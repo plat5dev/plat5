@@ -1,0 +1,10 @@
+services:
+  api-keys:
+    url: api-keys:3000
+    user:
+      routes:
+        - path: /api/keys
+          methods: [GET, POST]
+
+        - path: /api/keys/{id}
+          methods: [DELETE]

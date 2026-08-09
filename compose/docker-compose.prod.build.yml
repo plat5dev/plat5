@@ -1,0 +1,31 @@
+# Optional override: build images from this repo instead of pulling GHCR.
+# docker compose -f docker-compose.prod.yml -f docker-compose.prod.build.yml --env-file .env up --build -d
+services:
+  route-registry:
+    build:
+      context: ../services/route-registry
+      target: prod
+      args:
+        VERSION: ${PLAT5_VERSION:-v0.1.2}
+        REVISION: ${PLAT5_REVISION:-}
+  gateway:
+    build:
+      context: ../services/gateway
+      target: prod
+      args:
+        VERSION: ${PLAT5_VERSION:-v0.1.2}
+        REVISION: ${PLAT5_REVISION:-}
+  organizations:
+    build:
+      context: ../services/organizations
+      target: prod
+      args:
+        VERSION: ${PLAT5_VERSION:-v0.1.2}
+        REVISION: ${PLAT5_REVISION:-}
+  api-keys:
+    build:
+      context: ../services/api-keys
+      target: prod
+      args:
+        VERSION: ${PLAT5_VERSION:-v0.1.2}
+        REVISION: ${PLAT5_REVISION:-}

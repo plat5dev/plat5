@@ -1,0 +1,205 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      gateway: ${{ steps.filter.outputs.gateway }}
+      route-registry: ${{ steps.filter.outputs.route-registry }}
+      api-keys: ${{ steps.filter.outputs.api-keys }}
+      organizations: ${{ steps.filter.outputs.organizations }}
+      docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            gateway:
+              - '.github/workflows/ci.yml'
+              - 'services/gateway/**'
+            route-registry:
+              - '.github/workflows/ci.yml'
+              - 'services/route-registry/**'
+            api-keys:
+              - '.github/workflows/ci.yml'
+              - 'services/api-keys/**'
+            organizations:
+              - '.github/workflows/ci.yml'
+              - 'services/organizations/**'
+            docker:
+              - '.github/workflows/ci.yml'
+              - 'services/gateway/**'
+              - 'services/route-registry/**'
+              - 'services/api-keys/**'
+              - 'services/organizations/**'
+
+  gateway:
+    needs: changes
+    if: needs.changes.outputs.gateway == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/gateway
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/gateway
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all-targets
+
+  route-registry:
+    needs: changes
+    if: needs.changes.outputs.route-registry == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/route-registry
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/route-registry
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all-targets
+
+  api-keys:
+    needs: changes
+    if: needs.changes.outputs.api-keys == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api-keys
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/api-keys/go.mod
+          cache-dependency-path: services/api-keys/go.sum
+      - name: format check
+        run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test ./...
+
+  organizations:
+    needs: changes
+    if: needs.changes.outputs.organizations == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/organizations
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/organizations/go.mod
+          cache-dependency-path: services/organizations/go.sum
+      - name: format check
+        run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test ./...
+
+  docker-build:
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gateway
+            context: services/gateway
+            filter: gateway
+          - name: route-registry
+            context: services/route-registry
+            filter: route-registry
+          - name: api-keys
+            context: services/api-keys
+            filter: api-keys
+          - name: organizations
+            context: services/organizations
+            filter: organizations
+    steps:
+      - name: Decide whether to build
+        id: want
+        run: |
+          case "${{ matrix.filter }}" in
+            gateway)        v="${{ needs.changes.outputs.gateway }}" ;;
+            route-registry) v="${{ needs.changes.outputs.route-registry }}" ;;
+            api-keys)       v="${{ needs.changes.outputs.api-keys }}" ;;
+            organizations)  v="${{ needs.changes.outputs.organizations }}" ;;
+          esac
+          echo "build=$v" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: steps.want.outputs.build == 'true'
+      - uses: docker/setup-buildx-action@v3
+        if: steps.want.outputs.build == 'true'
+      - uses: docker/build-push-action@v6
+        if: steps.want.outputs.build == 'true'
+        with:
+          context: ${{ matrix.context }}
+          target: prod
+          push: false
+          platforms: linux/amd64
+          tags: plat5/${{ matrix.name }}:ci
+          build-args: |
+            VERSION=ci
+            REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  # Single required check for branch protection. Skipped jobs count as ok.
+  ci:
+    needs:
+      - changes
+      - gateway
+      - route-registry
+      - api-keys
+      - organizations
+      - docker-build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate
+        run: |
+          results=(
+            "${{ needs.changes.result }}"
+            "${{ needs.gateway.result }}"
+            "${{ needs.route-registry.result }}"
+            "${{ needs.api-keys.result }}"
+            "${{ needs.organizations.result }}"
+            "${{ needs.docker-build.result }}"
+          )
+          for r in "${results[@]}"; do
+            case "$r" in
+              failure|cancelled) echo "job result: $r"; exit 1 ;;
+            esac
+          done
+          echo "ok"

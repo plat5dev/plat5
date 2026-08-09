@@ -1,0 +1,16 @@
+.DS_Store
+.env
+.env.*
+!.env.template
+!.env.example
+**/.env
+node_modules/
+**/node_modules/
+**/target/
+**/tmp/
+dist/
+*.log
+*.local
+*.db
+*.db-shm
+*.db-wal

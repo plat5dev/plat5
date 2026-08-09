@@ -1,0 +1,196 @@
+# Image-mode production stack.
+# Pin: PLAT5_VERSION=v0.1.2 (default). Local source build:
+#   docker compose -f docker-compose.prod.yml -f docker-compose.prod.build.yml --env-file .env up --build -d
+name: plat5
+
+volumes:
+  etcd_data:
+  pg_data:
+
+networks:
+  plat5:
+    driver: bridge
+
+services:
+  postgres:
+    image: postgres:17
+    labels:
+      service.name: postgres
+      service.namespace: infra
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-plat5}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-plat5}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - plat5
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  etcd:
+    image: gcr.io/etcd-development/etcd:v3.6.0
+    labels:
+      service.name: etcd
+      service.namespace: infra
+    environment:
+      ETCD_NAME: etcd0
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_ADVERTISE_CLIENT_URLS: http://localhost:2379
+      ETCD_INITIAL_CLUSTER_TOKEN: etcd-cluster-1
+      ETCD_INITIAL_CLUSTER_STATE: new
+    command:
+      - /usr/local/bin/etcd
+      - --data-dir=/etcd-data
+    volumes:
+      - etcd_data:/etcd-data
+    networks:
+      - plat5
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  route-registry:
+    image: ghcr.io/plat5dev/route-registry:${PLAT5_VERSION:-v0.1.2}
+    labels:
+      service.name: route-registry
+      service.namespace: edge
+      metrics.port: "5003"
+    # Admin API not published by default in prod — reach via private network.
+    environment:
+      PORT: 5002
+      INTERNAL_PORT: 5003
+      ETCD_URL: http://etcd:2379
+      ADMIN_TOKEN: ${ADMIN_TOKEN}
+      SEED_ROUTES_DIR: /seed
+      PLATFORM_SERVICES: api-keys,organizations
+      RUST_LOG: info
+      OTEL_SERVICE_NAME: route-registry
+      OTEL_SERVICE_NAMESPACE: edge
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      DEPLOYMENT_ENV: prod
+    volumes:
+      - ./seed/api-keys.yml:/seed/api-keys.yml:ro
+      - ./seed/organizations.yml:/seed/organizations.yml:ro
+    networks:
+      - plat5
+    depends_on:
+      etcd:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5003/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  gateway:
+    image: ghcr.io/plat5dev/gateway:${PLAT5_VERSION:-v0.1.2}
+    labels:
+      service.name: gateway
+      service.namespace: edge
+      metrics.port: "8000"
+    ports:
+      - "5001:5001"
+    environment:
+      SERVER_NAME: gateway
+      PORT: 5001
+      INTERNAL_PORT: 8000
+      AUTH_ISSUER: ${AUTH_ISSUER}
+      AUTH_JWKS_URI: ${AUTH_JWKS_URI}
+      AUTH_ALLOWED_AUDIENCES: ${AUTH_ALLOWED_AUDIENCES:-}
+      AUTH_USER_ID_CLAIM: ${AUTH_USER_ID_CLAIM:-properties.user_id}
+      APIKEY_VALIDATE_URL: http://api-keys:3001/internal/keys/validate
+      MEMBERSHIP_RESOLVE_URL: http://organizations:3001/internal/memberships/resolve
+      INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
+      RUST_LOG: info
+      MEMBERSHIP_CACHE_TTL_SECS: "300"
+      ETCD_URL: http://etcd:2379
+      OTEL_SERVICE_NAME: gateway
+      OTEL_SERVICE_NAMESPACE: edge
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      DEPLOYMENT_ENV: prod
+    networks:
+      - plat5
+    depends_on:
+      etcd:
+        condition: service_healthy
+      route-registry:
+        condition: service_healthy
+      api-keys:
+        condition: service_started
+      organizations:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  organizations:
+    image: ghcr.io/plat5dev/organizations:${PLAT5_VERSION:-v0.1.2}
+    labels:
+      service.name: organizations
+      service.namespace: identity
+      metrics.port: "3001"
+    environment:
+      PORT: 3000
+      INTERNAL_PORT: 3001
+      INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-plat5}?sslmode=disable
+      OTEL_SERVICE_NAME: organizations
+      OTEL_SERVICE_NAMESPACE: identity
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      DEPLOYMENT_ENV: prod
+    networks:
+      - plat5
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  api-keys:
+    image: ghcr.io/plat5dev/api-keys:${PLAT5_VERSION:-v0.1.2}
+    labels:
+      service.name: api-keys
+      service.namespace: identity
+      metrics.port: "3001"
+    environment:
+      PORT: 3000
+      INTERNAL_PORT: 3001
+      INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-plat5}?sslmode=disable
+      OTEL_SERVICE_NAME: api-keys
+      OTEL_SERVICE_NAMESPACE: identity
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      DEPLOYMENT_ENV: prod
+    networks:
+      - plat5
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped

@@ -1,0 +1,14 @@
+services:
+  organizations:
+    url: organizations:3000
+    user:
+      route_prefix: /api/organizations
+      routes:
+        - path: /
+          methods: [POST, GET]
+        - path: /{organization_id}
+          methods: [GET, PATCH, DELETE]
+        - path: /{organization_id}/memberships
+          methods: [GET, POST]
+        - path: /{organization_id}/memberships/{membership_id}
+          methods: [GET, PATCH, DELETE]
