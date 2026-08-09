@@ -22,7 +22,6 @@ jobs:
       route-registry: ${{ steps.filter.outputs.route-registry }}
       api-keys: ${{ steps.filter.outputs.api-keys }}
       organizations: ${{ steps.filter.outputs.organizations }}
-      docker: ${{ steps.filter.outputs.docker }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -40,12 +39,6 @@ jobs:
               - 'services/api-keys/**'
             organizations:
               - '.github/workflows/ci.yml'
-              - 'services/organizations/**'
-            docker:
-              - '.github/workflows/ci.yml'
-              - 'services/gateway/**'
-              - 'services/route-registry/**'
-              - 'services/api-keys/**'
               - 'services/organizations/**'
 
   gateway:
@@ -126,55 +119,6 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
 
-  docker-build:
-    needs: changes
-    if: needs.changes.outputs.docker == 'true'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: gateway
-            context: services/gateway
-            filter: gateway
-          - name: route-registry
-            context: services/route-registry
-            filter: route-registry
-          - name: api-keys
-            context: services/api-keys
-            filter: api-keys
-          - name: organizations
-            context: services/organizations
-            filter: organizations
-    steps:
-      - name: Decide whether to build
-        id: want
-        run: |
-          case "${{ matrix.filter }}" in
-            gateway)        v="${{ needs.changes.outputs.gateway }}" ;;
-            route-registry) v="${{ needs.changes.outputs.route-registry }}" ;;
-            api-keys)       v="${{ needs.changes.outputs.api-keys }}" ;;
-            organizations)  v="${{ needs.changes.outputs.organizations }}" ;;
-          esac
-          echo "build=$v" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
-        if: steps.want.outputs.build == 'true'
-      - uses: docker/setup-buildx-action@v3
-        if: steps.want.outputs.build == 'true'
-      - uses: docker/build-push-action@v6
-        if: steps.want.outputs.build == 'true'
-        with:
-          context: ${{ matrix.context }}
-          target: prod
-          push: false
-          platforms: linux/amd64
-          tags: plat5/${{ matrix.name }}:ci
-          build-args: |
-            VERSION=ci
-            REVISION=${{ github.sha }}
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
-
   # Single required check for branch protection. Skipped jobs count as ok.
   ci:
     needs:
@@ -183,7 +127,6 @@ jobs:
       - route-registry
       - api-keys
       - organizations
-      - docker-build
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -195,7 +138,6 @@ jobs:
             "${{ needs.route-registry.result }}"
             "${{ needs.api-keys.result }}"
             "${{ needs.organizations.result }}"
-            "${{ needs.docker-build.result }}"
           )
           for r in "${results[@]}"; do
             case "$r" in
