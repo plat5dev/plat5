@@ -41,7 +41,7 @@ LABEL org.opencontainers.image.title="api-keys" \
       org.opencontainers.image.source="${SOURCE}" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}" \
-      org.opencontainers.image.licenses="UNLICENSED"
+      org.opencontainers.image.licenses="Apache-2.0"
 
 WORKDIR /app
 
