@@ -221,5 +221,4 @@ mod tests {
             Err(OrgParamError::MissingParamName)
         ));
     }
-
 }

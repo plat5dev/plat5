@@ -56,11 +56,7 @@ impl UserGateway {
         }
     }
 
-    async fn handle_preflight(
-        &self,
-        session: &mut Session,
-        ctx: &GatewayContext,
-    ) -> Result<bool> {
+    async fn handle_preflight(&self, session: &mut Session, ctx: &GatewayContext) -> Result<bool> {
         let mut header = ResponseHeader::build(200, None)?;
         self.cors
             .apply(&mut header, ctx.request_origin.as_deref())?;
@@ -105,11 +101,7 @@ impl UserGateway {
         ))
     }
 
-    fn resolve_route(
-        &self,
-        path: &str,
-        method: &str,
-    ) -> Option<(Route, HashMap<String, String>)> {
+    fn resolve_route(&self, path: &str, method: &str) -> Option<(Route, HashMap<String, String>)> {
         let route_map = self.route_map.load();
         route_map
             .find_route(path, method)

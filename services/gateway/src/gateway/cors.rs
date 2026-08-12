@@ -12,11 +12,7 @@ impl CorsPolicy {
         Self { allowed_origins }
     }
 
-    pub fn apply(
-        &self,
-        header: &mut ResponseHeader,
-        request_origin: Option<&str>,
-    ) -> Result<()> {
+    pub fn apply(&self, header: &mut ResponseHeader, request_origin: Option<&str>) -> Result<()> {
         if self.allowed_origins.is_empty() {
             header.insert_header("Access-Control-Allow-Origin", "*")?;
         } else if let Some(origin) = request_origin {

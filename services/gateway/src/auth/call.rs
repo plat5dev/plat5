@@ -43,8 +43,7 @@ impl AuthCallTimer {
             InternalHttpError::HttpStatus { status } => {
                 warn!(
                     error_kind = ErrorKind::Network.as_str(),
-                    status,
-                    "{op} returned error status"
+                    status, "{op} returned error status"
                 );
                 format!("{op} returned status {status}")
             }

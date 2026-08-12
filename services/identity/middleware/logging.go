@@ -87,5 +87,3 @@ func resolveStatus(c fiber.Ctx, err error) int {
 	}
 	return c.Response().StatusCode()
 }
-
-

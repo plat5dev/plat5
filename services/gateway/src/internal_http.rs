@@ -18,7 +18,9 @@ pub struct InternalHttpClient {
 pub enum InternalHttpError {
     Network(String),
     /// Non-success HTTP status (body not decoded as domain type).
-    HttpStatus { status: u16 },
+    HttpStatus {
+        status: u16,
+    },
     Decode(String),
 }
 
@@ -74,4 +76,3 @@ impl InternalHttpClient {
             .map_err(|e| InternalHttpError::Decode(e.to_string()))
     }
 }
-

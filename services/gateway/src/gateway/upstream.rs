@@ -135,9 +135,7 @@ pub fn build_and_store_upstream_peer(
             .root_span()
             .map(|span| span.context())
             .unwrap_or_else(|| tracing::Span::current().context());
-        global::get_text_map_propagator(|propagator| {
-            propagator.inject_context(&cx, &mut injector)
-        });
+        global::get_text_map_propagator(|propagator| propagator.inject_context(&cx, &mut injector));
     }
 
     let peer_addr = peer_address(&route.base_url);

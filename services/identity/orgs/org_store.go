@@ -169,4 +169,3 @@ func (s *Store) DeleteOrganization(ctx context.Context, organizationID string) e
 	op.OK("ok")
 	return nil
 }
-

@@ -147,9 +147,7 @@ impl RouteMap {
             let param = organization_param
                 .as_deref()
                 .filter(|p| !p.is_empty())
-                .ok_or_else(|| {
-                    "organization route missing organization_param".to_string()
-                })?;
+                .ok_or_else(|| "organization route missing organization_param".to_string())?;
             let needle = format!("{{{param}}}");
             if !path.contains(&needle) {
                 return Err(format!(

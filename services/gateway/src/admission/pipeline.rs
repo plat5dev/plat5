@@ -85,9 +85,7 @@ impl Admissor {
             .map(|s| s.to_string());
 
         if let Some(key_str) = member_key {
-            return self
-                .admit_member_api_key(&organization_id, &key_str)
-                .await;
+            return self.admit_member_api_key(&organization_id, &key_str).await;
         }
 
         let auth = self.authenticate(req).await.map_err(AdmitError::Auth)?;
@@ -326,10 +324,7 @@ impl Admissor {
             AuthError::UserApiKeyValidationUnavailable
         })?;
 
-        self.stack
-            .user_apikey_cache
-            .put(key, user_id.clone())
-            .await;
+        self.stack.user_apikey_cache.put(key, user_id.clone()).await;
 
         Ok(AuthContext {
             user_id,

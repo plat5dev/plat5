@@ -270,4 +270,3 @@ func (s *Store) DeleteServiceAccount(ctx context.Context, organizationID, servic
 	op.OK("ok")
 	return nil
 }
-
