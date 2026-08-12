@@ -8,7 +8,7 @@ use crate::metrics;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 const INTERNAL_TOKEN_HEADER: &str = "X-Plat5-Internal-Token";
 
-/// Client for organizations internal membership resolve.
+/// Client for identity internal member resolve.
 #[derive(Clone)]
 pub struct MembershipResolver {
     resolve_url: String,
@@ -18,7 +18,7 @@ pub struct MembershipResolver {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MembershipResolve {
-    pub membership_id: String,
+    pub member_id: String,
     pub organization_id: String,
     pub user_id: String,
     pub status: String,
@@ -47,7 +47,7 @@ impl MembershipResolver {
             .build()
             .expect("failed to create reqwest client");
 
-        info!(resolve_url = %resolve_url, "membership resolver initialized");
+        info!(resolve_url = %resolve_url, "member resolver initialized");
 
         Self {
             resolve_url,
@@ -77,7 +77,7 @@ impl MembershipResolver {
             warn!(
                 error_kind = ErrorKind::Network.as_str(),
                 error_message = %e,
-                "failed to call membership resolve"
+                "failed to call member resolve"
             );
             MembershipError::ServiceError(e.to_string())
         })?;
@@ -95,10 +95,10 @@ impl MembershipResolver {
             warn!(
                 error_kind = ErrorKind::Network.as_str(),
                 status = %status,
-                "membership resolve returned error status"
+                "member resolve returned error status"
             );
             return Err(MembershipError::ServiceError(format!(
-                "membership resolve returned status {}",
+                "member resolve returned status {}",
                 status
             )));
         }
@@ -109,7 +109,7 @@ impl MembershipResolver {
             warn!(
                 error_kind = ErrorKind::Internal.as_str(),
                 error_message = %e,
-                "failed to parse membership resolve response"
+                "failed to parse member resolve response"
             );
             MembershipError::ServiceError(e.to_string())
         })?;

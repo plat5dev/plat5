@@ -148,7 +148,7 @@ Write **JSON** to stdout always (including when OTLP is enabled). No OTLP log ex
 | `trace_id` / `span_id` | When a span is active |
 | `user_id` | Authenticated user ID (when known) |
 | `organization_id` | Organization ID (when in org context) |
-| `membership_id` | Membership ID (when in org context) |
+| `member_id` | Member ID (when in org context) |
 
 Field names: [`naming-conventions.md`](naming-conventions.md).
 
@@ -172,7 +172,7 @@ Do not include `error_kind` for 4xx.
 Follow [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/). Also:
 
 - `request_id` on HTTP request spans (if present)
-- `user.id` on HTTP request spans when authenticated — set at the **edge/gateway** for ops. Org-scoped services do not receive `X-User-Id`; they should not invent `user.id`. Gateway may also set `organization.id` / `membership.id`.
+- `user.id` on HTTP request spans when authenticated — set at the **edge/gateway** for ops. Org-scoped services do not receive `X-User-Id`; they should not invent `user.id`. Gateway may also set `organization.id` / `member.id`.
 - `error.kind` on **error spans** (5xx only): `auth`, `network`, `db`, `io`, `internal`, `validation`
 - 4xx responses are normal business outcomes — do not set `error.kind` and do not mark the span as failed
 - Record exceptions via `span.recordException(err)` / `span.record_exception(err)`
@@ -232,8 +232,7 @@ When OTLP metrics are enabled, the same series should appear there too. Extra pr
 |---------|-----------|--------|
 | gateway | `edge` | Internal `/metrics`; gateway sets edge span identity attrs |
 | route-registry | `edge` | Internal `/metrics` |
-| api-keys | `identity` | Internal `/metrics` |
-| organizations | `identity` | Internal `/metrics` |
+| identity | `identity` | Internal `/metrics` |
 
 ## Non-goals
 

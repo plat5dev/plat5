@@ -10,7 +10,7 @@ Gateway still **loads and watches** etcd; it does not expose route CRUD.
 routes.yml → POST /v1/apply (or PUT /v1/services/{name}) → etcd → gateway watch
 ```
 
-Seed on boot: identity services (`api-keys`, `organizations`) from `SEED_ROUTES_DIR`.
+Seed on boot: platform identity routes (`identity`) from `SEED_ROUTES_DIR`.
 
 ## Local URLs
 
@@ -124,16 +124,15 @@ Validation / auth / empty body failures still use the Plat5 envelope (`api-error
 | `ETCD_URL` | `http://localhost:2379` | etcd |
 | `ADMIN_TOKEN` | required | Bearer token |
 | `SEED_ROUTES_DIR` | empty | Directory of `*.yml` / `*.yaml` to upsert on boot |
-| `PLATFORM_SERVICES` | `api-keys,organizations` | Names protected from delete without `?force=true` |
+| `PLATFORM_SERVICES` | `identity` | Names protected from delete without `?force=true` |
 
 ## Platform seed
 
 Compose mounts:
 
-- `services/api-keys/routes.yml` → `/seed/api-keys.yml`
-- `services/organizations/routes.yml` → `/seed/organizations.yml`
+- `services/identity/routes.yml` → `/seed/identity.yml` (until rename: `services/organizations/routes.yml`)
 
-Registry upserts these on every start (idempotent).
+Registry upserts seed files on every start (idempotent).
 
 ## Validation
 

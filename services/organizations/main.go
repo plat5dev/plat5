@@ -48,7 +48,7 @@ func main() {
 	handler := orgs.NewHandler(store, telem)
 
 	app := fiber.New(fiber.Config{
-		AppName:      "organizations",
+		AppName:      "identity",
 		ErrorHandler: errors.FiberErrorHandler,
 	})
 
@@ -67,11 +67,11 @@ func main() {
 	api.Patch("/:organization_id", middleware.RequireUserID(), handler.UpdateOrganization)
 	api.Delete("/:organization_id", middleware.RequireUserID(), handler.DeleteOrganization)
 
-	api.Get("/:organization_id/memberships", middleware.RequireUserID(), handler.ListMemberships)
-	api.Post("/:organization_id/memberships", middleware.RequireUserID(), handler.CreateMembership)
-	api.Get("/:organization_id/memberships/:membership_id", middleware.RequireUserID(), handler.GetMembership)
-	api.Patch("/:organization_id/memberships/:membership_id", middleware.RequireUserID(), handler.UpdateMembership)
-	api.Delete("/:organization_id/memberships/:membership_id", middleware.RequireUserID(), handler.DeleteMembership)
+	api.Get("/:organization_id/members", middleware.RequireUserID(), handler.ListMembers)
+	api.Post("/:organization_id/members", middleware.RequireUserID(), handler.CreateMember)
+	api.Get("/:organization_id/members/:member_id", middleware.RequireUserID(), handler.GetMember)
+	api.Patch("/:organization_id/members/:member_id", middleware.RequireUserID(), handler.UpdateMember)
+	api.Delete("/:organization_id/members/:member_id", middleware.RequireUserID(), handler.DeleteMember)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -79,7 +79,7 @@ func main() {
 	}
 
 	internalApp := fiber.New(fiber.Config{
-		AppName:      "organizations-internal",
+		AppName:      "identity-internal",
 		ErrorHandler: errors.FiberErrorHandler,
 	})
 
@@ -99,7 +99,7 @@ func main() {
 	metricsHandler := adaptor.HTTPHandler(metrics.Handler())
 	internalApp.Get("/metrics", metricsHandler)
 
-	internalApp.Post("/internal/memberships/resolve", middleware.RequireInternalToken(), handler.Resolve)
+	internalApp.Post("/internal/members/resolve", middleware.RequireInternalToken(), handler.Resolve)
 
 	internalPort := os.Getenv("INTERNAL_PORT")
 	if internalPort == "" {
@@ -110,7 +110,7 @@ func main() {
 	baseLogger.Info().
 		Str("port", port).
 		Str("internal_port", internalPort).
-		Msg("starting organizations server")
+		Msg("starting identity server")
 
 	go func() {
 		if err := internalApp.Listen(":" + internalPort); err != nil {

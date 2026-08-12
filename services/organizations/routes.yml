@@ -2,13 +2,12 @@ services:
   organizations:
     url: organizations:3000
     user:
-      route_prefix: /api/organizations
       routes:
-        - path: /
+        - path: /api/organizations
           methods: [POST, GET]
-        - path: /{organization_id}
+        - path: /api/organizations/{organization_id}
           methods: [GET, PATCH, DELETE]
-        - path: /{organization_id}/memberships
+        - path: /api/organizations/{organization_id}/members
           methods: [GET, POST]
-        - path: /{organization_id}/memberships/{membership_id}
+        - path: /api/organizations/{organization_id}/members/{member_id}
           methods: [GET, PATCH, DELETE]

@@ -6,7 +6,7 @@ Optional container labels for operators who scrape logs/metrics (e.g. their own 
 
 | Label | Example | Purpose |
 |-------|---------|---------|
-| `service.name` | `api-keys` | Identifies the service in logs, traces, and metrics |
+| `service.name` | `identity` | Identifies the service in logs, traces, and metrics |
 | `service.namespace` | `identity` | Groups related services |
 
 ## Metrics scrape (recommended)
@@ -22,17 +22,16 @@ Services expose Prometheus `/metrics` on the internal port ([`telemetry.md`](tel
 
 | Namespace | Used By |
 |-----------|---------|
-| `identity` | Plat5 backends: `api-keys`, `organizations` |
+| `identity` | Plat5 identity backend: `identity` |
 | `edge` | Gateway (`gateway`), route registry (`route-registry`) |
-| `api` | Business API services — **not** Plat5 identity backends |
+| `api` | Business API services — **not** Plat5 identity |
 | `infra` | Dependencies (etcd, postgres) |
 
 ### Platform service labels
 
 | Service | `service.namespace` | Notes |
 |---------|---------------------|--------|
-| `api-keys` | **`identity`** | Identity backend (`api` is for business services only) |
-| `organizations` | **`identity`** | Identity backend |
+| `identity` | **`identity`** | Orgs, members, service accounts, API keys |
 | `gateway` | **`edge`** | Gateway hop |
 | `route-registry` | **`edge`** | Route admin API |
 
@@ -56,13 +55,13 @@ Platform backend:
 
 ```yaml
 services:
-  api-keys:
+  identity:
     labels:
-      service.name: api-keys
+      service.name: identity
       service.namespace: identity
       metrics.port: "3001"
     environment:
-      OTEL_SERVICE_NAME: api-keys
+      OTEL_SERVICE_NAME: identity
       OTEL_SERVICE_NAMESPACE: identity
 ```
 

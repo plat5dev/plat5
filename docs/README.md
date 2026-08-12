@@ -23,5 +23,4 @@ Per-service details live in each service's `README.md`.
 | [`routes.md`](routes.md) | Route publishing, scopes, `route_prefix` |
 | [`route-registry.md`](route-registry.md) | Admin API to write routes (etcd writer) |
 | [`identity-boundary.md`](identity-boundary.md) | Authn vs organization context vs resource authz |
-| [`organizations.md`](organizations.md) | Organizations service API + internal membership resolve |
-| [`api-keys.md`](api-keys.md) | API keys CRUD + internal validate |
+| [`identity.md`](identity.md) | Identity service: orgs, members, service accounts, API keys, internal validate/resolve |

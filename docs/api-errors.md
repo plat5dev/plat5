@@ -55,7 +55,7 @@ Returned by the **gateway**, not downstream services. If a downstream service re
 
 Canonical policy: [`identity-boundary.md`](identity-boundary.md).
 
-When `organization` scope is live: non-member / inactive / unknown org → **`NOT_FOUND` (404)**. Membership resolve unavailable → **`SERVICE_UNAVAILABLE` (503)**. Bad credential → **`UNAUTHORIZED` (401)**.
+When `organization` scope is live: non-member / inactive / unknown org → **`NOT_FOUND` (404)**. Member resolve or key validate unavailable → **`SERVICE_UNAVAILABLE` (503)**. Bad credential → **`UNAUTHORIZED` (401)**.
 
 ### `RATE_LIMITED` Headers
 

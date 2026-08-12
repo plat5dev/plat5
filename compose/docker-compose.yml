@@ -114,7 +114,7 @@ services:
       AUTH_ALLOWED_AUDIENCES: ${AUTH_ALLOWED_AUDIENCES:-plat5}
       AUTH_USER_ID_CLAIM: ${AUTH_USER_ID_CLAIM:-properties.user_id}
       APIKEY_VALIDATE_URL: http://api-keys:3001/internal/keys/validate
-      MEMBERSHIP_RESOLVE_URL: http://organizations:3001/internal/memberships/resolve
+      MEMBERSHIP_RESOLVE_URL: http://organizations:3001/internal/members/resolve
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN:-dev-internal-token}
       RUST_LOG: info
       APIKEY_CACHE_TTL_SECS: "300"
@@ -159,7 +159,7 @@ services:
       INTERNAL_PORT: 3001
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN:-dev-internal-token}
       DATABASE_URL: postgres://plat5:plat5@postgres:5432/plat5?sslmode=disable
-      OTEL_SERVICE_NAME: organizations
+      OTEL_SERVICE_NAME: identity
       OTEL_SERVICE_NAMESPACE: identity
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       DEPLOYMENT_ENV: docker

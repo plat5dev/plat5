@@ -4,8 +4,8 @@ use moka::future::Cache;
 
 use crate::metrics;
 
-/// Cache for membership resolve admissions.
-/// Key: user_id + organization_id. Value: membership_id + organization_id (active only).
+/// Cache for member resolve admissions.
+/// Key: user_id + organization_id. Value: member_id + organization_id (active only).
 #[derive(Clone)]
 pub struct MembershipCache {
     inner: Cache<String, CachedMembership>,
@@ -13,7 +13,7 @@ pub struct MembershipCache {
 
 #[derive(Clone)]
 pub struct CachedMembership {
-    pub membership_id: String,
+    pub member_id: String,
     pub organization_id: String,
 }
 
@@ -37,13 +37,13 @@ impl MembershipCache {
         result
     }
 
-    pub async fn put(&self, user_id: &str, organization_id: &str, membership_id: String) {
+    pub async fn put(&self, user_id: &str, organization_id: &str, member_id: String) {
         let key = cache_key(user_id, organization_id);
         self.inner
             .insert(
                 key,
                 CachedMembership {
-                    membership_id,
+                    member_id,
                     organization_id: organization_id.to_string(),
                 },
             )

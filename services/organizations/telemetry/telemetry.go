@@ -144,9 +144,9 @@ func Init(ctx context.Context) (*Telemetry, error) {
 }
 
 func buildResource(ctx context.Context) (*resource.Resource, error) {
-	serviceName := getEnv("OTEL_SERVICE_NAME", "organizations")
+	serviceName := getEnv("OTEL_SERVICE_NAME", "identity")
 	serviceNamespace := getEnv("OTEL_SERVICE_NAMESPACE", "identity")
-	serviceInstanceID := getEnv("OTEL_SERVICE_INSTANCE_ID", getEnv("HOSTNAME", "organizations-local"))
+	serviceInstanceID := getEnv("OTEL_SERVICE_INSTANCE_ID", getEnv("HOSTNAME", "identity-local"))
 	deploymentEnv := getEnv("OTEL_DEPLOYMENT_ENV", getEnv("DEPLOYMENT_ENV", "development"))
 	serviceVersion := getEnv("OTEL_SERVICE_VERSION", getEnv("CI_COMMIT_TAG", "0.0.0"))
 

@@ -111,7 +111,7 @@ services:
       AUTH_ALLOWED_AUDIENCES: ${AUTH_ALLOWED_AUDIENCES:-}
       AUTH_USER_ID_CLAIM: ${AUTH_USER_ID_CLAIM:-properties.user_id}
       APIKEY_VALIDATE_URL: http://api-keys:3001/internal/keys/validate
-      MEMBERSHIP_RESOLVE_URL: http://organizations:3001/internal/memberships/resolve
+      MEMBERSHIP_RESOLVE_URL: http://organizations:3001/internal/members/resolve
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
       RUST_LOG: info
       MEMBERSHIP_CACHE_TTL_SECS: "300"

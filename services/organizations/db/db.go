@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const Schema = "organizations"
+const Schema = "identity"
 
 var schemaNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 

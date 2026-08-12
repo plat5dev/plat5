@@ -12,7 +12,7 @@ import (
 
 const (
 	dbSystemName = "postgresql"
-	dbNamespace  = "organizations"
+	dbNamespace  = "identity"
 )
 
 var (
@@ -20,7 +20,7 @@ var (
 	requestDuration *prometheus.HistogramVec
 	requestsTotal   *prometheus.CounterVec
 	orgsCreated     prometheus.Counter
-	membershipOps   *prometheus.CounterVec
+	memberOps       *prometheus.CounterVec
 	resolveTotal    *prometheus.CounterVec
 	dbOpsTotal      *prometheus.CounterVec
 	dbOpsErrors     *prometheus.CounterVec
@@ -33,13 +33,13 @@ func Init() {
 	initOnce.Do(func() {
 		requestDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "http_request_duration_seconds",
-			Help:    "HTTP request latency observed by the organizations service",
+			Help:    "HTTP request latency observed by the identity service",
 			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
 		}, []string{"route", "method"})
 
 		requestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "http_requests_total",
-			Help: "Total HTTP requests handled by the organizations service",
+			Help: "Total HTTP requests handled by the identity service",
 		}, []string{"route", "method", "status"})
 
 		orgsCreated = prometheus.NewCounter(prometheus.CounterOpts{
@@ -47,14 +47,14 @@ func Init() {
 			Help: "Total organizations created",
 		})
 
-		membershipOps = prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "organization_membership_operations_total",
-			Help: "Membership mutations by operation",
+		memberOps = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "member_operations_total",
+			Help: "Member mutations by operation",
 		}, []string{"operation"})
 
 		resolveTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "membership_resolve_total",
-			Help: "Internal membership resolve outcomes",
+			Name: "member_resolve_total",
+			Help: "Internal member resolve outcomes",
 		}, []string{"result"})
 
 		dbLabels := []string{"db_system_name", "db_operation_name", "db_namespace"}
@@ -79,7 +79,7 @@ func Init() {
 			requestDuration,
 			requestsTotal,
 			orgsCreated,
-			membershipOps,
+			memberOps,
 			resolveTotal,
 			dbOpsTotal,
 			dbOpsErrors,
@@ -110,9 +110,9 @@ func RecordOrgCreated() {
 	orgsCreated.Inc()
 }
 
-func RecordMembershipOp(operation string) {
+func RecordMemberOp(operation string) {
 	Init()
-	membershipOps.WithLabelValues(operation).Inc()
+	memberOps.WithLabelValues(operation).Inc()
 }
 
 func RecordResolve(result string) {

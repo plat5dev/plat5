@@ -17,6 +17,9 @@ const (
 	MaxSettingsBytes = 16 << 10 // 16 KiB
 	DefaultListLimit = 50
 	MaxListLimit     = 100
+
+	PrincipalUser           = "user"
+	PrincipalServiceAccount = "service_account"
 )
 
 type Role string
@@ -63,15 +66,28 @@ type Organization struct {
 	UpdatedAt time.Time
 }
 
-type Membership struct {
-	ID             string
-	OrganizationID string
-	UserID         string
-	Role           Role
-	Status         Status
-	InvitedBy      *string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+// Member is an org principal: exactly one of UserID or ServiceAccountID.
+type Member struct {
+	ID               string
+	OrganizationID   string
+	UserID           *string
+	ServiceAccountID *string
+	Role             Role
+	Status           Status
+	InvitedBy        *string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+func (m *Member) Principal() string {
+	if m.ServiceAccountID != nil {
+		return PrincipalServiceAccount
+	}
+	return PrincipalUser
+}
+
+func (m *Member) IsUser(userID string) bool {
+	return m.UserID != nil && *m.UserID == userID
 }
 
 func NewULID() string {

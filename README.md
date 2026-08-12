@@ -1,6 +1,6 @@
 # Plat5
 
-Open-source **platform runtime**. Authenticate at the gateway, delegate identity via headers, register routes, manage API keys and organizations.
+Open-source **platform runtime**. Authenticate at the gateway, delegate identity via headers, register routes, manage organizations, members, service accounts, and API keys.
 
 Login UI / user directory is **not included** — point the gateway at any OIDC IdP ([`docs/idp-contract.md`](docs/idp-contract.md)), including Plat5 Auth if you run it separately.
 
@@ -28,8 +28,7 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defau
 |------|---------|
 | `services/gateway/` | Reverse proxy, auth, routing (Rust / Pingora) |
 | `services/route-registry/` | Route admin API → etcd (Rust) |
-| `services/api-keys/` | API key CRUD + validate (Go) |
-| `services/organizations/` | Orgs, memberships, resolve (Go) |
+| `services/organizations/` | Identity control plane (Go) — rename target: `identity` |
 | `compose/` | Self-contained Plat5 stack |
 | `docs/` | Contracts |
 
@@ -43,7 +42,7 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defau
 | [`docs/routes.md`](docs/routes.md) | Route config format |
 | [`docs/route-registry.md`](docs/route-registry.md) | Apply routes via admin API |
 | [`docs/identity-boundary.md`](docs/identity-boundary.md) | Authn vs org context vs resource authz |
-| [`docs/organizations.md`](docs/organizations.md) | Organizations API |
+| [`docs/identity.md`](docs/identity.md) | Identity service API |
 | [`docs/api-errors.md`](docs/api-errors.md) | Error envelope |
 | [`docs/telemetry.md`](docs/telemetry.md) | Logs, traces, metrics |
 

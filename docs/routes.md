@@ -27,7 +27,7 @@ Long-running service. Validates config, expands `route_prefix`, writes JSON to e
 - **Local admin URL:** `http://localhost:5002`
 - **Auth:** `Authorization: Bearer <ADMIN_TOKEN>`
 - **Apply:** `POST /v1/apply` with a full `routes.yml` body (JSON or YAML)
-- **Seed:** identity routes (`api-keys`, `organizations`) on boot from `SEED_ROUTES_DIR`
+- **Seed:** platform identity routes (`identity`) on boot from `SEED_ROUTES_DIR`
 
 ```bash
 curl -sS -X POST http://localhost:5002/v1/apply \
@@ -83,8 +83,8 @@ services:
 | `services` | `map<string, ServiceConfig>` | Top-level wrapper. Keys are service names. |
 | `url` | `string` | Upstream URL (hostname:port or absolute URL the gateway can dial). |
 | `public` | `ScopeConfig?` | No authentication. |
-| `user` | `ScopeConfig?` | JWT or API key. |
-| `organization` | `ScopeConfig?` | JWT/API key + active membership resolve. |
+| `user` | `ScopeConfig?` | JWT or **user** API key. |
+| `organization` | `ScopeConfig?` | JWT / user API key + member resolve, or **member** API key. |
 | `route_prefix` | `string?` | Optional on any scope. Registry expands into each `path` before etcd. |
 | `organization_param` | `string` | **Required** on `organization` scope — path param name for org id. |
 | `routes` | `array<RouteConfig>` | HTTP routes for this scope. |
@@ -112,8 +112,8 @@ When `transform.path` is present, the gateway rewrites the request path before p
 | Scope | Auth | Identity headers |
 |-------|------|------------------|
 | `public` | No | none |
-| `user` | JWT or API key | `X-User-Id` only |
-| `organization` | JWT/API key + active membership | `X-Organization-Id`, `X-Membership-Id` only |
+| `user` | JWT or user API key | `X-User-Id` only |
+| `organization` | JWT / user API key + active member, or member API key | `X-Organization-Id`, `X-Member-Id` only |
 
 Full header and service rules: [`gateway-contract.md`](gateway-contract.md). Layer boundary and admission errors: [`identity-boundary.md`](identity-boundary.md).
 
@@ -138,9 +138,9 @@ Decoupled. Service down → gateway still knows the route → **503**. Missing r
 
 ## `organization` scope
 
-Business / product APIs that should not own membership storage. Gateway authenticates, resolves **active** membership for the org id in the path, injects org-context headers only.
+Business / product APIs that should not own membership storage. Gateway authenticates, admits an **active** member for the org id in the path, injects org-context headers only.
 
-**Who uses it:** Business APIs only. **organizations** stays on **`user` scope** (membership authority). Admission steps and errors: [`identity-boundary.md`](identity-boundary.md).
+**Who uses it:** Business APIs only. **identity** stays on **`user` scope** (membership authority). Admission steps and errors: [`identity-boundary.md`](identity-boundary.md).
 
 ### `organization_param`
 
@@ -150,7 +150,7 @@ Registry validation:
 
 - `organization_param` required for `organization` scope
 - Every expanded route path must include `{<organization_param>}`
-- Membership resolve mandatory for every match (no public/unauthenticated org routes)
+- Member admission mandatory for every match (no public/unauthenticated org routes)
 
 ### `route_prefix` (optional, any scope)
 
@@ -164,22 +164,33 @@ Joined with each route `path` so configs stay short.
 
 ### Examples
 
-#### organizations service — `user` scope only
+#### identity service — `user` scope only
 
 ```yaml
 services:
-  organizations:
-    url: organizations:3000
+  identity:
+    url: identity:3000
     user:
-      route_prefix: /api/organizations
       routes:
-        - path: /
-          methods: [POST, GET]
-        - path: /{organization_id}
-          methods: [GET, PATCH, DELETE]
-        - path: /{organization_id}/memberships
+        - path: /api/users/{user_id}/api-keys
           methods: [GET, POST]
-        - path: /{organization_id}/memberships/{membership_id}
+        - path: /api/users/{user_id}/api-keys/{key_id}
+          methods: [DELETE]
+        - path: /api/organizations
+          methods: [POST, GET]
+        - path: /api/organizations/{organization_id}
+          methods: [GET, PATCH, DELETE]
+        - path: /api/organizations/{organization_id}/members
+          methods: [GET, POST]
+        - path: /api/organizations/{organization_id}/members/{member_id}
+          methods: [GET, PATCH, DELETE]
+        - path: /api/organizations/{organization_id}/members/{member_id}/api-keys
+          methods: [GET, POST]
+        - path: /api/organizations/{organization_id}/members/{member_id}/api-keys/{key_id}
+          methods: [DELETE]
+        - path: /api/organizations/{organization_id}/service-accounts
+          methods: [GET, POST]
+        - path: /api/organizations/{organization_id}/service-accounts/{service_account_id}
           methods: [GET, PATCH, DELETE]
 ```
 
@@ -197,25 +208,6 @@ services:
           methods: [GET, POST]
         - path: /{project_id}
           methods: [GET, PATCH, DELETE]
-```
-
-## Real Examples
-
-### API Keys Service
-
-`services/api-keys/routes.yml`:
-
-```yaml
-services:
-  api-keys:
-    url: api-keys:3000
-    user:
-      routes:
-        - path: /api/keys
-          methods: [GET, POST]
-
-        - path: /api/keys/{id}
-          methods: [DELETE]
 ```
 
 ## Validation Rules

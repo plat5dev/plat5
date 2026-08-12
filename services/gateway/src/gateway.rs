@@ -43,7 +43,7 @@ const MEMBERSHIP_CACHE_CAPACITY: u64 = 10_000;
 const MEMBERSHIP_CACHE_DEFAULT_TTL_SECS: u64 = 300;
 const MAX_BODY_SIZE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 
-const IDENTITY_HEADERS: &[&str] = &["X-User-Id", "X-Organization-Id", "X-Membership-Id"];
+const IDENTITY_HEADERS: &[&str] = &["X-User-Id", "X-Organization-Id", "X-Member-Id"];
 const CLIENT_CREDENTIAL_HEADERS: &[&str] = &["Authorization", "X-API-Key"];
 
 pub struct UserGateway {
@@ -380,7 +380,7 @@ impl UserGateway {
             }
         }
 
-        let membership_id = match self
+        let member_id = match self
             .resolve_active_membership(&auth_ctx.user_id, &organization_id)
             .await
         {
@@ -389,7 +389,7 @@ impl UserGateway {
                 debug!(
                     user_id = %auth_ctx.user_id,
                     organization_id = %organization_id,
-                    "membership resolve miss or inactive"
+                    "member resolve miss or inactive"
                 );
                 return self
                     .write_json_error(session, ctx, 404, ApiError::not_found())
@@ -399,7 +399,7 @@ impl UserGateway {
                 warn!(
                     user_id = %auth_ctx.user_id,
                     organization_id = %organization_id,
-                    "membership resolve unavailable"
+                    "member resolve unavailable"
                 );
                 return self
                     .write_json_error(session, ctx, 503, ApiError::service_unavailable())
@@ -408,10 +408,10 @@ impl UserGateway {
         };
 
         if let Some(ref span) = ctx.root_span {
-            span.record("membership.id", membership_id.as_str());
+            span.record("member.id", member_id.as_str());
         }
 
-        // Org scope: only org + membership headers — never X-User-Id
+        // Org scope: only org + member headers — never X-User-Id
         if let Err(err) = session
             .req_header_mut()
             .insert_header("X-Organization-Id", &organization_id)
@@ -427,12 +427,12 @@ impl UserGateway {
         }
         if let Err(err) = session
             .req_header_mut()
-            .insert_header("X-Membership-Id", &membership_id)
+            .insert_header("X-Member-Id", &member_id)
         {
             warn!(
                 error_kind = ErrorKind::Internal.as_str(),
                 error_message = %err,
-                "failed to inject X-Membership-Id header"
+                "failed to inject X-Member-Id header"
             );
             return self
                 .write_json_error(session, ctx, 500, ApiError::internal_error())
@@ -443,7 +443,7 @@ impl UserGateway {
             auth_type = auth_ctx.auth_type,
             user_id = %auth_ctx.user_id,
             organization_id = %organization_id,
-            membership_id = %membership_id,
+            member_id = %member_id,
             "organization admission successful"
         );
 
@@ -457,7 +457,7 @@ impl UserGateway {
         organization_id: &str,
     ) -> Result<String, ResolveDeny> {
         if let Some(cached) = self.membership_cache.get(user_id, organization_id).await {
-            return Ok(cached.membership_id);
+            return Ok(cached.member_id);
         }
 
         let resolver = self
@@ -470,11 +470,11 @@ impl UserGateway {
                 if resolved.status != "active" {
                     return Err(ResolveDeny::NotFound);
                 }
-                let membership_id = resolved.membership_id;
+                let member_id = resolved.member_id;
                 self.membership_cache
-                    .put(user_id, organization_id, membership_id.clone())
+                    .put(user_id, organization_id, member_id.clone())
                     .await;
-                Ok(membership_id)
+                Ok(member_id)
             }
             Err(MembershipError::NotFound) => Err(ResolveDeny::NotFound),
             Err(MembershipError::ServiceError(_)) => Err(ResolveDeny::Unavailable),
@@ -626,7 +626,7 @@ impl GatewayContext {
             http.method = %method,
             user.id = tracing::field::Empty,
             organization.id = tracing::field::Empty,
-            membership.id = tracing::field::Empty,
+            member.id = tracing::field::Empty,
             request_id = tracing::field::Empty,
             http.status_code = tracing::field::Empty,
             jwt.kid = tracing::field::Empty,

@@ -20,7 +20,7 @@ import (
 	"github.com/plat5dev/plat5/organizations/telemetry"
 )
 
-const tracerName = "organizations.handlers"
+const tracerName = "identity.handlers"
 
 type Handler struct {
 	store  *Store
@@ -62,30 +62,32 @@ type ListOrgsResponse struct {
 	HasMore       bool          `json:"has_more"`
 }
 
-type CreateMembershipRequest struct {
+type CreateMemberRequest struct {
 	UserID string `json:"user_id"`
 	Role   string `json:"role"`
 }
 
-type UpdateMembershipRequest struct {
+type UpdateMemberRequest struct {
 	Role   *string `json:"role"`
 	Status *string `json:"status"`
 }
 
-type MembershipResponse struct {
-	ID             string  `json:"id"`
-	OrganizationID string  `json:"organization_id"`
-	UserID         string  `json:"user_id"`
-	Role           string  `json:"role"`
-	Status         string  `json:"status"`
-	InvitedBy      *string `json:"invited_by"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
+type MemberResponse struct {
+	ID               string  `json:"id"`
+	OrganizationID   string  `json:"organization_id"`
+	Principal        string  `json:"principal"`
+	UserID           *string `json:"user_id"`
+	ServiceAccountID *string `json:"service_account_id"`
+	Role             string  `json:"role"`
+	Status           string  `json:"status"`
+	InvitedBy        *string `json:"invited_by"`
+	CreatedAt        string  `json:"created_at"`
+	UpdatedAt        string  `json:"updated_at"`
 }
 
-type ListMembershipsResponse struct {
-	Memberships []MembershipResponse `json:"memberships"`
-	HasMore     bool                 `json:"has_more"`
+type ListMembersResponse struct {
+	Members []MemberResponse `json:"members"`
+	HasMore bool             `json:"has_more"`
 }
 
 type ResolveRequest struct {
@@ -94,7 +96,7 @@ type ResolveRequest struct {
 }
 
 type ResolveResponse struct {
-	MembershipID   string `json:"membership_id"`
+	MemberID       string `json:"member_id"`
 	OrganizationID string `json:"organization_id"`
 	UserID         string `json:"user_id"`
 	Status         string `json:"status"`
@@ -152,7 +154,7 @@ func (h *Handler) CreateOrganization(c fiber.Ctx) error {
 	}
 	span.SetAttributes(attribute.String("organization.id", org.ID))
 
-	membership, err := h.store.CreateOrganization(ctx, org, userID)
+	member, err := h.store.CreateOrganization(ctx, org, userID)
 	if err != nil {
 		if stderrors.Is(err, ErrConflict) {
 			return errors.ConflictError("slug", slug)
@@ -162,8 +164,8 @@ func (h *Handler) CreateOrganization(c fiber.Ctx) error {
 	}
 
 	metrics.RecordOrgCreated()
-	metrics.RecordMembershipOp("create_owner")
-	span.SetAttributes(attribute.String("membership.id", membership.ID))
+	metrics.RecordMemberOp("create_owner")
+	span.SetAttributes(attribute.String("member.id", member.ID))
 	span.SetStatus(codes.Ok, "created")
 
 	return c.Status(fiber.StatusCreated).JSON(toOrgResponse(org))
@@ -327,8 +329,8 @@ func (h *Handler) DeleteOrganization(c fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-func (h *Handler) ListMemberships(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "memberships.list")
+func (h *Handler) ListMembers(c fiber.Ctx) error {
+	ctx, span := h.tracer.Start(c.Context(), "members.list")
 	defer span.End()
 
 	userID := middleware.GetUserID(c)
@@ -344,26 +346,26 @@ func (h *Handler) ListMemberships(c fiber.Ctx) error {
 		return err
 	}
 
-	list, hasMore, err := h.store.ListMemberships(ctx, orgID, limit, offset)
+	list, hasMore, err := h.store.ListMembers(ctx, orgID, limit, offset)
 	if err != nil {
-		h.logError(ctx, span, "failed to list memberships", err, errors.KindDB)
+		h.logError(ctx, span, "failed to list members", err, errors.KindDB)
 		return errors.InternalError()
 	}
 
-	out := ListMembershipsResponse{
-		Memberships: make([]MembershipResponse, 0, len(list)),
-		HasMore:     hasMore,
+	out := ListMembersResponse{
+		Members: make([]MemberResponse, 0, len(list)),
+		HasMore: hasMore,
 	}
 	for _, m := range list {
-		out.Memberships = append(out.Memberships, toMembershipResponse(m))
+		out.Members = append(out.Members, toMemberResponse(m))
 	}
-	span.SetAttributes(attribute.Int("memberships.count", len(out.Memberships)))
+	span.SetAttributes(attribute.Int("members.count", len(out.Members)))
 	span.SetStatus(codes.Ok, "ok")
 	return c.JSON(out)
 }
 
-func (h *Handler) CreateMembership(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "memberships.create")
+func (h *Handler) CreateMember(c fiber.Ctx) error {
+	ctx, span := h.tracer.Start(c.Context(), "members.create")
 	defer span.End()
 
 	userID := middleware.GetUserID(c)
@@ -375,10 +377,10 @@ func (h *Handler) CreateMembership(c fiber.Ctx) error {
 		return err
 	}
 	if actor.Role != RoleAdmin && actor.Role != RoleOwner {
-		return errors.ForbiddenError("membership.create", "organization", orgID)
+		return errors.ForbiddenError("member.create", "organization", orgID)
 	}
 
-	var req CreateMembershipRequest
+	var req CreateMemberRequest
 	if err := c.Bind().Body(&req); err != nil {
 		return err
 	}
@@ -405,15 +407,15 @@ func (h *Handler) CreateMembership(c fiber.Ctx) error {
 		})
 	}
 	if role == RoleOwner && actor.Role != RoleOwner {
-		return errors.ForbiddenError("membership.create_owner", "organization", orgID)
+		return errors.ForbiddenError("member.create_owner", "organization", orgID)
 	}
 
 	now := time.Now().UTC()
 	invitedBy := userID
-	m := &Membership{
+	m := &Member{
 		ID:             NewULID(),
 		OrganizationID: orgID,
-		UserID:         targetUser,
+		UserID:         &targetUser,
 		Role:           role,
 		Status:         StatusActive,
 		InvitedBy:      &invitedBy,
@@ -421,62 +423,62 @@ func (h *Handler) CreateMembership(c fiber.Ctx) error {
 		UpdatedAt:      now,
 	}
 
-	if err := h.store.CreateMembership(ctx, m); err != nil {
+	if err := h.store.CreateUserMember(ctx, m); err != nil {
 		if stderrors.Is(err, ErrConflict) {
 			return errors.ConflictError("user_id", targetUser)
 		}
-		h.logError(ctx, span, "failed to create membership", err, errors.KindDB)
+		h.logError(ctx, span, "failed to create member", err, errors.KindDB)
 		return errors.InternalError()
 	}
 
-	metrics.RecordMembershipOp("create")
-	span.SetAttributes(attribute.String("membership.id", m.ID))
+	metrics.RecordMemberOp("create")
+	span.SetAttributes(attribute.String("member.id", m.ID))
 	span.SetStatus(codes.Ok, "created")
-	return c.Status(fiber.StatusCreated).JSON(toMembershipResponse(m))
+	return c.Status(fiber.StatusCreated).JSON(toMemberResponse(m))
 }
 
-func (h *Handler) GetMembership(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "memberships.get")
+func (h *Handler) GetMember(c fiber.Ctx) error {
+	ctx, span := h.tracer.Start(c.Context(), "members.get")
 	defer span.End()
 
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
-	membershipID := c.Params("membership_id")
+	memberID := c.Params("member_id")
 	span.SetAttributes(
 		attribute.String("organization.id", orgID),
-		attribute.String("membership.id", membershipID),
+		attribute.String("member.id", memberID),
 	)
 
 	if _, err := h.requireActiveMember(ctx, orgID, userID); err != nil {
 		return err
 	}
 
-	m, err := h.store.GetMembership(ctx, orgID, membershipID)
+	m, err := h.store.GetMember(ctx, orgID, memberID)
 	if err != nil {
 		if stderrors.Is(err, ErrNotFound) {
-			return errors.NotFoundError("membership", membershipID)
+			return errors.NotFoundError("member", memberID)
 		}
-		h.logError(ctx, span, "failed to get membership", err, errors.KindDB)
+		h.logError(ctx, span, "failed to get member", err, errors.KindDB)
 		return errors.InternalError()
 	}
 	if m.Status == StatusRemoved {
-		return errors.NotFoundError("membership", membershipID)
+		return errors.NotFoundError("member", memberID)
 	}
 
 	span.SetStatus(codes.Ok, "ok")
-	return c.JSON(toMembershipResponse(m))
+	return c.JSON(toMemberResponse(m))
 }
 
-func (h *Handler) UpdateMembership(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "memberships.update")
+func (h *Handler) UpdateMember(c fiber.Ctx) error {
+	ctx, span := h.tracer.Start(c.Context(), "members.update")
 	defer span.End()
 
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
-	membershipID := c.Params("membership_id")
+	memberID := c.Params("member_id")
 	span.SetAttributes(
 		attribute.String("organization.id", orgID),
-		attribute.String("membership.id", membershipID),
+		attribute.String("member.id", memberID),
 	)
 
 	actor, err := h.requireActiveMember(ctx, orgID, userID)
@@ -484,21 +486,26 @@ func (h *Handler) UpdateMembership(c fiber.Ctx) error {
 		return err
 	}
 
-	var req UpdateMembershipRequest
+	var req UpdateMemberRequest
 	if err := c.Bind().Body(&req); err != nil {
 		return err
 	}
 
-	m, err := h.store.MutateMembership(ctx, orgID, membershipID, func(m *Membership, activeOwners int) error {
-		isSelf := m.UserID == userID
+	m, err := h.store.MutateMember(ctx, orgID, memberID, func(m *Member, activeOwners int) error {
+		isSelf := m.IsUser(userID)
 
 		if req.Role != nil {
 			if actor.Role != RoleAdmin && actor.Role != RoleOwner {
-				return errors.ForbiddenError("membership.update_role", "membership", membershipID)
+				return errors.ForbiddenError("member.update_role", "member", memberID)
 			}
-			// Only owners may change another owner's role.
 			if m.Role == RoleOwner && actor.Role != RoleOwner {
-				return errors.ForbiddenError("membership.manage_owner", "membership", membershipID)
+				return errors.ForbiddenError("member.manage_owner", "member", memberID)
+			}
+			// Service accounts cannot be owners.
+			if m.ServiceAccountID != nil && Role(strings.TrimSpace(*req.Role)) == RoleOwner {
+				return errors.ValidationError("Request validation failed", map[string]interface{}{
+					"fields": []map[string]string{{"path": "role", "message": "service accounts cannot be owners"}},
+				})
 			}
 			newRole := Role(strings.TrimSpace(*req.Role))
 			if !newRole.Valid() {
@@ -507,7 +514,7 @@ func (h *Handler) UpdateMembership(c fiber.Ctx) error {
 				})
 			}
 			if newRole == RoleOwner && actor.Role != RoleOwner {
-				return errors.ForbiddenError("membership.promote_owner", "membership", membershipID)
+				return errors.ForbiddenError("member.promote_owner", "member", memberID)
 			}
 			if m.Role == RoleOwner && newRole != RoleOwner && activeOwners <= 1 {
 				return errors.ValidationError("Cannot demote the sole owner", map[string]interface{}{
@@ -532,11 +539,10 @@ func (h *Handler) UpdateMembership(c fiber.Ctx) error {
 				}
 			} else {
 				if actor.Role != RoleAdmin && actor.Role != RoleOwner {
-					return errors.ForbiddenError("membership.update_status", "membership", membershipID)
+					return errors.ForbiddenError("member.update_status", "member", memberID)
 				}
-				// Only owners may change another owner's status.
 				if m.Role == RoleOwner && actor.Role != RoleOwner {
-					return errors.ForbiddenError("membership.manage_owner", "membership", membershipID)
+					return errors.ForbiddenError("member.manage_owner", "member", memberID)
 				}
 			}
 			if m.Role == RoleOwner && newStatus != StatusActive && m.Status == StatusActive && activeOwners <= 1 {
@@ -550,30 +556,30 @@ func (h *Handler) UpdateMembership(c fiber.Ctx) error {
 	})
 	if err != nil {
 		if stderrors.Is(err, ErrNotFound) {
-			return errors.NotFoundError("membership", membershipID)
+			return errors.NotFoundError("member", memberID)
 		}
 		if _, ok := err.(*errors.ApiError); ok {
 			return err
 		}
-		h.logError(ctx, span, "failed to update membership", err, errors.KindDB)
+		h.logError(ctx, span, "failed to update member", err, errors.KindDB)
 		return errors.InternalError()
 	}
 
-	metrics.RecordMembershipOp("update")
+	metrics.RecordMemberOp("update")
 	span.SetStatus(codes.Ok, "ok")
-	return c.JSON(toMembershipResponse(m))
+	return c.JSON(toMemberResponse(m))
 }
 
-func (h *Handler) DeleteMembership(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "memberships.delete")
+func (h *Handler) DeleteMember(c fiber.Ctx) error {
+	ctx, span := h.tracer.Start(c.Context(), "members.delete")
 	defer span.End()
 
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
-	membershipID := c.Params("membership_id")
+	memberID := c.Params("member_id")
 	span.SetAttributes(
 		attribute.String("organization.id", orgID),
-		attribute.String("membership.id", membershipID),
+		attribute.String("member.id", memberID),
 	)
 
 	actor, err := h.requireActiveMember(ctx, orgID, userID)
@@ -581,18 +587,17 @@ func (h *Handler) DeleteMembership(c fiber.Ctx) error {
 		return err
 	}
 
-	_, err = h.store.MutateMembership(ctx, orgID, membershipID, func(m *Membership, activeOwners int) error {
-		isSelf := m.UserID == userID
+	_, err = h.store.MutateMember(ctx, orgID, memberID, func(m *Member, activeOwners int) error {
+		isSelf := m.IsUser(userID)
 		if !isSelf && actor.Role != RoleAdmin && actor.Role != RoleOwner {
-			return errors.ForbiddenError("membership.remove", "membership", membershipID)
+			return errors.ForbiddenError("member.remove", "member", memberID)
 		}
-		// Only owners may remove another owner.
 		if m.Role == RoleOwner && !isSelf && actor.Role != RoleOwner {
-			return errors.ForbiddenError("membership.manage_owner", "membership", membershipID)
+			return errors.ForbiddenError("member.manage_owner", "member", memberID)
 		}
 		if m.Role == RoleOwner && activeOwners <= 1 {
 			return errors.ValidationError("Cannot remove the sole owner", map[string]interface{}{
-				"fields": []map[string]string{{"path": "membership_id", "message": "transfer ownership first"}},
+				"fields": []map[string]string{{"path": "member_id", "message": "transfer ownership first"}},
 			})
 		}
 		m.Status = StatusRemoved
@@ -600,23 +605,23 @@ func (h *Handler) DeleteMembership(c fiber.Ctx) error {
 	})
 	if err != nil {
 		if stderrors.Is(err, ErrNotFound) {
-			return errors.NotFoundError("membership", membershipID)
+			return errors.NotFoundError("member", memberID)
 		}
 		if _, ok := err.(*errors.ApiError); ok {
 			return err
 		}
-		h.logError(ctx, span, "failed to remove membership", err, errors.KindDB)
+		h.logError(ctx, span, "failed to remove member", err, errors.KindDB)
 		return errors.InternalError()
 	}
 
-	metrics.RecordMembershipOp("remove")
+	metrics.RecordMemberOp("remove")
 	span.SetStatus(codes.Ok, "ok")
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-// Resolve handles POST /internal/memberships/resolve (internal listener; not gateway-published).
+// Resolve handles POST /internal/members/resolve (internal listener; not gateway-published).
 func (h *Handler) Resolve(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "memberships.resolve")
+	ctx, span := h.tracer.Start(c.Context(), "members.resolve")
 	defer span.End()
 
 	var req ResolveRequest
@@ -640,29 +645,34 @@ func (h *Handler) Resolve(c fiber.Ctx) error {
 		attribute.String("organization.id", orgID),
 	)
 
-	m, err := h.store.ResolveMembership(ctx, userID, orgID)
+	m, err := h.store.ResolveMember(ctx, userID, orgID)
 	if err != nil {
 		if stderrors.Is(err, ErrNotFound) {
 			metrics.RecordResolve("miss")
 			span.SetStatus(codes.Ok, "miss")
-			return errors.NotFoundError("membership", userID+":"+orgID)
+			return errors.NotFoundError("member", userID+":"+orgID)
 		}
-		h.logError(ctx, span, "failed to resolve membership", err, errors.KindDB)
+		h.logError(ctx, span, "failed to resolve member", err, errors.KindDB)
 		metrics.RecordResolve("error")
 		return errors.InternalError()
 	}
 
 	metrics.RecordResolve("hit")
 	span.SetAttributes(
-		attribute.String("membership.id", m.ID),
-		attribute.String("membership.status", string(m.Status)),
+		attribute.String("member.id", m.ID),
+		attribute.String("member.status", string(m.Status)),
 	)
 	span.SetStatus(codes.Ok, "hit")
 
+	uid := ""
+	if m.UserID != nil {
+		uid = *m.UserID
+	}
+
 	return c.JSON(ResolveResponse{
-		MembershipID:   m.ID,
+		MemberID:       m.ID,
 		OrganizationID: m.OrganizationID,
-		UserID:         m.UserID,
+		UserID:         uid,
 		Status:         string(m.Status),
 	})
 }
@@ -695,13 +705,13 @@ func parseListParams(c fiber.Ctx) (limit, offset int, err error) {
 }
 
 // requireActiveMember returns 404 for non-member / unknown org (existence policy).
-func (h *Handler) requireActiveMember(ctx context.Context, orgID, userID string) (*Membership, error) {
-	m, err := h.store.GetActiveMembership(ctx, orgID, userID)
+func (h *Handler) requireActiveMember(ctx context.Context, orgID, userID string) (*Member, error) {
+	m, err := h.store.GetActiveMemberForUser(ctx, orgID, userID)
 	if err != nil {
 		if stderrors.Is(err, ErrNotFound) {
 			return nil, errors.NotFoundError("organization", orgID)
 		}
-		h.logError(ctx, nil, "failed to load membership", err, errors.KindDB)
+		h.logError(ctx, nil, "failed to load member", err, errors.KindDB)
 		return nil, errors.InternalError()
 	}
 	return m, nil
@@ -722,16 +732,18 @@ func toOrgResponse(o *Organization) OrgResponse {
 	}
 }
 
-func toMembershipResponse(m *Membership) MembershipResponse {
-	return MembershipResponse{
-		ID:             m.ID,
-		OrganizationID: m.OrganizationID,
-		UserID:         m.UserID,
-		Role:           string(m.Role),
-		Status:         string(m.Status),
-		InvitedBy:      m.InvitedBy,
-		CreatedAt:      m.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:      m.UpdatedAt.UTC().Format(time.RFC3339),
+func toMemberResponse(m *Member) MemberResponse {
+	return MemberResponse{
+		ID:               m.ID,
+		OrganizationID:   m.OrganizationID,
+		Principal:        m.Principal(),
+		UserID:           m.UserID,
+		ServiceAccountID: m.ServiceAccountID,
+		Role:             string(m.Role),
+		Status:           string(m.Status),
+		InvitedBy:        m.InvitedBy,
+		CreatedAt:        m.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:        m.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }
 

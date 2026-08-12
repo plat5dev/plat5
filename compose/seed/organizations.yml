@@ -8,7 +8,7 @@ services:
           methods: [POST, GET]
         - path: /{organization_id}
           methods: [GET, PATCH, DELETE]
-        - path: /{organization_id}/memberships
+        - path: /{organization_id}/members
           methods: [GET, POST]
-        - path: /{organization_id}/memberships/{membership_id}
+        - path: /{organization_id}/members/{member_id}
           methods: [GET, PATCH, DELETE]

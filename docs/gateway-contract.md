@@ -2,13 +2,13 @@
 
 Auth delegation, identity headers, and trace propagation from the Plat5 gateway (`services/gateway/`).
 
-Boundary: [`identity-boundary.md`](identity-boundary.md). Routes: [`routes.md`](routes.md). Errors: [`api-errors.md`](api-errors.md).
+Boundary: [`identity-boundary.md`](identity-boundary.md). Routes: [`routes.md`](routes.md). Errors: [`api-errors.md`](api-errors.md). Identity backends: [`identity.md`](identity.md).
 
 ## Responsibilities
 
 | Layer | Responsibility |
 |-------|---------------|
-| **Gateway** | Routing, authentication (JWT/API key), membership resolve on `organization` scope, identity header injection, CORS, trace propagation |
+| **Gateway** | Routing, authentication (JWT/API key), member admission on `organization` scope, identity header injection, CORS, trace propagation |
 | **Edge / Load Balancer** | TLS termination (e.g. Cloudflare Zero Trust tunnels) |
 | **Downstream services** | Business logic, data access, resource authorization |
 
@@ -21,8 +21,8 @@ The gateway strips client-supplied identity headers, then injects only what the 
 | Scope | Credential | Identity headers injected |
 |-------|------------|---------------------------|
 | `public` | none | none |
-| `user` | user JWT or API key | `X-User-Id` only |
-| `organization` | user JWT or API key + active membership resolve | **`X-Organization-Id`**, **`X-Membership-Id`** only — **not** `X-User-Id` |
+| `user` | user JWT or **user** API key | `X-User-Id` only |
+| `organization` | user JWT, **user** API key + member resolve, or **member** API key | **`X-Organization-Id`**, **`X-Member-Id`** only — **not** `X-User-Id` |
 
 ### Stripped before upstream (all scopes)
 
@@ -42,7 +42,7 @@ Clients still send these headers **to the gateway**. Services behind the gateway
 | `X-Request-ID` | Correlation ID (gateway-generated; also on response) |
 | `traceparent` | W3C trace context (OTel propagation) |
 
-Org-scope identity is `X-Organization-Id` + `X-Membership-Id` only. Membership **role** is organizations-service domain data — not a gateway header. Need user or role → load from organizations deliberately.
+Org-scope identity is `X-Organization-Id` + `X-Member-Id` only. Member **role** is identity-service domain data — not a gateway header. Need user or role → load from identity deliberately.
 
 ## Route Configuration
 
@@ -70,7 +70,7 @@ Direct-exposed services are exempt (see below).
 
 1. **Trust identity headers for your scope** — Do not validate tokens.
    - `user`: trust `X-User-Id`
-   - `organization`: trust `X-Organization-Id` and `X-Membership-Id` only
+   - `organization`: trust `X-Organization-Id` and `X-Member-Id` only
 2. **Missing expected headers → platform bug** — Return `INTERNAL_ERROR` (500), not `UNAUTHORIZED`
 3. **Propagate `traceparent`** on downstream calls
 4. **Log with `request_id`** from `X-Request-ID`
@@ -91,14 +91,25 @@ These protect the shared auth model for the entire platform.
 
 Admission error policy (canonical): [`identity-boundary.md`](identity-boundary.md).
 
+### User credential (JWT or user API key)
+
 1. Bad/missing credential → **401** `UNAUTHORIZED`
-2. Membership resolve unavailable → **503** `SERVICE_UNAVAILABLE`
-3. No membership or status ≠ `active` → **404** `NOT_FOUND`
-4. Active hit → inject only `X-Organization-Id` + `X-Membership-Id`
+2. Member resolve unavailable → **503** `SERVICE_UNAVAILABLE`
+3. No member or status ≠ `active` → **404** `NOT_FOUND`
+4. Active hit → inject only `X-Organization-Id` + `X-Member-Id`
+
+### Member API key
+
+1. Bad/missing / invalid key → **401** `UNAUTHORIZED`
+2. Key validate unavailable → **503** `SERVICE_UNAVAILABLE`
+3. `key_type` ≠ `member`, or `organization_id` ≠ path org, or member not usable → **404** `NOT_FOUND` (or **401** if treat as wrong credential — prefer **404** when org mismatch to match existence policy on org routes)
+4. Active member key for path org → inject only `X-Organization-Id` + `X-Member-Id`
+
+Member keys are **not** valid on `user` scope routes → **401** `UNAUTHORIZED`.
 
 Missing org headers on an org-scoped service request → **500** `INTERNAL_ERROR`.
 
-The **organizations** service stays on **`user` scope** and enforces membership in-process. See [`organizations.md`](organizations.md).
+The **identity** service stays on **`user` scope** and enforces membership in-process. See [`identity.md`](identity.md).
 
 ## Internal identity control plane
 
@@ -106,10 +117,10 @@ Gateway calls identity backends over HTTP (not published on the edge route map):
 
 | Call | Env | Typical URL |
 |------|-----|-------------|
-| API key validate | `APIKEY_VALIDATE_URL` | `http://api-keys:3001/internal/keys/validate` |
-| Membership resolve | `MEMBERSHIP_RESOLVE_URL` | `http://organizations:3001/internal/memberships/resolve` |
+| API key validate | `APIKEY_VALIDATE_URL` | `http://identity:3001/internal/keys/validate` |
+| Member resolve | `MEMBER_RESOLVE_URL` | `http://identity:3001/internal/members/resolve` |
 
-Both live on each service’s **`INTERNAL_PORT`**. Optional shared `INTERNAL_AUTH_TOKEN` is sent as `X-Plat5-Internal-Token`. Contracts: [`api-keys.md`](api-keys.md), [`organizations.md`](organizations.md).
+Both live on identity’s **`INTERNAL_PORT`**. Optional shared `INTERNAL_AUTH_TOKEN` is sent as `X-Plat5-Internal-Token`. Contract: [`identity.md`](identity.md).
 
 ## Public Routes
 
@@ -140,7 +151,7 @@ Gateway handles `OPTIONS` preflight and adds `Access-Control-Allow-*` on respons
 | Auth failure (bad/missing credential) | `UNAUTHORIZED` (401) — gateway only |
 | Route not registered | `NOT_FOUND` (404) |
 | Request body too large | `PAYLOAD_TOO_LARGE` (413) |
-| Upstream or auth infra down (JWKS, api-keys validate, membership resolve) | `SERVICE_UNAVAILABLE` (503); proxy upstream failure may surface as **502** with the same `SERVICE_UNAVAILABLE` code |
+| Upstream or auth infra down (JWKS, key validate, member resolve) | `SERVICE_UNAVAILABLE` (503); proxy upstream failure may surface as **502** with the same `SERVICE_UNAVAILABLE` code |
 | Gateway internal failure mid-proxy | `INTERNAL_ERROR` (500) |
 | Missing expected identity headers in a service | `INTERNAL_ERROR` (500) |
 

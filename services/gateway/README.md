@@ -27,8 +27,8 @@ cargo test --all-targets
 | `AUTH_USER_ID_CLAIM` | `properties.user_id` | Dotted claim path for Plat5 user id (`sub` for many OIDC IdPs) |
 | `APIKEY_VALIDATE_URL` | (required) | Full URL for key validate (e.g. `http://api-keys:3001/internal/keys/validate`) |
 | `APIKEY_CACHE_TTL_SECS` | `300` | API key cache TTL |
-| `MEMBERSHIP_RESOLVE_URL` | (optional) | Full URL for membership resolve; required for `organization` scope |
-| `MEMBERSHIP_CACHE_TTL_SECS` | `300` | Membership resolve cache TTL |
+| `MEMBERSHIP_RESOLVE_URL` | (optional) | Full URL for member resolve (`…/internal/members/resolve`); required for `organization` scope |
+| `MEMBERSHIP_CACHE_TTL_SECS` | `300` | Member resolve cache TTL |
 | `INTERNAL_AUTH_TOKEN` | unset | Sent as `X-Plat5-Internal-Token` to validate/resolve when set |
 | `UPSTREAM_CONNECT_TIMEOUT_MS` | `10000` | Upstream connection timeout |
 | `UPSTREAM_READ_TIMEOUT_MS` | `30000` | Upstream read timeout |
