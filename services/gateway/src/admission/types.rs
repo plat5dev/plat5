@@ -1,15 +1,44 @@
 use serde_json::Value;
 
-/// Authentication context extracted from a successful auth check.
+/// Authentication context from a successful user credential check (JWT or user API key).
 pub struct AuthContext {
     pub user_id: String,
     pub auth_type: &'static str,
     pub kid: Option<String>,
 }
 
+/// Successful route admission — what identity headers to inject (if any).
+pub enum Admission {
+    Public,
+    User {
+        user_id: String,
+        auth_type: &'static str,
+        kid: Option<String>,
+    },
+    Organization {
+        organization_id: String,
+        member_id: String,
+        auth_type: &'static str,
+        /// Present when admitted via user credential + membership resolve.
+        user_id: Option<String>,
+        kid: Option<String>,
+    },
+}
+
 pub enum ResolveDeny {
     NotFound,
     Unavailable,
+}
+
+/// Denial from the admission pipeline (mapped to HTTP by the proxy layer).
+#[derive(Debug)]
+pub enum AdmitError {
+    Auth(AuthError),
+    MemberApiKeyInvalid,
+    NotFound,
+    Unavailable,
+    /// Route/config invariant broken (missing org param, etc.).
+    Internal(&'static str),
 }
 
 #[derive(Debug)]
@@ -18,11 +47,11 @@ pub enum AuthError {
     InvalidAuthorizationHeader,
     InvalidToken { reason: &'static str },
     MissingUserId,
-    MissingApiKey,
-    InvalidApiKeyHeader,
-    InvalidApiKey,
+    MissingUserApiKey,
+    InvalidUserApiKeyHeader,
+    InvalidUserApiKey,
     JwtValidationUnavailable,
-    ApiKeyValidationUnavailable,
+    UserApiKeyValidationUnavailable,
 }
 
 impl AuthError {
@@ -32,11 +61,11 @@ impl AuthError {
             AuthError::InvalidAuthorizationHeader => "invalid_authorization",
             AuthError::InvalidToken { reason } => reason,
             AuthError::MissingUserId => "missing_user_id",
-            AuthError::MissingApiKey => "missing_apikey",
-            AuthError::InvalidApiKeyHeader => "invalid_apikey_header",
-            AuthError::InvalidApiKey => "invalid_apikey",
+            AuthError::MissingUserApiKey => "missing_user_apikey",
+            AuthError::InvalidUserApiKeyHeader => "invalid_user_apikey_header",
+            AuthError::InvalidUserApiKey => "invalid_user_apikey",
             AuthError::JwtValidationUnavailable => "jwks_unavailable",
-            AuthError::ApiKeyValidationUnavailable => "apikey_service_unavailable",
+            AuthError::UserApiKeyValidationUnavailable => "user_apikey_service_unavailable",
         }
     }
 
@@ -47,10 +76,10 @@ impl AuthError {
             | AuthError::InvalidToken { .. }
             | AuthError::MissingUserId
             | AuthError::JwtValidationUnavailable => "jwt",
-            AuthError::MissingApiKey
-            | AuthError::InvalidApiKeyHeader
-            | AuthError::InvalidApiKey
-            | AuthError::ApiKeyValidationUnavailable => "apikey",
+            AuthError::MissingUserApiKey
+            | AuthError::InvalidUserApiKeyHeader
+            | AuthError::InvalidUserApiKey
+            | AuthError::UserApiKeyValidationUnavailable => "user_apikey",
         }
     }
 
@@ -61,9 +90,9 @@ impl AuthError {
                 | AuthError::InvalidAuthorizationHeader
                 | AuthError::InvalidToken { .. }
                 | AuthError::MissingUserId
-                | AuthError::MissingApiKey
-                | AuthError::InvalidApiKeyHeader
-                | AuthError::InvalidApiKey
+                | AuthError::MissingUserApiKey
+                | AuthError::InvalidUserApiKeyHeader
+                | AuthError::InvalidUserApiKey
         )
     }
 

@@ -3,9 +3,7 @@ package userkeys
 import (
 	"context"
 	stderrors "errors"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gofiber/fiber/v3"
 	"go.opentelemetry.io/otel"
@@ -14,6 +12,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/plat5dev/plat5/identity/errors"
+	"github.com/plat5dev/plat5/identity/internal/apikey"
+	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/metrics"
 	"github.com/plat5dev/plat5/identity/middleware"
 	"github.com/plat5dev/plat5/identity/telemetry"
@@ -69,7 +69,6 @@ type ValidateResponse struct {
 	UserID string `json:"user_id,omitempty"`
 }
 
-// Create handles POST /api/users/{user_id}/api-keys
 func (h *Handler) Create(c fiber.Ctx) error {
 	ctx, span := h.tracer.Start(c.Context(), "userkeys.create")
 	defer span.End()
@@ -84,16 +83,9 @@ func (h *Handler) Create(c fiber.Ctx) error {
 		return err
 	}
 
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		name = "Unnamed Key"
-	}
-	if len(name) > MaxKeyNameLen {
-		return errors.ValidationError("Request validation failed", map[string]interface{}{
-			"fields": []map[string]string{
-				{"path": "name", "message": "must be at most 128 characters"},
-			},
-		})
+	name, err := apikey.NormalizeName(req.Name)
+	if err != nil {
+		return errors.FieldError("name", "must be at most 128 characters")
 	}
 	span.SetAttributes(attribute.String("key.name", name))
 
@@ -126,11 +118,10 @@ func (h *Handler) Create(c fiber.Ctx) error {
 		Key:       plaintext,
 		KeyPrefix: apiKey.KeyPrefix,
 		Name:      apiKey.Name,
-		CreatedAt: apiKey.CreatedAt.UTC().Format(time.RFC3339),
+		CreatedAt: httpx.FormatTime(apiKey.CreatedAt),
 	})
 }
 
-// List handles GET /api/users/{user_id}/api-keys
 func (h *Handler) List(c fiber.Ctx) error {
 	ctx, span := h.tracer.Start(c.Context(), "userkeys.list")
 	defer span.End()
@@ -140,7 +131,7 @@ func (h *Handler) List(c fiber.Ctx) error {
 	}
 	userID := middleware.GetUserID(c)
 
-	limit, offset, err := parseListParams(c)
+	limit, offset, err := httpx.ParseListParams(c)
 	if err != nil {
 		return err
 	}
@@ -164,7 +155,6 @@ func (h *Handler) List(c fiber.Ctx) error {
 	return c.JSON(out)
 }
 
-// Revoke handles DELETE /api/users/{user_id}/api-keys/{key_id}
 func (h *Handler) Revoke(c fiber.Ctx) error {
 	ctx, span := h.tracer.Start(c.Context(), "userkeys.revoke")
 	defer span.End()
@@ -175,9 +165,7 @@ func (h *Handler) Revoke(c fiber.Ctx) error {
 	userID := middleware.GetUserID(c)
 	keyID := c.Params("key_id")
 	if keyID == "" {
-		return errors.ValidationError("Request validation failed", map[string]interface{}{
-			"fields": []map[string]string{{"path": "key_id", "message": "required"}},
-		})
+		return errors.FieldError("key_id", "required")
 	}
 	span.SetAttributes(attribute.String("key.id", keyID))
 
@@ -201,8 +189,6 @@ func (h *Handler) Revoke(c fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-// Validate handles POST /internal/user-keys/validate.
-// Only user_api_keys. Wrong prefix or unknown/revoked → valid:false.
 func (h *Handler) Validate(c fiber.Ctx) error {
 	ctx, span := h.tracer.Start(c.Context(), "userkeys.validate")
 	defer span.End()
@@ -213,9 +199,7 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 	}
 	key := strings.TrimSpace(req.Key)
 	if key == "" {
-		return errors.ValidationError("Request validation failed", map[string]interface{}{
-			"fields": []map[string]string{{"path": "key", "message": "required"}},
-		})
+		return errors.FieldError("key", "required")
 	}
 	if !LooksLike(key) {
 		return h.invalid(c, span)
@@ -265,58 +249,16 @@ func requirePathUser(c fiber.Ctx) error {
 	return nil
 }
 
-func parseListParams(c fiber.Ctx) (limit, offset int, err error) {
-	limit = DefaultListLimit
-	if v := strings.TrimSpace(c.Query("limit")); v != "" {
-		n, parseErr := strconv.Atoi(v)
-		if parseErr != nil || n < 1 {
-			return 0, 0, errors.ValidationError("Request validation failed", map[string]interface{}{
-				"fields": []map[string]string{{"path": "limit", "message": "must be a positive integer"}},
-			})
-		}
-		limit = n
-	}
-	if limit > MaxListLimit {
-		limit = MaxListLimit
-	}
-
-	if v := strings.TrimSpace(c.Query("offset")); v != "" {
-		n, parseErr := strconv.Atoi(v)
-		if parseErr != nil || n < 0 {
-			return 0, 0, errors.ValidationError("Request validation failed", map[string]interface{}{
-				"fields": []map[string]string{{"path": "offset", "message": "must be a non-negative integer"}},
-			})
-		}
-		offset = n
-	}
-	return limit, offset, nil
-}
-
 func toKeyResponse(k *APIKey) KeyResponse {
-	r := KeyResponse{
+	return KeyResponse{
 		ID:        k.ID,
 		KeyPrefix: k.KeyPrefix,
 		Name:      k.Name,
-		CreatedAt: k.CreatedAt.UTC().Format(time.RFC3339),
+		CreatedAt: httpx.FormatTime(k.CreatedAt),
+		RevokedAt: httpx.FormatTimePtr(k.RevokedAt),
 	}
-	if k.RevokedAt != nil {
-		s := k.RevokedAt.UTC().Format(time.RFC3339)
-		r.RevokedAt = &s
-	}
-	return r
 }
 
 func (h *Handler) logError(ctx context.Context, span trace.Span, msg string, err error, kind errors.ErrorKind) {
-	span.SetStatus(codes.Error, msg)
-	span.SetAttributes(
-		attribute.String("error.kind", kind.String()),
-		attribute.String("error.message", err.Error()),
-	)
-	span.RecordError(err)
-
-	logger := h.telem.LoggerWithContext(ctx)
-	logger.Error().
-		Str("error_kind", kind.String()).
-		Str("error_message", err.Error()).
-		Msg(msg)
+	httpx.LogError(ctx, span, h.telem.LoggerWithContext(ctx), msg, err, kind)
 }

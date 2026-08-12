@@ -7,7 +7,7 @@ use etcd_client::{Client, GetOptions, WatchOptions};
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
-use crate::config::{Config, ServiceConfig, ROUTES_PREFIX};
+use crate::route_config::{Config, ServiceConfig, ROUTES_PREFIX};
 use crate::route_map::RouteMap;
 
 const DEFAULT_ETCD_URL: &str = "http://localhost:2379";

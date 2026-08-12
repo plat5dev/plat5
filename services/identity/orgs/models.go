@@ -2,13 +2,12 @@ package orgs
 
 import (
 	"bytes"
-	"crypto/rand"
 	"encoding/json"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/oklog/ulid/v2"
+	"github.com/plat5dev/plat5/identity/internal/id"
 )
 
 const (
@@ -16,8 +15,6 @@ const (
 	MaxSANameLen     = 128
 	MaxUserIDLen     = 128
 	MaxSettingsBytes = 16 << 10 // 16 KiB
-	DefaultListLimit = 50
-	MaxListLimit     = 100
 
 	PrincipalUser           = "user"
 	PrincipalServiceAccount = "service_account"
@@ -105,7 +102,7 @@ func (m *Member) IsUser(userID string) bool {
 }
 
 func NewULID() string {
-	return ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader).String()
+	return id.New()
 }
 
 var (

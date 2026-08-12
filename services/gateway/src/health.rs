@@ -7,7 +7,7 @@ use prometheus::{Encoder, TextEncoder};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::auth::state::JwtValidatorState;
+use crate::auth::jwt::JwtValidatorState;
 
 /// Shared state for health checks
 pub struct HealthState {

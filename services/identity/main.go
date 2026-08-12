@@ -4,15 +4,19 @@ import (
 	"context"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/gofiber/contrib/v3/otel"
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/adaptor"
 	"github.com/gofiber/fiber/v3/middleware/recover"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/plat5dev/plat5/identity/config"
 	"github.com/plat5dev/plat5/identity/db"
-	"github.com/plat5dev/plat5/identity/errors"
+	apierrors "github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/memberkeys"
 	"github.com/plat5dev/plat5/identity/metrics"
 	"github.com/plat5dev/plat5/identity/middleware"
@@ -22,7 +26,9 @@ import (
 )
 
 func main() {
+	cfg := config.Load()
 	ctx := context.Background()
+
 	// Register prometheus metrics before OTLP bridge so the first export sees them.
 	metrics.Init()
 
@@ -30,34 +36,78 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to initialize telemetry: %v", err)
 	}
-	defer func() {
-		if err := telem.Shutdown(context.Background()); err != nil {
-			log.Printf("error shutting down telemetry: %v", err)
-		}
-	}()
 
-	pool, err := db.Connect(ctx)
+	pool, err := db.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("failed to connect to postgres: %v", err)
 	}
-	defer pool.Close()
 
 	if err := db.Migrate(ctx, pool); err != nil {
+		pool.Close()
 		log.Fatalf("failed to migrate database: %v", err)
 	}
 
 	orgStore := orgs.NewStore(pool)
 	orgHandler := orgs.NewHandler(orgStore, telem)
-	userKeyStore := userkeys.NewStore(pool)
-	userKeyHandler := userkeys.NewHandler(userKeyStore, telem)
-	memberKeyStore := memberkeys.NewStore(pool)
-	memberKeyHandler := memberkeys.NewHandler(memberKeyStore, orgStore, telem)
+	userKeyHandler := userkeys.NewHandler(userkeys.NewStore(pool), telem)
+	memberKeyHandler := memberkeys.NewHandler(memberkeys.NewStore(pool), orgStore, telem)
 
+	app := newPublicApp(telem, orgHandler, userKeyHandler, memberKeyHandler)
+	internalApp := newInternalApp(telem, pool, cfg.InternalAuthToken, orgHandler, userKeyHandler, memberKeyHandler)
+
+	baseLogger := telem.Logger()
+	baseLogger.Info().
+		Str("port", cfg.Port).
+		Str("internal_port", cfg.InternalPort).
+		Msg("starting identity server")
+
+	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	errCh := make(chan error, 2)
+	go func() {
+		errCh <- internalApp.Listen(":" + cfg.InternalPort)
+	}()
+	go func() {
+		errCh <- app.Listen(":" + cfg.Port)
+	}()
+
+	select {
+	case <-runCtx.Done():
+		baseLogger.Info().Msg("shutdown signal received")
+	case err := <-errCh:
+		if err != nil {
+			baseLogger.Error().Err(err).Msg("server exited unexpectedly")
+			stop()
+		}
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := app.ShutdownWithContext(shutdownCtx); err != nil {
+		baseLogger.Error().Err(err).Msg("public server shutdown")
+	}
+	if err := internalApp.ShutdownWithContext(shutdownCtx); err != nil {
+		baseLogger.Error().Err(err).Msg("internal server shutdown")
+	}
+	pool.Close()
+	if err := telem.Shutdown(shutdownCtx); err != nil {
+		baseLogger.Error().Err(err).Msg("telemetry shutdown")
+	}
+	baseLogger.Info().Msg("shutdown complete")
+}
+
+func newPublicApp(
+	telem *telemetry.Telemetry,
+	orgHandler *orgs.Handler,
+	userKeyHandler *userkeys.Handler,
+	memberKeyHandler *memberkeys.Handler,
+) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName:      "identity",
-		ErrorHandler: errors.FiberErrorHandler,
+		ErrorHandler: apierrors.FiberErrorHandler,
 	})
-
 	app.Use(recover.New())
 	app.Use(otel.Middleware(
 		otel.WithTracerProvider(telem.TracerProvider()),
@@ -66,49 +116,37 @@ func main() {
 	))
 	app.Use(middleware.RequestLogger(telem))
 
-	users := app.Group("/api/users")
-	users.Post("/:user_id/api-keys", middleware.RequireUserID(), userKeyHandler.Create)
-	users.Get("/:user_id/api-keys", middleware.RequireUserID(), userKeyHandler.List)
-	users.Delete("/:user_id/api-keys/:key_id", middleware.RequireUserID(), userKeyHandler.Revoke)
+	userKeyHandler.MountPublic(app.Group("/api/users", middleware.RequireUserID()))
+	orgsGroup := app.Group("/api/organizations", middleware.RequireUserID())
+	orgHandler.MountPublic(orgsGroup)
+	memberKeyHandler.MountPublic(orgsGroup)
+	return app
+}
 
-	api := app.Group("/api/organizations")
-	api.Post("/", middleware.RequireUserID(), orgHandler.CreateOrganization)
-	api.Get("/", middleware.RequireUserID(), orgHandler.ListOrganizations)
-	api.Get("/:organization_id", middleware.RequireUserID(), orgHandler.GetOrganization)
-	api.Patch("/:organization_id", middleware.RequireUserID(), orgHandler.UpdateOrganization)
-	api.Delete("/:organization_id", middleware.RequireUserID(), orgHandler.DeleteOrganization)
-
-	api.Get("/:organization_id/members", middleware.RequireUserID(), orgHandler.ListMembers)
-	api.Post("/:organization_id/members", middleware.RequireUserID(), orgHandler.CreateMember)
-	api.Get("/:organization_id/members/:member_id", middleware.RequireUserID(), orgHandler.GetMember)
-	api.Patch("/:organization_id/members/:member_id", middleware.RequireUserID(), orgHandler.UpdateMember)
-	api.Delete("/:organization_id/members/:member_id", middleware.RequireUserID(), orgHandler.DeleteMember)
-
-	api.Post("/:organization_id/members/:member_id/api-keys", middleware.RequireUserID(), memberKeyHandler.Create)
-	api.Get("/:organization_id/members/:member_id/api-keys", middleware.RequireUserID(), memberKeyHandler.List)
-	api.Delete("/:organization_id/members/:member_id/api-keys/:key_id", middleware.RequireUserID(), memberKeyHandler.Revoke)
-
-	api.Post("/:organization_id/service-accounts", middleware.RequireUserID(), orgHandler.CreateServiceAccount)
-	api.Get("/:organization_id/service-accounts", middleware.RequireUserID(), orgHandler.ListServiceAccounts)
-	api.Get("/:organization_id/service-accounts/:service_account_id", middleware.RequireUserID(), orgHandler.GetServiceAccount)
-	api.Patch("/:organization_id/service-accounts/:service_account_id", middleware.RequireUserID(), orgHandler.UpdateServiceAccount)
-	api.Delete("/:organization_id/service-accounts/:service_account_id", middleware.RequireUserID(), orgHandler.DeleteServiceAccount)
-
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "3000"
-	}
-
-	internalApp := fiber.New(fiber.Config{
+func newInternalApp(
+	telem *telemetry.Telemetry,
+	pool *pgxpool.Pool,
+	internalToken string,
+	orgHandler *orgs.Handler,
+	userKeyHandler *userkeys.Handler,
+	memberKeyHandler *memberkeys.Handler,
+) *fiber.App {
+	app := fiber.New(fiber.Config{
 		AppName:      "identity-internal",
-		ErrorHandler: errors.FiberErrorHandler,
+		ErrorHandler: apierrors.FiberErrorHandler,
 	})
+	app.Use(recover.New())
+	app.Use(otel.Middleware(
+		otel.WithTracerProvider(telem.TracerProvider()),
+		otel.WithPropagators(telem.Propagator()),
+		otel.WithoutMetrics(true),
+	))
+	app.Use(middleware.RequestLogger(telem))
 
-	internalApp.Get("/health/live", func(c fiber.Ctx) error {
+	app.Get("/health/live", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "healthy"})
 	})
-
-	internalApp.Get("/health/ready", func(c fiber.Ctx) error {
+	app.Get("/health/ready", func(c fiber.Ctx) error {
 		pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		if err := pool.Ping(pingCtx); err != nil {
@@ -116,32 +154,11 @@ func main() {
 		}
 		return c.JSON(fiber.Map{"status": "healthy"})
 	})
+	app.Get("/metrics", adaptor.HTTPHandler(metrics.Handler()))
 
-	metricsHandler := adaptor.HTTPHandler(metrics.Handler())
-	internalApp.Get("/metrics", metricsHandler)
-
-	internalApp.Post("/internal/members/resolve", middleware.RequireInternalToken(), orgHandler.Resolve)
-	internalApp.Post("/internal/user-keys/validate", middleware.RequireInternalToken(), userKeyHandler.Validate)
-	internalApp.Post("/internal/member-keys/validate", middleware.RequireInternalToken(), memberKeyHandler.Validate)
-
-	internalPort := os.Getenv("INTERNAL_PORT")
-	if internalPort == "" {
-		internalPort = "3001"
-	}
-
-	baseLogger := telem.Logger()
-	baseLogger.Info().
-		Str("port", port).
-		Str("internal_port", internalPort).
-		Msg("starting identity server")
-
-	go func() {
-		if err := internalApp.Listen(":" + internalPort); err != nil {
-			baseLogger.Fatal().Err(err).Msg("internal server exited")
-		}
-	}()
-
-	if err := app.Listen(":" + port); err != nil {
-		baseLogger.Fatal().Err(err).Msg("fiber server exited")
-	}
+	internalAPI := app.Group("/internal", middleware.RequireInternalToken(internalToken))
+	orgHandler.MountInternal(internalAPI)
+	userKeyHandler.MountInternal(internalAPI)
+	memberKeyHandler.MountInternal(internalAPI)
+	return app
 }

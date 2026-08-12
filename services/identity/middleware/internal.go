@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"crypto/subtle"
-	"os"
 
 	"github.com/gofiber/fiber/v3"
 	"go.opentelemetry.io/otel/attribute"
@@ -13,10 +12,9 @@ import (
 
 const InternalTokenHeader = "X-Plat5-Internal-Token"
 
-// RequireInternalToken enforces INTERNAL_AUTH_TOKEN when set.
-// Unset token = network-trust only (dev). Health/metrics stay ungated.
-func RequireInternalToken() fiber.Handler {
-	expected := os.Getenv("INTERNAL_AUTH_TOKEN")
+// RequireInternalToken enforces expected when non-empty.
+// Empty token = network-trust only (dev). Health/metrics stay ungated by the caller.
+func RequireInternalToken(expected string) fiber.Handler {
 	return func(c fiber.Ctx) error {
 		if expected == "" {
 			return c.Next()

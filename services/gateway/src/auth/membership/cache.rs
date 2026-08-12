@@ -5,7 +5,7 @@ use moka::future::Cache;
 use crate::metrics;
 
 /// Cache for member resolve admissions.
-/// Key: user_id + organization_id. Value: member_id + organization_id (active only).
+/// Key: user_id + organization_id. Value: member_id (active only).
 #[derive(Clone)]
 pub struct MembershipCache {
     inner: Cache<String, CachedMembership>,

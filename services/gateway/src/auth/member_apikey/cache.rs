@@ -7,11 +7,11 @@ use crate::metrics;
 /// Cache for validated member API keys (plat5-mk-1-).
 #[derive(Clone)]
 pub struct MemberApiKeyCache {
-    inner: Cache<String, CachedMemberKey>,
+    inner: Cache<String, CachedMemberApiKey>,
 }
 
 #[derive(Clone)]
-pub struct CachedMemberKey {
+pub struct CachedMemberApiKey {
     pub member_id: String,
     pub organization_id: String,
 }
@@ -25,7 +25,7 @@ impl MemberApiKeyCache {
         Self { inner: cache }
     }
 
-    pub async fn get(&self, key: &str) -> Option<CachedMemberKey> {
+    pub async fn get(&self, key: &str) -> Option<CachedMemberApiKey> {
         let hash = hash_key(key);
         let result = self.inner.get(&hash).await;
         if result.is_some() {
@@ -41,7 +41,7 @@ impl MemberApiKeyCache {
         self.inner
             .insert(
                 hash,
-                CachedMemberKey {
+                CachedMemberApiKey {
                     member_id,
                     organization_id,
                 },

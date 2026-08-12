@@ -4,21 +4,19 @@ use moka::future::Cache;
 
 use crate::metrics;
 
-/// In-memory cache for validated API key results.
+/// In-memory cache for validated user API key results.
 /// Uses blake3 hash of full key as cache key and moka for lock-free reads + fixed TTL.
 #[derive(Clone)]
-pub struct ApiKeyCache {
-    inner: Cache<String, CachedValidation>,
+pub struct UserApiKeyCache {
+    inner: Cache<String, CachedUserApiKey>,
 }
 
-/// Cached validation result (subset of ApiKeyValidation)
 #[derive(Clone)]
-pub struct CachedValidation {
+pub struct CachedUserApiKey {
     pub user_id: String,
 }
 
-impl ApiKeyCache {
-    /// Create a new cache with given capacity and TTL in seconds.
+impl UserApiKeyCache {
     pub fn new(capacity: u64, ttl_secs: u64) -> Self {
         let cache = Cache::builder()
             .max_capacity(capacity)
@@ -27,22 +25,22 @@ impl ApiKeyCache {
         Self { inner: cache }
     }
 
-    /// Get cached validation for key if present and not expired.
-    pub async fn get(&self, key: &str) -> Option<CachedValidation> {
+    pub async fn get(&self, key: &str) -> Option<CachedUserApiKey> {
         let hash = hash_key(key);
         let result = self.inner.get(&hash).await;
         if result.is_some() {
-            metrics::record_auth_cache_hit("apikey");
+            metrics::record_auth_cache_hit("user_apikey");
         } else {
-            metrics::record_auth_cache_miss("apikey");
+            metrics::record_auth_cache_miss("user_apikey");
         }
         result
     }
 
-    /// Cache a valid API key validation result.
     pub async fn put(&self, key: &str, user_id: String) {
         let hash = hash_key(key);
-        self.inner.insert(hash, CachedValidation { user_id }).await;
+        self.inner
+            .insert(hash, CachedUserApiKey { user_id })
+            .await;
     }
 }
 

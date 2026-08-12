@@ -1,7 +1,6 @@
 package errors
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/gofiber/fiber/v3"
@@ -38,6 +37,12 @@ func (e *ApiError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
 
+// Field is one validation field violation in details.fields.
+type Field struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
+}
+
 func ValidationError(message string, details interface{}) *ApiError {
 	return &ApiError{
 		Type:    "invalid_request_error",
@@ -45,7 +50,21 @@ func ValidationError(message string, details interface{}) *ApiError {
 		Message: message,
 		Details: details,
 		Status:  fiber.StatusUnprocessableEntity,
+		Kind:    KindValidation,
 	}
+}
+
+// FieldError is VALIDATION_ERROR for a single path.
+func FieldError(path, message string) *ApiError {
+	return ValidationFields("Request validation failed", Field{Path: path, Message: message})
+}
+
+// ValidationFields builds VALIDATION_ERROR with details.fields.
+func ValidationFields(message string, fields ...Field) *ApiError {
+	if message == "" {
+		message = "Request validation failed"
+	}
+	return ValidationError(message, map[string]interface{}{"fields": fields})
 }
 
 func NotFoundError(resource string, id interface{}) *ApiError {
@@ -58,6 +77,7 @@ func NotFoundError(resource string, id interface{}) *ApiError {
 			"id":       id,
 		},
 		Status: fiber.StatusNotFound,
+		Kind:   KindValidation,
 	}
 }
 
@@ -72,6 +92,7 @@ func ForbiddenError(permission, resource string, resourceID interface{}) *ApiErr
 			"resource_id": resourceID,
 		},
 		Status: fiber.StatusForbidden,
+		Kind:   KindAuth,
 	}
 }
 
@@ -85,6 +106,7 @@ func ConflictError(field string, value interface{}) *ApiError {
 			"value": value,
 		},
 		Status: fiber.StatusConflict,
+		Kind:   KindValidation,
 	}
 }
 
@@ -97,6 +119,7 @@ func PayloadTooLargeError(maxSizeBytes int64) *ApiError {
 			"max_size_bytes": maxSizeBytes,
 		},
 		Status: fiber.StatusRequestEntityTooLarge,
+		Kind:   KindValidation,
 	}
 }
 
@@ -107,6 +130,7 @@ func RateLimitedError() *ApiError {
 		Message: "Too many requests",
 		Details: nil,
 		Status:  fiber.StatusTooManyRequests,
+		Kind:    KindValidation,
 	}
 }
 
@@ -145,30 +169,31 @@ func ServiceUnavailableError() *ApiError {
 	}
 }
 
-type errorEnvelope struct {
-	Error struct {
-		Type      string      `json:"type"`
-		Code      string      `json:"code"`
-		Message   string      `json:"message"`
-		RequestID *string     `json:"request_id"`
-		Details   interface{} `json:"details"`
-	} `json:"error"`
+type errorBody struct {
+	Type      string      `json:"type"`
+	Code      string      `json:"code"`
+	Message   string      `json:"message"`
+	RequestID *string     `json:"request_id"`
+	Details   interface{} `json:"details"`
 }
 
-func (e *ApiError) Response(requestID string) fiber.Map {
-	env := errorEnvelope{}
-	env.Error.Type = e.Type
-	env.Error.Code = e.Code
-	env.Error.Message = e.Message
-	env.Error.Details = e.Details
+type errorEnvelope struct {
+	Error errorBody `json:"error"`
+}
+
+func (e *ApiError) Response(requestID string) errorEnvelope {
+	env := errorEnvelope{
+		Error: errorBody{
+			Type:    e.Type,
+			Code:    e.Code,
+			Message: e.Message,
+			Details: e.Details,
+		},
+	}
 	if requestID != "" {
 		env.Error.RequestID = &requestID
 	}
-
-	b, _ := json.Marshal(env)
-	var out fiber.Map
-	_ = json.Unmarshal(b, &out)
-	return out
+	return env
 }
 
 func FiberErrorHandler(c fiber.Ctx, err error) error {
@@ -178,18 +203,14 @@ func FiberErrorHandler(c fiber.Ctx, err error) error {
 	case *ApiError:
 		apiErr = e
 	case *fiber.BindError:
-		details := map[string]interface{}{
-			"fields": []map[string]string{
-				{"path": e.Field, "message": e.Err.Error()},
-			},
-		}
-		apiErr = ValidationError("Request validation failed", details)
+		apiErr = FieldError(e.Field, e.Err.Error())
+		apiErr.Message = "Request validation failed"
 	case *fiber.Error:
 		switch e.Code {
 		case fiber.StatusBadRequest:
 			apiErr = ValidationError(e.Message, nil)
 		case fiber.StatusUnauthorized:
-			apiErr = InternalError()
+			apiErr = UnauthorizedError("unauthorized")
 		case fiber.StatusForbidden:
 			apiErr = ForbiddenError("", "resource", nil)
 		case fiber.StatusNotFound:

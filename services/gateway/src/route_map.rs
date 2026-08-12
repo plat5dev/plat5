@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use regex::Regex;
 use tracing::warn;
 
-use crate::config::Config;
+use crate::route_config::Config;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RouteScope {
@@ -307,7 +307,7 @@ fn path_to_regex(path: &str) -> Result<Regex, regex::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, RouteConfig, ScopeConfig, ServiceConfig};
+    use crate::route_config::{Config, RouteConfig, ScopeConfig, ServiceConfig};
 
     fn route(path: &str, methods: &[&str]) -> RouteConfig {
         RouteConfig {
