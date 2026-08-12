@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
@@ -56,12 +54,9 @@ type ResolveResponse struct {
 }
 
 func (h *Handler) ListMembers(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "members.list")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
-	span.SetAttributes(attribute.String("organization.id", orgID))
 
 	if _, err := h.requireActiveMember(ctx, orgID, userID); err != nil {
 		return err
@@ -74,7 +69,7 @@ func (h *Handler) ListMembers(c fiber.Ctx) error {
 
 	list, hasMore, err := h.store.ListMembers(ctx, orgID, limit, offset)
 	if err != nil {
-		return h.mapStoreErr(ctx, span, err, "failed to list members", storeErrOpts{})
+		return httpx.MapDB(ctx, err, "failed to list members", httpx.DBErr{})
 	}
 
 	out := ListMembersResponse{
@@ -84,18 +79,13 @@ func (h *Handler) ListMembers(c fiber.Ctx) error {
 	for _, m := range list {
 		out.Members = append(out.Members, toMemberResponse(m))
 	}
-	span.SetAttributes(attribute.Int("members.count", len(out.Members)))
-	span.SetStatus(codes.Ok, "ok")
 	return c.JSON(out)
 }
 
 func (h *Handler) CreateMember(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "members.create")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
-	span.SetAttributes(attribute.String("organization.id", orgID))
 
 	actor, err := h.requireActiveMember(ctx, orgID, userID)
 	if err != nil {
@@ -137,28 +127,20 @@ func (h *Handler) CreateMember(c fiber.Ctx) error {
 	}
 
 	if err := h.store.CreateUserMember(ctx, m); err != nil {
-		return h.mapStoreErr(ctx, span, err, "failed to create member",
-			conflict("user_id", targetUser),
-		)
+		return httpx.MapDB(ctx, err, "failed to create member", httpx.DBErr{
+			Conflict: ErrConflict, Field: "user_id", FieldValue: targetUser,
+		})
 	}
 
 	metrics.RecordMemberOp("create")
-	span.SetAttributes(attribute.String("member.id", m.ID))
-	span.SetStatus(codes.Ok, "created")
 	return c.Status(fiber.StatusCreated).JSON(toMemberResponse(m))
 }
 
 func (h *Handler) GetMember(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "members.get")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
 	memberID := c.Params("member_id")
-	span.SetAttributes(
-		attribute.String("organization.id", orgID),
-		attribute.String("member.id", memberID),
-	)
 
 	if _, err := h.requireActiveMember(ctx, orgID, userID); err != nil {
 		return err
@@ -166,29 +148,21 @@ func (h *Handler) GetMember(c fiber.Ctx) error {
 
 	m, err := h.store.GetMember(ctx, orgID, memberID)
 	if err != nil {
-		return h.mapStoreErr(ctx, span, err, "failed to get member",
-			notFound("member", memberID),
-		)
+		return httpx.MapDB(ctx, err, "failed to get member", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "member", ResourceID: memberID,
+		})
 	}
 	if m.Status == StatusRemoved {
 		return errors.NotFoundError("member", memberID)
 	}
-
-	span.SetStatus(codes.Ok, "ok")
 	return c.JSON(toMemberResponse(m))
 }
 
 func (h *Handler) UpdateMember(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "members.update")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
 	memberID := c.Params("member_id")
-	span.SetAttributes(
-		attribute.String("organization.id", orgID),
-		attribute.String("member.id", memberID),
-	)
 
 	actor, err := h.requireActiveMember(ctx, orgID, userID)
 	if err != nil {
@@ -221,27 +195,20 @@ func (h *Handler) UpdateMember(c fiber.Ctx) error {
 		return ApplyMemberUpdate(actor, m, userID, newRole, newStatus, activeOwners)
 	})
 	if err != nil {
-		return h.mapStoreErr(ctx, span, err, "failed to update member",
-			notFound("member", memberID),
-		)
+		return httpx.MapDB(ctx, err, "failed to update member", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "member", ResourceID: memberID,
+		})
 	}
 
 	metrics.RecordMemberOp("update")
-	span.SetStatus(codes.Ok, "ok")
 	return c.JSON(toMemberResponse(m))
 }
 
 func (h *Handler) DeleteMember(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "members.delete")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
 	memberID := c.Params("member_id")
-	span.SetAttributes(
-		attribute.String("organization.id", orgID),
-		attribute.String("member.id", memberID),
-	)
 
 	actor, err := h.requireActiveMember(ctx, orgID, userID)
 	if err != nil {
@@ -252,20 +219,18 @@ func (h *Handler) DeleteMember(c fiber.Ctx) error {
 		return ApplyMemberRemove(actor, m, userID, activeOwners)
 	})
 	if err != nil {
-		return h.mapStoreErr(ctx, span, err, "failed to remove member",
-			notFound("member", memberID),
-		)
+		return httpx.MapDB(ctx, err, "failed to remove member", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "member", ResourceID: memberID,
+		})
 	}
 
 	metrics.RecordMemberOp("remove")
-	span.SetStatus(codes.Ok, "ok")
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
 // Resolve handles POST /internal/members/resolve (internal listener; not gateway-published).
 func (h *Handler) Resolve(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "members.resolve")
-	defer span.End()
+	ctx := c.Context()
 
 	var req ResolveRequest
 	if err := c.Bind().Body(&req); err != nil {
@@ -281,28 +246,17 @@ func (h *Handler) Resolve(c fiber.Ctx) error {
 		)
 	}
 
-	span.SetAttributes(
-		attribute.String("user.id", userID),
-		attribute.String("organization.id", orgID),
-	)
-
 	m, err := h.store.ResolveMember(ctx, userID, orgID)
 	if err != nil {
 		if stderrors.Is(err, ErrNotFound) {
 			metrics.RecordResolve("miss")
-			span.SetStatus(codes.Ok, "miss")
 			return errors.NotFoundError("member", userID+":"+orgID)
 		}
 		metrics.RecordResolve("error")
-		return h.mapStoreErr(ctx, span, err, "failed to resolve member", storeErrOpts{})
+		return httpx.MapDB(ctx, err, "failed to resolve member", httpx.DBErr{})
 	}
 
 	metrics.RecordResolve("hit")
-	span.SetAttributes(
-		attribute.String("member.id", m.ID),
-		attribute.String("member.status", string(m.Status)),
-	)
-	span.SetStatus(codes.Ok, "hit")
 
 	uid := ""
 	if m.UserID != nil {

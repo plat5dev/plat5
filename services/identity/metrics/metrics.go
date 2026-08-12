@@ -13,6 +13,10 @@ import (
 const (
 	dbSystemName = "postgresql"
 	dbNamespace  = "identity"
+
+	// KeyScope labels for api_keys_* metrics (separate products, shared counters).
+	KeyScopeUser   = "user"
+	KeyScopeMember = "member"
 )
 
 var (
@@ -22,8 +26,8 @@ var (
 	orgsCreated     prometheus.Counter
 	memberOps       *prometheus.CounterVec
 	resolveTotal    *prometheus.CounterVec
-	keysCreated     prometheus.Counter
-	keysRevoked     prometheus.Counter
+	keysCreated     *prometheus.CounterVec
+	keysRevoked     *prometheus.CounterVec
 	keysValidated   *prometheus.CounterVec
 	dbOpsTotal      *prometheus.CounterVec
 	dbOpsErrors     *prometheus.CounterVec
@@ -60,20 +64,20 @@ func Init() {
 			Help: "Internal member resolve outcomes",
 		}, []string{"result"})
 
-		keysCreated = prometheus.NewCounter(prometheus.CounterOpts{
+		keysCreated = prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "api_keys_created_total",
 			Help: "Total API keys created",
-		})
+		}, []string{"key_scope"})
 
-		keysRevoked = prometheus.NewCounter(prometheus.CounterOpts{
+		keysRevoked = prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "api_keys_revoked_total",
 			Help: "Total API keys revoked",
-		})
+		}, []string{"key_scope"})
 
 		keysValidated = prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "api_keys_validated_total",
 			Help: "API key validate outcomes",
-		}, []string{"valid"})
+		}, []string{"key_scope", "valid"})
 
 		dbLabels := []string{"db_system_name", "db_operation_name", "db_namespace"}
 
@@ -141,19 +145,19 @@ func RecordResolve(result string) {
 	resolveTotal.WithLabelValues(result).Inc()
 }
 
-func RecordKeyCreated() {
+func RecordKeyCreated(keyScope string) {
 	Init()
-	keysCreated.Inc()
+	keysCreated.WithLabelValues(keyScope).Inc()
 }
 
-func RecordKeyRevoked() {
+func RecordKeyRevoked(keyScope string) {
 	Init()
-	keysRevoked.Inc()
+	keysRevoked.WithLabelValues(keyScope).Inc()
 }
 
-func RecordKeyValidation(valid bool) {
+func RecordKeyValidation(keyScope string, valid bool) {
 	Init()
-	keysValidated.WithLabelValues(fmt.Sprintf("%t", valid)).Inc()
+	keysValidated.WithLabelValues(keyScope, fmt.Sprintf("%t", valid)).Inc()
 }
 
 func RecordDBOperation(operation string, duration time.Duration, err error) {

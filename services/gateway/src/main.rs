@@ -23,9 +23,8 @@ fn main() {
     // Use a single Tokio runtime for all async initialization.
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
-    // Initialize route registry from etcd
     let route_map = rt.block_on(async {
-        let registry = route_registry::RouteRegistry::connect()
+        let registry = route_registry::RouteRegistry::connect(&cfg.etcd_url)
             .await
             .expect("failed to initialize route registry from etcd");
         registry.route_map()
@@ -33,7 +32,6 @@ fn main() {
 
     info!("route registry initialized");
 
-    // read command line arguments
     let opt = Opt::parse_args();
     let mut my_server = Server::new(Some(opt)).unwrap();
     my_server.bootstrap();

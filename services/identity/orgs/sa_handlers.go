@@ -2,8 +2,6 @@ package orgs
 
 import (
 	"github.com/gofiber/fiber/v3"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
@@ -36,12 +34,9 @@ type ListServiceAccountsResponse struct {
 }
 
 func (h *Handler) CreateServiceAccount(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "service_accounts.create")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
-	span.SetAttributes(attribute.String("organization.id", orgID))
 
 	actor, err := h.requireActiveMember(ctx, orgID, userID)
 	if err != nil {
@@ -68,23 +63,17 @@ func (h *Handler) CreateServiceAccount(c fiber.Ctx) error {
 	}
 	invitedBy := userID
 	if _, err := h.store.CreateServiceAccount(ctx, sa, RoleMember, &invitedBy); err != nil {
-		return h.mapStoreErr(ctx, span, err, "failed to create service account",
-			notFound("organization", orgID),
-		)
+		return httpx.MapDB(ctx, err, "failed to create service account", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "organization", ResourceID: orgID,
+		})
 	}
-
-	span.SetAttributes(attribute.String("service_account.id", sa.ID))
-	span.SetStatus(codes.Ok, "created")
 	return c.Status(fiber.StatusCreated).JSON(toServiceAccountResponse(sa))
 }
 
 func (h *Handler) ListServiceAccounts(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "service_accounts.list")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
-	span.SetAttributes(attribute.String("organization.id", orgID))
 
 	if _, err := h.requireActiveMember(ctx, orgID, userID); err != nil {
 		return err
@@ -97,7 +86,7 @@ func (h *Handler) ListServiceAccounts(c fiber.Ctx) error {
 
 	list, hasMore, err := h.store.ListServiceAccounts(ctx, orgID, limit, offset)
 	if err != nil {
-		return h.mapStoreErr(ctx, span, err, "failed to list service accounts", storeErrOpts{})
+		return httpx.MapDB(ctx, err, "failed to list service accounts", httpx.DBErr{})
 	}
 
 	out := ListServiceAccountsResponse{
@@ -107,23 +96,14 @@ func (h *Handler) ListServiceAccounts(c fiber.Ctx) error {
 	for _, sa := range list {
 		out.ServiceAccounts = append(out.ServiceAccounts, toServiceAccountResponse(sa))
 	}
-
-	span.SetAttributes(attribute.Int("service_accounts.count", len(out.ServiceAccounts)))
-	span.SetStatus(codes.Ok, "ok")
 	return c.JSON(out)
 }
 
 func (h *Handler) GetServiceAccount(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "service_accounts.get")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
 	saID := c.Params("service_account_id")
-	span.SetAttributes(
-		attribute.String("organization.id", orgID),
-		attribute.String("service_account.id", saID),
-	)
 
 	if _, err := h.requireActiveMember(ctx, orgID, userID); err != nil {
 		return err
@@ -131,26 +111,18 @@ func (h *Handler) GetServiceAccount(c fiber.Ctx) error {
 
 	sa, err := h.store.GetServiceAccount(ctx, orgID, saID)
 	if err != nil {
-		return h.mapStoreErr(ctx, span, err, "failed to get service account",
-			notFound("service_account", saID),
-		)
+		return httpx.MapDB(ctx, err, "failed to get service account", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "service_account", ResourceID: saID,
+		})
 	}
-
-	span.SetStatus(codes.Ok, "ok")
 	return c.JSON(toServiceAccountResponse(sa))
 }
 
 func (h *Handler) UpdateServiceAccount(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "service_accounts.update")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
 	saID := c.Params("service_account_id")
-	span.SetAttributes(
-		attribute.String("organization.id", orgID),
-		attribute.String("service_account.id", saID),
-	)
 
 	actor, err := h.requireActiveMember(ctx, orgID, userID)
 	if err != nil {
@@ -178,26 +150,18 @@ func (h *Handler) UpdateServiceAccount(c fiber.Ctx) error {
 
 	sa, err := h.store.UpdateServiceAccount(ctx, orgID, saID, name, req.Disabled)
 	if err != nil {
-		return h.mapStoreErr(ctx, span, err, "failed to update service account",
-			notFound("service_account", saID),
-		)
+		return httpx.MapDB(ctx, err, "failed to update service account", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "service_account", ResourceID: saID,
+		})
 	}
-
-	span.SetStatus(codes.Ok, "ok")
 	return c.JSON(toServiceAccountResponse(sa))
 }
 
 func (h *Handler) DeleteServiceAccount(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "service_accounts.delete")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
 	saID := c.Params("service_account_id")
-	span.SetAttributes(
-		attribute.String("organization.id", orgID),
-		attribute.String("service_account.id", saID),
-	)
 
 	actor, err := h.requireActiveMember(ctx, orgID, userID)
 	if err != nil {
@@ -208,12 +172,10 @@ func (h *Handler) DeleteServiceAccount(c fiber.Ctx) error {
 	}
 
 	if err := h.store.DeleteServiceAccount(ctx, orgID, saID); err != nil {
-		return h.mapStoreErr(ctx, span, err, "failed to delete service account",
-			notFound("service_account", saID),
-		)
+		return httpx.MapDB(ctx, err, "failed to delete service account", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "service_account", ResourceID: saID,
+		})
 	}
-
-	span.SetStatus(codes.Ok, "ok")
 	return c.SendStatus(fiber.StatusNoContent)
 }
 

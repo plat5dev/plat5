@@ -4,10 +4,12 @@ use jsonwebtoken::TokenData;
 use moka::future::Cache;
 use serde_json::Value;
 
+use crate::auth::cache::hash_secret;
+use crate::auth::AuthType;
 use crate::metrics;
 
 /// In-memory cache for validated JWT claims.
-/// Uses blake3 hash of full token as key and moka for lock-free reads + per-entry TTL.
+/// Uses blake3 hash of full token as key and moka for lock-free reads + per-entry TTL from `exp`.
 #[derive(Clone)]
 pub struct JwtCache {
     inner: Cache<String, TokenData<Value>>,
@@ -28,20 +30,19 @@ impl JwtCache {
 
     /// Get cached claims for token if present and not expired.
     pub async fn get(&self, token: &str) -> Option<TokenData<Value>> {
-        let key = hash_token(token);
+        let key = hash_secret(token);
         let result = self.inner.get(&key).await;
         if result.is_some() {
-            metrics::record_auth_cache_hit("jwt");
+            metrics::record_auth_cache_hit(AuthType::Jwt.as_str());
         } else {
-            metrics::record_auth_cache_miss("jwt");
+            metrics::record_auth_cache_miss(AuthType::Jwt.as_str());
         }
         result
     }
 
     /// Cache validated claims with TTL derived from token exp claim.
     pub async fn put(&self, token: &str, claims: TokenData<Value>) {
-        let key = hash_token(token);
-        self.inner.insert(key, claims).await;
+        self.inner.insert(hash_secret(token), claims).await;
     }
 }
 
@@ -68,8 +69,4 @@ impl moka::Expiry<String, TokenData<Value>> for JwtExpiry {
             .max(1);
         Some(Duration::from_secs(ttl_secs))
     }
-}
-
-fn hash_token(token: &str) -> String {
-    blake3::hash(token.as_bytes()).to_hex().to_string()
 }

@@ -2,8 +2,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use arc_swap::ArcSwapOption;
 use jsonwebtoken::jwk::JwkSet;
-use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 const FETCH_TIMEOUT_SECS: u64 = 10;
@@ -11,11 +11,13 @@ const REFRESH_INTERVAL_SECS: u64 = 15 * 60;
 
 #[derive(Clone)]
 pub struct JwtValidatorState {
-    issuer: String,
-    jwks_uri: String,
-    allowed_audiences: Vec<String>,
-    jwks: Arc<Mutex<Option<JwkSet>>>,
+    issuer: Arc<str>,
+    jwks_uri: Arc<str>,
+    allowed_audiences: Arc<[String]>,
+    jwks: Arc<ArcSwapOption<JwkSet>>,
     client: reqwest::Client,
+    /// Serializes cold-path fetch so only one request runs at a time.
+    fetch_lock: Arc<tokio::sync::Mutex<()>>,
     refresh_started: Arc<AtomicBool>,
 }
 
@@ -27,46 +29,43 @@ impl JwtValidatorState {
             .expect("failed to create reqwest client");
 
         Self {
-            issuer,
-            jwks_uri,
-            allowed_audiences,
-            jwks: Arc::new(Mutex::new(None)),
+            issuer: issuer.into(),
+            jwks_uri: jwks_uri.into(),
+            allowed_audiences: allowed_audiences.into(),
+            jwks: Arc::new(ArcSwapOption::empty()),
             client,
+            fetch_lock: Arc::new(tokio::sync::Mutex::new(())),
             refresh_started: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub async fn get_jwks(&self) -> Result<JwkSet, reqwest::Error> {
-        let mut jwks_guard = self.jwks.lock().await;
-
-        match &*jwks_guard {
-            Some(jwks) => Ok(jwks.clone()),
-            None => {
-                let new_jwks = fetch_jwks(&self.client, &self.jwks_uri).await?;
-                *jwks_guard = Some(new_jwks.clone());
-                drop(jwks_guard);
-
-                self.try_start_refresh_task();
-
-                Ok(new_jwks)
-            }
+        if let Some(jwks) = self.jwks.load_full() {
+            return Ok((*jwks).clone());
         }
+
+        let _guard = self.fetch_lock.lock().await;
+        if let Some(jwks) = self.jwks.load_full() {
+            return Ok((*jwks).clone());
+        }
+
+        let new_jwks = fetch_jwks(&self.client, &self.jwks_uri).await?;
+        self.jwks.store(Some(Arc::new(new_jwks.clone())));
+        self.try_start_refresh_task();
+        Ok(new_jwks)
     }
 
     pub fn get_issuer(&self) -> String {
-        self.issuer.clone()
+        self.issuer.to_string()
     }
 
     pub fn get_allowed_audiences(&self) -> &[String] {
         &self.allowed_audiences
     }
 
-    /// Check if JWKS is loaded (non-blocking)
+    /// Check if JWKS is loaded (non-blocking).
     pub fn is_ready(&self) -> bool {
-        self.jwks
-            .try_lock()
-            .map(|guard| guard.is_some())
-            .unwrap_or(false)
+        self.jwks.load_full().is_some()
     }
 
     /// Attempt to fetch JWKS immediately. On failure the cache stays empty
@@ -74,8 +73,7 @@ impl JwtValidatorState {
     pub async fn initialize(&self) -> Result<(), reqwest::Error> {
         match fetch_jwks(&self.client, &self.jwks_uri).await {
             Ok(new_jwks) => {
-                let mut jwks_guard = self.jwks.lock().await;
-                *jwks_guard = Some(new_jwks);
+                self.jwks.store(Some(Arc::new(new_jwks)));
                 info!(jwks_uri = %self.jwks_uri, "jwks loaded successfully on startup");
             }
             Err(err) => {
@@ -85,6 +83,7 @@ impl JwtValidatorState {
                     error_message = %err,
                     "jwks startup fetch failed; will retry in background"
                 );
+                self.try_start_refresh_task();
                 return Err(err);
             }
         }
@@ -121,8 +120,7 @@ impl JwtValidatorState {
 
     async fn refresh_jwks(&self) -> Result<(), reqwest::Error> {
         let new_jwks = fetch_jwks(&self.client, &self.jwks_uri).await?;
-        let mut jwks_guard = self.jwks.lock().await;
-        *jwks_guard = Some(new_jwks);
+        self.jwks.store(Some(Arc::new(new_jwks)));
         info!(jwks_uri = %self.jwks_uri, "jwks refreshed successfully");
         Ok(())
     }

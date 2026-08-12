@@ -3,59 +3,27 @@ use std::collections::HashMap;
 use pingora::http::RequestHeader;
 use tracing::{debug, warn};
 
-use crate::auth::jwt::{validate_token, JwtCache, JwtValidatorState};
-use crate::auth::member_apikey::{
-    MemberApiKeyCache, MemberApiKeyError, MemberApiKeyValidator, MEMBER_KEY_PREFIX,
-};
-use crate::auth::membership::{MembershipCache, MembershipError, MembershipResolver};
-use crate::auth::user_apikey::{
-    UserApiKeyCache, UserApiKeyError, UserApiKeyValidator, USER_KEY_PREFIX,
-};
+use crate::auth::jwt::validate_token;
+use crate::auth::member::MemberError;
+use crate::auth::member_apikey::{MemberApiKeyError, MEMBER_KEY_PREFIX};
+use crate::auth::user_apikey::{UserApiKeyError, USER_KEY_PREFIX};
+use crate::auth::AuthStack;
 use crate::error::ErrorKind;
 use crate::route_map::{Route, RouteScope};
 
 use super::types::{
     extract_claim_path, jwt_error_reason, organization_id_from_params, Admission, AdmitError,
-    AuthContext, AuthError, OrgParamError, ResolveDeny,
+    AuthContext, AuthError, AuthType, OrgParamError, OrgVia, ResolveDeny,
 };
 
 /// Composes auth domains into route-scope admission decisions.
 pub struct Admissor {
-    jwt_validator: JwtValidatorState,
-    jwt_cache: JwtCache,
-    user_id_claim: Vec<String>,
-    user_apikey_validator: UserApiKeyValidator,
-    user_apikey_cache: UserApiKeyCache,
-    member_apikey_validator: Option<MemberApiKeyValidator>,
-    member_apikey_cache: MemberApiKeyCache,
-    membership_resolver: Option<MembershipResolver>,
-    membership_cache: MembershipCache,
+    stack: AuthStack,
 }
 
 impl Admissor {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        jwt_validator: JwtValidatorState,
-        jwt_cache: JwtCache,
-        user_id_claim: Vec<String>,
-        user_apikey_validator: UserApiKeyValidator,
-        user_apikey_cache: UserApiKeyCache,
-        member_apikey_validator: Option<MemberApiKeyValidator>,
-        member_apikey_cache: MemberApiKeyCache,
-        membership_resolver: Option<MembershipResolver>,
-        membership_cache: MembershipCache,
-    ) -> Self {
-        Self {
-            jwt_validator,
-            jwt_cache,
-            user_id_claim,
-            user_apikey_validator,
-            user_apikey_cache,
-            member_apikey_validator,
-            member_apikey_cache,
-            membership_resolver,
-            membership_cache,
-        }
+    pub fn new(stack: AuthStack) -> Self {
+        Self { stack }
     }
 
     pub async fn admit(
@@ -77,7 +45,7 @@ impl Admissor {
     async fn admit_user(&self, req: &RequestHeader) -> Result<Admission, AdmitError> {
         let auth = self.authenticate(req).await.map_err(AdmitError::Auth)?;
         debug!(
-            auth_type = auth.auth_type,
+            auth_type = auth.auth_type.as_str(),
             user_id = %auth.user_id,
             "authentication successful"
         );
@@ -125,7 +93,7 @@ impl Admissor {
         let auth = self.authenticate(req).await.map_err(AdmitError::Auth)?;
 
         let member_id = self
-            .resolve_active_membership(&auth.user_id, &organization_id)
+            .resolve_active_member(&auth.user_id, &organization_id)
             .await
             .map_err(|d| match d {
                 ResolveDeny::NotFound => {
@@ -147,7 +115,7 @@ impl Admissor {
             })?;
 
         debug!(
-            auth_type = auth.auth_type,
+            auth_type = auth.auth_type.as_str(),
             user_id = %auth.user_id,
             organization_id = %organization_id,
             member_id = %member_id,
@@ -157,9 +125,11 @@ impl Admissor {
         Ok(Admission::Organization {
             organization_id,
             member_id,
-            auth_type: auth.auth_type,
-            user_id: Some(auth.user_id),
-            kid: auth.kid,
+            via: OrgVia::User {
+                user_id: auth.user_id,
+                auth_type: auth.auth_type,
+                kid: auth.kid,
+            },
         })
     }
 
@@ -168,7 +138,7 @@ impl Admissor {
         path_organization_id: &str,
         key: &str,
     ) -> Result<Admission, AdmitError> {
-        if let Some(cached) = self.member_apikey_cache.get(key).await {
+        if let Some(cached) = self.stack.member_apikey_cache.get(key).await {
             if cached.organization_id != path_organization_id {
                 debug!(
                     key_org = %cached.organization_id,
@@ -178,7 +148,7 @@ impl Admissor {
                 return Err(AdmitError::NotFound);
             }
             debug!(
-                auth_type = "member_apikey",
+                auth_type = AuthType::MemberApiKey.as_str(),
                 organization_id = %path_organization_id,
                 member_id = %cached.member_id,
                 "organization admission successful"
@@ -186,13 +156,11 @@ impl Admissor {
             return Ok(Admission::Organization {
                 organization_id: path_organization_id.to_string(),
                 member_id: cached.member_id,
-                auth_type: "member_apikey",
-                user_id: None,
-                kid: None,
+                via: OrgVia::MemberKey,
             });
         }
 
-        let validator = self.member_apikey_validator.as_ref().ok_or_else(|| {
+        let validator = self.stack.member_apikey_validator.as_ref().ok_or_else(|| {
             warn!("member api key presented but MEMBER_APIKEY_VALIDATE_URL unset");
             AdmitError::Unavailable
         })?;
@@ -234,12 +202,13 @@ impl Admissor {
             return Err(AdmitError::NotFound);
         }
 
-        self.member_apikey_cache
+        self.stack
+            .member_apikey_cache
             .put(key, member_id.clone(), key_org)
             .await;
 
         debug!(
-            auth_type = "member_apikey",
+            auth_type = AuthType::MemberApiKey.as_str(),
             organization_id = %path_organization_id,
             member_id = %member_id,
             "organization admission successful"
@@ -248,9 +217,7 @@ impl Admissor {
         Ok(Admission::Organization {
             organization_id: path_organization_id.to_string(),
             member_id,
-            auth_type: "member_apikey",
-            user_id: None,
-            kid: None,
+            via: OrgVia::MemberKey,
         })
     }
 
@@ -273,39 +240,41 @@ impl Admissor {
         let mut parts = auth_value.split_whitespace();
         match (parts.next(), parts.next()) {
             (Some("Bearer"), Some(token)) => {
-                if let Some(cached_claims) = self.jwt_cache.get(token).await {
-                    let user_id = extract_claim_path(&cached_claims.claims, &self.user_id_claim)
-                        .ok_or(AuthError::MissingUserId)?;
+                if let Some(cached_claims) = self.stack.jwt_cache.get(token).await {
+                    let user_id =
+                        extract_claim_path(&cached_claims.claims, &self.stack.user_id_claim)
+                            .ok_or(AuthError::MissingUserId)?;
                     return Ok(AuthContext {
                         user_id,
-                        auth_type: "jwt",
+                        auth_type: AuthType::Jwt,
                         kid: cached_claims.header.kid.clone(),
                     });
                 }
 
                 let jwks = self
+                    .stack
                     .jwt_validator
                     .get_jwks()
                     .await
                     .map_err(|_| AuthError::JwtValidationUnavailable)?;
                 let (claims, kid) = validate_token(
                     token,
-                    self.jwt_validator.get_issuer(),
+                    self.stack.jwt_validator.get_issuer(),
                     jwks,
-                    self.jwt_validator.get_allowed_audiences().to_vec(),
+                    self.stack.jwt_validator.get_allowed_audiences().to_vec(),
                 )
                 .await
                 .map_err(|e| AuthError::InvalidToken {
                     reason: jwt_error_reason(&e),
                 })?;
 
-                self.jwt_cache.put(token, claims.clone()).await;
+                self.stack.jwt_cache.put(token, claims.clone()).await;
 
-                let user_id = extract_claim_path(&claims.claims, &self.user_id_claim)
+                let user_id = extract_claim_path(&claims.claims, &self.stack.user_id_claim)
                     .ok_or(AuthError::MissingUserId)?;
                 Ok(AuthContext {
                     user_id,
-                    auth_type: "jwt",
+                    auth_type: AuthType::Jwt,
                     kid: Some(kid),
                 })
             }
@@ -327,15 +296,16 @@ impl Admissor {
             return Err(AuthError::InvalidUserApiKey);
         }
 
-        if let Some(cached) = self.user_apikey_cache.get(key).await {
+        if let Some(user_id) = self.stack.user_apikey_cache.get(key).await {
             return Ok(AuthContext {
-                user_id: cached.user_id,
-                auth_type: "user_apikey",
+                user_id,
+                auth_type: AuthType::UserApiKey,
                 kid: None,
             });
         }
 
         let validation = self
+            .stack
             .user_apikey_validator
             .validate(key)
             .await
@@ -356,26 +326,30 @@ impl Admissor {
             AuthError::UserApiKeyValidationUnavailable
         })?;
 
-        self.user_apikey_cache.put(key, user_id.clone()).await;
+        self.stack
+            .user_apikey_cache
+            .put(key, user_id.clone())
+            .await;
 
         Ok(AuthContext {
             user_id,
-            auth_type: "user_apikey",
+            auth_type: AuthType::UserApiKey,
             kid: None,
         })
     }
 
-    async fn resolve_active_membership(
+    async fn resolve_active_member(
         &self,
         user_id: &str,
         organization_id: &str,
     ) -> Result<String, ResolveDeny> {
-        if let Some(cached) = self.membership_cache.get(user_id, organization_id).await {
-            return Ok(cached.member_id);
+        if let Some(member_id) = self.stack.member_cache.get(user_id, organization_id).await {
+            return Ok(member_id);
         }
 
         let resolver = self
-            .membership_resolver
+            .stack
+            .member_resolver
             .as_ref()
             .ok_or(ResolveDeny::Unavailable)?;
 
@@ -385,13 +359,14 @@ impl Admissor {
                     return Err(ResolveDeny::NotFound);
                 }
                 let member_id = resolved.member_id;
-                self.membership_cache
+                self.stack
+                    .member_cache
                     .put(user_id, organization_id, member_id.clone())
                     .await;
                 Ok(member_id)
             }
-            Err(MembershipError::NotFound) => Err(ResolveDeny::NotFound),
-            Err(MembershipError::ServiceError(_)) => Err(ResolveDeny::Unavailable),
+            Err(MemberError::NotFound) => Err(ResolveDeny::NotFound),
+            Err(MemberError::ServiceError(_)) => Err(ResolveDeny::Unavailable),
         }
     }
 }

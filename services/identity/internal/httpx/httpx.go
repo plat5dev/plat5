@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"context"
+	stderrors "errors"
 	"strconv"
 	"strings"
 	"time"
@@ -54,9 +55,15 @@ func FormatTimePtr(t *time.Time) *string {
 	return &s
 }
 
-// LogError records span error state and logs via the provided logger factory.
-func LogError(ctx context.Context, span trace.Span, logger zerolog.Logger, msg string, err error, kind errors.ErrorKind) {
-	if span != nil {
+// Logger returns the request-scoped logger from ctx (see middleware.RequestLogger).
+func Logger(ctx context.Context) *zerolog.Logger {
+	return zerolog.Ctx(ctx)
+}
+
+// LogError records span error state and logs.
+func LogError(ctx context.Context, msg string, err error, kind errors.ErrorKind) {
+	span := trace.SpanFromContext(ctx)
+	if span.IsRecording() {
 		span.SetStatus(codes.Error, msg)
 		span.SetAttributes(
 			attribute.String("error.kind", kind.String()),
@@ -64,8 +71,46 @@ func LogError(ctx context.Context, span trace.Span, logger zerolog.Logger, msg s
 		)
 		span.RecordError(err)
 	}
-	logger.Error().
+	Logger(ctx).Error().
 		Str("error_kind", kind.String()).
 		Str("error_message", err.Error()).
 		Msg(msg)
+}
+
+// DBErr maps store sentinel errors to API errors.
+// NotFound/Conflict are the package sentinels to match (e.g. orgs.ErrNotFound).
+// When a sentinel matches, Resource/ResourceID or Field/FieldValue fill the API details.
+type DBErr struct {
+	NotFound   error
+	Resource   string
+	ResourceID interface{}
+
+	Conflict   error
+	Field      string
+	FieldValue interface{}
+}
+
+// MapDB maps store sentinels and *errors.ApiError through; logs unexpected errors as INTERNAL.
+// NotFound always maps when the sentinel matches (Resource defaults to "resource").
+// Conflict maps only when Conflict sentinel is set and matches.
+func MapDB(ctx context.Context, err error, msg string, m DBErr) error {
+	if err == nil {
+		return nil
+	}
+	var apiErr *errors.ApiError
+	if stderrors.As(err, &apiErr) {
+		return apiErr
+	}
+	if m.NotFound != nil && stderrors.Is(err, m.NotFound) {
+		resource := m.Resource
+		if resource == "" {
+			resource = "resource"
+		}
+		return errors.NotFoundError(resource, m.ResourceID)
+	}
+	if m.Conflict != nil && stderrors.Is(err, m.Conflict) {
+		return errors.ConflictError(m.Field, m.FieldValue)
+	}
+	LogError(ctx, msg, err, errors.KindDB)
+	return errors.InternalError()
 }

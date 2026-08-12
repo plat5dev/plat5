@@ -114,11 +114,11 @@ services:
       AUTH_USER_ID_CLAIM: ${AUTH_USER_ID_CLAIM:-properties.user_id}
       USER_APIKEY_VALIDATE_URL: http://identity:3001/internal/user-keys/validate
       MEMBER_APIKEY_VALIDATE_URL: http://identity:3001/internal/member-keys/validate
-      MEMBERSHIP_RESOLVE_URL: http://identity:3001/internal/members/resolve
+      MEMBER_RESOLVE_URL: http://identity:3001/internal/members/resolve
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN:-dev-internal-token}
       RUST_LOG: info
       APIKEY_CACHE_TTL_SECS: "300"
-      MEMBERSHIP_CACHE_TTL_SECS: "300"
+      MEMBER_CACHE_TTL_SECS: "300"
       ETCD_URL: http://etcd:2379
       OTEL_SERVICE_NAME: gateway
       OTEL_SERVICE_NAMESPACE: edge

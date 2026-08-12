@@ -20,7 +20,7 @@ This file tracks deferred gateway improvements that are intentionally out of sco
 
 - **Current state:** No per-IP, per-user, or per-API-key rate limiting.
 - **Desired state:** Add basic per-IP rate limiting on auth endpoints at minimum. Full per-key rate limiting with `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` response headers is the long-term goal.
-- **Rationale:** Prevents brute-force attacks and protects downstream services from abuse. Invalid API keys and membership misses are not cached, so backends see every attempt until rate limiting exists.
+- **Rationale:** Prevents brute-force attacks and protects downstream services from abuse. Invalid API keys and member resolve misses are not cached, so backends see every attempt until rate limiting exists.
 
 ## JWKS Conditional Refresh
 

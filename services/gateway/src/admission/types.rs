@@ -1,10 +1,24 @@
 use serde_json::Value;
 
+pub use crate::auth::AuthType;
+
 /// Authentication context from a successful user credential check (JWT or user API key).
 pub struct AuthContext {
     pub user_id: String,
-    pub auth_type: &'static str,
+    pub auth_type: AuthType,
     pub kid: Option<String>,
+}
+
+/// How an organization-scoped request was admitted.
+pub enum OrgVia {
+    /// User credential + active member resolve.
+    User {
+        user_id: String,
+        auth_type: AuthType,
+        kid: Option<String>,
+    },
+    /// Member API key for the path org.
+    MemberKey,
 }
 
 /// Successful route admission — what identity headers to inject (if any).
@@ -12,16 +26,13 @@ pub enum Admission {
     Public,
     User {
         user_id: String,
-        auth_type: &'static str,
+        auth_type: AuthType,
         kid: Option<String>,
     },
     Organization {
         organization_id: String,
         member_id: String,
-        auth_type: &'static str,
-        /// Present when admitted via user credential + membership resolve.
-        user_id: Option<String>,
-        kid: Option<String>,
+        via: OrgVia,
     },
 }
 
@@ -69,17 +80,17 @@ impl AuthError {
         }
     }
 
-    pub fn auth_type(&self) -> &'static str {
+    pub fn auth_type(&self) -> AuthType {
         match self {
             AuthError::MissingAuthorization
             | AuthError::InvalidAuthorizationHeader
             | AuthError::InvalidToken { .. }
             | AuthError::MissingUserId
-            | AuthError::JwtValidationUnavailable => "jwt",
+            | AuthError::JwtValidationUnavailable => AuthType::Jwt,
             AuthError::MissingUserApiKey
             | AuthError::InvalidUserApiKeyHeader
             | AuthError::InvalidUserApiKey
-            | AuthError::UserApiKeyValidationUnavailable => "user_apikey",
+            | AuthError::UserApiKeyValidationUnavailable => AuthType::UserApiKey,
         }
     }
 
@@ -210,4 +221,5 @@ mod tests {
             Err(OrgParamError::MissingParamName)
         ));
     }
+
 }

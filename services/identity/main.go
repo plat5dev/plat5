@@ -48,9 +48,9 @@ func main() {
 	}
 
 	orgStore := orgs.NewStore(pool)
-	orgHandler := orgs.NewHandler(orgStore, telem)
-	userKeyHandler := userkeys.NewHandler(userkeys.NewStore(pool), telem)
-	memberKeyHandler := memberkeys.NewHandler(memberkeys.NewStore(pool), orgStore, telem)
+	orgHandler := orgs.NewHandler(orgStore)
+	userKeyHandler := userkeys.NewHandler(userkeys.NewStore(pool))
+	memberKeyHandler := memberkeys.NewHandler(memberkeys.NewStore(pool), orgStore)
 
 	app := newPublicApp(telem, orgHandler, userKeyHandler, memberKeyHandler)
 	internalApp := newInternalApp(telem, pool, cfg.InternalAuthToken, orgHandler, userKeyHandler, memberKeyHandler)

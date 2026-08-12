@@ -28,8 +28,8 @@ cargo test --all-targets
 | `USER_APIKEY_VALIDATE_URL` | (required) | User key validate (`…/internal/user-keys/validate`); keys `plat5-sk-1-…` |
 | `MEMBER_APIKEY_VALIDATE_URL` | (optional) | Member key validate (`…/internal/member-keys/validate`); keys `plat5-mk-1-…`; org scope (503 if unset when presented) |
 | `APIKEY_CACHE_TTL_SECS` | `300` | User + member API key cache TTL |
-| `MEMBERSHIP_RESOLVE_URL` | (optional) | Full URL for member resolve (`…/internal/members/resolve`); required for `organization` scope |
-| `MEMBERSHIP_CACHE_TTL_SECS` | `300` | Member resolve cache TTL |
+| `MEMBER_RESOLVE_URL` | (optional) | Full URL for member resolve (`…/internal/members/resolve`); required for `organization` scope |
+| `MEMBER_CACHE_TTL_SECS` | `300` | Member resolve cache TTL |
 | `INTERNAL_AUTH_TOKEN` | unset | Sent as `X-Plat5-Internal-Token` to validate/resolve when set |
 | `UPSTREAM_CONNECT_TIMEOUT_MS` | `10000` | Upstream connection timeout |
 | `UPSTREAM_READ_TIMEOUT_MS` | `30000` | Upstream read timeout |

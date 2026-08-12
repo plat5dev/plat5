@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
@@ -16,6 +15,19 @@ import (
 func RequestLogger(telem *telemetry.Telemetry) fiber.Handler {
 	return func(c fiber.Ctx) error {
 		start := time.Now()
+
+		// Inject request-scoped logger before handlers run.
+		reqLogger := telem.LoggerWithContext(c.Context())
+		if requestID := c.Get("X-Request-ID"); requestID != "" {
+			reqLogger = reqLogger.With().Str("request_id", requestID).Logger()
+			span := trace.SpanFromContext(c.Context())
+			span.SetAttributes(attribute.String("request_id", requestID))
+		}
+		if userID := c.Get("X-User-Id"); userID != "" {
+			reqLogger = reqLogger.With().Str("user_id", userID).Logger()
+		}
+		c.SetContext(reqLogger.WithContext(c.Context()))
+
 		err := c.Next()
 
 		// ErrorHandler runs after middleware; response status is still default
@@ -30,7 +42,12 @@ func RequestLogger(telem *telemetry.Telemetry) fiber.Handler {
 
 		metrics.ObserveRequest(routePattern, c.Method(), status, duration)
 
-		logger := buildRequestLogger(c, telem, routePattern, status, duration)
+		logger := reqLogger.With().
+			Str("route", routePattern).
+			Str("method", c.Method()).
+			Int("status", status).
+			Float64("duration_ms", float64(duration.Microseconds())/1000.0).
+			Logger()
 
 		if err != nil {
 			if apiErr, ok := err.(*errors.ApiError); ok && apiErr.Status >= 500 {
@@ -71,23 +88,4 @@ func resolveStatus(c fiber.Ctx, err error) int {
 	return c.Response().StatusCode()
 }
 
-func buildRequestLogger(c fiber.Ctx, telem *telemetry.Telemetry, route string, status int, duration time.Duration) zerolog.Logger {
-	ctx := telem.LoggerWithContext(c.Context()).With().
-		Str("route", route).
-		Str("method", c.Method()).
-		Int("status", status).
-		Float64("duration_ms", float64(duration.Microseconds())/1000.0)
 
-	requestID := c.Get("X-Request-ID")
-	if requestID != "" {
-		ctx = ctx.Str("request_id", requestID)
-		span := trace.SpanFromContext(c.Context())
-		span.SetAttributes(attribute.String("request_id", requestID))
-	}
-
-	if userID := c.Get("X-User-Id"); userID != "" {
-		ctx = ctx.Str("user_id", userID)
-	}
-
-	return ctx.Logger()
-}

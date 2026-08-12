@@ -6,10 +6,6 @@ import (
 	"strings"
 
 	"github.com/gofiber/fiber/v3"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/internal/apikey"
@@ -17,25 +13,15 @@ import (
 	"github.com/plat5dev/plat5/identity/metrics"
 	"github.com/plat5dev/plat5/identity/middleware"
 	"github.com/plat5dev/plat5/identity/orgs"
-	"github.com/plat5dev/plat5/identity/telemetry"
 )
-
-const tracerName = "identity.memberkeys"
 
 type Handler struct {
 	store    *Store
 	orgStore *orgs.Store
-	tracer   trace.Tracer
-	telem    *telemetry.Telemetry
 }
 
-func NewHandler(store *Store, orgStore *orgs.Store, telem *telemetry.Telemetry) *Handler {
-	return &Handler{
-		store:    store,
-		orgStore: orgStore,
-		tracer:   otel.Tracer(tracerName),
-		telem:    telem,
-	}
+func NewHandler(store *Store, orgStore *orgs.Store) *Handler {
+	return &Handler{store: store, orgStore: orgStore}
 }
 
 type CreateRequest struct {
@@ -76,16 +62,10 @@ type ValidateResponse struct {
 }
 
 func (h *Handler) Create(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "memberkeys.create")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
 	memberID := c.Params("member_id")
-	span.SetAttributes(
-		attribute.String("organization.id", orgID),
-		attribute.String("member.id", memberID),
-	)
 
 	target, err := h.authorizeKeyManage(ctx, orgID, memberID, userID)
 	if err != nil {
@@ -106,28 +86,23 @@ func (h *Handler) Create(c fiber.Ctx) error {
 
 	plaintext, err := GenerateKey()
 	if err != nil {
-		h.logError(ctx, span, "failed to generate key", err, errors.KindInternal)
+		httpx.LogError(ctx, "failed to generate key", err, errors.KindInternal)
 		return errors.InternalError()
 	}
 
 	apiKey := New(memberID, name, plaintext)
 	if err := h.store.Create(ctx, apiKey); err != nil {
-		h.logError(ctx, span, "failed to store member key", err, errors.KindDB)
-		return errors.InternalError()
+		return httpx.MapDB(ctx, err, "failed to store member key", httpx.DBErr{})
 	}
 
-	logger := h.telem.LoggerWithContext(ctx)
-	logger.Info().
+	httpx.Logger(ctx).Info().
 		Str("organization_id", orgID).
 		Str("member_id", memberID).
 		Str("key_id", apiKey.ID).
 		Str("key_prefix", apiKey.KeyPrefix).
 		Msg("member api key created")
 
-	metrics.RecordKeyCreated()
-	span.SetAttributes(attribute.String("key.id", apiKey.ID))
-	span.SetStatus(codes.Ok, "created")
-
+	metrics.RecordKeyCreated(metrics.KeyScopeMember)
 	return c.Status(fiber.StatusCreated).JSON(CreateResponse{
 		ID:        apiKey.ID,
 		Key:       plaintext,
@@ -138,16 +113,10 @@ func (h *Handler) Create(c fiber.Ctx) error {
 }
 
 func (h *Handler) List(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "memberkeys.list")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
 	memberID := c.Params("member_id")
-	span.SetAttributes(
-		attribute.String("organization.id", orgID),
-		attribute.String("member.id", memberID),
-	)
 
 	if _, err := h.authorizeKeyManage(ctx, orgID, memberID, userID); err != nil {
 		return err
@@ -160,8 +129,7 @@ func (h *Handler) List(c fiber.Ctx) error {
 
 	list, hasMore, err := h.store.List(ctx, memberID, limit, offset)
 	if err != nil {
-		h.logError(ctx, span, "failed to list member keys", err, errors.KindDB)
-		return errors.InternalError()
+		return httpx.MapDB(ctx, err, "failed to list member keys", httpx.DBErr{})
 	}
 
 	out := ListResponse{
@@ -171,25 +139,15 @@ func (h *Handler) List(c fiber.Ctx) error {
 	for _, k := range list {
 		out.Keys = append(out.Keys, toKeyResponse(k))
 	}
-
-	span.SetAttributes(attribute.Int("keys.count", len(out.Keys)))
-	span.SetStatus(codes.Ok, "ok")
 	return c.JSON(out)
 }
 
 func (h *Handler) Revoke(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "memberkeys.revoke")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
 	memberID := c.Params("member_id")
 	keyID := c.Params("key_id")
-	span.SetAttributes(
-		attribute.String("organization.id", orgID),
-		attribute.String("member.id", memberID),
-		attribute.String("key.id", keyID),
-	)
 
 	if _, err := h.authorizeKeyManage(ctx, orgID, memberID, userID); err != nil {
 		return err
@@ -200,28 +158,23 @@ func (h *Handler) Revoke(c fiber.Ctx) error {
 
 	key, err := h.store.Revoke(ctx, memberID, keyID)
 	if err != nil {
-		if stderrors.Is(err, ErrNotFound) {
-			return errors.NotFoundError("api_key", keyID)
-		}
-		h.logError(ctx, span, "failed to revoke member key", err, errors.KindDB)
-		return errors.InternalError()
+		return httpx.MapDB(ctx, err, "failed to revoke member key", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "api_key", ResourceID: keyID,
+		})
 	}
 
-	logger := h.telem.LoggerWithContext(ctx)
-	logger.Info().
+	httpx.Logger(ctx).Info().
 		Str("organization_id", orgID).
 		Str("member_id", memberID).
 		Str("key_id", key.ID).
 		Msg("member api key revoked")
 
-	metrics.RecordKeyRevoked()
-	span.SetStatus(codes.Ok, "revoked")
+	metrics.RecordKeyRevoked(metrics.KeyScopeMember)
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
 func (h *Handler) Validate(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "memberkeys.validate")
-	defer span.End()
+	ctx := c.Context()
 
 	var req ValidateRequest
 	if err := c.Bind().Body(&req); err != nil {
@@ -232,36 +185,24 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 		return errors.FieldError("key", "required")
 	}
 	if !LooksLike(key) {
-		return h.invalid(c, span)
+		return h.invalid(c)
 	}
 
-	keyHash := HashKey(key)
-	span.SetAttributes(attribute.String("key.hash_prefix", keyHash[:8]))
-
-	memberKey, err := h.store.GetByHash(ctx, keyHash)
+	memberKey, err := h.store.GetByHash(ctx, HashKey(key))
 	if err != nil {
 		if stderrors.Is(err, ErrNotFound) {
-			return h.invalid(c, span)
+			return h.invalid(c)
 		}
-		h.logError(ctx, span, "failed to get member key", err, errors.KindDB)
-		return errors.InternalError()
+		return httpx.MapDB(ctx, err, "failed to get member key", httpx.DBErr{})
 	}
 	if memberKey.Key.IsRevoked() {
-		return h.invalid(c, span)
+		return h.invalid(c)
 	}
 	if memberKey.MemberStatus != string(orgs.StatusActive) {
-		return h.invalid(c, span)
+		return h.invalid(c)
 	}
 
-	metrics.RecordKeyValidation(true)
-	span.SetAttributes(
-		attribute.Bool("key.valid", true),
-		attribute.String("key.id", memberKey.Key.ID),
-		attribute.String("member.id", memberKey.Key.MemberID),
-		attribute.String("organization.id", memberKey.OrganizationID),
-	)
-	span.SetStatus(codes.Ok, "valid")
-
+	metrics.RecordKeyValidation(metrics.KeyScopeMember, true)
 	return c.JSON(ValidateResponse{
 		Valid:            true,
 		MemberID:         memberKey.Key.MemberID,
@@ -272,22 +213,16 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 }
 
 func (h *Handler) authorizeKeyManage(ctx context.Context, orgID, memberID, userID string) (*orgs.Member, error) {
-	actor, err := h.orgStore.GetActiveMemberForUser(ctx, orgID, userID)
+	actor, err := orgs.RequireActiveMember(ctx, h.orgStore, orgID, userID)
 	if err != nil {
-		if stderrors.Is(err, orgs.ErrNotFound) {
-			return nil, errors.NotFoundError("organization", orgID)
-		}
-		h.logError(ctx, nil, "failed to load actor member", err, errors.KindDB)
-		return nil, errors.InternalError()
+		return nil, httpx.MapDB(ctx, err, "failed to load actor member", httpx.DBErr{})
 	}
 
 	target, err := h.orgStore.GetMember(ctx, orgID, memberID)
 	if err != nil {
-		if stderrors.Is(err, orgs.ErrNotFound) {
-			return nil, errors.NotFoundError("member", memberID)
-		}
-		h.logError(ctx, nil, "failed to load target member", err, errors.KindDB)
-		return nil, errors.InternalError()
+		return nil, httpx.MapDB(ctx, err, "failed to load target member", httpx.DBErr{
+			NotFound: orgs.ErrNotFound, Resource: "member", ResourceID: memberID,
+		})
 	}
 	if target.Status == orgs.StatusRemoved {
 		return nil, errors.NotFoundError("member", memberID)
@@ -298,10 +233,8 @@ func (h *Handler) authorizeKeyManage(ctx context.Context, orgID, memberID, userI
 	return target, nil
 }
 
-func (h *Handler) invalid(c fiber.Ctx, span trace.Span) error {
-	metrics.RecordKeyValidation(false)
-	span.SetAttributes(attribute.Bool("key.valid", false))
-	span.SetStatus(codes.Ok, "invalid")
+func (h *Handler) invalid(c fiber.Ctx) error {
+	metrics.RecordKeyValidation(metrics.KeyScopeMember, false)
 	return c.JSON(ValidateResponse{Valid: false})
 }
 
@@ -313,8 +246,4 @@ func toKeyResponse(k *APIKey) KeyResponse {
 		CreatedAt: httpx.FormatTime(k.CreatedAt),
 		RevokedAt: httpx.FormatTimePtr(k.RevokedAt),
 	}
-}
-
-func (h *Handler) logError(ctx context.Context, span trace.Span, msg string, err error, kind errors.ErrorKind) {
-	httpx.LogError(ctx, span, h.telem.LoggerWithContext(ctx), msg, err, kind)
 }

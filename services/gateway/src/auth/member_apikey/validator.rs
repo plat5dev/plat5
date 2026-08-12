@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::info;
 
-use crate::error::ErrorKind;
-use crate::internal_http::{InternalHttpClient, InternalHttpError};
-use crate::metrics;
+use crate::auth::call::AuthCallTimer;
+use crate::auth::AuthType;
+use crate::internal_http::InternalHttpClient;
 
 /// Member API key wire prefix. Independent of user keys (`plat5-sk-1-`).
 pub const MEMBER_KEY_PREFIX: &str = "plat5-mk-1-";
@@ -44,57 +44,28 @@ impl MemberApiKeyValidator {
     }
 
     pub async fn validate(&self, key: &str) -> Result<MemberApiKeyValidation, MemberApiKeyError> {
-        let start = std::time::Instant::now();
+        let timer = AuthCallTimer::start(AuthType::MemberApiKey.as_str());
 
         let result = self
             .http
-            .post_json::<_, MemberApiKeyValidation>(
-                &self.validate_url,
-                &ValidateRequest { key },
-            )
+            .post_json::<_, MemberApiKeyValidation>(&self.validate_url, &ValidateRequest { key })
             .await;
-
-        let duration = start.elapsed().as_secs_f64();
 
         let validation = match result {
             Ok(v) => v,
-            Err(InternalHttpError::Network(msg)) => {
-                metrics::record_auth_validation("member_apikey", "error", duration);
-                warn!(
-                    error_kind = ErrorKind::Network.as_str(),
-                    error_message = %msg,
-                    "failed to call member key validate"
-                );
-                return Err(MemberApiKeyError::ServiceError(msg));
-            }
-            Err(InternalHttpError::HttpStatus { status }) => {
-                metrics::record_auth_validation("member_apikey", "error", duration);
-                warn!(
-                    error_kind = ErrorKind::Network.as_str(),
-                    status,
-                    "member key validate returned error status"
-                );
-                return Err(MemberApiKeyError::ServiceError(format!(
-                    "member key validate returned status {status}"
-                )));
-            }
-            Err(InternalHttpError::Decode(msg)) => {
-                metrics::record_auth_validation("member_apikey", "error", duration);
-                warn!(
-                    error_kind = ErrorKind::Internal.as_str(),
-                    error_message = %msg,
-                    "failed to parse member key validate response"
-                );
-                return Err(MemberApiKeyError::ServiceError(msg));
+            Err(err) => {
+                return Err(MemberApiKeyError::ServiceError(
+                    timer.finish_transport(err, "member key validate"),
+                ));
             }
         };
 
         if !validation.valid {
-            metrics::record_auth_validation("member_apikey", "invalid", duration);
+            timer.finish("invalid");
             return Err(MemberApiKeyError::InvalidKey);
         }
 
-        metrics::record_auth_validation("member_apikey", "ok", duration);
+        timer.finish("ok");
         Ok(validation)
     }
 }

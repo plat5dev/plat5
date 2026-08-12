@@ -14,6 +14,12 @@ pub struct GatewayContext {
     pub body_bytes: u64,
 }
 
+impl Default for GatewayContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GatewayContext {
     pub fn new() -> Self {
         Self {

@@ -3,6 +3,7 @@ mod cors;
 mod response;
 mod upstream;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,24 +20,17 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::admission::Admissor;
-use crate::auth::jwt::{JwtCache, JwtValidatorState};
-use crate::auth::member_apikey::{MemberApiKeyCache, MemberApiKeyValidator};
-use crate::auth::membership::{MembershipCache, MembershipResolver};
-use crate::auth::user_apikey::{UserApiKeyCache, UserApiKeyValidator};
+use crate::auth::jwt::JwtValidatorState;
+use crate::auth::AuthStack;
 use crate::config::GatewayConfig;
 use crate::error::{ApiError, ErrorKind};
-use crate::internal_http::InternalHttpClient;
 use crate::metrics;
-use crate::route_map::RouteMap;
+use crate::route_map::{Route, RouteMap};
 
 pub use crate::admission::parse_user_id_claim;
 pub use context::GatewayContext;
+use cors::CorsPolicy;
 
-const JWT_CACHE_CAPACITY: u64 = 10_000;
-const JWT_CACHE_TTL_BUFFER_SECS: u64 = 60;
-const USER_APIKEY_CACHE_CAPACITY: u64 = 10_000;
-const MEMBER_APIKEY_CACHE_CAPACITY: u64 = 10_000;
-const MEMBERSHIP_CACHE_CAPACITY: u64 = 10_000;
 const MAX_BODY_SIZE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 
 pub struct UserGateway {
@@ -44,8 +38,7 @@ pub struct UserGateway {
     route_map: Arc<ArcSwap<RouteMap>>,
     connect_timeout: Duration,
     read_timeout: Duration,
-    /// Empty = reflect `*`. Non-empty = allowlist; matched Origin is reflected with `Vary: Origin`.
-    allowed_origins: Vec<String>,
+    cors: CorsPolicy,
 }
 
 impl UserGateway {
@@ -54,38 +47,138 @@ impl UserGateway {
         jwt_validator: JwtValidatorState,
         route_map: Arc<ArcSwap<RouteMap>>,
     ) -> Self {
-        let http = InternalHttpClient::new(cfg.internal_auth_token.clone());
-
-        let user_apikey_validator =
-            UserApiKeyValidator::new(cfg.user_apikey_validate_url.clone(), http.clone());
-        let member_apikey_validator = cfg
-            .member_apikey_validate_url
-            .clone()
-            .map(|url| MemberApiKeyValidator::new(url, http.clone()));
-        let membership_resolver = cfg
-            .membership_resolve_url
-            .clone()
-            .map(|url| MembershipResolver::new(url, http));
-
-        let admissor = Admissor::new(
-            jwt_validator,
-            JwtCache::new(JWT_CACHE_CAPACITY, JWT_CACHE_TTL_BUFFER_SECS),
-            cfg.auth_user_id_claim.clone(),
-            user_apikey_validator,
-            UserApiKeyCache::new(USER_APIKEY_CACHE_CAPACITY, cfg.apikey_cache_ttl_secs),
-            member_apikey_validator,
-            MemberApiKeyCache::new(MEMBER_APIKEY_CACHE_CAPACITY, cfg.apikey_cache_ttl_secs),
-            membership_resolver,
-            MembershipCache::new(MEMBERSHIP_CACHE_CAPACITY, cfg.membership_cache_ttl_secs),
-        );
-
         Self {
-            admissor,
+            admissor: Admissor::new(AuthStack::from_config(cfg, jwt_validator)),
             route_map,
             connect_timeout: cfg.upstream_connect_timeout,
             read_timeout: cfg.upstream_read_timeout,
-            allowed_origins: cfg.allowed_origins.clone(),
+            cors: CorsPolicy::new(cfg.allowed_origins.clone()),
         }
+    }
+
+    async fn handle_preflight(
+        &self,
+        session: &mut Session,
+        ctx: &GatewayContext,
+    ) -> Result<bool> {
+        let mut header = ResponseHeader::build(200, None)?;
+        self.cors
+            .apply(&mut header, ctx.request_origin.as_deref())?;
+        header.insert_header("Access-Control-Max-Age", "86400")?;
+        session
+            .write_response_header(Box::new(header), true)
+            .await?;
+        Ok(true)
+    }
+
+    async fn reject_oversized_content_length(
+        &self,
+        session: &mut Session,
+        ctx: &GatewayContext,
+    ) -> Result<Option<bool>> {
+        let Some(content_length) = session.req_header().headers.get("content-length") else {
+            return Ok(None);
+        };
+        let Ok(len_str) = content_length.to_str() else {
+            return Ok(None);
+        };
+        let Ok(len) = len_str.parse::<u64>() else {
+            return Ok(None);
+        };
+        if len <= MAX_BODY_SIZE_BYTES {
+            return Ok(None);
+        }
+        warn!(
+            content_length = len,
+            max_body_size = MAX_BODY_SIZE_BYTES,
+            "request body too large"
+        );
+        Ok(Some(
+            response::write_json_error(
+                &self.cors,
+                session,
+                ctx,
+                413,
+                ApiError::payload_too_large(MAX_BODY_SIZE_BYTES),
+            )
+            .await?,
+        ))
+    }
+
+    fn resolve_route(
+        &self,
+        path: &str,
+        method: &str,
+    ) -> Option<(Route, HashMap<String, String>)> {
+        let route_map = self.route_map.load();
+        route_map
+            .find_route(path, method)
+            .map(|(route, params)| (route.clone(), params))
+    }
+
+    async fn prepare_upstream(
+        &self,
+        session: &mut Session,
+        ctx: &mut GatewayContext,
+        path: &str,
+        route: &Route,
+        params: &HashMap<String, String>,
+        request_id: &str,
+    ) -> Result<bool> {
+        if let Err(err) = session
+            .req_header_mut()
+            .insert_header("X-Request-ID", request_id)
+        {
+            warn!(
+                error_kind = ErrorKind::Internal.as_str(),
+                error_message = %err,
+                "failed to inject X-Request-ID header"
+            );
+            return response::write_json_error(
+                &self.cors,
+                session,
+                ctx,
+                500,
+                ApiError::internal_error(),
+            )
+            .await;
+        }
+
+        upstream::strip_identity_headers(session.req_header_mut());
+
+        let admission = match self
+            .admissor
+            .admit(session.req_header(), route, params)
+            .await
+        {
+            Ok(a) => a,
+            Err(err) => {
+                return response::write_admit_error(&self.cors, session, ctx, err).await;
+            }
+        };
+
+        upstream::record_admission_span(ctx, &admission);
+        if upstream::apply_admission_headers(session.req_header_mut(), &admission).is_err() {
+            return response::write_json_error(
+                &self.cors,
+                session,
+                ctx,
+                500,
+                ApiError::internal_error(),
+            )
+            .await;
+        }
+
+        upstream::build_and_store_upstream_peer(
+            session,
+            ctx,
+            path,
+            route,
+            params,
+            self.connect_timeout,
+            self.read_timeout,
+        )?;
+        Ok(false)
     }
 }
 
@@ -104,6 +197,77 @@ fn otel_trace_ids(span: Option<&tracing::Span>) -> (Option<String>, Option<Strin
     )
 }
 
+struct RequestLog<'a> {
+    request_id: &'a str,
+    route: &'a str,
+    method: &'a str,
+    status: u16,
+    duration_ms: f64,
+    trace_id: Option<&'a str>,
+    span_id: Option<&'a str>,
+}
+
+fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
+    let RequestLog {
+        request_id,
+        route,
+        method,
+        status,
+        duration_ms,
+        trace_id,
+        span_id,
+    } = log;
+
+    match (error, trace_id, span_id) {
+        (Some(err), Some(trace_id), Some(span_id)) => {
+            warn!(
+                trace_id,
+                span_id,
+                request_id,
+                route = %route,
+                method = %method,
+                status,
+                duration_ms,
+                error = %err,
+                "request failed"
+            );
+        }
+        (Some(err), _, _) => {
+            warn!(
+                request_id,
+                route = %route,
+                method = %method,
+                status,
+                duration_ms,
+                error = %err,
+                "request failed"
+            );
+        }
+        (None, Some(trace_id), Some(span_id)) => {
+            info!(
+                trace_id,
+                span_id,
+                request_id,
+                route = %route,
+                method = %method,
+                status,
+                duration_ms,
+                "request completed"
+            );
+        }
+        (None, _, _) => {
+            info!(
+                request_id,
+                route = %route,
+                method = %method,
+                status,
+                duration_ms,
+                "request completed"
+            );
+        }
+    }
+}
+
 #[async_trait]
 impl ProxyHttp for UserGateway {
     type CTX = GatewayContext;
@@ -114,7 +278,7 @@ impl ProxyHttp for UserGateway {
 
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
         let path = session.req_header().uri.path().to_string();
-        let method = session.req_header().method.to_string();
+        let method = session.req_header().method.as_str().to_string();
         ctx.method = Some(method.clone());
         ctx.request_origin = session
             .req_header()
@@ -134,118 +298,29 @@ impl ProxyHttp for UserGateway {
             span.record("request_id", request_id.as_str());
         }
 
-        if method == "OPTIONS" {
-            let mut header = ResponseHeader::build(200, None)?;
-            cors::apply_cors(
-                &self.allowed_origins,
-                &mut header,
-                ctx.request_origin.as_deref(),
-            )?;
-            header.insert_header("Access-Control-Max-Age", "86400")?;
-            session
-                .write_response_header(Box::new(header), true)
-                .await?;
-            return Ok(true);
+        if session.req_header().method == http::Method::OPTIONS {
+            return self.handle_preflight(session, ctx).await;
         }
 
-        // Content-Length early reject (chunked bodies enforced in request_body_filter)
-        if let Some(content_length) = session.req_header().headers.get("content-length") {
-            if let Ok(len_str) = content_length.to_str() {
-                if let Ok(len) = len_str.parse::<u64>() {
-                    if len > MAX_BODY_SIZE_BYTES {
-                        warn!(
-                            content_length = len,
-                            max_body_size = MAX_BODY_SIZE_BYTES,
-                            "request body too large"
-                        );
-                        return response::write_json_error(
-                            &self.allowed_origins,
-                            session,
-                            ctx,
-                            413,
-                            ApiError::payload_too_large(MAX_BODY_SIZE_BYTES),
-                        )
-                        .await;
-                    }
-                }
-            }
+        if let Some(done) = self.reject_oversized_content_length(session, ctx).await? {
+            return Ok(done);
         }
 
-        let (route, params) = {
-            let route_map = self.route_map.load();
-            match route_map.find_route(&path, &method) {
-                Some((route, params)) => (route.clone(), params),
-                None => {
-                    warn!("no matching route");
-                    return response::write_json_error(
-                        &self.allowed_origins,
-                        session,
-                        ctx,
-                        404,
-                        ApiError::not_found(),
-                    )
-                    .await;
-                }
-            }
+        let Some((route, params)) = self.resolve_route(&path, &method) else {
+            warn!("no matching route");
+            return response::write_json_error(
+                &self.cors,
+                session,
+                ctx,
+                404,
+                ApiError::not_found(),
+            )
+            .await;
         };
 
         ctx.route = Some(route.path.clone());
-
-        if let Err(err) = session
-            .req_header_mut()
-            .insert_header("X-Request-ID", &request_id)
-        {
-            warn!(
-                error_kind = ErrorKind::Internal.as_str(),
-                error_message = %err,
-                "failed to inject X-Request-ID header"
-            );
-            return response::write_json_error(
-                &self.allowed_origins,
-                session,
-                ctx,
-                500,
-                ApiError::internal_error(),
-            )
-            .await;
-        }
-
-        upstream::strip_identity_headers(session.req_header_mut());
-
-        let admission = match self
-            .admissor
-            .admit(session.req_header(), &route, &params)
+        self.prepare_upstream(session, ctx, &path, &route, &params, &request_id)
             .await
-        {
-            Ok(a) => a,
-            Err(err) => {
-                return response::write_admit_error(&self.allowed_origins, session, ctx, err)
-                    .await;
-            }
-        };
-
-        upstream::record_admission_span(ctx, &admission);
-        if let Err(_err) = upstream::apply_admission_headers(session.req_header_mut(), &admission) {
-            return response::write_json_error(
-                &self.allowed_origins,
-                session,
-                ctx,
-                500,
-                ApiError::internal_error(),
-            )
-            .await;
-        }
-
-        upstream::build_and_store_upstream_peer(
-            session,
-            ctx,
-            &path,
-            &route,
-            &params,
-            self.connect_timeout,
-            self.read_timeout,
-        )?;
-        Ok(false)
     }
 
     async fn request_body_filter(
@@ -293,8 +368,7 @@ impl ProxyHttp for UserGateway {
                 502 => ApiError::service_unavailable(),
                 _ => ApiError::internal_error(),
             };
-            if let Err(err) =
-                response::send_json_error(&self.allowed_origins, session, ctx, code, error).await
+            if let Err(err) = response::send_json_error(&self.cors, session, ctx, code, error).await
             {
                 warn!(
                     status = code,
@@ -340,11 +414,8 @@ impl ProxyHttp for UserGateway {
         }
 
         upstream_response.remove_header("alt-svc");
-        cors::apply_cors(
-            &self.allowed_origins,
-            upstream_response,
-            ctx.request_origin.as_deref(),
-        )?;
+        self.cors
+            .apply(upstream_response, ctx.request_origin.as_deref())?;
 
         debug!("rewrote upstream response headers");
         Ok(())
@@ -383,55 +454,18 @@ impl ProxyHttp for UserGateway {
 
         let request_id = ctx.request_id.as_deref().unwrap_or("");
         let (trace_id, span_id) = otel_trace_ids(root_span.as_ref());
-
-        match (e, trace_id.as_deref(), span_id.as_deref()) {
-            (Some(err), Some(trace_id), Some(span_id)) => {
-                warn!(
-                    trace_id,
-                    span_id,
-                    request_id,
-                    route = %route,
-                    method = %method,
-                    status,
-                    duration_ms = duration * 1000.0,
-                    error = %err,
-                    "request failed"
-                );
-            }
-            (Some(err), _, _) => {
-                warn!(
-                    request_id,
-                    route = %route,
-                    method = %method,
-                    status,
-                    duration_ms = duration * 1000.0,
-                    error = %err,
-                    "request failed"
-                );
-            }
-            (None, Some(trace_id), Some(span_id)) => {
-                info!(
-                    trace_id,
-                    span_id,
-                    request_id,
-                    route = %route,
-                    method = %method,
-                    status,
-                    duration_ms = duration * 1000.0,
-                    "request completed"
-                );
-            }
-            (None, _, _) => {
-                info!(
-                    request_id,
-                    route = %route,
-                    method = %method,
-                    status,
-                    duration_ms = duration * 1000.0,
-                    "request completed"
-                );
-            }
-        }
+        log_request_outcome(
+            RequestLog {
+                request_id,
+                route: &route,
+                method: &method,
+                status,
+                duration_ms: duration * 1000.0,
+                trace_id: trace_id.as_deref(),
+                span_id: span_id.as_deref(),
+            },
+            e,
+        );
 
         ctx.finish_root_span();
     }

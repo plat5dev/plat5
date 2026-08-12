@@ -1,38 +1,24 @@
 package userkeys
 
 import (
-	"context"
 	stderrors "errors"
 	"strings"
 
 	"github.com/gofiber/fiber/v3"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/internal/apikey"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/metrics"
 	"github.com/plat5dev/plat5/identity/middleware"
-	"github.com/plat5dev/plat5/identity/telemetry"
 )
 
-const tracerName = "identity.userkeys"
-
 type Handler struct {
-	store  *Store
-	tracer trace.Tracer
-	telem  *telemetry.Telemetry
+	store *Store
 }
 
-func NewHandler(store *Store, telem *telemetry.Telemetry) *Handler {
-	return &Handler{
-		store:  store,
-		tracer: otel.Tracer(tracerName),
-		telem:  telem,
-	}
+func NewHandler(store *Store) *Handler {
+	return &Handler{store: store}
 }
 
 type CreateRequest struct {
@@ -70,9 +56,7 @@ type ValidateResponse struct {
 }
 
 func (h *Handler) Create(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "userkeys.create")
-	defer span.End()
-
+	ctx := c.Context()
 	if err := requirePathUser(c); err != nil {
 		return err
 	}
@@ -87,32 +71,25 @@ func (h *Handler) Create(c fiber.Ctx) error {
 	if err != nil {
 		return errors.FieldError("name", "must be at most 128 characters")
 	}
-	span.SetAttributes(attribute.String("key.name", name))
 
 	plaintext, err := GenerateKey()
 	if err != nil {
-		h.logError(ctx, span, "failed to generate key", err, errors.KindInternal)
+		httpx.LogError(ctx, "failed to generate key", err, errors.KindInternal)
 		return errors.InternalError()
 	}
 
 	apiKey := New(userID, name, plaintext)
-	span.SetAttributes(attribute.String("key.id", apiKey.ID))
-
 	if err := h.store.Create(ctx, apiKey); err != nil {
-		h.logError(ctx, span, "failed to store user key", err, errors.KindDB)
-		return errors.InternalError()
+		return httpx.MapDB(ctx, err, "failed to store user key", httpx.DBErr{})
 	}
 
-	logger := h.telem.LoggerWithContext(ctx)
-	logger.Info().
+	httpx.Logger(ctx).Info().
 		Str("user_id", userID).
 		Str("key_id", apiKey.ID).
 		Str("key_prefix", apiKey.KeyPrefix).
 		Msg("user api key created")
 
-	metrics.RecordKeyCreated()
-	span.SetStatus(codes.Ok, "created")
-
+	metrics.RecordKeyCreated(metrics.KeyScopeUser)
 	return c.Status(fiber.StatusCreated).JSON(CreateResponse{
 		ID:        apiKey.ID,
 		Key:       plaintext,
@@ -123,9 +100,7 @@ func (h *Handler) Create(c fiber.Ctx) error {
 }
 
 func (h *Handler) List(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "userkeys.list")
-	defer span.End()
-
+	ctx := c.Context()
 	if err := requirePathUser(c); err != nil {
 		return err
 	}
@@ -138,8 +113,7 @@ func (h *Handler) List(c fiber.Ctx) error {
 
 	list, hasMore, err := h.store.List(ctx, userID, limit, offset)
 	if err != nil {
-		h.logError(ctx, span, "failed to list user keys", err, errors.KindDB)
-		return errors.InternalError()
+		return httpx.MapDB(ctx, err, "failed to list user keys", httpx.DBErr{})
 	}
 
 	out := ListResponse{
@@ -149,16 +123,11 @@ func (h *Handler) List(c fiber.Ctx) error {
 	for _, k := range list {
 		out.Keys = append(out.Keys, toKeyResponse(k))
 	}
-
-	span.SetAttributes(attribute.Int("keys.count", len(out.Keys)))
-	span.SetStatus(codes.Ok, "ok")
 	return c.JSON(out)
 }
 
 func (h *Handler) Revoke(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "userkeys.revoke")
-	defer span.End()
-
+	ctx := c.Context()
 	if err := requirePathUser(c); err != nil {
 		return err
 	}
@@ -167,31 +136,25 @@ func (h *Handler) Revoke(c fiber.Ctx) error {
 	if keyID == "" {
 		return errors.FieldError("key_id", "required")
 	}
-	span.SetAttributes(attribute.String("key.id", keyID))
 
 	key, err := h.store.Revoke(ctx, userID, keyID)
 	if err != nil {
-		if stderrors.Is(err, ErrNotFound) {
-			return errors.NotFoundError("api_key", keyID)
-		}
-		h.logError(ctx, span, "failed to revoke user key", err, errors.KindDB)
-		return errors.InternalError()
+		return httpx.MapDB(ctx, err, "failed to revoke user key", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "api_key", ResourceID: keyID,
+		})
 	}
 
-	logger := h.telem.LoggerWithContext(ctx)
-	logger.Info().
+	httpx.Logger(ctx).Info().
 		Str("user_id", userID).
 		Str("key_id", key.ID).
 		Msg("user api key revoked")
 
-	metrics.RecordKeyRevoked()
-	span.SetStatus(codes.Ok, "revoked")
+	metrics.RecordKeyRevoked(metrics.KeyScopeUser)
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
 func (h *Handler) Validate(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "userkeys.validate")
-	defer span.End()
+	ctx := c.Context()
 
 	var req ValidateRequest
 	if err := c.Bind().Body(&req); err != nil {
@@ -202,41 +165,29 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 		return errors.FieldError("key", "required")
 	}
 	if !LooksLike(key) {
-		return h.invalid(c, span)
+		return h.invalid(c)
 	}
 
-	keyHash := HashKey(key)
-	span.SetAttributes(attribute.String("key.hash_prefix", keyHash[:8]))
-
-	userKey, err := h.store.GetByHash(ctx, keyHash)
+	userKey, err := h.store.GetByHash(ctx, HashKey(key))
 	if err != nil {
 		if stderrors.Is(err, ErrNotFound) {
-			return h.invalid(c, span)
+			return h.invalid(c)
 		}
-		h.logError(ctx, span, "failed to get user key", err, errors.KindDB)
-		return errors.InternalError()
+		return httpx.MapDB(ctx, err, "failed to get user key", httpx.DBErr{})
 	}
 	if userKey.IsRevoked() {
-		return h.invalid(c, span)
+		return h.invalid(c)
 	}
 
-	metrics.RecordKeyValidation(true)
-	span.SetAttributes(
-		attribute.Bool("key.valid", true),
-		attribute.String("key.id", userKey.ID),
-		attribute.String("user.id", userKey.UserID),
-	)
-	span.SetStatus(codes.Ok, "valid")
+	metrics.RecordKeyValidation(metrics.KeyScopeUser, true)
 	return c.JSON(ValidateResponse{
 		Valid:  true,
 		UserID: userKey.UserID,
 	})
 }
 
-func (h *Handler) invalid(c fiber.Ctx, span trace.Span) error {
-	metrics.RecordKeyValidation(false)
-	span.SetAttributes(attribute.Bool("key.valid", false))
-	span.SetStatus(codes.Ok, "invalid")
+func (h *Handler) invalid(c fiber.Ctx) error {
+	metrics.RecordKeyValidation(metrics.KeyScopeUser, false)
 	return c.JSON(ValidateResponse{Valid: false})
 }
 
@@ -257,8 +208,4 @@ func toKeyResponse(k *APIKey) KeyResponse {
 		CreatedAt: httpx.FormatTime(k.CreatedAt),
 		RevokedAt: httpx.FormatTimePtr(k.RevokedAt),
 	}
-}
-
-func (h *Handler) logError(ctx context.Context, span trace.Span, msg string, err error, kind errors.ErrorKind) {
-	httpx.LogError(ctx, span, h.telem.LoggerWithContext(ctx), msg, err, kind)
 }

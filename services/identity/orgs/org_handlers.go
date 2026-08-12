@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
@@ -42,9 +40,7 @@ type ListOrgsResponse struct {
 }
 
 func (h *Handler) CreateOrganization(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "organizations.create")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 
 	var req CreateOrgRequest
@@ -80,28 +76,21 @@ func (h *Handler) CreateOrganization(c fiber.Ctx) error {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	span.SetAttributes(attribute.String("organization.id", org.ID))
 
-	member, err := h.store.CreateOrganization(ctx, org, userID)
-	if err != nil {
-		return h.mapStoreErr(ctx, span, err, "failed to create organization",
-			notFound("organization", org.ID),
-			conflict("slug", slug),
-		)
+	if _, err := h.store.CreateOrganization(ctx, org, userID); err != nil {
+		return httpx.MapDB(ctx, err, "failed to create organization", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "organization", ResourceID: org.ID,
+			Conflict: ErrConflict, Field: "slug", FieldValue: slug,
+		})
 	}
 
 	metrics.RecordOrgCreated()
 	metrics.RecordMemberOp("create_owner")
-	span.SetAttributes(attribute.String("member.id", member.ID))
-	span.SetStatus(codes.Ok, "created")
-
 	return c.Status(fiber.StatusCreated).JSON(toOrgResponse(org))
 }
 
 func (h *Handler) ListOrganizations(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "organizations.list")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 	limit, offset, err := httpx.ParseListParams(c)
 	if err != nil {
@@ -110,7 +99,7 @@ func (h *Handler) ListOrganizations(c fiber.Ctx) error {
 
 	list, hasMore, err := h.store.ListOrganizationsForUser(ctx, userID, limit, offset)
 	if err != nil {
-		return h.mapStoreErr(ctx, span, err, "failed to list organizations", storeErrOpts{})
+		return httpx.MapDB(ctx, err, "failed to list organizations", httpx.DBErr{})
 	}
 
 	out := ListOrgsResponse{
@@ -120,18 +109,13 @@ func (h *Handler) ListOrganizations(c fiber.Ctx) error {
 	for _, o := range list {
 		out.Organizations = append(out.Organizations, toOrgResponse(o))
 	}
-	span.SetAttributes(attribute.Int("organizations.count", len(out.Organizations)))
-	span.SetStatus(codes.Ok, "ok")
 	return c.JSON(out)
 }
 
 func (h *Handler) GetOrganization(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "organizations.get")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
-	span.SetAttributes(attribute.String("organization.id", orgID))
 
 	if _, err := h.requireActiveMember(ctx, orgID, userID); err != nil {
 		return err
@@ -139,22 +123,17 @@ func (h *Handler) GetOrganization(c fiber.Ctx) error {
 
 	org, err := h.store.GetOrganization(ctx, orgID)
 	if err != nil {
-		return h.mapStoreErr(ctx, span, err, "failed to get organization",
-			notFound("organization", orgID),
-		)
+		return httpx.MapDB(ctx, err, "failed to get organization", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "organization", ResourceID: orgID,
+		})
 	}
-
-	span.SetStatus(codes.Ok, "ok")
 	return c.JSON(toOrgResponse(org))
 }
 
 func (h *Handler) UpdateOrganization(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "organizations.update")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
-	span.SetAttributes(attribute.String("organization.id", orgID))
 
 	actor, err := h.requireActiveMember(ctx, orgID, userID)
 	if err != nil {
@@ -171,9 +150,9 @@ func (h *Handler) UpdateOrganization(c fiber.Ctx) error {
 
 	org, err := h.store.GetOrganization(ctx, orgID)
 	if err != nil {
-		return h.mapStoreErr(ctx, span, err, "failed to get organization",
-			notFound("organization", orgID),
-		)
+		return httpx.MapDB(ctx, err, "failed to get organization", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "organization", ResourceID: orgID,
+		})
 	}
 
 	if req.Name != nil {
@@ -198,23 +177,18 @@ func (h *Handler) UpdateOrganization(c fiber.Ctx) error {
 	}
 
 	if err := h.store.UpdateOrganization(ctx, org); err != nil {
-		return h.mapStoreErr(ctx, span, err, "failed to update organization",
-			notFound("organization", orgID),
-			conflict("slug", org.Slug),
-		)
+		return httpx.MapDB(ctx, err, "failed to update organization", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "organization", ResourceID: orgID,
+			Conflict: ErrConflict, Field: "slug", FieldValue: org.Slug,
+		})
 	}
-
-	span.SetStatus(codes.Ok, "ok")
 	return c.JSON(toOrgResponse(org))
 }
 
 func (h *Handler) DeleteOrganization(c fiber.Ctx) error {
-	ctx, span := h.tracer.Start(c.Context(), "organizations.delete")
-	defer span.End()
-
+	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
-	span.SetAttributes(attribute.String("organization.id", orgID))
 
 	actor, err := h.requireActiveMember(ctx, orgID, userID)
 	if err != nil {
@@ -225,12 +199,10 @@ func (h *Handler) DeleteOrganization(c fiber.Ctx) error {
 	}
 
 	if err := h.store.DeleteOrganization(ctx, orgID); err != nil {
-		return h.mapStoreErr(ctx, span, err, "failed to delete organization",
-			notFound("organization", orgID),
-		)
+		return httpx.MapDB(ctx, err, "failed to delete organization", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "organization", ResourceID: orgID,
+		})
 	}
-
-	span.SetStatus(codes.Ok, "ok")
 	return c.SendStatus(fiber.StatusNoContent)
 }
 

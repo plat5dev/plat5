@@ -6,12 +6,12 @@ use pingora::Result;
 use tracing::{info, warn, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::admission::{AdmitError, AuthError};
+use crate::admission::{AdmitError, AuthError, AuthType};
 use crate::error::{ApiError, ErrorKind};
 use crate::metrics;
 
 use super::context::GatewayContext;
-use super::cors;
+use super::cors::CorsPolicy;
 
 /// Client errors → span Ok; infrastructure failures → span Error.
 pub fn apply_error_span_status(span: &Span, status: u16) {
@@ -32,7 +32,7 @@ pub fn apply_error_span_status(span: &Span, status: u16) {
 }
 
 pub async fn send_json_error(
-    allowed_origins: &[String],
+    cors: &CorsPolicy,
     session: &mut Session,
     ctx: &GatewayContext,
     status: u16,
@@ -47,7 +47,7 @@ pub async fn send_json_error(
     let mut header = ResponseHeader::build(status, None)?;
     header.insert_header("Content-Type", "application/json")?;
     header.insert_header("Content-Length", body.len().to_string())?;
-    cors::apply_cors(allowed_origins, &mut header, ctx.request_origin.as_deref())?;
+    cors.apply(&mut header, ctx.request_origin.as_deref())?;
     if let Some(ref request_id) = ctx.request_id {
         header.insert_header("X-Request-ID", request_id)?;
     }
@@ -61,86 +61,65 @@ pub async fn send_json_error(
 }
 
 pub async fn write_json_error(
-    allowed_origins: &[String],
+    cors: &CorsPolicy,
     session: &mut Session,
     ctx: &GatewayContext,
     status: u16,
     error: ApiError,
 ) -> Result<bool> {
-    send_json_error(allowed_origins, session, ctx, status, error).await?;
+    send_json_error(cors, session, ctx, status, error).await?;
     Ok(true)
 }
 
 pub async fn write_admit_error(
-    allowed_origins: &[String],
+    cors: &CorsPolicy,
     session: &mut Session,
     ctx: &GatewayContext,
     err: AdmitError,
 ) -> Result<bool> {
     match err {
-        AdmitError::Auth(auth_err) => {
-            write_auth_error(allowed_origins, session, ctx, auth_err).await
-        }
+        AdmitError::Auth(auth_err) => write_auth_error(cors, session, ctx, auth_err).await,
         AdmitError::MemberApiKeyInvalid => {
-            metrics::record_auth_failure("member_apikey", "invalid_member_apikey");
+            let auth_type = AuthType::MemberApiKey.as_str();
+            metrics::record_auth_failure(auth_type, "invalid_member_apikey");
             info!(
                 error_kind = ErrorKind::Auth.as_str(),
-                auth_type = "member_apikey",
+                auth_type,
                 error_message = "invalid_member_apikey",
                 "authentication failed"
             );
-            write_json_error(
-                allowed_origins,
-                session,
-                ctx,
-                401,
-                ApiError::unauthorized(None),
-            )
-            .await
+            write_json_error(cors, session, ctx, 401, ApiError::unauthorized(None)).await
         }
         AdmitError::NotFound => {
-            write_json_error(allowed_origins, session, ctx, 404, ApiError::not_found()).await
+            write_json_error(cors, session, ctx, 404, ApiError::not_found()).await
         }
         AdmitError::Unavailable => {
-            write_json_error(
-                allowed_origins,
-                session,
-                ctx,
-                503,
-                ApiError::service_unavailable(),
-            )
-            .await
+            write_json_error(cors, session, ctx, 503, ApiError::service_unavailable()).await
         }
         AdmitError::Internal(msg) => {
             warn!(reason = msg, "admission internal error (config bug)");
-            write_json_error(
-                allowed_origins,
-                session,
-                ctx,
-                500,
-                ApiError::internal_error(),
-            )
-            .await
+            write_json_error(cors, session, ctx, 500, ApiError::internal_error()).await
         }
     }
 }
 
 async fn write_auth_error(
-    allowed_origins: &[String],
+    cors: &CorsPolicy,
     session: &mut Session,
     ctx: &GatewayContext,
     err: AuthError,
 ) -> Result<bool> {
+    let auth_type = err.auth_type().as_str();
     if err.is_client_error() {
-        metrics::record_auth_failure(err.auth_type(), err.as_str());
+        metrics::record_auth_failure(auth_type, err.as_str());
         info!(
             error_kind = ErrorKind::Auth.as_str(),
-            auth_type = err.auth_type(),
+            auth_type,
             error_message = err.as_str(),
             "authentication failed"
         );
         write_json_error(
-            allowed_origins,
+            cors,
             session,
             ctx,
             401,
@@ -150,17 +129,10 @@ async fn write_auth_error(
     } else {
         warn!(
             error_kind = ErrorKind::Network.as_str(),
-            auth_type = err.auth_type(),
+            auth_type,
             error_message = err.as_str(),
             "authentication infrastructure unavailable"
         );
-        write_json_error(
-            allowed_origins,
-            session,
-            ctx,
-            503,
-            ApiError::service_unavailable(),
-        )
-        .await
+        write_json_error(cors, session, ctx, 503, ApiError::service_unavailable()).await
     }
 }

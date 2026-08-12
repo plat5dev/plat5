@@ -5,9 +5,10 @@ use crate::admission::parse_user_id_claim;
 
 const DEFAULT_PORT: &str = "5001";
 const DEFAULT_INTERNAL_PORT: &str = "8000";
+const DEFAULT_ETCD_URL: &str = "http://localhost:2379";
 const DEFAULT_USER_ID_CLAIM: &str = "properties.user_id";
 const DEFAULT_APIKEY_CACHE_TTL_SECS: u64 = 300;
-const DEFAULT_MEMBERSHIP_CACHE_TTL_SECS: u64 = 300;
+const DEFAULT_MEMBER_CACHE_TTL_SECS: u64 = 300;
 const DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_UPSTREAM_READ_TIMEOUT_MS: u64 = 30_000;
 
@@ -16,6 +17,7 @@ const DEFAULT_UPSTREAM_READ_TIMEOUT_MS: u64 = 30_000;
 pub struct GatewayConfig {
     pub port: String,
     pub internal_port: String,
+    pub etcd_url: String,
 
     pub auth_issuer: String,
     pub auth_jwks_uri: String,
@@ -25,12 +27,12 @@ pub struct GatewayConfig {
 
     pub user_apikey_validate_url: String,
     pub member_apikey_validate_url: Option<String>,
-    pub membership_resolve_url: Option<String>,
+    pub member_resolve_url: Option<String>,
     pub internal_auth_token: Option<String>,
 
     /// TTL for user + member API key caches (`APIKEY_CACHE_TTL_SECS`).
     pub apikey_cache_ttl_secs: u64,
-    pub membership_cache_ttl_secs: u64,
+    pub member_cache_ttl_secs: u64,
 
     pub upstream_connect_timeout: Duration,
     pub upstream_read_timeout: Duration,
@@ -65,6 +67,7 @@ impl GatewayConfig {
             port: env::var("PORT").unwrap_or_else(|_| DEFAULT_PORT.to_string()),
             internal_port: env::var("INTERNAL_PORT")
                 .unwrap_or_else(|_| DEFAULT_INTERNAL_PORT.to_string()),
+            etcd_url: env::var("ETCD_URL").unwrap_or_else(|_| DEFAULT_ETCD_URL.to_string()),
 
             auth_issuer,
             auth_jwks_uri,
@@ -76,16 +79,16 @@ impl GatewayConfig {
 
             user_apikey_validate_url,
             member_apikey_validate_url: optional_nonempty_env("MEMBER_APIKEY_VALIDATE_URL"),
-            membership_resolve_url: optional_nonempty_env("MEMBERSHIP_RESOLVE_URL"),
+            member_resolve_url: optional_nonempty_env("MEMBER_RESOLVE_URL"),
             internal_auth_token: optional_nonempty_env("INTERNAL_AUTH_TOKEN"),
 
             apikey_cache_ttl_secs: parse_u64_env(
                 "APIKEY_CACHE_TTL_SECS",
                 DEFAULT_APIKEY_CACHE_TTL_SECS,
             )?,
-            membership_cache_ttl_secs: parse_u64_env(
-                "MEMBERSHIP_CACHE_TTL_SECS",
-                DEFAULT_MEMBERSHIP_CACHE_TTL_SECS,
+            member_cache_ttl_secs: parse_u64_env(
+                "MEMBER_CACHE_TTL_SECS",
+                DEFAULT_MEMBER_CACHE_TTL_SECS,
             )?,
 
             upstream_connect_timeout: Duration::from_millis(parse_u64_env(

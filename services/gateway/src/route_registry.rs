@@ -10,8 +10,6 @@ use tracing::{error, info, warn};
 use crate::route_config::{Config, ServiceConfig, ROUTES_PREFIX};
 use crate::route_map::RouteMap;
 
-const DEFAULT_ETCD_URL: &str = "http://localhost:2379";
-
 /// Manages the dynamic route registry backed by etcd.
 ///
 /// Routes are loaded from etcd at startup and kept in sync via watches.
@@ -24,12 +22,10 @@ impl RouteRegistry {
     /// Connect to etcd, load initial routes, and spawn a background watch task.
     ///
     /// If etcd is unreachable, this function returns an error immediately.
-    pub async fn connect() -> Result<Self, RouteRegistryError> {
-        let etcd_url = std::env::var("ETCD_URL").unwrap_or_else(|_| DEFAULT_ETCD_URL.to_string());
-
+    pub async fn connect(etcd_url: &str) -> Result<Self, RouteRegistryError> {
         info!(etcd_url = %etcd_url, "connecting to etcd for route registry");
 
-        let client = Client::connect([etcd_url.as_str()], None)
+        let client = Client::connect([etcd_url], None)
             .await
             .map_err(|e| RouteRegistryError::Connect(e.to_string()))?;
 

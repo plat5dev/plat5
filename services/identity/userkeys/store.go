@@ -71,28 +71,6 @@ func (s *Store) GetByHash(ctx context.Context, keyHash string) (*APIKey, error) 
 	return key, nil
 }
 
-func (s *Store) GetByID(ctx context.Context, userID, keyID string) (*APIKey, error) {
-	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "get_user_api_key", dbx.DefaultTimeout,
-		attribute.String("key.id", keyID),
-	)
-	defer cancel()
-	defer op.End()
-
-	key, err := scanKey(s.pool.QueryRow(ctx, `
-		SELECT id, user_id, name, key_prefix, key_hash, created_at, revoked_at
-		FROM user_api_keys
-		WHERE id = $1 AND user_id = $2
-	`, keyID, userID))
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, op.Expected("not found", ErrNotFound)
-		}
-		return nil, op.Fail(err)
-	}
-	op.OK("found")
-	return key, nil
-}
-
 func (s *Store) List(ctx context.Context, userID string, limit, offset int) ([]*APIKey, bool, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_user_api_keys", dbx.DefaultTimeout,
 		attribute.String("user.id", userID),

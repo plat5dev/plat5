@@ -64,7 +64,7 @@ impl RouteMap {
     }
 
     /// Build RouteMap from parsed config. Skips routes whose paths contain
-    /// invalid regex patterns and logs a warning.
+    /// invalid patterns and logs a warning.
     ///
     /// Services are processed in sorted name order. Routes are sorted by
     /// specificity (more static segments, fewer params, longer path, path string)
@@ -80,8 +80,32 @@ impl RouteMap {
             let service_config = &config.services[service_name];
             let base_url = &service_config.url;
 
-            if let Some(ref public) = service_config.public {
-                for route_config in &public.routes {
+            let scopes = [
+                (
+                    service_config.public.as_ref(),
+                    RouteScope::Public,
+                    None::<String>,
+                ),
+                (
+                    service_config.user.as_ref(),
+                    RouteScope::User,
+                    None::<String>,
+                ),
+                (
+                    service_config.organization.as_ref(),
+                    RouteScope::Organization,
+                    service_config
+                        .organization
+                        .as_ref()
+                        .and_then(|o| o.organization_param.clone()),
+                ),
+            ];
+
+            for (scope_cfg, scope, org_param) in scopes {
+                let Some(scope_cfg) = scope_cfg else {
+                    continue;
+                };
+                for route_config in &scope_cfg.routes {
                     let methods: Vec<&str> =
                         route_config.methods.iter().map(|s| s.as_str()).collect();
                     let transform_path =
@@ -92,65 +116,14 @@ impl RouteMap {
                         &route_config.path,
                         &methods,
                         transform_path,
-                        RouteScope::Public,
-                        None,
-                    ) {
-                        warn!(
-                            service = %service_name,
-                            path = %route_config.path,
-                            error = %e,
-                            "skipping route with invalid path pattern"
-                        );
-                    }
-                }
-            }
-
-            if let Some(ref user) = service_config.user {
-                for route_config in &user.routes {
-                    let methods: Vec<&str> =
-                        route_config.methods.iter().map(|s| s.as_str()).collect();
-                    let transform_path =
-                        route_config.transform.as_ref().and_then(|t| t.path.clone());
-
-                    if let Err(e) = route_map.add_route(
-                        base_url,
-                        &route_config.path,
-                        &methods,
-                        transform_path,
-                        RouteScope::User,
-                        None,
-                    ) {
-                        warn!(
-                            service = %service_name,
-                            path = %route_config.path,
-                            error = %e,
-                            "skipping route with invalid path pattern"
-                        );
-                    }
-                }
-            }
-
-            if let Some(ref organization) = service_config.organization {
-                let org_param = organization.organization_param.clone();
-                for route_config in &organization.routes {
-                    let methods: Vec<&str> =
-                        route_config.methods.iter().map(|s| s.as_str()).collect();
-                    let transform_path =
-                        route_config.transform.as_ref().and_then(|t| t.path.clone());
-
-                    if let Err(e) = route_map.add_route(
-                        base_url,
-                        &route_config.path,
-                        &methods,
-                        transform_path,
-                        RouteScope::Organization,
+                        scope,
                         org_param.clone(),
                     ) {
                         warn!(
                             service = %service_name,
                             path = %route_config.path,
                             error = %e,
-                            "skipping route with invalid path pattern"
+                            "skipping invalid route"
                         );
                     }
                 }
@@ -169,8 +142,23 @@ impl RouteMap {
         transform_path: Option<String>,
         scope: RouteScope,
         organization_param: Option<String>,
-    ) -> Result<(), regex::Error> {
-        let re = path_to_regex(path)?;
+    ) -> Result<(), String> {
+        if scope == RouteScope::Organization {
+            let param = organization_param
+                .as_deref()
+                .filter(|p| !p.is_empty())
+                .ok_or_else(|| {
+                    "organization route missing organization_param".to_string()
+                })?;
+            let needle = format!("{{{param}}}");
+            if !path.contains(&needle) {
+                return Err(format!(
+                    "organization route path must include path param {needle}"
+                ));
+            }
+        }
+
+        let re = path_to_regex(path).map_err(|e| e.to_string())?;
         let (static_segments, param_count) = path_specificity(path);
 
         let route = Route {
@@ -385,5 +373,40 @@ mod tests {
     #[test]
     fn empty_param_name_rejected() {
         assert!(path_to_regex("/api/{}").is_err());
+    }
+
+    #[test]
+    fn org_route_requires_param_in_path() {
+        let mut map = RouteMap::new();
+        assert!(map
+            .add_route(
+                "http://x",
+                "/api/widgets",
+                &["GET"],
+                None,
+                RouteScope::Organization,
+                Some("organization_id".into()),
+            )
+            .is_err());
+        assert!(map
+            .add_route(
+                "http://x",
+                "/api/orgs/{organization_id}/widgets",
+                &["GET"],
+                None,
+                RouteScope::Organization,
+                Some("organization_id".into()),
+            )
+            .is_ok());
+        assert!(map
+            .add_route(
+                "http://x",
+                "/api/orgs/{organization_id}",
+                &["GET"],
+                None,
+                RouteScope::Organization,
+                None,
+            )
+            .is_err());
     }
 }

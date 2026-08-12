@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::info;
 
-use crate::error::ErrorKind;
-use crate::internal_http::{InternalHttpClient, InternalHttpError};
-use crate::metrics;
+use crate::auth::call::AuthCallTimer;
+use crate::auth::AuthType;
+use crate::internal_http::InternalHttpClient;
 
 /// User API key wire prefix. Independent of member keys (`plat5-mk-1-`).
 pub const USER_KEY_PREFIX: &str = "plat5-sk-1-";
@@ -41,57 +41,28 @@ impl UserApiKeyValidator {
     }
 
     pub async fn validate(&self, key: &str) -> Result<UserApiKeyValidation, UserApiKeyError> {
-        let start = std::time::Instant::now();
+        let timer = AuthCallTimer::start(AuthType::UserApiKey.as_str());
 
         let result = self
             .http
-            .post_json::<_, UserApiKeyValidation>(
-                &self.validate_url,
-                &ValidateRequest { key },
-            )
+            .post_json::<_, UserApiKeyValidation>(&self.validate_url, &ValidateRequest { key })
             .await;
-
-        let duration = start.elapsed().as_secs_f64();
 
         let validation = match result {
             Ok(v) => v,
-            Err(InternalHttpError::Network(msg)) => {
-                metrics::record_auth_validation("user_apikey", "error", duration);
-                warn!(
-                    error_kind = ErrorKind::Network.as_str(),
-                    error_message = %msg,
-                    "failed to call user key validate"
-                );
-                return Err(UserApiKeyError::ServiceError(msg));
-            }
-            Err(InternalHttpError::HttpStatus { status }) => {
-                metrics::record_auth_validation("user_apikey", "error", duration);
-                warn!(
-                    error_kind = ErrorKind::Network.as_str(),
-                    status,
-                    "user key validate returned error status"
-                );
-                return Err(UserApiKeyError::ServiceError(format!(
-                    "user key validate returned status {status}"
-                )));
-            }
-            Err(InternalHttpError::Decode(msg)) => {
-                metrics::record_auth_validation("user_apikey", "error", duration);
-                warn!(
-                    error_kind = ErrorKind::Internal.as_str(),
-                    error_message = %msg,
-                    "failed to parse user key validate response"
-                );
-                return Err(UserApiKeyError::ServiceError(msg));
+            Err(err) => {
+                return Err(UserApiKeyError::ServiceError(
+                    timer.finish_transport(err, "user key validate"),
+                ));
             }
         };
 
         if !validation.valid {
-            metrics::record_auth_validation("user_apikey", "invalid", duration);
+            timer.finish("invalid");
             return Err(UserApiKeyError::InvalidKey);
         }
 
-        metrics::record_auth_validation("user_apikey", "ok", duration);
+        timer.finish("ok");
         Ok(validation)
     }
 }

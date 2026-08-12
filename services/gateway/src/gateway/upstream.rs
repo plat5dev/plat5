@@ -12,7 +12,7 @@ use pingora::{Error, ErrorType, Result};
 use tracing::{debug, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::admission::Admission;
+use crate::admission::{Admission, OrgVia};
 use crate::error::ErrorKind;
 use crate::route_map::Route;
 
@@ -55,9 +55,7 @@ pub fn record_admission_span(ctx: &GatewayContext, admission: &Admission) {
     };
     match admission {
         Admission::Public => {}
-        Admission::User {
-            user_id, kid, ..
-        } => {
+        Admission::User { user_id, kid, .. } => {
             span.record("user.id", user_id.as_str());
             if let Some(kid) = kid {
                 span.record("jwt.kid", kid.as_str());
@@ -66,17 +64,15 @@ pub fn record_admission_span(ctx: &GatewayContext, admission: &Admission) {
         Admission::Organization {
             organization_id,
             member_id,
-            user_id,
-            kid,
-            ..
+            via,
         } => {
             span.record("organization.id", organization_id.as_str());
             span.record("member.id", member_id.as_str());
-            if let Some(uid) = user_id {
-                span.record("user.id", uid.as_str());
-            }
-            if let Some(kid) = kid {
-                span.record("jwt.kid", kid.as_str());
+            if let OrgVia::User { user_id, kid, .. } = via {
+                span.record("user.id", user_id.as_str());
+                if let Some(kid) = kid {
+                    span.record("jwt.kid", kid.as_str());
+                }
             }
         }
     }
