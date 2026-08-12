@@ -24,8 +24,11 @@ use crate::admission::{
     OrgParamError, ResolveDeny,
 };
 use crate::apikey_cache::ApiKeyCache;
-use crate::auth::apikey::{ApiKeyError, ApiKeyValidator};
+use crate::auth::apikey::{
+    ApiKeyError, MemberApiKeyValidator, UserApiKeyValidator, MEMBER_KEY_PREFIX, USER_KEY_PREFIX,
+};
 use crate::auth::membership::{MembershipError, MembershipResolver};
+use crate::member_apikey_cache::MemberApiKeyCache;
 use crate::auth::{jwt::validate_token, state::JwtValidatorState};
 use crate::error::{ApiError, ErrorKind};
 use crate::jwt_cache::JwtCache;
@@ -51,8 +54,10 @@ pub struct UserGateway {
     jwt_cache: JwtCache,
     /// Dotted JSON path into JWT claims for the Plat5 user id (e.g. `properties.user_id`, `sub`).
     user_id_claim: Vec<String>,
-    apikey_validator: ApiKeyValidator,
+    user_apikey_validator: UserApiKeyValidator,
     apikey_cache: ApiKeyCache,
+    member_apikey_validator: Option<MemberApiKeyValidator>,
+    member_apikey_cache: MemberApiKeyCache,
     membership_resolver: Option<MembershipResolver>,
     membership_cache: MembershipCache,
     route_map: Arc<ArcSwap<RouteMap>>,
@@ -67,8 +72,9 @@ impl UserGateway {
     pub fn new(
         jwt_validator: JwtValidatorState,
         user_id_claim: Vec<String>,
-        apikey_validator: ApiKeyValidator,
+        user_apikey_validator: UserApiKeyValidator,
         apikey_cache_ttl_secs: Option<u64>,
+        member_apikey_validator: Option<MemberApiKeyValidator>,
         membership_resolver: Option<MembershipResolver>,
         membership_cache_ttl_secs: Option<u64>,
         route_map: Arc<ArcSwap<RouteMap>>,
@@ -82,8 +88,10 @@ impl UserGateway {
             jwt_validator,
             jwt_cache: JwtCache::new(JWT_CACHE_CAPACITY, JWT_CACHE_TTL_BUFFER_SECS),
             user_id_claim,
-            apikey_validator,
+            user_apikey_validator,
             apikey_cache: ApiKeyCache::new(APIKEY_CACHE_CAPACITY, ttl),
+            member_apikey_validator,
+            member_apikey_cache: MemberApiKeyCache::new(APIKEY_CACHE_CAPACITY, ttl),
             membership_resolver,
             membership_cache: MembershipCache::new(MEMBERSHIP_CACHE_CAPACITY, membership_ttl),
             route_map,
@@ -238,7 +246,8 @@ impl UserGateway {
         }
     }
 
-    /// Check for API key authentication via X-API-Key header
+    /// User API key auth via X-API-Key (`plat5-sk-1-…` only).
+    /// Member keys (`plat5-mk-1-…`) are organization-scope only — not accepted here.
     async fn check_api_key(&self, req: &RequestHeader) -> Result<AuthContext, AuthError> {
         let api_key = req
             .headers
@@ -249,6 +258,10 @@ impl UserGateway {
             .to_str()
             .map_err(|_| AuthError::InvalidApiKeyHeader)?;
 
+        if !key.starts_with(USER_KEY_PREFIX) {
+            return Err(AuthError::InvalidApiKey);
+        }
+
         if let Some(cached) = self.apikey_cache.get(key).await {
             return Ok(AuthContext {
                 user_id: cached.user_id,
@@ -258,7 +271,7 @@ impl UserGateway {
         }
 
         let validation = self
-            .apikey_validator
+            .user_apikey_validator
             .validate(key)
             .await
             .map_err(|e| match e {
@@ -267,14 +280,14 @@ impl UserGateway {
                     warn!(
                         error_kind = ErrorKind::Network.as_str(),
                         error_message = %msg,
-                        "api-keys service error"
+                        "user key validate error"
                     );
                     AuthError::ApiKeyValidationUnavailable
                 }
             })?;
 
         let user_id = validation.user_id.clone().ok_or_else(|| {
-            warn!("api-keys service returned validation without user_id");
+            warn!("user key validate returned valid without user_id");
             AuthError::ApiKeyValidationUnavailable
         })?;
 
@@ -347,11 +360,6 @@ impl UserGateway {
         route: &Route,
         params: &HashMap<String, String>,
     ) -> Result<bool> {
-        let auth_ctx = match self.authenticate(session.req_header()).await {
-            Ok(a) => a,
-            Err(err) => return self.write_auth_error(session, ctx, err).await,
-        };
-
         let organization_id =
             match organization_id_from_params(route.organization_param.as_deref(), params) {
                 Ok(id) => id,
@@ -373,8 +381,39 @@ impl UserGateway {
             };
 
         if let Some(ref span) = ctx.root_span {
-            span.record("user.id", auth_ctx.user_id.as_str());
             span.record("organization.id", organization_id.as_str());
+        }
+
+        // Member API key (plat5-mk-1-): validate → org match → inject. No member resolve.
+        let member_key = session
+            .req_header()
+            .headers
+            .get("X-API-Key")
+            .and_then(|v| v.to_str().ok())
+            .filter(|k| k.starts_with(MEMBER_KEY_PREFIX))
+            .map(|s| s.to_string());
+        if let Some(key_str) = member_key {
+            return self
+                .admit_member_api_key(
+                    session,
+                    ctx,
+                    path,
+                    route,
+                    params,
+                    &organization_id,
+                    &key_str,
+                )
+                .await;
+        }
+
+        // User credential (JWT or user API key) → member resolve.
+        let auth_ctx = match self.authenticate(session.req_header()).await {
+            Ok(a) => a,
+            Err(err) => return self.write_auth_error(session, ctx, err).await,
+        };
+
+        if let Some(ref span) = ctx.root_span {
+            span.record("user.id", auth_ctx.user_id.as_str());
             if let Some(ref kid) = auth_ctx.kid {
                 span.record("jwt.kid", kid.as_str());
             }
@@ -407,14 +446,153 @@ impl UserGateway {
             }
         };
 
+        self.inject_org_headers_and_forward(
+            session,
+            ctx,
+            path,
+            route,
+            params,
+            &organization_id,
+            &member_id,
+            auth_ctx.auth_type,
+            Some(auth_ctx.user_id.as_str()),
+        )
+        .await
+    }
+
+    async fn admit_member_api_key(
+        &self,
+        session: &mut Session,
+        ctx: &mut GatewayContext,
+        path: &str,
+        route: &Route,
+        params: &HashMap<String, String>,
+        path_organization_id: &str,
+        key: &str,
+    ) -> Result<bool> {
+        if let Some(cached) = self.member_apikey_cache.get(key).await {
+            if cached.organization_id != path_organization_id {
+                debug!(
+                    key_org = %cached.organization_id,
+                    path_org = %path_organization_id,
+                    "member key org mismatch"
+                );
+                return self
+                    .write_json_error(session, ctx, 404, ApiError::not_found())
+                    .await;
+            }
+            return self
+                .inject_org_headers_and_forward(
+                    session,
+                    ctx,
+                    path,
+                    route,
+                    params,
+                    path_organization_id,
+                    &cached.member_id,
+                    "member_apikey",
+                    None,
+                )
+                .await;
+        }
+
+        let validator = match self.member_apikey_validator.as_ref() {
+            Some(v) => v,
+            None => {
+                warn!("member api key presented but MEMBER_APIKEY_VALIDATE_URL unset");
+                return self
+                    .write_json_error(session, ctx, 503, ApiError::service_unavailable())
+                    .await;
+            }
+        };
+
+        let validation = match validator.validate(key).await {
+            Ok(v) => v,
+            Err(ApiKeyError::InvalidKey) => {
+                metrics::record_auth_failure("member_apikey", "invalid_apikey");
+                return self.write_auth_error(session, ctx, AuthError::InvalidApiKey).await;
+            }
+            Err(ApiKeyError::ServiceError(msg)) => {
+                warn!(
+                    error_kind = ErrorKind::Network.as_str(),
+                    error_message = %msg,
+                    "member key validate error"
+                );
+                return self
+                    .write_json_error(session, ctx, 503, ApiError::service_unavailable())
+                    .await;
+            }
+        };
+
+        let member_id = match validation.member_id.clone() {
+            Some(id) if !id.is_empty() => id,
+            _ => {
+                warn!("member key validate returned valid without member_id");
+                return self
+                    .write_json_error(session, ctx, 503, ApiError::service_unavailable())
+                    .await;
+            }
+        };
+        let key_org = match validation.organization_id.clone() {
+            Some(id) if !id.is_empty() => id,
+            _ => {
+                warn!("member key validate returned valid without organization_id");
+                return self
+                    .write_json_error(session, ctx, 503, ApiError::service_unavailable())
+                    .await;
+            }
+        };
+
+        if key_org != path_organization_id {
+            debug!(
+                key_org = %key_org,
+                path_org = %path_organization_id,
+                "member key org mismatch"
+            );
+            return self
+                .write_json_error(session, ctx, 404, ApiError::not_found())
+                .await;
+        }
+
+        self.member_apikey_cache
+            .put(key, member_id.clone(), key_org)
+            .await;
+
+        self.inject_org_headers_and_forward(
+            session,
+            ctx,
+            path,
+            route,
+            params,
+            path_organization_id,
+            &member_id,
+            "member_apikey",
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn inject_org_headers_and_forward(
+        &self,
+        session: &mut Session,
+        ctx: &mut GatewayContext,
+        path: &str,
+        route: &Route,
+        params: &HashMap<String, String>,
+        organization_id: &str,
+        member_id: &str,
+        auth_type: &str,
+        user_id: Option<&str>,
+    ) -> Result<bool> {
         if let Some(ref span) = ctx.root_span {
-            span.record("member.id", member_id.as_str());
+            span.record("member.id", member_id);
         }
 
         // Org scope: only org + member headers — never X-User-Id
         if let Err(err) = session
             .req_header_mut()
-            .insert_header("X-Organization-Id", &organization_id)
+            .insert_header("X-Organization-Id", organization_id)
         {
             warn!(
                 error_kind = ErrorKind::Internal.as_str(),
@@ -427,7 +605,7 @@ impl UserGateway {
         }
         if let Err(err) = session
             .req_header_mut()
-            .insert_header("X-Member-Id", &member_id)
+            .insert_header("X-Member-Id", member_id)
         {
             warn!(
                 error_kind = ErrorKind::Internal.as_str(),
@@ -439,13 +617,21 @@ impl UserGateway {
                 .await;
         }
 
-        debug!(
-            auth_type = auth_ctx.auth_type,
-            user_id = %auth_ctx.user_id,
-            organization_id = %organization_id,
-            member_id = %member_id,
-            "organization admission successful"
-        );
+        match user_id {
+            Some(uid) => debug!(
+                auth_type,
+                user_id = %uid,
+                organization_id = %organization_id,
+                member_id = %member_id,
+                "organization admission successful"
+            ),
+            None => debug!(
+                auth_type,
+                organization_id = %organization_id,
+                member_id = %member_id,
+                "organization admission successful"
+            ),
+        }
 
         self.build_and_store_upstream_peer(session, ctx, path, route, params)?;
         Ok(false)

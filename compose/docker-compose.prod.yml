@@ -72,15 +72,14 @@ services:
       ETCD_URL: http://etcd:2379
       ADMIN_TOKEN: ${ADMIN_TOKEN}
       SEED_ROUTES_DIR: /seed
-      PLATFORM_SERVICES: api-keys,organizations
+      PLATFORM_SERVICES: identity
       RUST_LOG: info
       OTEL_SERVICE_NAME: route-registry
       OTEL_SERVICE_NAMESPACE: edge
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       DEPLOYMENT_ENV: prod
     volumes:
-      - ./seed/api-keys.yml:/seed/api-keys.yml:ro
-      - ./seed/organizations.yml:/seed/organizations.yml:ro
+      - ./seed/identity.yml:/seed/identity.yml:ro
     networks:
       - plat5
     depends_on:
@@ -110,8 +109,9 @@ services:
       AUTH_JWKS_URI: ${AUTH_JWKS_URI}
       AUTH_ALLOWED_AUDIENCES: ${AUTH_ALLOWED_AUDIENCES:-}
       AUTH_USER_ID_CLAIM: ${AUTH_USER_ID_CLAIM:-properties.user_id}
-      APIKEY_VALIDATE_URL: http://api-keys:3001/internal/keys/validate
-      MEMBERSHIP_RESOLVE_URL: http://organizations:3001/internal/members/resolve
+      USER_APIKEY_VALIDATE_URL: http://identity:3001/internal/user-keys/validate
+      MEMBER_APIKEY_VALIDATE_URL: http://identity:3001/internal/member-keys/validate
+      MEMBERSHIP_RESOLVE_URL: http://identity:3001/internal/members/resolve
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
       RUST_LOG: info
       MEMBERSHIP_CACHE_TTL_SECS: "300"
@@ -127,9 +127,7 @@ services:
         condition: service_healthy
       route-registry:
         condition: service_healthy
-      api-keys:
-        condition: service_started
-      organizations:
+      identity:
         condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health/ready"]
@@ -139,10 +137,10 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  organizations:
-    image: ghcr.io/plat5dev/organizations:${PLAT5_VERSION:-v0.1.2}
+  identity:
+    image: ghcr.io/plat5dev/identity:${PLAT5_VERSION:-v0.1.2}
     labels:
-      service.name: organizations
+      service.name: identity
       service.namespace: identity
       metrics.port: "3001"
     environment:
@@ -150,35 +148,7 @@ services:
       INTERNAL_PORT: 3001
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-plat5}?sslmode=disable
-      OTEL_SERVICE_NAME: organizations
-      OTEL_SERVICE_NAMESPACE: identity
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
-      DEPLOYMENT_ENV: prod
-    networks:
-      - plat5
-    depends_on:
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health/ready"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
-    restart: unless-stopped
-
-  api-keys:
-    image: ghcr.io/plat5dev/api-keys:${PLAT5_VERSION:-v0.1.2}
-    labels:
-      service.name: api-keys
-      service.namespace: identity
-      metrics.port: "3001"
-    environment:
-      PORT: 3000
-      INTERNAL_PORT: 3001
-      INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-plat5}?sslmode=disable
-      OTEL_SERVICE_NAME: api-keys
+      OTEL_SERVICE_NAME: identity
       OTEL_SERVICE_NAMESPACE: identity
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       DEPLOYMENT_ENV: prod

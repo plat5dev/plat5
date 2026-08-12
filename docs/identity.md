@@ -35,7 +35,7 @@ No `/api/users` collection and no `/me`. Clients already know `user_id` from the
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/api/users/{user_id}/api-keys` | Create; plaintext returned **once** (`plat5-sk-1-…`) |
+| `POST` | `/api/users/{user_id}/api-keys` | Create; plaintext once — prefix **`plat5-sk-1-`** |
 | `GET` | `/api/users/{user_id}/api-keys` | List (no hashes); `limit` / `offset` / `has_more` |
 | `DELETE` | `/api/users/{user_id}/api-keys/{key_id}` | Soft-revoke; idempotent |
 
@@ -136,7 +136,7 @@ Keys that authenticate **as a member** (org context). Used for automation / S2S 
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/api/organizations/{organization_id}/members/{member_id}/api-keys` | Create; plaintext once |
+| `POST` | `/api/organizations/{organization_id}/members/{member_id}/api-keys` | Create; plaintext once — prefix **`plat5-mk-1-`** |
 | `GET` | `/api/organizations/{organization_id}/members/{member_id}/api-keys` | List |
 | `DELETE` | `/api/organizations/{organization_id}/members/{member_id}/api-keys/{key_id}` | Soft-revoke |
 
@@ -147,7 +147,7 @@ Keys that authenticate **as a member** (org context). Used for automation / S2S 
 | `user` (human) | That user (self) or org admin/owner |
 | `service_account` | Org admin/owner only |
 
-Same key format and storage rules as user keys (`plat5-sk-1-…`, SHA-256 hex at rest). List may include revoked keys (`revoked_at` set).
+Member keys are a **separate product surface** from user keys: different table (`member_api_keys`), different plaintext prefix (`plat5-mk-1-` vs `plat5-sk-1-`), different validate endpoint. Same header name (`X-API-Key`) only. Hashing at rest is SHA-256 hex in both cases by coincidence, not a shared module requirement. List may include revoked keys (`revoked_at` set).
 
 ## Roles and status
 
@@ -182,12 +182,14 @@ List endpoints accept `limit` (default 50, max 100) and `offset` (default 0). Re
 
 Not published on the gateway. Served only on **`INTERNAL_PORT`**. Optional `INTERNAL_AUTH_TOKEN` → header `X-Plat5-Internal-Token` (constant-time compare). Unset = network-trust only (dev).
 
-Gateway env: `APIKEY_VALIDATE_URL`, `MEMBER_RESOLVE_URL`, same `INTERNAL_AUTH_TOKEN`.
+Gateway env: `USER_APIKEY_VALIDATE_URL`, `MEMBER_APIKEY_VALIDATE_URL` (when member-key admission is on), `MEMBER_RESOLVE_URL`, same `INTERNAL_AUTH_TOKEN`.
 
-### API key validate
+There is **no** combined key validate and **no** `key_type`. Gateway picks the endpoint from the key’s wire prefix before calling identity.
+
+### User API key validate
 
 ```
-POST /internal/keys/validate
+POST /internal/user-keys/validate
 Content-Type: application/json
 X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
@@ -196,20 +198,32 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
 | Result | Response |
 |--------|----------|
-| Valid **user** key | **200** `{ "valid": true, "key_type": "user", "user_id": "…" }` |
-| Valid **member** key | **200** `{ "valid": true, "key_type": "member", "member_id": "…", "organization_id": "…", "user_id": "…" \| null, "service_account_id": "…" \| null }` |
-| Missing / revoked / unknown | **200** `{ "valid": false }` |
+| Valid user key | **200** `{ "valid": true, "user_id": "…" }` |
+| Wrong prefix / missing / revoked / unknown | **200** `{ "valid": false }` |
 
-Member-key response includes principal ids when present. Gateway maps:
+Gateway: prefix `plat5-sk-1-` → this URL. Subject = `user_id` (same as JWT for scope checks). Cache: `APIKEY_CACHE_TTL_SECS` (default 300s).
 
-| Validate outcome | Client |
-|------------------|--------|
-| `valid: false` | **401** `UNAUTHORIZED` |
+### Member API key validate
+
+```
+POST /internal/member-keys/validate
+Content-Type: application/json
+X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
+
+{ "key": "plat5-mk-1-…" }
+```
+
+| Result | Response |
+|--------|----------|
+| Valid active member key | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "user_id": "…" \| null, "service_account_id": "…" \| null }` |
+| Wrong prefix / missing / revoked / inactive member / unknown | **200** `{ "valid": false }` |
+
+Gateway: prefix `plat5-mk-1-` → this URL. **organization** scope only (see gateway contract). Does not use member resolve.
+
+| Validate outcome (either endpoint) | Client |
+|------------------------------------|--------|
+| `valid: false` or unknown prefix | **401** `UNAUTHORIZED` |
 | transport / non-2xx / `valid: true` missing required fields | **503** `SERVICE_UNAVAILABLE` |
-| `key_type: user` | Subject = `user_id` (same as JWT path for scope checks) |
-| `key_type: member` | Subject = member; **organization** scope only (see gateway contract) |
-
-Gateway may cache successful validates (`APIKEY_CACHE_TTL_SECS`, default 300s). Revoke is not edge-instant until TTL expires.
 
 ### Member resolve
 
@@ -252,10 +266,15 @@ members
 service_accounts
   home_organization_id (create-time org)
   name, disabled_at, created_by_user_id, …
-api_keys
-  user_id XOR member_id
-  name, key_prefix, key_hash, revoked_at, …
+
+user_api_keys          -- person credentials (user scope); wire plat5-sk-1-
+  user_id, name, key_prefix, key_hash, revoked_at, …
+
+member_api_keys        -- org principal credentials (org scope); wire plat5-mk-1-
+  member_id, name, key_prefix, key_hash, revoked_at, …
 ```
+
+Independent tables, independent packages (`userkeys` / `memberkeys`), independent validate endpoints. Not one polymorphic key system.
 
 No IdP user table and no FK to an external directory. `user_id` values are opaque strings from the gateway.
 
@@ -263,7 +282,7 @@ No IdP user table and no FK to an external directory. `user_id` values are opaqu
 
 | | |
 |--|--|
-| Directory | `identity` (implement in `services/organizations/` until rename) |
+| Directory | `services/identity/` |
 | `service.name` | `identity` |
 | `service.namespace` | `identity` |
 | Public port | `3000` |

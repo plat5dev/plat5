@@ -28,7 +28,7 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defau
 |------|---------|
 | `services/gateway/` | Reverse proxy, auth, routing (Rust / Pingora) |
 | `services/route-registry/` | Route admin API → etcd (Rust) |
-| `services/organizations/` | Identity control plane (Go) — rename target: `identity` |
+| `services/identity/` | Identity control plane (Go) |
 | `compose/` | Self-contained Plat5 stack |
 | `docs/` | Contracts |
 

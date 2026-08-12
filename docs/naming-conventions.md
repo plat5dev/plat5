@@ -71,7 +71,7 @@ When changing labels: update compose labels and `OTEL_SERVICE_NAMESPACE` togethe
 |---------|---------|-------------|
 | Identity service (authority) | `/api/users/...`, `/api/organizations/...` | **`user`** only |
 | Business APIs under an org | e.g. `/api/organizations/{organization_id}/projects` | **`organization`** |
-| Internal control (not on gateway) | `/internal/keys/validate`, `/internal/members/resolve` | private / `INTERNAL_PORT` |
+| Internal control (not on gateway) | `/internal/user-keys/validate`, `/internal/member-keys/validate`, `/internal/members/resolve` | private / `INTERNAL_PORT` |
 
 Scopes and headers: [`gateway-contract.md`](gateway-contract.md). Full identity API: [`identity.md`](identity.md).
 
@@ -112,7 +112,7 @@ Member **role** is not a gateway header. Always (all scopes): `X-Request-ID`, `t
 
 ## Database
 
-- Table names: `snake_case`, plural: `api_keys`, `organizations`, `members`, `service_accounts`
+- Table names: `snake_case`, plural: `user_api_keys`, `member_api_keys`, `organizations`, `members`, `service_accounts`
 - Column names: `snake_case`: `created_at`, `updated_at`, `user_id`, `organization_id`, `member_id`, `service_account_id`
 - Foreign key columns: `<entity>_id`
 - New identity row IDs: **ULID** strings (`organization_id`, `member_id`, `service_account_id`, key ids)

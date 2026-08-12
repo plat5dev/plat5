@@ -1,6 +1,6 @@
 # Plat5 compose
 
-Self-contained Plat5 runtime: gateway, route-registry, api-keys, organizations, postgres, etcd. Own Docker network.
+Self-contained Plat5 runtime: gateway, route-registry, identity, postgres, etcd. Own Docker network.
 
 ## Quick start
 
@@ -19,7 +19,7 @@ docker compose up --build
 | `http://localhost:5002` | Route registry admin API |
 
 Admin token default: `dev-admin-token` (`ADMIN_TOKEN`).
-Internal control-plane token default: `dev-internal-token` (`INTERNAL_AUTH_TOKEN`) — gateway ↔ api-keys validate / organizations resolve.
+Internal control-plane token default: `dev-internal-token` (`INTERNAL_AUTH_TOKEN`) — gateway ↔ identity validate / resolve.
 
 ## Apply routes
 
@@ -27,10 +27,10 @@ Internal control-plane token default: `dev-internal-token` (`INTERNAL_AUTH_TOKEN
 curl -sS -X POST http://localhost:5002/v1/apply \
   -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/yaml" \
-  --data-binary @../services/api-keys/routes.yml
+  --data-binary @../services/identity/routes.yml
 ```
 
-Identity routes (`api-keys`, `organizations`) are seeded by route-registry on startup.
+Identity routes are seeded by route-registry on startup (`PLATFORM_SERVICES: identity`).
 
 ## JWT / IdP
 

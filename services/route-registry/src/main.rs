@@ -53,7 +53,7 @@ async fn main() {
 
     let platform_services: Arc<Vec<String>> = Arc::new(
         std::env::var("PLATFORM_SERVICES")
-            .unwrap_or_else(|_| "api-keys,organizations".to_string())
+            .unwrap_or_else(|_| "identity".to_string())
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())

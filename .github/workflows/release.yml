@@ -41,20 +41,12 @@ jobs:
             context: services/route-registry
             platform: linux/arm64
             runner: ubuntu-24.04-arm
-          - name: api-keys
-            context: services/api-keys
+          - name: identity
+            context: services/identity
             platform: linux/amd64
             runner: ubuntu-24.04
-          - name: api-keys
-            context: services/api-keys
-            platform: linux/arm64
-            runner: ubuntu-24.04-arm
-          - name: organizations
-            context: services/organizations
-            platform: linux/amd64
-            runner: ubuntu-24.04
-          - name: organizations
-            context: services/organizations
+          - name: identity
+            context: services/identity
             platform: linux/arm64
             runner: ubuntu-24.04-arm
     steps:
@@ -111,8 +103,7 @@ jobs:
         name:
           - gateway
           - route-registry
-          - api-keys
-          - organizations
+          - identity
     steps:
       - name: Prepare
         run: |

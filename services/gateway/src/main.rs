@@ -57,15 +57,21 @@ fn main() {
         .ok()
         .filter(|s| !s.is_empty());
 
-    // Initialize API key validator
-    let apikeys_url = env::var("APIKEY_VALIDATE_URL").expect("APIKEY_VALIDATE_URL is not set");
-    let apikey_validator =
-        auth::apikey::ApiKeyValidator::new(apikeys_url, internal_auth_token.clone());
+    // User API keys (plat5-sk-1-).
+    let user_apikeys_url =
+        env::var("USER_APIKEY_VALIDATE_URL").expect("USER_APIKEY_VALIDATE_URL is not set");
+    let user_apikey_validator =
+        auth::apikey::UserApiKeyValidator::new(user_apikeys_url, internal_auth_token.clone());
     let apikey_cache_ttl: Option<u64> = env::var("APIKEY_CACHE_TTL_SECS")
         .ok()
         .and_then(|v| v.parse().ok());
 
-    // Membership resolve (organization scope). Optional: org routes return 503 if unset.
+    // Member API keys (plat5-mk-1-). Optional: member-key org admission returns 503 if unset.
+    let member_apikey_validator = env::var("MEMBER_APIKEY_VALIDATE_URL").ok().map(|url| {
+        auth::apikey::MemberApiKeyValidator::new(url, internal_auth_token.clone())
+    });
+
+    // Membership resolve (organization scope, user credentials). Optional: org routes return 503 if unset.
     let membership_resolver = env::var("MEMBERSHIP_RESOLVE_URL")
         .ok()
         .map(|url| auth::membership::MembershipResolver::new(url, internal_auth_token.clone()));
@@ -99,8 +105,9 @@ fn main() {
         UserGateway::new(
             jwt_validator.clone(),
             user_id_claim,
-            apikey_validator,
+            user_apikey_validator,
             apikey_cache_ttl,
+            member_apikey_validator,
             membership_resolver,
             membership_cache_ttl,
             route_map,

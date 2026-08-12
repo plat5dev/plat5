@@ -98,14 +98,21 @@ Admission error policy (canonical): [`identity-boundary.md`](identity-boundary.m
 3. No member or status ≠ `active` → **404** `NOT_FOUND`
 4. Active hit → inject only `X-Organization-Id` + `X-Member-Id`
 
-### Member API key
+### Member API key (`plat5-mk-1-…`)
 
 1. Bad/missing / invalid key → **401** `UNAUTHORIZED`
-2. Key validate unavailable → **503** `SERVICE_UNAVAILABLE`
-3. `key_type` ≠ `member`, or `organization_id` ≠ path org, or member not usable → **404** `NOT_FOUND` (or **401** if treat as wrong credential — prefer **404** when org mismatch to match existence policy on org routes)
+2. Member-key validate unavailable → **503** `SERVICE_UNAVAILABLE`
+3. `organization_id` ≠ path org → **404** `NOT_FOUND` (existence policy)
 4. Active member key for path org → inject only `X-Organization-Id` + `X-Member-Id`
 
-Member keys are **not** valid on `user` scope routes → **401** `UNAUTHORIZED`.
+Gateway chooses validate URL by **wire prefix** before calling identity:
+
+| Prefix | Endpoint env | Scope |
+|--------|--------------|--------|
+| `plat5-sk-1-` | `USER_APIKEY_VALIDATE_URL` | user (+ org via member resolve) |
+| `plat5-mk-1-` | `MEMBER_APIKEY_VALIDATE_URL` | organization only |
+
+Member keys are **not** valid on `user` scope routes → **401** `UNAUTHORIZED`. User keys are not sent to the member-key validate URL.
 
 Missing org headers on an org-scoped service request → **500** `INTERNAL_ERROR`.
 
@@ -117,7 +124,8 @@ Gateway calls identity backends over HTTP (not published on the edge route map):
 
 | Call | Env | Typical URL |
 |------|-----|-------------|
-| API key validate | `APIKEY_VALIDATE_URL` | `http://identity:3001/internal/keys/validate` |
+| User API key validate | `USER_APIKEY_VALIDATE_URL` | `http://identity:3001/internal/user-keys/validate` |
+| Member API key validate | `MEMBER_APIKEY_VALIDATE_URL` | `http://identity:3001/internal/member-keys/validate` |
 | Member resolve | `MEMBER_RESOLVE_URL` | `http://identity:3001/internal/members/resolve` |
 
 Both live on identity’s **`INTERNAL_PORT`**. Optional shared `INTERNAL_AUTH_TOKEN` is sent as `X-Plat5-Internal-Token`. Contract: [`identity.md`](identity.md).

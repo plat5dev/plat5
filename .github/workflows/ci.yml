@@ -20,8 +20,7 @@ jobs:
     outputs:
       gateway: ${{ steps.filter.outputs.gateway }}
       route-registry: ${{ steps.filter.outputs.route-registry }}
-      api-keys: ${{ steps.filter.outputs.api-keys }}
-      organizations: ${{ steps.filter.outputs.organizations }}
+      identity: ${{ steps.filter.outputs.identity }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -34,12 +33,9 @@ jobs:
             route-registry:
               - '.github/workflows/ci.yml'
               - 'services/route-registry/**'
-            api-keys:
+            identity:
               - '.github/workflows/ci.yml'
-              - 'services/api-keys/**'
-            organizations:
-              - '.github/workflows/ci.yml'
-              - 'services/organizations/**'
+              - 'services/identity/**'
 
   gateway:
     needs: changes
@@ -83,37 +79,19 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all-targets
 
-  api-keys:
+  identity:
     needs: changes
-    if: needs.changes.outputs.api-keys == 'true'
+    if: needs.changes.outputs.identity == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: services/api-keys
+        working-directory: services/identity
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: services/api-keys/go.mod
-          cache-dependency-path: services/api-keys/go.sum
-      - name: format check
-        run: test -z "$(gofmt -l .)"
-      - run: go vet ./...
-      - run: go test ./...
-
-  organizations:
-    needs: changes
-    if: needs.changes.outputs.organizations == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: services/organizations
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: services/organizations/go.mod
-          cache-dependency-path: services/organizations/go.sum
+          go-version-file: services/identity/go.mod
+          cache-dependency-path: services/identity/go.sum
       - name: format check
         run: test -z "$(gofmt -l .)"
       - run: go vet ./...
@@ -125,8 +103,7 @@ jobs:
       - changes
       - gateway
       - route-registry
-      - api-keys
-      - organizations
+      - identity
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -136,8 +113,7 @@ jobs:
             "${{ needs.changes.result }}"
             "${{ needs.gateway.result }}"
             "${{ needs.route-registry.result }}"
-            "${{ needs.api-keys.result }}"
-            "${{ needs.organizations.result }}"
+            "${{ needs.identity.result }}"
           )
           for r in "${results[@]}"; do
             case "$r" in

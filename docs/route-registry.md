@@ -130,7 +130,7 @@ Validation / auth / empty body failures still use the Plat5 envelope (`api-error
 
 Compose mounts:
 
-- `services/identity/routes.yml` → `/seed/identity.yml` (until rename: `services/organizations/routes.yml`)
+- `services/identity/routes.yml` → `/seed/identity.yml`
 
 Registry upserts seed files on every start (idempotent).
 

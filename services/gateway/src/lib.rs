@@ -1,5 +1,6 @@
 pub mod admission;
 pub mod apikey_cache;
+pub mod member_apikey_cache;
 pub mod auth;
 pub mod config;
 pub mod error;
