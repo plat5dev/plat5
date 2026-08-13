@@ -6,19 +6,19 @@ services:
       context: ../services/route-registry
       target: prod
       args:
-        VERSION: ${PLAT5_VERSION:-v0.1.2}
+        VERSION: ${PLAT5_VERSION:-v0.1.5}
         REVISION: ${PLAT5_REVISION:-}
   gateway:
     build:
       context: ../services/gateway
       target: prod
       args:
-        VERSION: ${PLAT5_VERSION:-v0.1.2}
+        VERSION: ${PLAT5_VERSION:-v0.1.5}
         REVISION: ${PLAT5_REVISION:-}
   identity:
     build:
       context: ../services/identity
       target: prod
       args:
-        VERSION: ${PLAT5_VERSION:-v0.1.2}
+        VERSION: ${PLAT5_VERSION:-v0.1.5}
         REVISION: ${PLAT5_REVISION:-}
