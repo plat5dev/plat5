@@ -2,6 +2,8 @@
 
 Contracts, standards, and conventions for Plat5. Follow them for gateway auth delegation, dynamic routing, unified error handling, and optional telemetry.
 
+Locked product invariants (what not to grow into): [`../AGENTS.md`](../AGENTS.md).
+
 Per-service details live in each service's `README.md`.
 
 ## Contracts
@@ -21,6 +23,6 @@ Per-service details live in each service's `README.md`.
 | [`gateway-contract.md`](gateway-contract.md) | Auth delegation, scope headers, TLS, service rules |
 | [`idp-contract.md`](idp-contract.md) | BYO IdP, JWKS, user-id claim mapping |
 | [`routes.md`](routes.md) | Route publishing, scopes, `route_prefix` |
-| [`route-registry.md`](route-registry.md) | Admin API to write routes (etcd writer) |
+| [`route-registry.md`](route-registry.md) | Desired state (Postgres) + etcd projection |
 | [`identity-boundary.md`](identity-boundary.md) | Authn vs organization context vs resource authz |
 | [`identity.md`](identity.md) | Identity service: orgs, members, service accounts, API keys, internal validate/resolve |

@@ -42,7 +42,7 @@ Clients still send these headers **to the gateway**. Services behind the gateway
 | `X-Request-ID` | Correlation ID (gateway-generated; also on response) |
 | `traceparent` | W3C trace context (OTel propagation) |
 
-Org-scope identity is `X-Organization-Id` + `X-Member-Id` only. Member **role** is identity-service domain data — not a gateway header. Need user or role → load from identity deliberately.
+Org-scope identity is `X-Organization-Id` + `X-Member-Id` only. Member **role** is identity-service domain data — not a gateway header and not a lookup for org-scope apps.
 
 ## Route Configuration
 

@@ -54,11 +54,9 @@ type ValidateRequest struct {
 }
 
 type ValidateResponse struct {
-	Valid            bool    `json:"valid"`
-	MemberID         string  `json:"member_id,omitempty"`
-	OrganizationID   string  `json:"organization_id,omitempty"`
-	UserID           *string `json:"user_id,omitempty"`
-	ServiceAccountID *string `json:"service_account_id,omitempty"`
+	Valid          bool   `json:"valid"`
+	MemberID       string `json:"member_id,omitempty"`
+	OrganizationID string `json:"organization_id,omitempty"`
 }
 
 func (h *Handler) Create(c fiber.Ctx) error {
@@ -204,11 +202,9 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 
 	metrics.RecordKeyValidation(metrics.KeyScopeMember, true)
 	return c.JSON(ValidateResponse{
-		Valid:            true,
-		MemberID:         memberKey.Key.MemberID,
-		OrganizationID:   memberKey.OrganizationID,
-		UserID:           memberKey.UserID,
-		ServiceAccountID: memberKey.ServiceAccountID,
+		Valid:          true,
+		MemberID:       memberKey.Key.MemberID,
+		OrganizationID: memberKey.OrganizationID,
 	})
 }
 

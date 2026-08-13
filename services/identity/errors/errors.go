@@ -123,17 +123,6 @@ func PayloadTooLargeError(maxSizeBytes int64) *ApiError {
 	}
 }
 
-func RateLimitedError() *ApiError {
-	return &ApiError{
-		Type:    "rate_limit_error",
-		Code:    "RATE_LIMITED",
-		Message: "Too many requests",
-		Details: nil,
-		Status:  fiber.StatusTooManyRequests,
-		Kind:    KindValidation,
-	}
-}
-
 func UnauthorizedError(reason string) *ApiError {
 	return &ApiError{
 		Type:    "invalid_request_error",
@@ -219,8 +208,6 @@ func FiberErrorHandler(c fiber.Ctx, err error) error {
 			apiErr = ConflictError("", nil)
 		case fiber.StatusRequestEntityTooLarge:
 			apiErr = PayloadTooLargeError(0)
-		case fiber.StatusTooManyRequests:
-			apiErr = RateLimitedError()
 		case fiber.StatusServiceUnavailable:
 			apiErr = ServiceUnavailableError()
 		default:

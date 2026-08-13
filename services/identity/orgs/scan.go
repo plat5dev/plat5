@@ -24,7 +24,7 @@ func scanServiceAccount(row dbx.Scannable) (*ServiceAccount, error) {
 
 func scanOrg(row dbx.Scannable) (*Organization, error) {
 	var o Organization
-	err := row.Scan(&o.ID, &o.Name, &o.Slug, &o.Settings, &o.CreatedAt, &o.UpdatedAt)
+	err := row.Scan(&o.ID, &o.Name, &o.Slug, &o.CreatedAt, &o.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

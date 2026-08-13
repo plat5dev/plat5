@@ -22,14 +22,10 @@ func (s *Store) CreateOrganization(ctx context.Context, org *Organization, owner
 	}
 	defer tx.Rollback(ctx)
 
-	if org.Settings == nil {
-		org.Settings = []byte("{}")
-	}
-
 	_, err = tx.Exec(ctx, `
-		INSERT INTO organizations (id, name, slug, settings, created_at, updated_at)
-		VALUES ($1, $2, $3, $4::jsonb, $5, $6)
-	`, org.ID, org.Name, org.Slug, org.Settings, org.CreatedAt, org.UpdatedAt)
+		INSERT INTO organizations (id, name, slug, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`, org.ID, org.Name, org.Slug, org.CreatedAt, org.UpdatedAt)
 	if err != nil {
 		if dbx.IsUniqueViolation(err) {
 			return nil, op.SoftFail("slug conflict", ErrConflict, ErrConflict)
@@ -72,7 +68,7 @@ func (s *Store) GetOrganization(ctx context.Context, organizationID string) (*Or
 	defer op.End()
 
 	org, err := scanOrg(s.pool.QueryRow(ctx, `
-		SELECT id, name, slug, settings, created_at, updated_at
+		SELECT id, name, slug, created_at, updated_at
 		FROM organizations WHERE id = $1
 	`, organizationID))
 	if err != nil {
@@ -93,7 +89,7 @@ func (s *Store) ListOrganizationsForUser(ctx context.Context, userID string, lim
 	defer op.End()
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT o.id, o.name, o.slug, o.settings, o.created_at, o.updated_at
+		SELECT o.id, o.name, o.slug, o.created_at, o.updated_at
 		FROM organizations o
 		INNER JOIN members m ON m.organization_id = o.id
 		WHERE m.user_id = $1 AND m.status = 'active'
@@ -136,9 +132,9 @@ func (s *Store) UpdateOrganization(ctx context.Context, org *Organization) error
 	org.UpdatedAt = time.Now().UTC()
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE organizations
-		SET name = $2, slug = $3, settings = $4::jsonb, updated_at = $5
+		SET name = $2, slug = $3, updated_at = $4
 		WHERE id = $1
-	`, org.ID, org.Name, org.Slug, org.Settings, org.UpdatedAt)
+	`, org.ID, org.Name, org.Slug, org.UpdatedAt)
 	if err != nil {
 		if dbx.IsUniqueViolation(err) {
 			return op.SoftFail("slug conflict", ErrConflict, ErrConflict)

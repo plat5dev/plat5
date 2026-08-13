@@ -1,7 +1,6 @@
 package orgs
 
 import (
-	"encoding/json"
 	"strings"
 	"time"
 
@@ -14,24 +13,21 @@ import (
 )
 
 type CreateOrgRequest struct {
-	Name     string          `json:"name"`
-	Slug     string          `json:"slug"`
-	Settings json.RawMessage `json:"settings"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
 }
 
 type UpdateOrgRequest struct {
-	Name     *string          `json:"name"`
-	Slug     *string          `json:"slug"`
-	Settings *json.RawMessage `json:"settings"`
+	Name *string `json:"name"`
+	Slug *string `json:"slug"`
 }
 
 type OrgResponse struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Slug      string          `json:"slug"`
-	Settings  json.RawMessage `json:"settings"`
-	CreatedAt string          `json:"created_at"`
-	UpdatedAt string          `json:"updated_at"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Slug      string `json:"slug"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 type ListOrgsResponse struct {
@@ -60,19 +56,11 @@ func (h *Handler) CreateOrganization(c fiber.Ctx) error {
 		return errors.FieldError("slug", "must be lowercase alphanumeric with hyphens")
 	}
 
-	settings := req.Settings
-	if len(settings) == 0 {
-		settings = json.RawMessage(`{}`)
-	} else if !ValidSettingsObject(settings) {
-		return errors.FieldError("settings", "must be a JSON object")
-	}
-
 	now := time.Now().UTC()
 	org := &Organization{
 		ID:        NewULID(),
 		Name:      name,
 		Slug:      slug,
-		Settings:  settings,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -169,12 +157,6 @@ func (h *Handler) UpdateOrganization(c fiber.Ctx) error {
 		}
 		org.Slug = slug
 	}
-	if req.Settings != nil {
-		if !ValidSettingsObject(*req.Settings) {
-			return errors.FieldError("settings", "must be a JSON object")
-		}
-		org.Settings = *req.Settings
-	}
 
 	if err := h.store.UpdateOrganization(ctx, org); err != nil {
 		return httpx.MapDB(ctx, err, "failed to update organization", httpx.DBErr{
@@ -207,15 +189,10 @@ func (h *Handler) DeleteOrganization(c fiber.Ctx) error {
 }
 
 func toOrgResponse(o *Organization) OrgResponse {
-	settings := json.RawMessage(o.Settings)
-	if len(settings) == 0 {
-		settings = json.RawMessage(`{}`)
-	}
 	return OrgResponse{
 		ID:        o.ID,
 		Name:      o.Name,
 		Slug:      o.Slug,
-		Settings:  settings,
 		CreatedAt: httpx.FormatTime(o.CreatedAt),
 		UpdatedAt: httpx.FormatTime(o.UpdatedAt),
 	}

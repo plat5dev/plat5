@@ -15,7 +15,7 @@ Boundary: [`identity-boundary.md`](identity-boundary.md). Errors: [`api-errors.m
 
 This service is the **membership authority**. It must not sit behind gateway org admission into itself. It enforces member and role rules in-process from `X-User-Id` + path.
 
-Member **role** is domain data here only. Never a gateway-injected header. Org-scope business services do not receive role and must not call this service for it.
+Member **role** is domain data here only. Never a gateway-injected header. Org-scope business services do not receive role and have no API to load it.
 
 Public routes below are **not** auto-published. Apply `services/identity/routes.yml` (or a subset) via the route-registry. Internal validate/resolve stay on `INTERNAL_PORT` regardless.
 
@@ -56,10 +56,10 @@ Prefix: `/api/organizations`
 #### Create body
 
 ```json
-{ "name": "Acme", "slug": "acme", "settings": {} }
+{ "name": "Acme", "slug": "acme" }
 ```
 
-`slug` optional (derived from name). Globally unique. IDs are **ULID** strings. `name` max 128 chars. `settings` must be a JSON **object** (max 16 KiB).
+`slug` optional (derived from name). Globally unique. IDs are **ULID** strings. `name` max 128 chars.
 
 #### Org response
 
@@ -68,7 +68,6 @@ Prefix: `/api/organizations`
   "id": "...",
   "name": "Acme",
   "slug": "acme",
-  "settings": {},
   "created_at": "...",
   "updated_at": "..."
 }
@@ -107,7 +106,7 @@ Prefix: `/api/organizations`
 
 ### Service accounts
 
-Created under an organization. One transaction: service account row + **active** member (default role `member`). Service accounts **cannot** be `owner`.
+Created under an organization. One transaction: service account row + **active** member (default role `member`). Lives in **that org only**. Service accounts **cannot** be `owner`.
 
 | Method | Path | Notes |
 |--------|------|--------|
@@ -216,7 +215,7 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
 | Result | Response |
 |--------|----------|
-| Valid active member key | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "user_id": "…" \| null, "service_account_id": "…" \| null }` |
+| Valid active member key | **200** `{ "valid": true, "member_id": "…", "organization_id": "…" }` |
 | Wrong prefix / missing / revoked / inactive member / unknown | **200** `{ "valid": false }` |
 
 Gateway: prefix `plat5-mk-1-` → this URL. **organization** scope only (see gateway contract). Does not use member resolve.
@@ -265,7 +264,7 @@ members
   user_id XOR service_account_id
   role, status, added_by, …
 service_accounts
-  home_organization_id (create-time org)
+  organization_id
   name, disabled_at, created_by_user_id, …
 
 user_api_keys          -- person credentials (user scope); wire plat5-sk-1-
@@ -297,6 +296,8 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 
 - Login UI, password store, JWKS (IdP / Plat5 Auth)
 - Global `/service-accounts` (SAs are org-scoped)
+- Multi-org service accounts (one SA, one org, one member)
+- Org `settings` / config bag
 - `GET /api/users` or `/api/users/me`
 - Platform-owned user rows / IdP account linking (opaque `user_id` only)
 - Invites, email, or pending membership

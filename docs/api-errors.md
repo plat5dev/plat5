@@ -22,7 +22,7 @@ Standard envelope for machine-readable errors across Plat5 services.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `type` | `string` | `invalid_request_error`, `api_error`, `rate_limit_error` |
+| `type` | `string` | `invalid_request_error`, `api_error` |
 | `code` | `string` | Machine-readable identifier (UPPER_SNAKE_CASE) |
 | `message` | `string` | Human-readable description |
 | `request_id` | `string` | Correlation ID from `X-Request-ID`. Propagate it; do not generate it. |
@@ -43,7 +43,6 @@ Standard envelope for machine-readable errors across Plat5 services.
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | Resource already exists | `{ field, value }` |
 | `PAYLOAD_TOO_LARGE` | 413 | `invalid_request_error` | Request body exceeds maximum allowed size | `{ max_size_bytes }` |
-| `RATE_LIMITED` | 429 | `rate_limit_error` | Too many requests | `null` |
 | `INTERNAL_ERROR` | 500 | `api_error` | An unexpected error occurred | `null` |
 | `SERVICE_UNAVAILABLE` | 503 | `api_error` | Service temporarily unavailable | `null` |
 
@@ -56,12 +55,6 @@ Returned by the **gateway**, not downstream services. If a downstream service re
 Canonical policy: [`identity-boundary.md`](identity-boundary.md).
 
 When `organization` scope is live: non-member / inactive / unknown org → **`NOT_FOUND` (404)**. Member resolve or key validate unavailable → **`SERVICE_UNAVAILABLE` (503)**. Bad credential → **`UNAUTHORIZED` (401)**.
-
-### `RATE_LIMITED` Headers
-
-```
-Retry-After: 60
-```
 
 ## Principles
 

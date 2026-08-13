@@ -21,8 +21,6 @@ pub struct MemberApiKeyValidation {
     pub valid: bool,
     pub member_id: Option<String>,
     pub organization_id: Option<String>,
-    pub user_id: Option<String>,
-    pub service_account_id: Option<String>,
 }
 
 #[derive(Serialize)]

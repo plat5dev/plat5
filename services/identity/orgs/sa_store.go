@@ -12,12 +12,12 @@ import (
 
 const saSelect = `
 	SELECT
-		sa.id, sa.home_organization_id, m.id, sa.name, sa.created_by_user_id,
+		sa.id, sa.organization_id, m.id, sa.name, sa.created_by_user_id,
 		sa.disabled_at, sa.created_at, sa.updated_at
 	FROM service_accounts sa
 	INNER JOIN members m
 		ON m.service_account_id = sa.id
-		AND m.organization_id = sa.home_organization_id
+		AND m.organization_id = sa.organization_id
 		AND m.status <> 'removed'
 `
 
@@ -57,7 +57,7 @@ func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount, ro
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO service_accounts
-			(id, home_organization_id, name, created_by_user_id, disabled_at, created_at, updated_at)
+			(id, organization_id, name, created_by_user_id, disabled_at, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, NULL, $5, $6)
 	`, sa.ID, sa.OrganizationID, sa.Name, sa.CreatedByUserID, sa.CreatedAt, sa.UpdatedAt)
 	if err != nil {
@@ -101,7 +101,7 @@ func (s *Store) GetServiceAccount(ctx context.Context, organizationID, serviceAc
 	defer op.End()
 
 	sa, err := scanServiceAccount(s.pool.QueryRow(ctx, saSelect+`
-		WHERE sa.id = $1 AND sa.home_organization_id = $2
+		WHERE sa.id = $1 AND sa.organization_id = $2
 	`, serviceAccountID, organizationID))
 	if err != nil {
 		if dbx.IsNoRows(err) {
@@ -121,7 +121,7 @@ func (s *Store) ListServiceAccounts(ctx context.Context, organizationID string, 
 	defer op.End()
 
 	rows, err := s.pool.Query(ctx, saSelect+`
-		WHERE sa.home_organization_id = $1
+		WHERE sa.organization_id = $1
 		ORDER BY sa.created_at DESC
 		LIMIT $2 OFFSET $3
 	`, organizationID, limit+1, offset)
@@ -167,7 +167,7 @@ func (s *Store) UpdateServiceAccount(ctx context.Context, organizationID, servic
 	defer tx.Rollback(ctx)
 
 	sa, err := scanServiceAccount(tx.QueryRow(ctx, saSelect+`
-		WHERE sa.id = $1 AND sa.home_organization_id = $2
+		WHERE sa.id = $1 AND sa.organization_id = $2
 		FOR UPDATE OF sa, m
 	`, serviceAccountID, organizationID))
 	if err != nil {
@@ -193,7 +193,7 @@ func (s *Store) UpdateServiceAccount(ctx context.Context, organizationID, servic
 	_, err = tx.Exec(ctx, `
 		UPDATE service_accounts
 		SET name = $3, disabled_at = $4, updated_at = $5
-		WHERE id = $1 AND home_organization_id = $2
+		WHERE id = $1 AND organization_id = $2
 	`, serviceAccountID, organizationID, sa.Name, sa.DisabledAt, sa.UpdatedAt)
 	if err != nil {
 		return nil, op.Fail(err)
@@ -236,7 +236,7 @@ func (s *Store) DeleteServiceAccount(ctx context.Context, organizationID, servic
 	defer tx.Rollback(ctx)
 
 	sa, err := scanServiceAccount(tx.QueryRow(ctx, saSelect+`
-		WHERE sa.id = $1 AND sa.home_organization_id = $2
+		WHERE sa.id = $1 AND sa.organization_id = $2
 		FOR UPDATE OF sa, m
 	`, serviceAccountID, organizationID))
 	if err != nil {
@@ -250,7 +250,7 @@ func (s *Store) DeleteServiceAccount(ctx context.Context, organizationID, servic
 	_, err = tx.Exec(ctx, `
 		UPDATE service_accounts
 		SET disabled_at = COALESCE(disabled_at, $3), updated_at = $3
-		WHERE id = $1 AND home_organization_id = $2
+		WHERE id = $1 AND organization_id = $2
 	`, serviceAccountID, organizationID, now)
 	if err != nil {
 		return op.Fail(err)

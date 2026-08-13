@@ -30,13 +30,11 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	}
 }
 
-// Validated is a member key plus org principal fields for gateway admission.
+// Validated is a member key plus org fields for gateway admission.
 type Validated struct {
-	Key              *APIKey
-	OrganizationID   string
-	UserID           *string
-	ServiceAccountID *string
-	MemberStatus     string
+	Key            *APIKey
+	OrganizationID string
+	MemberStatus   string
 }
 
 func (s *Store) Create(ctx context.Context, key *APIKey) error {
@@ -67,11 +65,10 @@ func (s *Store) GetByHash(ctx context.Context, keyHash string) (*Validated, erro
 
 	var key APIKey
 	var orgID, status string
-	var userID, saID *string
 	err := s.pool.QueryRow(ctx, `
 		SELECT
 			k.id, k.member_id, k.name, k.key_prefix, k.key_hash, k.created_at, k.revoked_at,
-			m.organization_id, m.user_id, m.service_account_id, m.status
+			m.organization_id, m.status
 		FROM member_api_keys k
 		INNER JOIN members m ON m.id = k.member_id
 		WHERE k.key_hash = $1
@@ -84,8 +81,6 @@ func (s *Store) GetByHash(ctx context.Context, keyHash string) (*Validated, erro
 		&key.CreatedAt,
 		&key.RevokedAt,
 		&orgID,
-		&userID,
-		&saID,
 		&status,
 	)
 	if err != nil {
@@ -96,11 +91,9 @@ func (s *Store) GetByHash(ctx context.Context, keyHash string) (*Validated, erro
 	}
 	op.OK("found")
 	return &Validated{
-		Key:              &key,
-		OrganizationID:   orgID,
-		UserID:           userID,
-		ServiceAccountID: saID,
-		MemberStatus:     status,
+		Key:            &key,
+		OrganizationID: orgID,
+		MemberStatus:   status,
 	}, nil
 }
 

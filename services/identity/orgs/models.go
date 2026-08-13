@@ -1,8 +1,6 @@
 package orgs
 
 import (
-	"bytes"
-	"encoding/json"
 	"regexp"
 	"strings"
 	"time"
@@ -11,10 +9,9 @@ import (
 )
 
 const (
-	MaxOrgNameLen    = 128
-	MaxSANameLen     = 128
-	MaxUserIDLen     = 128
-	MaxSettingsBytes = 16 << 10 // 16 KiB
+	MaxOrgNameLen = 128
+	MaxSANameLen  = 128
+	MaxUserIDLen  = 128
 
 	PrincipalUser           = "user"
 	PrincipalServiceAccount = "service_account"
@@ -58,7 +55,6 @@ type Organization struct {
 	ID        string
 	Name      string
 	Slug      string
-	Settings  []byte
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -76,11 +72,11 @@ type Member struct {
 	UpdatedAt        time.Time
 }
 
-// ServiceAccount is a non-human identity owned by an organization.
-// Always paired with a member row in home_organization_id.
+// ServiceAccount is a non-human identity owned by one organization.
+// Always paired with exactly one member row in that org.
 type ServiceAccount struct {
 	ID              string
-	OrganizationID  string // home_organization_id
+	OrganizationID  string
 	MemberID        string // filled on read via join
 	Name            string
 	CreatedByUserID *string
@@ -128,20 +124,4 @@ func ValidSlug(slug string) bool {
 		return false
 	}
 	return slugValid.MatchString(slug)
-}
-
-// ValidSettingsObject reports whether b is empty or a JSON object (not array/scalar/null).
-func ValidSettingsObject(b []byte) bool {
-	if len(b) == 0 {
-		return true
-	}
-	if len(b) > MaxSettingsBytes {
-		return false
-	}
-	trim := bytes.TrimSpace(b)
-	if len(trim) == 0 || trim[0] != '{' {
-		return false
-	}
-	var obj map[string]json.RawMessage
-	return json.Unmarshal(trim, &obj) == nil
 }

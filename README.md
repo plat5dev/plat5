@@ -36,6 +36,7 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defau
 
 | Doc | Contents |
 |-----|----------|
+| [`AGENTS.md`](AGENTS.md) | Locked invariants and stop conditions (for agents) |
 | [`docs/README.md`](docs/README.md) | Contract index |
 | [`docs/idp-contract.md`](docs/idp-contract.md) | BYO IdP / JWT user-id claim |
 | [`docs/gateway-contract.md`](docs/gateway-contract.md) | Auth delegation, identity headers |
@@ -63,7 +64,7 @@ curl -sS -X POST http://localhost:5002/v1/apply \
 
 ## Telemetry
 
-Stdout logs + `/metrics` always. OTLP opt-in (traces by default when endpoint set; metrics OTLP explicit). [`docs/telemetry.md`](docs/telemetry.md).
+Stdout logs + `/metrics` always. OTLP opt-in (traces and metrics both on when endpoint set). [`docs/telemetry.md`](docs/telemetry.md).
 
 ## License
 

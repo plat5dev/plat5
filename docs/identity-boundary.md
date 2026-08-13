@@ -103,4 +103,5 @@ Do not return `UNAUTHORIZED` for missing identity headers — the gateway alread
 - Operator / employee admin planes
 - Member role as platform wire identity (role stays in identity)
 - Service accounts as a parallel auth system (they are members with keys)
+- Multi-org service accounts
 - Invites / email join (add member by known `user_id` only)
