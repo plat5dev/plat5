@@ -107,7 +107,7 @@ impl PgStore {
                 .begin()
                 .await
                 .map_err(|e| PgError::Query(e.to_string()))?;
-            sqlx::query(INIT_SQL)
+            sqlx::raw_sql(INIT_SQL)
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| PgError::Query(e.to_string()))?;
