@@ -21,6 +21,7 @@ RUN mkdir -p src && echo "fn main() {}" > src/main.rs \
 
 COPY src ./src
 COPY migrations ./migrations
+RUN cargo build
 
 CMD ["cargo", "watch", "-x", "run"]
 
