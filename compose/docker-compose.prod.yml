@@ -71,19 +71,18 @@ services:
       INTERNAL_PORT: 5003
       ETCD_URL: http://etcd:2379
       ADMIN_TOKEN: ${ADMIN_TOKEN}
-      SEED_ROUTES_DIR: /seed
-      PLATFORM_SERVICES: identity
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-plat5}?sslmode=disable
       RUST_LOG: info
       OTEL_SERVICE_NAME: route-registry
       OTEL_SERVICE_NAMESPACE: edge
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       DEPLOYMENT_ENV: prod
-    volumes:
-      - ./seed/identity.yml:/seed/identity.yml:ro
     networks:
       - plat5
     depends_on:
       etcd:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5003/health/ready"]

@@ -20,7 +20,7 @@ docker compose up --build
 | Gateway | `http://localhost:5001` | API edge; internal metrics on `:8000` |
 | Route registry | `http://localhost:5002` | Admin API (Bearer `ADMIN_TOKEN`, default `dev-admin-token`) |
 
-JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defaults). API keys work without an IdP.
+JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defaults). API keys are an alternative credential; the IdP is still required.
 
 ## Layout
 

@@ -21,7 +21,7 @@ const saSelect = `
 		AND m.status <> 'removed'
 `
 
-func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount, role Role, invitedBy *string) (*Member, error) {
+func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount, role Role, addedBy *string) (*Member, error) {
 	if role == RoleOwner {
 		return nil, fmt.Errorf("create_service_account: service accounts cannot be owners")
 	}
@@ -70,15 +70,15 @@ func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount, ro
 		ServiceAccountID: &sa.ID,
 		Role:             role,
 		Status:           StatusActive,
-		InvitedBy:        invitedBy,
+		AddedBy:          addedBy,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO members
-			(id, organization_id, user_id, service_account_id, role, status, invited_by, created_at, updated_at)
+			(id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at)
 		VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8)
-	`, m.ID, m.OrganizationID, sa.ID, m.Role, m.Status, m.InvitedBy, m.CreatedAt, m.UpdatedAt)
+	`, m.ID, m.OrganizationID, sa.ID, m.Role, m.Status, m.AddedBy, m.CreatedAt, m.UpdatedAt)
 	if err != nil {
 		return nil, op.Fail(err)
 	}

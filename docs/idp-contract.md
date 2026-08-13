@@ -36,4 +36,4 @@ Downstream services never validate JWTs; they trust gateway headers. There is **
 3. Set `AUTH_ALLOWED_AUDIENCES` to your API audience(s) if the IdP sets `aud`. Default Plat5 API audience is often `plat5`.
 4. Plat5 does not share a Docker network with the IdP. Reach JWKS via host/public URL (`host.docker.internal` from containers when the IdP publishes on the host).
 
-API-key auth does not need an IdP.
+A request may use an API key instead of a JWT. The gateway still requires a configured IdP (`AUTH_ISSUER`, `AUTH_JWKS_URI`) to start and become ready.

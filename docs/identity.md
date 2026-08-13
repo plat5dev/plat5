@@ -15,7 +15,9 @@ Boundary: [`identity-boundary.md`](identity-boundary.md). Errors: [`api-errors.m
 
 This service is the **membership authority**. It must not sit behind gateway org admission into itself. It enforces member and role rules in-process from `X-User-Id` + path.
 
-Member **role** is domain data here only. Never a gateway-injected header.
+Member **role** is domain data here only. Never a gateway-injected header. Org-scope business services do not receive role and must not call this service for it.
+
+Public routes below are **not** auto-published. Apply `services/identity/routes.yml` (or a subset) via the route-registry. Internal validate/resolve stay on `INTERNAL_PORT` regardless.
 
 ## Glossary
 
@@ -77,12 +79,12 @@ Prefix: `/api/organizations`
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/api/organizations/{organization_id}/members` | Active member |
-| `POST` | `/api/organizations/{organization_id}/members` | Admin or owner; add **user** — body `{ "user_id", "role?" }` |
+| `POST` | `/api/organizations/{organization_id}/members` | Admin or owner; add **user** — body `{ "user_id", "role?" }`. Target `user_id` must already be known (IdP id). No invites. |
 | `GET` | `/api/organizations/{organization_id}/members/{member_id}` | Active member |
 | `PATCH` | `/api/organizations/{organization_id}/members/{member_id}` | Role/status; admin/owner (self-leave allowed for humans) |
 | `DELETE` | `/api/organizations/{organization_id}/members/{member_id}` | Soft-remove; self or admin/owner |
 
-`POST` adds a **user** member only. Service accounts are created via the service-accounts API (member row included).
+`POST` adds a **user** member only (immediately `active`). Service accounts are created via the service-accounts API (member row included). There is no invite or pending state.
 
 #### Member response
 
@@ -95,7 +97,7 @@ Prefix: `/api/organizations`
   "service_account_id": null,
   "role": "member",
   "status": "active",
-  "invited_by": "...",
+  "added_by": "...",
   "created_at": "...",
   "updated_at": "..."
 }
@@ -159,7 +161,6 @@ Member keys are a **separate product surface** from user keys: different table (
 
 | Status | |
 |--------|--|
-| `pending` | Reserved (invites later); not admitted |
 | `active` | Admitted |
 | `suspended` | Not admitted |
 | `removed` | Soft-deleted; not listed |
@@ -262,7 +263,7 @@ Member API keys do **not** use this endpoint for admission: validate already ret
 organizations
 members
   user_id XOR service_account_id
-  role, status, …
+  role, status, added_by, …
 service_accounts
   home_organization_id (create-time org)
   name, disabled_at, created_by_user_id, …
@@ -297,6 +298,8 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - Login UI, password store, JWKS (IdP / Plat5 Auth)
 - Global `/service-accounts` (SAs are org-scoped)
 - `GET /api/users` or `/api/users/me`
-- Platform-owned user rows / IdP account linking (opaque `user_id` only for now)
+- Platform-owned user rows / IdP account linking (opaque `user_id` only)
+- Invites, email, or pending membership
 - Resource ACL, FGA, project permissions
 - Gateway `organization` scope on this service’s public routes
+- Auto-publishing these public routes — the operator applies the catalog (`routes.yml`)

@@ -58,23 +58,6 @@ impl EtcdStore {
         Ok(())
     }
 
-    pub async fn get(&self, name: &str) -> Result<Option<ServiceConfig>, StoreError> {
-        let key = Self::key(name);
-        let resp = self
-            .client
-            .kv_client()
-            .get(key, None)
-            .await
-            .map_err(|e| StoreError::Etcd(e.to_string()))?;
-        let Some(kv) = resp.kvs().first() else {
-            return Ok(None);
-        };
-        let value = String::from_utf8_lossy(kv.value());
-        let cfg: ServiceConfig =
-            serde_json::from_str(&value).map_err(|e| StoreError::Parse(e.to_string()))?;
-        Ok(Some(cfg))
-    }
-
     pub async fn list(&self) -> Result<HashMap<String, ServiceConfig>, StoreError> {
         let resp = self
             .client

@@ -1,16 +1,19 @@
 # Route registry
 
-Admin HTTP API that writes gateway routes to etcd. Plat5’s only supported write path for the route registry.
+Admin HTTP API: desired route state in Postgres, live projection in etcd. Plat5’s only supported write path for the route registry.
 
-Gateway still **loads and watches** etcd; it does not expose route CRUD.
+Gateway still **loads and watches** etcd; it does not talk to Postgres.
 
 ## Pipeline
 
 ```
-routes.yml → POST /v1/apply (or PUT /v1/services/{name}) → etcd → gateway watch
+routes.yml → POST /v1/apply (or PUT /v1/services/{name})
+  → Postgres schema `routes` (revision)
+  → etcd `edge/gateway/routes/{name}`
+  → gateway watch
 ```
 
-Seed on boot: platform identity routes (`identity`) from `SEED_ROUTES_DIR`.
+Postgres is the source of truth. etcd is a projection. A reconciler retries if a put/delete is missed.
 
 ## Local URLs
 
@@ -41,11 +44,18 @@ Local default: `dev-admin-token` (`ADMIN_TOKEN` env). Required and non-empty in 
 
 | Method | Path | Body | Notes |
 |--------|------|------|--------|
-| `POST` | `/v1/apply` | `routes.yml` shape (`services: {…}`) JSON or YAML | Validate, expand `route_prefix`, upsert each service |
-| `GET` | `/v1/services` | — | List all registered services |
-| `GET` | `/v1/services/{name}` | — | Get one `ServiceConfig` (post-expand) |
-| `PUT` | `/v1/services/{name}` | `ServiceConfig` JSON | Upsert one service |
-| `DELETE` | `/v1/services/{name}` | — | Delete; platform services need `?force=true` |
+| `POST` | `/v1/apply` | `routes.yml` shape (`services: {…}`) JSON or YAML | Validate, expand, one PG transaction, project |
+| `GET` | `/v1/services` | — | Current (non-deleted) services |
+| `GET` | `/v1/services/{name}` | — | Current config plus `name` / `revision` |
+| `PUT` | `/v1/services/{name}` | `ServiceConfig` JSON | New revision + project |
+| `DELETE` | `/v1/services/{name}` | — | Tombstone revision; remove etcd key |
+| `GET` | `/v1/services/{name}/revisions` | — | History (includes delete revisions) |
+| `GET` | `/v1/services/{name}/revisions/{rev}` | — | One revision (`config` is `null` if delete) |
+| `POST` | `/v1/services/{name}/revisions/{rev}/restore` | — | New revision copying that config |
+
+Apply is **upsert** of the services in the file. Services not in the file are left alone. There is no prune.
+
+Identity public routes are not special. Apply the catalog ([`services/identity/routes.yml`](../services/identity/routes.yml)) or a subset. Omitting a path does not disable the identity process — it only hides those routes from the gateway.
 
 ### Apply example
 
@@ -78,41 +88,29 @@ services:
 
 ### Response shape
 
-Success apply (`200`):
+Success apply (`200`) — desired state committed:
 
 ```json
 {
   "results": [
-    { "service": "widgets", "status": "upserted" }
+    { "service": "widgets", "status": "upserted", "revision": 1 }
   ]
 }
 ```
 
-Apply is **best-effort per service** after full pre-write validation. If a put fails mid-batch, earlier services stay written; the response is `503` with per-service status (not a pure error envelope):
+Validation / auth / empty body failures use the Plat5 envelope (`api-errors.md`) and write nothing. A Postgres failure rolls the whole batch back (`503`). etcd projection is retried by the reconciler; apply does not fail after a successful commit.
 
-```json
-{
-  "results": [
-    { "service": "a", "status": "upserted" },
-    { "service": "b", "status": "failed", "error": "Service temporarily unavailable" },
-    { "service": "c", "status": "skipped" }
-  ]
-}
-```
+## Revisions
 
-| `status` | Meaning |
-|----------|---------|
-| `upserted` | Written to etcd |
-| `failed` | Put failed; `error` has the message |
-| `skipped` | Not attempted (after a prior failure in the same apply) |
+Each write (apply/put/delete/restore) appends a revision. Rollback is a new revision that copies an old config, not a rewind.
 
-Validation / auth / empty body failures still use the Plat5 envelope (`api-errors.md`) and write nothing.
+Delete stores `config: null` and clears the etcd key. History remains. Restore of a delete revision is `422`.
 
-## etcd contract (unchanged)
+## etcd projection
 
 | | |
 |--|--|
-| Key | `identity/gateway/routes/{service_name}` |
+| Key | `edge/gateway/routes/{service_name}` |
 | Value | JSON `ServiceConfig` with **full paths** (`route_prefix` already expanded) |
 
 ## Environment
@@ -121,18 +119,18 @@ Validation / auth / empty body failures still use the Plat5 envelope (`api-error
 |----------|---------|---------|
 | `PORT` | `5002` | Admin API |
 | `INTERNAL_PORT` | `5003` | Health |
-| `ETCD_URL` | `http://localhost:2379` | etcd |
+| `ETCD_URL` | `http://localhost:2379` | etcd (projection) |
+| `DATABASE_URL` | required | Postgres; schema `routes` |
 | `ADMIN_TOKEN` | required | Bearer token |
-| `SEED_ROUTES_DIR` | empty | Directory of `*.yml` / `*.yaml` to upsert on boot |
-| `PLATFORM_SERVICES` | `identity` | Names protected from delete without `?force=true` |
+| `SEED_ROUTES_DIR` | empty | Dev: apply YAML for services with **no** history yet |
 
-## Platform seed
+Ready is **503** unless Postgres and etcd both answer.
 
-Compose mounts:
+## Dev seed
 
-- `services/identity/routes.yml` → `/seed/identity.yml`
+Compose mounts `services/identity/routes.yml` → `/seed/identity.yml` and sets `SEED_ROUTES_DIR`. On boot, missing services (no `routes.services` row) are applied. Existing rows — including deleted — are not overwritten.
 
-Registry upserts seed files on every start (idempotent).
+Prod compose does **not** seed. Apply identity routes yourself (CLI or curl).
 
 ## Validation
 

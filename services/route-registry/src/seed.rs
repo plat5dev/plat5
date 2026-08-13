@@ -1,11 +1,13 @@
 use std::path::Path;
 
-use crate::route_config::Config;
 use tracing::{info, warn};
 
 use crate::etcd_store::EtcdStore;
+use crate::pg_store::PgStore;
+use crate::projection;
+use crate::route_config::Config;
 
-pub async fn seed_from_dir(store: &EtcdStore, dir: &str) -> Result<(), String> {
+pub async fn seed_missing(pg: &PgStore, etcd: &EtcdStore, dir: &str) -> Result<(), String> {
     let path = Path::new(dir);
     if !path.is_dir() {
         return Err(format!("SEED_ROUTES_DIR is not a directory: {dir}"));
@@ -39,16 +41,39 @@ pub async fn seed_from_dir(store: &EtcdStore, dir: &str) -> Result<(), String> {
             .validate()
             .map_err(|e| format!("seed validation failed for {}: {e}", file_path.display()))?;
 
+        let mut batch = Vec::new();
         for (name, service) in config.services {
+            if pg
+                .has_row(&name)
+                .await
+                .map_err(|e| format!("seed lookup failed for '{name}': {e}"))?
+            {
+                info!(
+                    service = %name,
+                    file = %file_path.display(),
+                    "seed skipped; service already has history"
+                );
+                continue;
+            }
             let prepared = service
                 .prepare_for_registry(&name)
                 .map_err(|e| format!("seed prepare failed for '{name}': {e}"))?;
-            store
-                .put(&name, &prepared)
-                .await
-                .map_err(|e| format!("seed put failed for '{name}': {e}"))?;
+            batch.push((name, Some(prepared)));
+        }
+
+        if batch.is_empty() {
+            continue;
+        }
+
+        let commits = pg
+            .commit_batch(&batch, "seed")
+            .await
+            .map_err(|e| format!("seed commit failed: {e}"))?;
+        projection::project_commits(etcd, &commits).await;
+        for commit in commits {
             info!(
-                service = %name,
+                service = %commit.service,
+                revision = commit.revision,
                 file = %file_path.display(),
                 "seeded route service"
             );

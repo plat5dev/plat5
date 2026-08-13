@@ -20,6 +20,7 @@ RUN mkdir -p src && echo "fn main() {}" > src/main.rs \
     && mkdir -p src && echo "fn main() {}" > src/main.rs
 
 COPY src ./src
+COPY migrations ./migrations
 
 CMD ["cargo", "watch", "-x", "run"]
 
@@ -29,6 +30,7 @@ WORKDIR /app
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY migrations ./migrations
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM rust:1 AS builder
@@ -46,6 +48,7 @@ RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY migrations ./migrations
 RUN cargo build --release
 
 FROM debian:bookworm-slim AS prod

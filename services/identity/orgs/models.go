@@ -40,7 +40,6 @@ func (r Role) Valid() bool {
 type Status string
 
 const (
-	StatusPending   Status = "pending"
 	StatusActive    Status = "active"
 	StatusSuspended Status = "suspended"
 	StatusRemoved   Status = "removed"
@@ -48,7 +47,7 @@ const (
 
 func (s Status) Valid() bool {
 	switch s {
-	case StatusPending, StatusActive, StatusSuspended, StatusRemoved:
+	case StatusActive, StatusSuspended, StatusRemoved:
 		return true
 	default:
 		return false
@@ -72,7 +71,7 @@ type Member struct {
 	ServiceAccountID *string
 	Role             Role
 	Status           Status
-	InvitedBy        *string
+	AddedBy          *string
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }

@@ -46,7 +46,7 @@ func ParseRole(raw string, emptyDefault Role) (Role, error) {
 func ParseStatus(raw string) (Status, error) {
 	status := Status(strings.TrimSpace(raw))
 	if !status.Valid() {
-		return "", errors.FieldError("status", "invalid status")
+		return "", errors.FieldError("status", "must be active, suspended, or removed")
 	}
 	return status, nil
 }

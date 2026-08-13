@@ -19,7 +19,7 @@ func (s *Store) GetMember(ctx context.Context, organizationID, memberID string) 
 	defer op.End()
 
 	m, err := scanMember(s.pool.QueryRow(ctx, `
-		SELECT id, organization_id, user_id, service_account_id, role, status, invited_by, created_at, updated_at
+		SELECT id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at
 		FROM members
 		WHERE organization_id = $1 AND id = $2
 	`, organizationID, memberID))
@@ -42,7 +42,7 @@ func (s *Store) GetActiveMemberForUser(ctx context.Context, organizationID, user
 	defer op.End()
 
 	m, err := scanMember(s.pool.QueryRow(ctx, `
-		SELECT id, organization_id, user_id, service_account_id, role, status, invited_by, created_at, updated_at
+		SELECT id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at
 		FROM members
 		WHERE organization_id = $1 AND user_id = $2 AND status = 'active'
 	`, organizationID, userID))
@@ -66,7 +66,7 @@ func (s *Store) ResolveMember(ctx context.Context, userID, organizationID string
 	defer op.End()
 
 	m, err := scanMember(s.pool.QueryRow(ctx, `
-		SELECT id, organization_id, user_id, service_account_id, role, status, invited_by, created_at, updated_at
+		SELECT id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at
 		FROM members
 		WHERE organization_id = $1 AND user_id = $2 AND status <> 'removed'
 	`, organizationID, userID))
@@ -92,7 +92,7 @@ func (s *Store) ListMembers(ctx context.Context, organizationID string, limit, o
 	defer op.End()
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, organization_id, user_id, service_account_id, role, status, invited_by, created_at, updated_at
+		SELECT id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at
 		FROM members
 		WHERE organization_id = $1 AND status <> 'removed'
 		ORDER BY created_at ASC
@@ -145,7 +145,7 @@ func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 	defer tx.Rollback(ctx)
 
 	existing, err := scanMember(tx.QueryRow(ctx, `
-		SELECT id, organization_id, user_id, service_account_id, role, status, invited_by, created_at, updated_at
+		SELECT id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at
 		FROM members
 		WHERE organization_id = $1 AND user_id = $2
 		FOR UPDATE
@@ -161,9 +161,9 @@ func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 		now := time.Now().UTC()
 		_, err = tx.Exec(ctx, `
 			UPDATE members
-			SET role = $3, status = $4, invited_by = $5, updated_at = $6
+			SET role = $3, status = $4, added_by = $5, updated_at = $6
 			WHERE organization_id = $1 AND user_id = $2 AND status = 'removed'
-		`, m.OrganizationID, *m.UserID, m.Role, m.Status, m.InvitedBy, now)
+		`, m.OrganizationID, *m.UserID, m.Role, m.Status, m.AddedBy, now)
 		if err != nil {
 			return op.Fail(err)
 		}
@@ -180,9 +180,9 @@ func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO members
-			(id, organization_id, user_id, service_account_id, role, status, invited_by, created_at, updated_at)
+			(id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at)
 		VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8)
-	`, m.ID, m.OrganizationID, *m.UserID, m.Role, m.Status, m.InvitedBy, m.CreatedAt, m.UpdatedAt)
+	`, m.ID, m.OrganizationID, *m.UserID, m.Role, m.Status, m.AddedBy, m.CreatedAt, m.UpdatedAt)
 	if err != nil {
 		if dbx.IsUniqueViolation(err) {
 			return op.SoftFail("conflict", ErrConflict, ErrConflict)
@@ -214,7 +214,7 @@ func (s *Store) MutateMember(ctx context.Context, organizationID, memberID strin
 	defer tx.Rollback(ctx)
 
 	rows, err := tx.Query(ctx, `
-		SELECT id, organization_id, user_id, service_account_id, role, status, invited_by, created_at, updated_at
+		SELECT id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at
 		FROM members
 		WHERE organization_id = $1
 		FOR UPDATE

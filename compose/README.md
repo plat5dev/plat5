@@ -30,7 +30,7 @@ curl -sS -X POST http://localhost:5002/v1/apply \
   --data-binary @../services/identity/routes.yml
 ```
 
-Identity routes are seeded by route-registry on startup (`PLATFORM_SERVICES: identity`).
+Dev compose seeds identity routes only when that service has no history yet (does not overwrite). Prod does not seed — apply `services/identity/routes.yml` (or a subset) yourself.
 
 ## JWT / IdP
 
@@ -43,7 +43,7 @@ Set env (or defaults) for any IdP reachable from the gateway container:
 | `AUTH_USER_ID_CLAIM` | `properties.user_id` | Use `sub` for many OIDC providers |
 | `AUTH_ALLOWED_AUDIENCES` | `plat5` | Plat5 API audience; match your IdP client/`aud` |
 
-Gateway uses `host.docker.internal` so a host-published IdP does not need a shared Docker network. API keys work with no IdP.
+Gateway uses `host.docker.internal` so a host-published IdP does not need a shared Docker network. API keys are an alternative to JWT; the IdP is still required.
 
 See [`../docs/idp-contract.md`](../docs/idp-contract.md).
 
@@ -67,7 +67,5 @@ docker compose -f docker-compose.prod.yml -f docker-compose.prod.build.yml --env
 ```
 
 Required: `POSTGRES_PASSWORD`, `ADMIN_TOKEN`, `INTERNAL_AUTH_TOKEN`, `AUTH_ISSUER`, `AUTH_JWKS_URI`.
-
-Identity seed routes live under `seed/` (image-mode friendly; keep in sync with service `routes.yml`).
 
 Route registry admin port is **not** published in prod by default.

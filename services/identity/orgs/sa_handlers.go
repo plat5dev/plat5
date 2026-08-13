@@ -61,8 +61,8 @@ func (h *Handler) CreateServiceAccount(c fiber.Ctx) error {
 		Name:            name,
 		CreatedByUserID: &userID,
 	}
-	invitedBy := userID
-	if _, err := h.store.CreateServiceAccount(ctx, sa, RoleMember, &invitedBy); err != nil {
+	addedBy := userID
+	if _, err := h.store.CreateServiceAccount(ctx, sa, RoleMember, &addedBy); err != nil {
 		return httpx.MapDB(ctx, err, "failed to create service account", httpx.DBErr{
 			NotFound: ErrNotFound, Resource: "organization", ResourceID: orgID,
 		})

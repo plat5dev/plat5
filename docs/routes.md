@@ -5,10 +5,11 @@ Publish routes for the Plat5 gateway to discover and proxy traffic.
 ## Pipeline
 
 ```
-Service (routes.yml) → route-registry admin API → etcd (identity/gateway/routes/{name}) → Gateway
+Service (routes.yml) → route-registry (Postgres desired state + revision)
+                    → etcd (edge/gateway/routes/{name}) → Gateway
 ```
 
-Gateway loads routes from **etcd** at startup and watches for live updates. New services register without restarting the gateway.
+Postgres is the source of truth. etcd is the live projection the gateway watches. Apply while gateways are down; they pick up the map on watch/reconnect.
 
 Write path details: [`route-registry.md`](route-registry.md).
 
@@ -16,18 +17,18 @@ Write path details: [`route-registry.md`](route-registry.md).
 
 | Key | Value | Written By |
 |-----|-------|------------|
-| `identity/gateway/routes/{service_name}` | JSON `ServiceConfig` blob | **route-registry** |
+| `edge/gateway/routes/{service_name}` | JSON `ServiceConfig` blob | **route-registry** (projection) |
 
 Gateway watches the prefix. Create/modify/delete triggers a full route reload.
 
 ## Route registry
 
-Long-running service. Validates config, expands `route_prefix`, writes JSON to etcd.
+Long-running service. Validates config, expands `route_prefix`, records a revision in Postgres, projects current JSON to etcd.
 
 - **Local admin URL:** `http://localhost:5002`
 - **Auth:** `Authorization: Bearer <ADMIN_TOKEN>`
-- **Apply:** `POST /v1/apply` with a full `routes.yml` body (JSON or YAML)
-- **Seed:** platform identity routes (`identity`) on boot from `SEED_ROUTES_DIR`
+- **Apply:** `POST /v1/apply` with a `routes.yml` body (JSON or YAML) — **upsert** of the services in the file (not a full-map prune)
+- **Identity:** public identity routes are operator-owned. Catalog: [`services/identity/routes.yml`](../services/identity/routes.yml). Apply it (or a subset). Dev compose may seed missing services from that file on first boot; it does not overwrite. Prod does not seed.
 
 ```bash
 curl -sS -X POST http://localhost:5002/v1/apply \
@@ -36,9 +37,9 @@ curl -sS -X POST http://localhost:5002/v1/apply \
   --data-binary @routes.yml
 ```
 
-Validation is at **apply time**. Malformed config → `422 VALIDATION_ERROR`; nothing written for that apply batch once validation fails pre-write (per-service prepare still rejects bad entries).
+Validation is at **apply time**. Malformed config → `422 VALIDATION_ERROR`; nothing written.
 
-After validation, writes are **best-effort per service** (not a multi-key transaction). Mid-batch etcd failure → `503` with `results[]` showing `upserted` / `failed` / `skipped`. See [route-registry.md](route-registry.md).
+After validation, all services in the batch commit in **one Postgres transaction** (each service gets a new revision). etcd projection follows; a reconciler retries if a put fails. `200` means desired state is recorded.
 
 JSON in etcd (not YAML): registry validates and canonicalizes at write time; gateway deserializes into route types.
 
@@ -47,8 +48,9 @@ JSON in etcd (not YAML): registry validates and canonicalizes at write time; gat
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `ETCD_URL` | etcd client endpoint | `http://localhost:2379` |
+| `DATABASE_URL` | Postgres (schema `routes`) | Required |
 | `ADMIN_TOKEN` | Bearer token for `/v1/*` | Required |
-| `SEED_ROUTES_DIR` | Directory of seed YAML files | empty |
+| `SEED_ROUTES_DIR` | Optional; upsert **missing** services from YAML (dev) | empty |
 | `PORT` | Admin API port | `5002` |
 | `INTERNAL_PORT` | Health port | `5003` |
 
@@ -122,13 +124,13 @@ Full header and service rules: [`gateway-contract.md`](gateway-contract.md). Lay
 ### Startup
 
 1. Connect to etcd (`ETCD_URL`, default `http://localhost:2379`).
-2. Load all keys under `identity/gateway/routes/`.
+2. Load all keys under `edge/gateway/routes/`.
 3. Parse JSON, validate, build `RouteMap`.
 4. Fail fast if etcd unreachable — no start without a route registry store.
 
 ### Runtime Updates
 
-1. Watch `identity/gateway/routes/`.
+1. Watch `edge/gateway/routes/`.
 2. On any event: **full reload** of all routes (small set; simpler than incremental).
 3. Reload failure → keep current routes, log warning.
 

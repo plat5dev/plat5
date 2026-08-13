@@ -2,14 +2,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// etcd key prefix for gateway route registry entries.
-pub const ROUTES_PREFIX: &str = "identity/gateway/routes/";
+pub const ROUTES_PREFIX: &str = "edge/gateway/routes/";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     pub services: HashMap<String, ServiceConfig>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct ServiceConfig {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -20,7 +20,7 @@ pub struct ServiceConfig {
     pub organization: Option<ScopeConfig>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct ScopeConfig {
     /// Optional path prefix. Expanded into each route `path` at write time.
     /// Etcd stores full paths; gateway never requires this field.
@@ -32,7 +32,7 @@ pub struct ScopeConfig {
     pub routes: Vec<RouteConfig>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct RouteConfig {
     pub path: String,
     pub methods: Vec<String>,
@@ -40,7 +40,7 @@ pub struct RouteConfig {
     pub transform: Option<TransformConfig>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct TransformConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,

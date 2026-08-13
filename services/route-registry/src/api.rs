@@ -2,19 +2,21 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::route_config::{Config, ServiceConfig};
-use axum::extract::{MatchedPath, Path, Query, Request, State};
+use axum::extract::{MatchedPath, Path, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
 use tracing::Instrument;
 use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::metrics;
+use crate::pg_store::{CommitResult, Revision};
+use crate::projection;
 use crate::AppState;
 
 pub fn public_router(state: AppState) -> Router {
@@ -24,7 +26,13 @@ pub fn public_router(state: AppState) -> Router {
             "/v1/services/{name}",
             get(get_service).put(put_service).delete(delete_service),
         )
-        .route("/v1/apply", axum::routing::post(apply_routes))
+        .route("/v1/services/{name}/revisions", get(list_revisions))
+        .route("/v1/services/{name}/revisions/{rev}", get(get_revision))
+        .route(
+            "/v1/services/{name}/revisions/{rev}/restore",
+            post(restore_revision),
+        )
+        .route("/v1/apply", post(apply_routes))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             admin_auth_middleware,
@@ -155,13 +163,16 @@ async fn health_live() -> impl IntoResponse {
 }
 
 async fn health_ready(State(state): State<AppState>) -> impl IntoResponse {
-    match state.store.ping().await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "status": "healthy" }))).into_response(),
-        Err(_) => (
+    let pg_ok = state.pg.ping().await.is_ok();
+    let etcd_ok = state.etcd.ping().await.is_ok();
+    if pg_ok && etcd_ok {
+        (StatusCode::OK, Json(json!({ "status": "healthy" }))).into_response()
+    } else {
+        (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "status": "unhealthy" })),
         )
-            .into_response(),
+            .into_response()
     }
 }
 
@@ -175,7 +186,7 @@ async fn list_services(
     headers: axum::http::HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
     let request_id = request_id_from_headers(&headers);
-    let services = state.store.list().await.map_err(|e| {
+    let services = state.pg.list_current().await.map_err(|e| {
         tracing::error!(error = %e, "list failed");
         AppError::service_unavailable(request_id.clone())
     })?;
@@ -185,18 +196,33 @@ async fn list_services(
     ))
 }
 
+#[derive(Serialize)]
+struct ServiceResponse {
+    name: String,
+    revision: i64,
+    #[serde(flatten)]
+    config: ServiceConfig,
+}
+
 async fn get_service(
     State(state): State<AppState>,
     Path(name): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
     let request_id = request_id_from_headers(&headers);
-    let cfg = state.store.get(&name).await.map_err(|e| {
+    let current = state.pg.get_current(&name).await.map_err(|e| {
         tracing::error!(error = %e, "get failed");
         AppError::service_unavailable(request_id.clone())
     })?;
-    match cfg {
-        Some(c) => Ok((with_request_id(request_id), Json(c))),
+    match current {
+        Some((revision, config)) => Ok((
+            with_request_id(request_id),
+            Json(ServiceResponse {
+                name,
+                revision,
+                config,
+            }),
+        )),
         None => Err(AppError::not_found(request_id, "service", &name)),
     }
 }
@@ -208,46 +234,41 @@ async fn put_service(
     Json(body): Json<ServiceConfig>,
 ) -> Result<impl IntoResponse, AppError> {
     let request_id = request_id_from_headers(&headers);
-    upsert_one(&state, &name, body, &request_id).await?;
-    let cfg = state.store.get(&name).await.map_err(|e| {
-        tracing::error!(error = %e, "get after put failed");
-        AppError::internal(request_id.clone())
-    })?;
+    let prepared = prepare_named(&name, body, &request_id)?;
+    let commits = commit(&state, vec![(name.clone(), Some(prepared))], &request_id).await?;
+    let commit = commits.into_iter().next().expect("one commit");
+    let config = commit.config.expect("put is not a delete");
     Ok((
         StatusCode::OK,
         with_request_id(request_id),
-        Json(cfg.expect("just written")),
+        Json(ServiceResponse {
+            name: commit.service,
+            revision: commit.revision,
+            config,
+        }),
     ))
-}
-
-#[derive(Deserialize)]
-struct DeleteQuery {
-    #[serde(default)]
-    force: bool,
 }
 
 async fn delete_service(
     State(state): State<AppState>,
     Path(name): Path<String>,
-    Query(query): Query<DeleteQuery>,
     headers: axum::http::HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
     let request_id = request_id_from_headers(&headers);
-
-    if state.platform_services.iter().any(|s| s == &name) && !query.force {
-        return Err(AppError::forbidden(
-            request_id,
-            format!("refusing to delete platform service '{name}' without ?force=true"),
-        ));
-    }
-
-    let deleted = state.store.delete(&name).await.map_err(|e| {
-        tracing::error!(error = %e, "delete failed");
-        AppError::service_unavailable(request_id.clone())
-    })?;
-    if !deleted {
+    if state
+        .pg
+        .get_current(&name)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "get before delete failed");
+            AppError::service_unavailable(request_id.clone())
+        })?
+        .is_none()
+    {
         return Err(AppError::not_found(request_id, "service", &name));
     }
+
+    commit(&state, vec![(name, None)], &request_id).await?;
     Ok((StatusCode::NO_CONTENT, with_request_id(request_id)))
 }
 
@@ -255,8 +276,7 @@ async fn delete_service(
 struct ApplyResult {
     service: String,
     status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
+    revision: i64,
 }
 
 #[derive(Serialize)]
@@ -302,74 +322,161 @@ async fn apply_routes(
         .validate()
         .map_err(|e| AppError::validation(request_id.clone(), e.to_string()))?;
 
-    // Best-effort per service after full validation. Mid-batch write failure
-    // leaves earlier upserts live; response reports per-service status.
-    let mut results = Vec::new();
-    let mut failed = false;
+    let mut prepared = Vec::new();
     for (name, service) in config.services {
-        if failed {
-            results.push(ApplyResult {
-                service: name,
-                status: "skipped".into(),
-                error: None,
-            });
-            continue;
-        }
-        match upsert_one(&state, &name, service, &request_id).await {
-            Ok(()) => results.push(ApplyResult {
-                service: name,
-                status: "upserted".into(),
-                error: None,
-            }),
-            Err(e) => {
-                tracing::error!(
-                    service = %name,
-                    error = %e.message,
-                    "apply upsert failed; remaining services skipped"
-                );
-                results.push(ApplyResult {
-                    service: name,
-                    status: "failed".into(),
-                    error: Some(e.message),
-                });
-                failed = true;
-            }
-        }
+        let cfg = prepare_named(&name, service, &request_id)?;
+        prepared.push((name, Some(cfg)));
     }
 
-    let status = if failed {
-        StatusCode::SERVICE_UNAVAILABLE
-    } else {
-        StatusCode::OK
-    };
+    let commits = commit(&state, prepared, &request_id).await?;
+    let results = commits
+        .into_iter()
+        .map(|c| ApplyResult {
+            service: c.service,
+            status: "upserted".into(),
+            revision: c.revision,
+        })
+        .collect();
 
     Ok((
-        status,
+        StatusCode::OK,
         with_request_id(request_id),
         Json(ApplyResponse { results }),
     ))
 }
 
-async fn upsert_one(
-    state: &AppState,
+#[derive(Serialize)]
+struct RevisionResponse {
+    service: String,
+    revision: i64,
+    config: Option<ServiceConfig>,
+    request_id: String,
+    created_at: String,
+}
+
+#[derive(Serialize)]
+struct RevisionListResponse {
+    revisions: Vec<RevisionResponse>,
+}
+
+async fn list_revisions(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let request_id = request_id_from_headers(&headers);
+    let revisions = state.pg.list_revisions(&name).await.map_err(|e| {
+        tracing::error!(error = %e, "list revisions failed");
+        AppError::service_unavailable(request_id.clone())
+    })?;
+    match revisions {
+        Some(list) => Ok((
+            with_request_id(request_id),
+            Json(RevisionListResponse {
+                revisions: list.into_iter().map(to_revision_response).collect(),
+            }),
+        )),
+        None => Err(AppError::not_found(request_id, "service", &name)),
+    }
+}
+
+async fn get_revision(
+    State(state): State<AppState>,
+    Path((name, rev)): Path<(String, i64)>,
+    headers: axum::http::HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let request_id = request_id_from_headers(&headers);
+    let revision = state.pg.get_revision(&name, rev).await.map_err(|e| {
+        tracing::error!(error = %e, "get revision failed");
+        AppError::service_unavailable(request_id.clone())
+    })?;
+    match revision {
+        Some(r) => Ok((with_request_id(request_id), Json(to_revision_response(r)))),
+        None => Err(AppError::not_found(
+            request_id,
+            "revision",
+            &format!("{name}#{rev}"),
+        )),
+    }
+}
+
+async fn restore_revision(
+    State(state): State<AppState>,
+    Path((name, rev)): Path<(String, i64)>,
+    headers: axum::http::HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let request_id = request_id_from_headers(&headers);
+    let revision = state.pg.get_revision(&name, rev).await.map_err(|e| {
+        tracing::error!(error = %e, "get revision for restore failed");
+        AppError::service_unavailable(request_id.clone())
+    })?;
+    let Some(revision) = revision else {
+        return Err(AppError::not_found(
+            request_id,
+            "revision",
+            &format!("{name}#{rev}"),
+        ));
+    };
+    let Some(config) = revision.config else {
+        return Err(AppError::validation(
+            request_id,
+            "cannot restore a delete revision".into(),
+        ));
+    };
+
+    let commits = commit(&state, vec![(name, Some(config))], &request_id).await?;
+    let commit = commits.into_iter().next().expect("one commit");
+    let config = commit.config.expect("restore is not a delete");
+    Ok((
+        StatusCode::OK,
+        with_request_id(request_id),
+        Json(ServiceResponse {
+            name: commit.service,
+            revision: commit.revision,
+            config,
+        }),
+    ))
+}
+
+fn to_revision_response(r: Revision) -> RevisionResponse {
+    RevisionResponse {
+        service: r.service_name,
+        revision: r.revision,
+        config: r.config,
+        request_id: r.request_id,
+        created_at: r.created_at.to_rfc3339(),
+    }
+}
+
+fn prepare_named(
     name: &str,
     service: ServiceConfig,
     request_id: &str,
-) -> Result<(), AppError> {
+) -> Result<ServiceConfig, AppError> {
     if name.is_empty() {
         return Err(AppError::invalid_request(
             request_id.to_string(),
             "service name must not be empty",
         ));
     }
-
-    let prepared = service
+    service
         .prepare_for_registry(name)
-        .map_err(|e| AppError::validation(request_id.to_string(), e.to_string()))?;
+        .map_err(|e| AppError::validation(request_id.to_string(), e.to_string()))
+}
 
-    state.store.put(name, &prepared).await.map_err(|e| {
-        tracing::error!(error = %e, service = %name, "put failed");
-        AppError::service_unavailable(request_id.to_string())
-    })?;
-    Ok(())
+async fn commit(
+    state: &AppState,
+    items: Vec<(String, Option<ServiceConfig>)>,
+    request_id: &str,
+) -> Result<Vec<CommitResult>, AppError> {
+    let commits = state
+        .pg
+        .commit_batch(&items, request_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "postgres commit failed");
+            AppError::service_unavailable(request_id.to_string())
+        })?;
+    projection::project_commits(&state.etcd, &commits).await;
+    Ok(commits)
 }

@@ -11,7 +11,7 @@ Headers and service rules: [`gateway-contract.md`](gateway-contract.md). Routes:
 | **Authentication** | Who is this? | Gateway + **IdP (JWT)** / identity API keys (credentials stripped before upstream) |
 | **Organization context** | Is this credential an **active** member of this organization? | Gateway + **identity** (member resolve or member-scoped key) |
 | **Resource authorization** | Can this member do X to project/doc/…? | **Business services** — not gateway headers |
-| **Org administration** | Who may invite, change members, manage service accounts, transfer ownership? | **identity** only (member role lives here) |
+| **Org administration** | Who may add or change members, manage service accounts, transfer ownership? | **identity** only (member role lives here) |
 
 **Stop condition for the gateway:** If a check needs a resource-type registry, relation graph, or permission matrix on the wire, it does not belong in the gateway.
 
@@ -29,9 +29,9 @@ Always: `X-Request-ID`, `traceparent`. The edge may record `user.id` / `organiza
 
 ## Member role (identity only)
 
-Member **role** (member / admin / owner) is domain data for the **identity** service: invite, promote, owner rules, service accounts, member admin APIs. It is **not** gateway-injected identity and **not** part of the org-scope app contract.
+Member **role** (member / admin / owner) is domain data for the **identity** service: add members, promote, owner rules, service accounts, member admin APIs. It is **not** gateway-injected identity and **not** part of the org-scope app contract.
 
-Business services on `organization` scope get `organization_id` + `member_id` only. Need role later → load it from identity, not a header.
+Business services on `organization` scope get `organization_id` + `member_id` only. Role is not on the platform wire. Resource RBAC is the service’s problem.
 
 ## Who uses which scope
 
@@ -103,3 +103,4 @@ Do not return `UNAUTHORIZED` for missing identity headers — the gateway alread
 - Operator / employee admin planes
 - Member role as platform wire identity (role stays in identity)
 - Service accounts as a parallel auth system (they are members with keys)
+- Invites / email join (add member by known `user_id` only)

@@ -46,7 +46,7 @@ Org-scope identity is `X-Organization-Id` + `X-Member-Id` only. Member **role** 
 
 ## Route Configuration
 
-Routes live in etcd under `identity/gateway/routes/`. Scopes are `public` / `user` / `organization` blocks — not a flat `auth:` flag. Full schema and publish path: [`routes.md`](routes.md).
+Routes live in etcd under `edge/gateway/routes/`. Scopes are `public` / `user` / `organization` blocks — not a flat `auth:` flag. Full schema and publish path: [`routes.md`](routes.md).
 
 ```yaml
 services:

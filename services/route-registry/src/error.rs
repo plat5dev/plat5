@@ -75,34 +75,12 @@ impl AppError {
         }
     }
 
-    pub fn forbidden(request_id: String, message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::FORBIDDEN,
-            error_type: "invalid_request_error",
-            code: "FORBIDDEN",
-            message: message.into(),
-            details: None,
-            request_id,
-        }
-    }
-
     pub fn service_unavailable(request_id: String) -> Self {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
             error_type: "api_error",
             code: "SERVICE_UNAVAILABLE",
             message: "Service temporarily unavailable".into(),
-            details: None,
-            request_id,
-        }
-    }
-
-    pub fn internal(request_id: String) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            error_type: "api_error",
-            code: "INTERNAL_ERROR",
-            message: "An unexpected error occurred".into(),
             details: None,
             request_id,
         }

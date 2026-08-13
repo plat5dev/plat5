@@ -31,7 +31,7 @@ type MemberResponse struct {
 	ServiceAccountID *string `json:"service_account_id"`
 	Role             string  `json:"role"`
 	Status           string  `json:"status"`
-	InvitedBy        *string `json:"invited_by"`
+	AddedBy          *string `json:"added_by"`
 	CreatedAt        string  `json:"created_at"`
 	UpdatedAt        string  `json:"updated_at"`
 }
@@ -114,14 +114,14 @@ func (h *Handler) CreateMember(c fiber.Ctx) error {
 	}
 
 	now := time.Now().UTC()
-	invitedBy := userID
+	addedBy := userID
 	m := &Member{
 		ID:             NewULID(),
 		OrganizationID: orgID,
 		UserID:         &targetUser,
 		Role:           role,
 		Status:         StatusActive,
-		InvitedBy:      &invitedBy,
+		AddedBy:        &addedBy,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
@@ -280,7 +280,7 @@ func toMemberResponse(m *Member) MemberResponse {
 		ServiceAccountID: m.ServiceAccountID,
 		Role:             string(m.Role),
 		Status:           string(m.Status),
-		InvitedBy:        m.InvitedBy,
+		AddedBy:          m.AddedBy,
 		CreatedAt:        httpx.FormatTime(m.CreatedAt),
 		UpdatedAt:        httpx.FormatTime(m.UpdatedAt),
 	}

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// etcd key prefix for gateway route registry entries.
-pub const ROUTES_PREFIX: &str = "identity/gateway/routes/";
+pub const ROUTES_PREFIX: &str = "edge/gateway/routes/";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {

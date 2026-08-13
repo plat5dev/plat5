@@ -1,6 +1,6 @@
 # Route registry
 
-Admin HTTP service: validate route configs, expand prefixes, write to etcd for the Plat5 gateway.
+Admin HTTP service: validate route configs, record desired state + revisions in Postgres, project current JSON to etcd for the Plat5 gateway.
 
 Contract: [`../../docs/route-registry.md`](../../docs/route-registry.md).
 
@@ -72,6 +72,7 @@ curl -sS -X POST http://localhost:5002/v1/apply \
 ```bash
 cd services/route-registry
 export ETCD_URL=http://localhost:2379
+export DATABASE_URL=postgres://plat5:plat5@localhost:5432/plat5?sslmode=disable
 export ADMIN_TOKEN=dev-admin-token
 cargo run
 cargo test

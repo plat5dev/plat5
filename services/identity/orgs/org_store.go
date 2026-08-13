@@ -49,7 +49,7 @@ func (s *Store) CreateOrganization(ctx context.Context, org *Organization, owner
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO members
-			(id, organization_id, user_id, service_account_id, role, status, invited_by, created_at, updated_at)
+			(id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at)
 		VALUES ($1, $2, $3, NULL, $4, $5, NULL, $6, $7)
 	`, m.ID, m.OrganizationID, ownerUserID, m.Role, m.Status, m.CreatedAt, m.UpdatedAt)
 	if err != nil {

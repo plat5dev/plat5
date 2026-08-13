@@ -1,3 +1,5 @@
+# Catalog of identity public routes. Apply via route-registry (or a subset).
+# Not auto-published in prod. Internal validate/resolve are not listed here.
 services:
   identity:
     url: identity:3000

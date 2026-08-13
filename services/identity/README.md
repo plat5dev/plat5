@@ -4,6 +4,8 @@ Plat5 **identity** service: organizations, members, service accounts, user API k
 
 Contract: [`docs/identity.md`](../../docs/identity.md)
 
+Public route catalog: [`routes.yml`](routes.yml). Apply via route-registry; not auto-published in prod.
+
 ## Layout
 
 | Package | Role |

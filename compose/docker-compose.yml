@@ -59,6 +59,8 @@ services:
     build:
       context: ../services/route-registry
       target: local
+    # cargo-watch as PID 1 ignores SIGTERM; tini forwards stop signals.
+    init: true
     labels:
       service.name: route-registry
       service.namespace: edge
@@ -70,8 +72,8 @@ services:
       INTERNAL_PORT: 5003
       ETCD_URL: http://etcd:2379
       ADMIN_TOKEN: ${ADMIN_TOKEN:-dev-admin-token}
+      DATABASE_URL: postgres://plat5:plat5@postgres:5432/plat5?sslmode=disable
       SEED_ROUTES_DIR: /seed
-      PLATFORM_SERVICES: identity
       RUST_LOG: info
       OTEL_SERVICE_NAME: route-registry
       OTEL_SERVICE_NAMESPACE: edge
@@ -79,11 +81,14 @@ services:
       DEPLOYMENT_ENV: docker
     volumes:
       - ../services/route-registry/src:/app/src
+      - ../services/route-registry/migrations:/app/migrations:ro
       - ../services/identity/routes.yml:/seed/identity.yml:ro
     networks:
       - plat5
     depends_on:
       etcd:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5003/health/ready"]
@@ -97,6 +102,8 @@ services:
     build:
       context: ../services/gateway
       target: local
+    # cargo-watch as PID 1 ignores SIGTERM; tini forwards stop signals.
+    init: true
     labels:
       service.name: gateway
       service.namespace: edge

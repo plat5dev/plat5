@@ -41,7 +41,7 @@ func scanMember(row dbx.Scannable) (*Member, error) {
 		&m.ServiceAccountID,
 		&role,
 		&status,
-		&m.InvitedBy,
+		&m.AddedBy,
 		&m.CreatedAt,
 		&m.UpdatedAt,
 	)

@@ -13,7 +13,7 @@ use crate::route_map::RouteMap;
 /// Manages the dynamic route registry backed by etcd.
 ///
 /// Routes are loaded from etcd at startup and kept in sync via watches.
-/// Each key under `identity/gateway/routes/` contains a JSON `ServiceConfig` blob.
+/// Each key under `edge/gateway/routes/` contains a JSON `ServiceConfig` blob.
 pub struct RouteRegistry {
     route_map: Arc<ArcSwap<RouteMap>>,
 }
@@ -68,7 +68,7 @@ impl RouteRegistry {
             let key = String::from_utf8_lossy(kv.key());
             let value = String::from_utf8_lossy(kv.value());
 
-            // Extract service name from key: identity/gateway/routes/{service}
+            // Extract service name from key: edge/gateway/routes/{service}
             let service_name = key.strip_prefix(ROUTES_PREFIX).unwrap_or("").to_string();
 
             if service_name.is_empty() {
