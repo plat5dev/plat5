@@ -99,10 +99,10 @@ func (h *Handler) CreateMember(c fiber.Ctx) error {
 
 	targetUser := strings.TrimSpace(req.UserID)
 	if targetUser == "" {
-		return errors.FieldError("user_id", "required")
+		return errors.FieldError("user_id", "Choose someone to add.")
 	}
 	if len(targetUser) > MaxUserIDLen {
-		return errors.FieldError("user_id", "must be at most 128 characters")
+		return errors.FieldError("user_id", "That user ID is too long.")
 	}
 
 	role, err := ParseRole(req.Role, RoleMember)
@@ -129,6 +129,7 @@ func (h *Handler) CreateMember(c fiber.Ctx) error {
 	if err := h.store.CreateUserMember(ctx, m); err != nil {
 		return httpx.MapDB(ctx, err, "failed to create member", httpx.DBErr{
 			Conflict: ErrConflict, Field: "user_id", FieldValue: targetUser,
+			Message: "This person is already a member.",
 		})
 	}
 
@@ -240,9 +241,9 @@ func (h *Handler) Resolve(c fiber.Ctx) error {
 	userID := strings.TrimSpace(req.UserID)
 	orgID := strings.TrimSpace(req.OrganizationID)
 	if userID == "" || orgID == "" {
-		return errors.ValidationFields("Request validation failed",
-			errors.Field{Path: "user_id", Message: "required"},
-			errors.Field{Path: "organization_id", Message: "required"},
+		return errors.ValidationFields(errors.FallbackValidation,
+			errors.Field{Path: "user_id", Message: errors.FallbackValidation},
+			errors.Field{Path: "organization_id", Message: errors.FallbackValidation},
 		)
 	}
 

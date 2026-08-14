@@ -36,7 +36,7 @@ impl AppError {
             status: StatusCode::UNAUTHORIZED,
             error_type: "invalid_request_error",
             code: "UNAUTHORIZED",
-            message: "Authentication required".into(),
+            message: "Authentication required.".into(),
             details: Some(json!({ "reason": "invalid_or_missing_admin_token" })),
             request_id,
         }
@@ -47,7 +47,7 @@ impl AppError {
             status: StatusCode::NOT_FOUND,
             error_type: "invalid_request_error",
             code: "NOT_FOUND",
-            message: "Resource not found".into(),
+            message: "Resource not found.".into(),
             details: Some(json!({ "resource": resource, "id": id })),
             request_id,
         }
@@ -58,7 +58,7 @@ impl AppError {
             status: StatusCode::UNPROCESSABLE_ENTITY,
             error_type: "invalid_request_error",
             code: "VALIDATION_ERROR",
-            message: "Request validation failed".into(),
+            message: message.clone(),
             details: Some(json!({ "fields": [{ "path": "body", "message": message }] })),
             request_id,
         }
@@ -80,7 +80,7 @@ impl AppError {
             status: StatusCode::SERVICE_UNAVAILABLE,
             error_type: "api_error",
             code: "SERVICE_UNAVAILABLE",
-            message: "Service temporarily unavailable".into(),
+            message: "Service temporarily unavailable.".into(),
             details: None,
             request_id,
         }

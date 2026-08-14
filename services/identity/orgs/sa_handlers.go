@@ -137,7 +137,7 @@ func (h *Handler) UpdateServiceAccount(c fiber.Ctx) error {
 		return err
 	}
 	if req.Name == nil && req.Disabled == nil {
-		return errors.FieldError("body", "at least one of name, disabled required")
+		return errors.FieldError("body", "Nothing to update.")
 	}
 	var name *string
 	if req.Name != nil {

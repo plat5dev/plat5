@@ -26,7 +26,7 @@ func ParseListParams(c fiber.Ctx) (limit, offset int, err error) {
 	if v := strings.TrimSpace(c.Query("limit")); v != "" {
 		n, parseErr := strconv.Atoi(v)
 		if parseErr != nil || n < 1 {
-			return 0, 0, errors.FieldError("limit", "must be a positive integer")
+			return 0, 0, errors.FieldError("limit", errors.FallbackValidation)
 		}
 		limit = n
 	}
@@ -36,7 +36,7 @@ func ParseListParams(c fiber.Ctx) (limit, offset int, err error) {
 	if v := strings.TrimSpace(c.Query("offset")); v != "" {
 		n, parseErr := strconv.Atoi(v)
 		if parseErr != nil || n < 0 {
-			return 0, 0, errors.FieldError("offset", "must be a non-negative integer")
+			return 0, 0, errors.FieldError("offset", errors.FallbackValidation)
 		}
 		offset = n
 	}
@@ -88,6 +88,7 @@ type DBErr struct {
 	Conflict   error
 	Field      string
 	FieldValue interface{}
+	Message    string
 }
 
 // MapDB maps store sentinels and *errors.ApiError through; logs unexpected errors as INTERNAL.
@@ -109,7 +110,7 @@ func MapDB(ctx context.Context, err error, msg string, m DBErr) error {
 		return errors.NotFoundError(resource, m.ResourceID)
 	}
 	if m.Conflict != nil && stderrors.Is(err, m.Conflict) {
-		return errors.ConflictError(m.Field, m.FieldValue)
+		return errors.ConflictError(m.Message, m.Field, m.FieldValue)
 	}
 	LogError(ctx, msg, err, errors.KindDB)
 	return errors.InternalError()

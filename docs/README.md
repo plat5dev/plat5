@@ -11,6 +11,7 @@ Per-service details live in each service's `README.md`.
 | Document | Purpose |
 |----------|---------|
 | [`api-errors.md`](api-errors.md) | Error response envelope and error codes |
+| [`error-copy.md`](error-copy.md) | Stripe-style `message` — product copy appendix |
 | [`container-labels.md`](container-labels.md) | Docker labels (optional collector scrape) |
 | [`health-checks.md`](health-checks.md) | Health check endpoints |
 | [`naming-conventions.md`](naming-conventions.md) | Service names, terminology, paths, headers |

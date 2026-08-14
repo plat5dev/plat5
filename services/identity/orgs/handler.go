@@ -42,10 +42,10 @@ func (h *Handler) requireActiveMember(ctx context.Context, orgID, userID string)
 func requireName(raw, path string, maxLen int) (string, error) {
 	name := strings.TrimSpace(raw)
 	if name == "" {
-		return "", errors.FieldError(path, "required")
+		return "", errors.FieldError(path, "Name is required.")
 	}
 	if len(name) > maxLen {
-		return "", errors.FieldError(path, "must be at most 128 characters")
+		return "", errors.FieldError(path, "Name is too long.")
 	}
 	return name, nil
 }

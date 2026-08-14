@@ -43,7 +43,12 @@ type Field struct {
 	Message string `json:"message"`
 }
 
+const FallbackValidation = "That doesn't look right."
+
 func ValidationError(message string, details interface{}) *ApiError {
+	if message == "" {
+		message = FallbackValidation
+	}
 	return &ApiError{
 		Type:    "invalid_request_error",
 		Code:    "VALIDATION_ERROR",
@@ -54,15 +59,29 @@ func ValidationError(message string, details interface{}) *ApiError {
 	}
 }
 
-// FieldError is VALIDATION_ERROR for a single path.
+func InvalidRequestError() *ApiError {
+	return &ApiError{
+		Type:    "invalid_request_error",
+		Code:    "INVALID_REQUEST",
+		Message: "Malformed request.",
+		Details: nil,
+		Status:  fiber.StatusBadRequest,
+		Kind:    KindValidation,
+	}
+}
+
+// FieldError is VALIDATION_ERROR for a single path. message is the product sentence.
 func FieldError(path, message string) *ApiError {
-	return ValidationFields("Request validation failed", Field{Path: path, Message: message})
+	if message == "" {
+		message = FallbackValidation
+	}
+	return ValidationFields(message, Field{Path: path, Message: message})
 }
 
 // ValidationFields builds VALIDATION_ERROR with details.fields.
 func ValidationFields(message string, fields ...Field) *ApiError {
 	if message == "" {
-		message = "Request validation failed"
+		message = FallbackValidation
 	}
 	return ValidationError(message, map[string]interface{}{"fields": fields})
 }
@@ -71,7 +90,7 @@ func NotFoundError(resource string, id interface{}) *ApiError {
 	return &ApiError{
 		Type:    "invalid_request_error",
 		Code:    "NOT_FOUND",
-		Message: "Resource not found",
+		Message: "Resource not found.",
 		Details: map[string]interface{}{
 			"resource": resource,
 			"id":       id,
@@ -85,7 +104,7 @@ func ForbiddenError(permission, resource string, resourceID interface{}) *ApiErr
 	return &ApiError{
 		Type:    "invalid_request_error",
 		Code:    "FORBIDDEN",
-		Message: "Insufficient permissions",
+		Message: "You don't have permission to do that.",
 		Details: map[string]interface{}{
 			"permission":  permission,
 			"resource":    resource,
@@ -96,11 +115,14 @@ func ForbiddenError(permission, resource string, resourceID interface{}) *ApiErr
 	}
 }
 
-func ConflictError(field string, value interface{}) *ApiError {
+func ConflictError(message, field string, value interface{}) *ApiError {
+	if message == "" {
+		message = "That already exists."
+	}
 	return &ApiError{
 		Type:    "invalid_request_error",
 		Code:    "CONFLICT",
-		Message: "Resource already exists",
+		Message: message,
 		Details: map[string]interface{}{
 			"field": field,
 			"value": value,
@@ -114,7 +136,7 @@ func PayloadTooLargeError(maxSizeBytes int64) *ApiError {
 	return &ApiError{
 		Type:    "invalid_request_error",
 		Code:    "PAYLOAD_TOO_LARGE",
-		Message: "Request body exceeds maximum allowed size",
+		Message: "Request body is too large.",
 		Details: map[string]interface{}{
 			"max_size_bytes": maxSizeBytes,
 		},
@@ -127,7 +149,7 @@ func UnauthorizedError(reason string) *ApiError {
 	return &ApiError{
 		Type:    "invalid_request_error",
 		Code:    "UNAUTHORIZED",
-		Message: "Authentication required",
+		Message: "Authentication required.",
 		Details: map[string]interface{}{
 			"reason": reason,
 		},
@@ -140,7 +162,7 @@ func InternalError() *ApiError {
 	return &ApiError{
 		Type:    "api_error",
 		Code:    "INTERNAL_ERROR",
-		Message: "An unexpected error occurred",
+		Message: "An unexpected error occurred.",
 		Details: nil,
 		Status:  fiber.StatusInternalServerError,
 		Kind:    KindInternal,
@@ -151,7 +173,7 @@ func ServiceUnavailableError() *ApiError {
 	return &ApiError{
 		Type:    "api_error",
 		Code:    "SERVICE_UNAVAILABLE",
-		Message: "Service temporarily unavailable",
+		Message: "Service temporarily unavailable.",
 		Details: nil,
 		Status:  fiber.StatusServiceUnavailable,
 		Kind:    KindNetwork,
@@ -192,12 +214,11 @@ func FiberErrorHandler(c fiber.Ctx, err error) error {
 	case *ApiError:
 		apiErr = e
 	case *fiber.BindError:
-		apiErr = FieldError(e.Field, e.Err.Error())
-		apiErr.Message = "Request validation failed"
+		apiErr = FieldError(e.Field, FallbackValidation)
 	case *fiber.Error:
 		switch e.Code {
 		case fiber.StatusBadRequest:
-			apiErr = ValidationError(e.Message, nil)
+			apiErr = InvalidRequestError()
 		case fiber.StatusUnauthorized:
 			apiErr = UnauthorizedError("unauthorized")
 		case fiber.StatusForbidden:
@@ -205,14 +226,13 @@ func FiberErrorHandler(c fiber.Ctx, err error) error {
 		case fiber.StatusNotFound:
 			apiErr = NotFoundError("resource", nil)
 		case fiber.StatusConflict:
-			apiErr = ConflictError("", nil)
+			apiErr = ConflictError("", "", nil)
 		case fiber.StatusRequestEntityTooLarge:
 			apiErr = PayloadTooLargeError(0)
 		case fiber.StatusServiceUnavailable:
 			apiErr = ServiceUnavailableError()
 		default:
 			apiErr = InternalError()
-			apiErr.Message = e.Message
 		}
 	}
 

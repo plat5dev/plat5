@@ -79,7 +79,7 @@ func (h *Handler) Create(c fiber.Ctx) error {
 	}
 	name, err := apikey.NormalizeName(req.Name)
 	if err != nil {
-		return errors.FieldError("name", "must be at most 128 characters")
+		return errors.FieldError("name", "Name is too long.")
 	}
 
 	plaintext, err := GenerateKey()
@@ -151,7 +151,7 @@ func (h *Handler) Revoke(c fiber.Ctx) error {
 		return err
 	}
 	if keyID == "" {
-		return errors.FieldError("key_id", "required")
+		return errors.FieldError("key_id", errors.FallbackValidation)
 	}
 
 	key, err := h.store.Revoke(ctx, memberID, keyID)
@@ -180,7 +180,7 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 	}
 	key := strings.TrimSpace(req.Key)
 	if key == "" {
-		return errors.FieldError("key", "required")
+		return errors.FieldError("key", errors.FallbackValidation)
 	}
 	if !LooksLike(key) {
 		return h.invalid(c)

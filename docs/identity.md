@@ -2,7 +2,7 @@
 
 Plat5 **identity** service: organizations, members, service accounts, API keys, and internal auth helpers for the gateway.
 
-Boundary: [`identity-boundary.md`](identity-boundary.md). Errors: [`api-errors.md`](api-errors.md). Gateway: [`gateway-contract.md`](gateway-contract.md).
+Boundary: [`identity-boundary.md`](identity-boundary.md). Errors: [`api-errors.md`](api-errors.md), [`error-copy.md`](error-copy.md). Gateway: [`gateway-contract.md`](gateway-contract.md).
 
 ## Scope and headers
 

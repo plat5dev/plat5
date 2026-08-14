@@ -1,6 +1,10 @@
 # Plat5 API Error Response Standard
 
-Standard envelope for machine-readable errors across Plat5 services.
+Standard envelope across Plat5 services.
+
+Clients show `error.message`. Branch on `code` and HTTP status. Do not parse `details` to invent copy.
+
+Product sentences live in [`error-copy.md`](error-copy.md).
 
 ## Envelope
 
@@ -9,11 +13,11 @@ Standard envelope for machine-readable errors across Plat5 services.
   "error": {
     "type": "invalid_request_error",
     "code": "VALIDATION_ERROR",
-    "message": "Request validation failed",
+    "message": "Slug can only use lowercase letters, numbers, and dashes.",
     "request_id": "abc-123",
     "details": {
       "fields": [
-        { "path": "email", "message": "Expected string" }
+        { "path": "slug", "message": "Slug can only use lowercase letters, numbers, and dashes." }
       ]
     }
   }
@@ -24,9 +28,9 @@ Standard envelope for machine-readable errors across Plat5 services.
 |-------|------|-------------|
 | `type` | `string` | `invalid_request_error`, `api_error` |
 | `code` | `string` | Machine-readable identifier (UPPER_SNAKE_CASE) |
-| `message` | `string` | Human-readable description |
+| `message` | `string` | Human-readable sentence. Safe to show in a UI. |
 | `request_id` | `string` | Correlation ID from `X-Request-ID`. Propagate it; do not generate it. |
-| `details` | `object \| null` | Type-specific context. Shape varies by `code`. |
+| `details` | `object \| null` | Type-specific context. Shape varies by `code`. Never the only place the human sentence lives. |
 
 `request_id` is also returned in the **`X-Request-ID`** response header on every public API response. The gateway handles this; services behind the gateway must not set it.
 
@@ -34,17 +38,19 @@ Standard envelope for machine-readable errors across Plat5 services.
 
 ## Error Codes
 
-| Code | HTTP | Type | Message | Details |
-|------|------|------|---------|---------|
-| `INVALID_REQUEST` | 400 | `invalid_request_error` | Malformed request | — |
-| `VALIDATION_ERROR` | 422 | `invalid_request_error` | Request validation failed | `{ fields: [{ path, message }] }` |
-| `UNAUTHORIZED` | 401 | `invalid_request_error` | Authentication required | `{ reason }` |
-| `FORBIDDEN` | 403 | `invalid_request_error` | Insufficient permissions | `{ permission, resource, resource_id }` |
-| `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found | `{ resource, id }` |
-| `CONFLICT` | 409 | `invalid_request_error` | Resource already exists | `{ field, value }` |
-| `PAYLOAD_TOO_LARGE` | 413 | `invalid_request_error` | Request body exceeds maximum allowed size | `{ max_size_bytes }` |
-| `INTERNAL_ERROR` | 500 | `api_error` | An unexpected error occurred | `null` |
-| `SERVICE_UNAVAILABLE` | 503 | `api_error` | Service temporarily unavailable | `null` |
+The **Fallback message** column is used only when nothing more specific applies. `UNAUTHORIZED`, `NOT_FOUND`, `INTERNAL_ERROR`, and `SERVICE_UNAVAILABLE` stay generic on purpose.
+
+| Code | HTTP | Type | Fallback message | Details |
+|------|------|------|------------------|---------|
+| `INVALID_REQUEST` | 400 | `invalid_request_error` | Malformed request. | — |
+| `VALIDATION_ERROR` | 422 | `invalid_request_error` | That doesn't look right. | `{ fields: [{ path, message }] }` |
+| `UNAUTHORIZED` | 401 | `invalid_request_error` | Authentication required. | `{ reason }` |
+| `FORBIDDEN` | 403 | `invalid_request_error` | You don't have permission to do that. | `{ permission, resource, resource_id }` |
+| `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
+| `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
+| `PAYLOAD_TOO_LARGE` | 413 | `invalid_request_error` | Request body is too large. | `{ max_size_bytes }` |
+| `INTERNAL_ERROR` | 500 | `api_error` | An unexpected error occurred. | `null` |
+| `SERVICE_UNAVAILABLE` | 503 | `api_error` | Service temporarily unavailable. | `null` |
 
 ### `UNAUTHORIZED`
 
@@ -59,5 +65,6 @@ When `organization` scope is live: non-member / inactive / unknown org → **`NO
 ## Principles
 
 - **Consistent envelope** — Every error has the same top-level `error` object.
+- **`message` is for humans** — One sentence. No regex, no `code` names, no bind-error junk.
 - **Never leak internals** — `INTERNAL_ERROR` responses do not include stack traces. Log those server-side.
 - **Gateway handles authn** — Gateway returns `UNAUTHORIZED`. Downstream services must not.

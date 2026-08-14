@@ -32,12 +32,12 @@ func ParseRole(raw string, emptyDefault Role) (Role, error) {
 	role := Role(strings.TrimSpace(raw))
 	if role == "" {
 		if emptyDefault == "" {
-			return "", errors.FieldError("role", "must be member, admin, or owner")
+			return "", errors.FieldError("role", "Role must be member, admin, or owner.")
 		}
 		return emptyDefault, nil
 	}
 	if !role.Valid() {
-		return "", errors.FieldError("role", "must be member, admin, or owner")
+		return "", errors.FieldError("role", "Role must be member, admin, or owner.")
 	}
 	return role, nil
 }
@@ -46,7 +46,7 @@ func ParseRole(raw string, emptyDefault Role) (Role, error) {
 func ParseStatus(raw string) (Status, error) {
 	status := Status(strings.TrimSpace(raw))
 	if !status.Valid() {
-		return "", errors.FieldError("status", "must be active, suspended, or removed")
+		return "", errors.FieldError("status", "Status must be active, suspended, or removed.")
 	}
 	return status, nil
 }
@@ -75,14 +75,14 @@ func ApplyMemberUpdate(actor, target *Member, actorUserID string, newRole *Role,
 			return errors.ForbiddenError("member.manage_owner", "member", memberID)
 		}
 		if target.ServiceAccountID != nil && *newRole == RoleOwner {
-			return errors.FieldError("role", "service accounts cannot be owners")
+			return errors.FieldError("role", "Service accounts cannot be owners.")
 		}
 		if *newRole == RoleOwner && actor.Role != RoleOwner {
 			return errors.ForbiddenError("member.promote_owner", "member", memberID)
 		}
 		if target.Role == RoleOwner && *newRole != RoleOwner && activeOwners <= 1 {
-			return errors.ValidationFields("Cannot demote the sole owner",
-				errors.Field{Path: "role", Message: "sole owner cannot be demoted"})
+			return errors.ValidationFields("Cannot demote the sole owner.",
+				errors.Field{Path: "role", Message: "Cannot demote the sole owner."})
 		}
 		target.Role = *newRole
 	}
@@ -90,8 +90,8 @@ func ApplyMemberUpdate(actor, target *Member, actorUserID string, newRole *Role,
 	if newStatus != nil {
 		if *newStatus == StatusRemoved && isSelf {
 			if target.Role == RoleOwner && activeOwners <= 1 {
-				return errors.ValidationFields("Cannot leave as sole owner",
-					errors.Field{Path: "status", Message: "transfer ownership first"})
+				return errors.ValidationFields("Transfer ownership before leaving.",
+					errors.Field{Path: "status", Message: "Transfer ownership before leaving."})
 			}
 		} else {
 			if err := RequireAdminOrOwner(actor, "member.update_status", "member", memberID); err != nil {
@@ -102,8 +102,8 @@ func ApplyMemberUpdate(actor, target *Member, actorUserID string, newRole *Role,
 			}
 		}
 		if target.Role == RoleOwner && *newStatus != StatusActive && target.Status == StatusActive && activeOwners <= 1 {
-			return errors.ValidationFields("Cannot change status of sole owner",
-				errors.Field{Path: "status", Message: "sole owner must remain active"})
+			return errors.ValidationFields("Transfer ownership before changing the last owner's status.",
+				errors.Field{Path: "status", Message: "Transfer ownership before changing the last owner's status."})
 		}
 		target.Status = *newStatus
 	}
@@ -123,8 +123,8 @@ func ApplyMemberRemove(actor, target *Member, actorUserID string, activeOwners i
 		return errors.ForbiddenError("member.manage_owner", "member", memberID)
 	}
 	if target.Role == RoleOwner && activeOwners <= 1 {
-		return errors.ValidationFields("Cannot remove the sole owner",
-			errors.Field{Path: "member_id", Message: "transfer ownership first"})
+		return errors.ValidationFields("Transfer ownership before removing the last owner.",
+			errors.Field{Path: "member_id", Message: "Transfer ownership before removing the last owner."})
 	}
 	target.Status = StatusRemoved
 	return nil

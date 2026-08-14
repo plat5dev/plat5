@@ -53,7 +53,7 @@ func (h *Handler) CreateOrganization(c fiber.Ctx) error {
 	if slug == "" {
 		slug = Slugify(name)
 	} else if !ValidSlug(slug) {
-		return errors.FieldError("slug", "must be lowercase alphanumeric with hyphens")
+		return errors.FieldError("slug", "Slug can only use lowercase letters, numbers, and dashes.")
 	}
 
 	now := time.Now().UTC()
@@ -69,6 +69,7 @@ func (h *Handler) CreateOrganization(c fiber.Ctx) error {
 		return httpx.MapDB(ctx, err, "failed to create organization", httpx.DBErr{
 			NotFound: ErrNotFound, Resource: "organization", ResourceID: org.ID,
 			Conflict: ErrConflict, Field: "slug", FieldValue: slug,
+			Message: "An organization with this slug already exists.",
 		})
 	}
 
@@ -153,7 +154,7 @@ func (h *Handler) UpdateOrganization(c fiber.Ctx) error {
 	if req.Slug != nil {
 		slug := strings.TrimSpace(*req.Slug)
 		if !ValidSlug(slug) {
-			return errors.FieldError("slug", "must be lowercase alphanumeric with hyphens")
+			return errors.FieldError("slug", "Slug can only use lowercase letters, numbers, and dashes.")
 		}
 		org.Slug = slug
 	}
@@ -162,6 +163,7 @@ func (h *Handler) UpdateOrganization(c fiber.Ctx) error {
 		return httpx.MapDB(ctx, err, "failed to update organization", httpx.DBErr{
 			NotFound: ErrNotFound, Resource: "organization", ResourceID: orgID,
 			Conflict: ErrConflict, Field: "slug", FieldValue: org.Slug,
+			Message: "An organization with this slug already exists.",
 		})
 	}
 	return c.JSON(toOrgResponse(org))

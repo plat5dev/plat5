@@ -55,7 +55,7 @@ impl ApiError {
         Self {
             error_type: "invalid_request_error".to_string(),
             code: "UNAUTHORIZED".to_string(),
-            message: "Authentication required".to_string(),
+            message: "Authentication required.".to_string(),
             details,
         }
     }
@@ -64,7 +64,7 @@ impl ApiError {
         Self {
             error_type: "invalid_request_error".to_string(),
             code: "NOT_FOUND".to_string(),
-            message: "Not Found".to_string(),
+            message: "Resource not found.".to_string(),
             details: None,
         }
     }
@@ -73,7 +73,7 @@ impl ApiError {
         Self {
             error_type: "invalid_request_error".to_string(),
             code: "PAYLOAD_TOO_LARGE".to_string(),
-            message: "Request body exceeds maximum allowed size".to_string(),
+            message: "Request body is too large.".to_string(),
             details: Some(serde_json::json!({
                 "max_size_bytes": max_size_bytes
             })),
@@ -84,7 +84,7 @@ impl ApiError {
         Self {
             error_type: "api_error".to_string(),
             code: "INTERNAL_ERROR".to_string(),
-            message: "Internal server error".to_string(),
+            message: "An unexpected error occurred.".to_string(),
             details: None,
         }
     }
@@ -93,7 +93,7 @@ impl ApiError {
         Self {
             error_type: "api_error".to_string(),
             code: "SERVICE_UNAVAILABLE".to_string(),
-            message: "Service temporarily unavailable".to_string(),
+            message: "Service temporarily unavailable.".to_string(),
             details: None,
         }
     }
@@ -129,7 +129,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["error"]["type"], "invalid_request_error");
         assert_eq!(parsed["error"]["code"], "UNAUTHORIZED");
-        assert_eq!(parsed["error"]["message"], "Authentication required");
+        assert_eq!(parsed["error"]["message"], "Authentication required.");
         assert_eq!(parsed["error"]["request_id"], "req-123");
         assert_eq!(parsed["error"]["details"]["reason"], "token_expired");
     }
@@ -141,7 +141,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["error"]["type"], "invalid_request_error");
         assert_eq!(parsed["error"]["code"], "NOT_FOUND");
-        assert_eq!(parsed["error"]["message"], "Not Found");
+        assert_eq!(parsed["error"]["message"], "Resource not found.");
         assert!(parsed["error"]["details"].is_null());
     }
 
@@ -162,7 +162,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["error"]["type"], "api_error");
         assert_eq!(parsed["error"]["code"], "INTERNAL_ERROR");
-        assert_eq!(parsed["error"]["message"], "Internal server error");
+        assert_eq!(parsed["error"]["message"], "An unexpected error occurred.");
         assert_eq!(parsed["error"]["request_id"], "req-456");
         assert!(parsed["error"]["details"].is_null());
     }
@@ -176,14 +176,14 @@ mod tests {
         assert_eq!(parsed["error"]["code"], "SERVICE_UNAVAILABLE");
         assert_eq!(
             parsed["error"]["message"],
-            "Service temporarily unavailable"
+            "Service temporarily unavailable."
         );
     }
 
     #[test]
     fn test_display() {
         let err = ApiError::not_found();
-        assert_eq!(format!("{err}"), "NOT_FOUND: Not Found");
+        assert_eq!(format!("{err}"), "NOT_FOUND: Resource not found.");
     }
 
     #[test]

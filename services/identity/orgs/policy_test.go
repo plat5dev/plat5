@@ -58,6 +58,9 @@ func TestApplyMemberUpdateSoleOwner(t *testing.T) {
 	if !ok || api.Code != "VALIDATION_ERROR" {
 		t.Fatalf("got %#v", err)
 	}
+	if api.Message != "Cannot demote the sole owner." {
+		t.Fatalf("message=%q", api.Message)
+	}
 }
 
 func TestApplyMemberRemove(t *testing.T) {
