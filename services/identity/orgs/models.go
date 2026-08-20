@@ -74,13 +74,14 @@ type Member struct {
 
 // ServiceAccount is a non-human identity owned by one organization.
 // Always paired with exactly one member row in that org.
+// Status is the joined member’s status (active or suspended; removed is unlistable).
 type ServiceAccount struct {
 	ID              string
 	OrganizationID  string
 	MemberID        string // filled on read via join
 	Name            string
+	Status          Status // filled on read via join
 	CreatedByUserID *string
-	DisabledAt      *time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }

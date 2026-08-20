@@ -271,6 +271,3 @@ func (s *Store) MutateMember(ctx context.Context, organizationID, memberID strin
 	op.OK("ok")
 	return target, nil
 }
-
-// CreateServiceAccount inserts SA + active member in one transaction.
-// Role defaults to member; SA cannot be owner (DB check + code).

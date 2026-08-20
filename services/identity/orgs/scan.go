@@ -6,19 +6,21 @@ import (
 
 func scanServiceAccount(row dbx.Scannable) (*ServiceAccount, error) {
 	var sa ServiceAccount
+	var status string
 	err := row.Scan(
 		&sa.ID,
 		&sa.OrganizationID,
 		&sa.MemberID,
 		&sa.Name,
 		&sa.CreatedByUserID,
-		&sa.DisabledAt,
+		&status,
 		&sa.CreatedAt,
 		&sa.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
+	sa.Status = Status(status)
 	return &sa, nil
 }
 

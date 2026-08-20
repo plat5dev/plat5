@@ -113,8 +113,10 @@ Created under an organization. One transaction: service account row + **active**
 | `POST` | `/api/organizations/{organization_id}/service-accounts` | Admin or owner; body `{ "name" }` |
 | `GET` | `/api/organizations/{organization_id}/service-accounts` | Active member |
 | `GET` | `/api/organizations/{organization_id}/service-accounts/{service_account_id}` | Active member |
-| `PATCH` | `/api/organizations/{organization_id}/service-accounts/{service_account_id}` | Admin or owner; name / disable |
-| `DELETE` | `/api/organizations/{organization_id}/service-accounts/{service_account_id}` | Admin or owner; disables SA and removes member |
+| `PATCH` | `/api/organizations/{organization_id}/service-accounts/{service_account_id}` | Admin or owner; body `{ "name" }` |
+| `DELETE` | `/api/organizations/{organization_id}/service-accounts/{service_account_id}` | Admin or owner; soft-removes the member (same as `DELETE` member) |
+
+Lifecycle is the member row. Suspend / re-enable with `PATCH` `/members/{member_id}` (`status`).
 
 #### Service account response
 
@@ -124,12 +126,14 @@ Created under an organization. One transaction: service account row + **active**
   "organization_id": "...",
   "member_id": "...",
   "name": "deploy-bot",
-  "disabled_at": null,
+  "status": "active",
   "created_by_user_id": "...",
   "created_at": "...",
   "updated_at": "..."
 }
 ```
+
+`status` is the joined member’s status (`active` or `suspended`). `removed` members are not listed.
 
 ### Member API keys
 
@@ -265,7 +269,7 @@ members
   role, status, added_by, …
 service_accounts
   organization_id
-  name, disabled_at, created_by_user_id, …
+  name, created_by_user_id, …
 
 user_api_keys          -- person credentials (user scope); wire plat5-sk-1-
   user_id, name, key_prefix, key_hash, revoked_at, …

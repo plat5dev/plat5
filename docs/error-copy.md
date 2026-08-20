@@ -81,7 +81,7 @@ Use these only when a more specific sentence does not apply.
 |------|-----------|
 | Name empty | Name is required. |
 | Name > 128 | Name is too long. |
-| PATCH with neither name nor disabled | Nothing to update. |
+| PATCH with no name | Nothing to update. |
 
 ### API keys (user + member)
 

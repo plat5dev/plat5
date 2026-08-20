@@ -13,7 +13,7 @@ import (
 const saSelect = `
 	SELECT
 		sa.id, sa.organization_id, m.id, sa.name, sa.created_by_user_id,
-		sa.disabled_at, sa.created_at, sa.updated_at
+		m.status, sa.created_at, sa.updated_at
 	FROM service_accounts sa
 	INNER JOIN members m
 		ON m.service_account_id = sa.id
@@ -39,6 +39,7 @@ func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount, ro
 	now := time.Now().UTC()
 	sa.CreatedAt = now
 	sa.UpdatedAt = now
+	sa.Status = StatusActive
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -57,8 +58,8 @@ func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount, ro
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO service_accounts
-			(id, organization_id, name, created_by_user_id, disabled_at, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, NULL, $5, $6)
+			(id, organization_id, name, created_by_user_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
 	`, sa.ID, sa.OrganizationID, sa.Name, sa.CreatedByUserID, sa.CreatedAt, sa.UpdatedAt)
 	if err != nil {
 		return nil, op.Fail(err)
@@ -151,9 +152,7 @@ func (s *Store) ListServiceAccounts(ctx context.Context, organizationID string, 
 	return out, hasMore, nil
 }
 
-// UpdateServiceAccount updates name and/or disabled_at.
-// Setting disabled=true also sets member status suspended; disabled=false → active.
-func (s *Store) UpdateServiceAccount(ctx context.Context, organizationID, serviceAccountID string, name *string, disabled *bool) (*ServiceAccount, error) {
+func (s *Store) UpdateServiceAccount(ctx context.Context, organizationID, serviceAccountID string, name string) (*ServiceAccount, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "update_service_account", dbx.DefaultTimeout,
 		attribute.String("service_account.id", serviceAccountID),
 	)
@@ -178,40 +177,16 @@ func (s *Store) UpdateServiceAccount(ctx context.Context, organizationID, servic
 	}
 
 	now := time.Now().UTC()
-	if name != nil {
-		sa.Name = *name
-	}
-	if disabled != nil {
-		if *disabled {
-			sa.DisabledAt = &now
-		} else {
-			sa.DisabledAt = nil
-		}
-	}
+	sa.Name = name
 	sa.UpdatedAt = now
 
 	_, err = tx.Exec(ctx, `
 		UPDATE service_accounts
-		SET name = $3, disabled_at = $4, updated_at = $5
+		SET name = $3, updated_at = $4
 		WHERE id = $1 AND organization_id = $2
-	`, serviceAccountID, organizationID, sa.Name, sa.DisabledAt, sa.UpdatedAt)
+	`, serviceAccountID, organizationID, sa.Name, sa.UpdatedAt)
 	if err != nil {
 		return nil, op.Fail(err)
-	}
-
-	if disabled != nil {
-		memberStatus := StatusActive
-		if *disabled {
-			memberStatus = StatusSuspended
-		}
-		_, err = tx.Exec(ctx, `
-			UPDATE members
-			SET status = $3, updated_at = $4
-			WHERE id = $1 AND organization_id = $2 AND status <> 'removed'
-		`, sa.MemberID, organizationID, memberStatus, now)
-		if err != nil {
-			return nil, op.Fail(err)
-		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -221,7 +196,7 @@ func (s *Store) UpdateServiceAccount(ctx context.Context, organizationID, servic
 	return sa, nil
 }
 
-// DeleteServiceAccount disables the SA and soft-removes its member.
+// DeleteServiceAccount soft-removes the SA member (same as DELETE member).
 func (s *Store) DeleteServiceAccount(ctx context.Context, organizationID, serviceAccountID string) error {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "delete_service_account", dbx.DefaultTimeout,
 		attribute.String("service_account.id", serviceAccountID),
@@ -247,14 +222,6 @@ func (s *Store) DeleteServiceAccount(ctx context.Context, organizationID, servic
 	}
 
 	now := time.Now().UTC()
-	_, err = tx.Exec(ctx, `
-		UPDATE service_accounts
-		SET disabled_at = COALESCE(disabled_at, $3), updated_at = $3
-		WHERE id = $1 AND organization_id = $2
-	`, serviceAccountID, organizationID, now)
-	if err != nil {
-		return op.Fail(err)
-	}
 	_, err = tx.Exec(ctx, `
 		UPDATE members
 		SET status = 'removed', updated_at = $3

@@ -13,8 +13,7 @@ type CreateServiceAccountRequest struct {
 }
 
 type UpdateServiceAccountRequest struct {
-	Name     *string `json:"name"`
-	Disabled *bool   `json:"disabled"`
+	Name *string `json:"name"`
 }
 
 type ServiceAccountResponse struct {
@@ -22,7 +21,7 @@ type ServiceAccountResponse struct {
 	OrganizationID  string  `json:"organization_id"`
 	MemberID        string  `json:"member_id"`
 	Name            string  `json:"name"`
-	DisabledAt      *string `json:"disabled_at"`
+	Status          string  `json:"status"`
 	CreatedByUserID *string `json:"created_by_user_id"`
 	CreatedAt       string  `json:"created_at"`
 	UpdatedAt       string  `json:"updated_at"`
@@ -136,19 +135,15 @@ func (h *Handler) UpdateServiceAccount(c fiber.Ctx) error {
 	if err := c.Bind().Body(&req); err != nil {
 		return err
 	}
-	if req.Name == nil && req.Disabled == nil {
+	if req.Name == nil {
 		return errors.FieldError("body", "Nothing to update.")
 	}
-	var name *string
-	if req.Name != nil {
-		n, err := requireName(*req.Name, "name", MaxSANameLen)
-		if err != nil {
-			return err
-		}
-		name = &n
+	name, err := requireName(*req.Name, "name", MaxSANameLen)
+	if err != nil {
+		return err
 	}
 
-	sa, err := h.store.UpdateServiceAccount(ctx, orgID, saID, name, req.Disabled)
+	sa, err := h.store.UpdateServiceAccount(ctx, orgID, saID, name)
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to update service account", httpx.DBErr{
 			NotFound: ErrNotFound, Resource: "service_account", ResourceID: saID,
@@ -185,7 +180,7 @@ func toServiceAccountResponse(sa *ServiceAccount) ServiceAccountResponse {
 		OrganizationID:  sa.OrganizationID,
 		MemberID:        sa.MemberID,
 		Name:            sa.Name,
-		DisabledAt:      httpx.FormatTimePtr(sa.DisabledAt),
+		Status:          string(sa.Status),
 		CreatedByUserID: sa.CreatedByUserID,
 		CreatedAt:       httpx.FormatTime(sa.CreatedAt),
 		UpdatedAt:       httpx.FormatTime(sa.UpdatedAt),
