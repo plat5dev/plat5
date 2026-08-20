@@ -5,8 +5,8 @@ use tracing::{debug, warn};
 
 use crate::auth::jwt::validate_token;
 use crate::auth::member::MemberError;
-use crate::auth::member_apikey::{MemberApiKeyError, MEMBER_KEY_PREFIX};
-use crate::auth::user_apikey::{UserApiKeyError, USER_KEY_PREFIX};
+use crate::auth::member_apikey::MemberApiKeyError;
+use crate::auth::user_apikey::UserApiKeyError;
 use crate::auth::AuthStack;
 use crate::error::ErrorKind;
 use crate::route_map::{Route, RouteScope};
@@ -81,7 +81,7 @@ impl Admissor {
             .headers
             .get("X-API-Key")
             .and_then(|v| v.to_str().ok())
-            .filter(|k| k.starts_with(MEMBER_KEY_PREFIX))
+            .filter(|k| k.starts_with(self.stack.member_key_prefix.as_str()))
             .map(|s| s.to_string());
 
         if let Some(key_str) = member_key {
@@ -290,7 +290,7 @@ impl Admissor {
             .to_str()
             .map_err(|_| AuthError::InvalidUserApiKeyHeader)?;
 
-        if !key.starts_with(USER_KEY_PREFIX) {
+        if !key.starts_with(self.stack.user_key_prefix.as_str()) {
             return Err(AuthError::InvalidUserApiKey);
         }
 

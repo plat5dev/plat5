@@ -98,19 +98,19 @@ Admission error policy (canonical): [`identity-boundary.md`](identity-boundary.m
 3. No member or status ≠ `active` → **404** `NOT_FOUND`
 4. Active hit → inject only `X-Organization-Id` + `X-Member-Id`
 
-### Member API key (`plat5-mk-1-…`)
+### Member API key (`{brand}-mk-1-…`)
 
 1. Bad/missing / invalid key → **401** `UNAUTHORIZED`
 2. Member-key validate unavailable → **503** `SERVICE_UNAVAILABLE`
 3. `organization_id` ≠ path org → **404** `NOT_FOUND` (existence policy)
 4. Active member key for path org → inject only `X-Organization-Id` + `X-Member-Id`
 
-Gateway chooses validate URL by **wire prefix** before calling identity:
+Gateway chooses validate URL by **wire prefix** before calling identity. Prefixes come from `APIKEY_BRAND` (same env as identity; unset → `plat5`): `{brand}-sk-1-` / `{brand}-mk-1-`. Contract: [`identity.md`](identity.md).
 
 | Prefix | Endpoint env | Scope |
 |--------|--------------|--------|
-| `plat5-sk-1-` | `USER_APIKEY_VALIDATE_URL` | user (+ org via member resolve) |
-| `plat5-mk-1-` | `MEMBER_APIKEY_VALIDATE_URL` | organization only |
+| `{brand}-sk-1-` | `USER_APIKEY_VALIDATE_URL` | user (+ org via member resolve) |
+| `{brand}-mk-1-` | `MEMBER_APIKEY_VALIDATE_URL` | organization only |
 
 Member keys are **not** valid on `user` scope routes → **401** `UNAUTHORIZED`. User keys are not sent to the member-key validate URL.
 

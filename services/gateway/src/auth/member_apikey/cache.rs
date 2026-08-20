@@ -7,7 +7,7 @@ pub struct CachedMemberApiKey {
     pub organization_id: String,
 }
 
-/// Cache for validated member API keys (plat5-mk-1-).
+/// Cache for validated member API keys.
 #[derive(Clone)]
 pub struct MemberApiKeyCache {
     inner: TtlCache<CachedMemberApiKey>,

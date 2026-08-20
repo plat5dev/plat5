@@ -11,8 +11,10 @@ Public route catalog: [`routes.yml`](routes.yml). Apply via route-registry; not 
 | Package | Role |
 |---------|------|
 | `orgs/` | Organizations, members, service accounts |
-| `userkeys/` | User API keys (`plat5-sk-1-`) |
-| `memberkeys/` | Member API keys (`plat5-mk-1-`) |
+| `userkeys/` | User API keys (`{brand}-sk-1-`) |
+| `memberkeys/` | Member API keys (`{brand}-mk-1-`) |
+
+`APIKEY_BRAND` (default `plat5`) must match the gateway.
 
 ## Local
 

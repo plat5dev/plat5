@@ -111,6 +111,7 @@ services:
       USER_APIKEY_VALIDATE_URL: http://identity:3001/internal/user-keys/validate
       MEMBER_APIKEY_VALIDATE_URL: http://identity:3001/internal/member-keys/validate
       MEMBER_RESOLVE_URL: http://identity:3001/internal/members/resolve
+      APIKEY_BRAND: ${APIKEY_BRAND:-plat5}
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
       RUST_LOG: info
       MEMBER_CACHE_TTL_SECS: "300"
@@ -146,6 +147,7 @@ services:
       PORT: 3000
       INTERNAL_PORT: 3001
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
+      APIKEY_BRAND: ${APIKEY_BRAND:-plat5}
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-plat5}?sslmode=disable
       OTEL_SERVICE_NAME: identity
       OTEL_SERVICE_NAMESPACE: identity

@@ -16,6 +16,8 @@ pub struct AuthStack {
     pub jwt_validator: JwtValidatorState,
     pub jwt_cache: JwtCache,
     pub user_id_claim: Vec<String>,
+    pub user_key_prefix: String,
+    pub member_key_prefix: String,
     pub user_apikey_validator: UserApiKeyValidator,
     pub user_apikey_cache: UserApiKeyCache,
     pub member_apikey_validator: Option<MemberApiKeyValidator>,
@@ -43,6 +45,8 @@ impl AuthStack {
             jwt_validator,
             jwt_cache: JwtCache::new(JWT_CACHE_CAPACITY, JWT_CACHE_TTL_BUFFER_SECS),
             user_id_claim: cfg.auth_user_id_claim.clone(),
+            user_key_prefix: cfg.user_key_prefix.clone(),
+            member_key_prefix: cfg.member_key_prefix.clone(),
             user_apikey_validator,
             user_apikey_cache: UserApiKeyCache::new(
                 USER_APIKEY_CACHE_CAPACITY,

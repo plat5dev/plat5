@@ -5,9 +5,6 @@ use crate::auth::call::AuthCallTimer;
 use crate::auth::AuthType;
 use crate::internal_http::InternalHttpClient;
 
-/// User API key wire prefix. Independent of member keys (`plat5-mk-1-`).
-pub const USER_KEY_PREFIX: &str = "plat5-sk-1-";
-
 /// Validates user API keys via identity POST /internal/user-keys/validate.
 #[derive(Clone)]
 pub struct UserApiKeyValidator {

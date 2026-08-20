@@ -19,6 +19,7 @@ fn main() {
     let cfg = GatewayConfig::from_env().unwrap_or_else(|e| {
         panic!("invalid gateway configuration: {e}");
     });
+    info!(apikey_brand = %cfg.apikey_brand, "gateway configuration loaded");
 
     // Use a single Tokio runtime for all async initialization.
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");

@@ -18,10 +18,11 @@ import (
 type Handler struct {
 	store    *Store
 	orgStore *orgs.Store
+	prefix   string
 }
 
-func NewHandler(store *Store, orgStore *orgs.Store) *Handler {
-	return &Handler{store: store, orgStore: orgStore}
+func NewHandler(store *Store, orgStore *orgs.Store, prefix string) *Handler {
+	return &Handler{store: store, orgStore: orgStore, prefix: prefix}
 }
 
 type CreateRequest struct {
@@ -82,13 +83,13 @@ func (h *Handler) Create(c fiber.Ctx) error {
 		return errors.FieldError("name", "Name is too long.")
 	}
 
-	plaintext, err := GenerateKey()
+	plaintext, err := apikey.Generate(h.prefix)
 	if err != nil {
 		httpx.LogError(ctx, "failed to generate key", err, errors.KindInternal)
 		return errors.InternalError()
 	}
 
-	apiKey := New(memberID, name, plaintext)
+	apiKey := New(memberID, name, plaintext, h.prefix)
 	if err := h.store.Create(ctx, apiKey); err != nil {
 		return httpx.MapDB(ctx, err, "failed to store member key", httpx.DBErr{})
 	}
@@ -182,7 +183,7 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 	if key == "" {
 		return errors.FieldError("key", errors.FallbackValidation)
 	}
-	if !LooksLike(key) {
+	if !apikey.LooksLike(key, h.prefix) {
 		return h.invalid(c)
 	}
 

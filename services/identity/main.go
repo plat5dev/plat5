@@ -26,7 +26,10 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("invalid identity configuration: %v", err)
+	}
 	ctx := context.Background()
 
 	// Register prometheus metrics before OTLP bridge so the first export sees them.
@@ -49,8 +52,8 @@ func main() {
 
 	orgStore := orgs.NewStore(pool)
 	orgHandler := orgs.NewHandler(orgStore)
-	userKeyHandler := userkeys.NewHandler(userkeys.NewStore(pool))
-	memberKeyHandler := memberkeys.NewHandler(memberkeys.NewStore(pool), orgStore)
+	userKeyHandler := userkeys.NewHandler(userkeys.NewStore(pool), cfg.UserKeyPrefix)
+	memberKeyHandler := memberkeys.NewHandler(memberkeys.NewStore(pool), orgStore, cfg.MemberKeyPrefix)
 
 	app := newPublicApp(telem, orgHandler, userKeyHandler, memberKeyHandler)
 	internalApp := newInternalApp(telem, pool, cfg.InternalAuthToken, orgHandler, userKeyHandler, memberKeyHandler)
@@ -59,6 +62,7 @@ func main() {
 	baseLogger.Info().
 		Str("port", cfg.Port).
 		Str("internal_port", cfg.InternalPort).
+		Str("apikey_brand", cfg.APIKeyBrand).
 		Msg("starting identity server")
 
 	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

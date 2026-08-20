@@ -45,6 +45,8 @@ Set env (or defaults) for any IdP reachable from the gateway container:
 
 Gateway uses `host.docker.internal` so a host-published IdP does not need a shared Docker network. API keys are an alternative to JWT; the IdP is still required.
 
+`APIKEY_BRAND` (default `plat5`) is the same value on gateway and identity. Wire prefixes are `{brand}-sk-1-` / `{brand}-mk-1-`. See [`../docs/identity.md`](../docs/identity.md).
+
 See [`../docs/idp-contract.md`](../docs/idp-contract.md).
 
 ## Telemetry

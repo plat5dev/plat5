@@ -37,7 +37,7 @@ No `/api/users` collection and no `/me`. Clients already know `user_id` from the
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/api/users/{user_id}/api-keys` | Create; plaintext once — prefix **`plat5-sk-1-`** |
+| `POST` | `/api/users/{user_id}/api-keys` | Create; plaintext once — prefix **`{brand}-sk-1-`** |
 | `GET` | `/api/users/{user_id}/api-keys` | List (no hashes); `limit` / `offset` / `has_more` |
 | `DELETE` | `/api/users/{user_id}/api-keys/{key_id}` | Soft-revoke; idempotent |
 
@@ -141,7 +141,7 @@ Keys that authenticate **as a member** (org context). Used for automation / S2S 
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/api/organizations/{organization_id}/members/{member_id}/api-keys` | Create; plaintext once — prefix **`plat5-mk-1-`** |
+| `POST` | `/api/organizations/{organization_id}/members/{member_id}/api-keys` | Create; plaintext once — prefix **`{brand}-mk-1-`** |
 | `GET` | `/api/organizations/{organization_id}/members/{member_id}/api-keys` | List |
 | `DELETE` | `/api/organizations/{organization_id}/members/{member_id}/api-keys/{key_id}` | Soft-revoke |
 
@@ -152,7 +152,21 @@ Keys that authenticate **as a member** (org context). Used for automation / S2S 
 | `user` (human) | That user (self) or org admin/owner |
 | `service_account` | Org admin/owner only |
 
-Member keys are a **separate product surface** from user keys: different table (`member_api_keys`), different plaintext prefix (`plat5-mk-1-` vs `plat5-sk-1-`), different validate endpoint. Same header name (`X-API-Key`) only. Hashing at rest is SHA-256 hex in both cases by coincidence, not a shared module requirement. List may include revoked keys (`revoked_at` set).
+Member keys are a **separate product surface** from user keys: different table (`member_api_keys`), different plaintext prefix (`{brand}-mk-1-` vs `{brand}-sk-1-`), different validate endpoint. Same header name (`X-API-Key`) only. Hashing at rest is SHA-256 hex in both cases by coincidence, not a shared module requirement. List may include revoked keys (`revoked_at` set).
+
+### API key brand
+
+`APIKEY_BRAND` is boot config on **identity and the gateway**. Same value on both. Unset → `plat5`. Empty-but-set → refuse boot.
+
+| | |
+|--|--|
+| Brand | `[a-z][a-z0-9]*`, max 32. Lowercase only — no folding. |
+| User wire prefix | `{brand}-sk-1-` |
+| Member wire prefix | `{brand}-mk-1-` |
+
+`sk` / `mk` / `1` are not configurable. Not two independent full-prefix env vars. Not per-org. Not live-reloaded.
+
+Changing brand does not rewrite stored keys. Old plaintext no longer matches; those rows cannot authenticate. No dual-brand / accept-old-prefix path.
 
 ## Roles and status
 
@@ -186,7 +200,7 @@ List endpoints accept `limit` (default 50, max 100) and `offset` (default 0). Re
 
 Not published on the gateway. Served only on **`INTERNAL_PORT`**. Optional `INTERNAL_AUTH_TOKEN` → header `X-Plat5-Internal-Token` (constant-time compare). Unset = network-trust only (dev).
 
-Gateway env: `USER_APIKEY_VALIDATE_URL`, `MEMBER_APIKEY_VALIDATE_URL` (when member-key admission is on), `MEMBER_RESOLVE_URL`, same `INTERNAL_AUTH_TOKEN`.
+Gateway env: `USER_APIKEY_VALIDATE_URL`, `MEMBER_APIKEY_VALIDATE_URL` (when member-key admission is on), `MEMBER_RESOLVE_URL`, same `INTERNAL_AUTH_TOKEN`, same `APIKEY_BRAND`.
 
 There is **no** combined key validate and **no** `key_type`. Gateway picks the endpoint from the key’s wire prefix before calling identity.
 
@@ -197,7 +211,7 @@ POST /internal/user-keys/validate
 Content-Type: application/json
 X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
-{ "key": "plat5-sk-1-…" }
+{ "key": "{brand}-sk-1-…" }
 ```
 
 | Result | Response |
@@ -205,7 +219,7 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 | Valid user key | **200** `{ "valid": true, "user_id": "…" }` |
 | Wrong prefix / missing / revoked / unknown | **200** `{ "valid": false }` |
 
-Gateway: prefix `plat5-sk-1-` → this URL. Subject = `user_id` (same as JWT for scope checks). Cache: `APIKEY_CACHE_TTL_SECS` (default 300s).
+Gateway: prefix `{brand}-sk-1-` → this URL. Subject = `user_id` (same as JWT for scope checks). Cache: `APIKEY_CACHE_TTL_SECS` (default 300s).
 
 ### Member API key validate
 
@@ -214,7 +228,7 @@ POST /internal/member-keys/validate
 Content-Type: application/json
 X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
-{ "key": "plat5-mk-1-…" }
+{ "key": "{brand}-mk-1-…" }
 ```
 
 | Result | Response |
@@ -222,7 +236,7 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 | Valid active member key | **200** `{ "valid": true, "member_id": "…", "organization_id": "…" }` |
 | Wrong prefix / missing / revoked / inactive member / unknown | **200** `{ "valid": false }` |
 
-Gateway: prefix `plat5-mk-1-` → this URL. **organization** scope only (see gateway contract). Does not use member resolve.
+Gateway: prefix `{brand}-mk-1-` → this URL. **organization** scope only (see gateway contract). Does not use member resolve.
 
 | Validate outcome (either endpoint) | Client |
 |------------------------------------|--------|
@@ -271,10 +285,10 @@ service_accounts
   organization_id
   name, created_by_user_id, …
 
-user_api_keys          -- person credentials (user scope); wire plat5-sk-1-
+user_api_keys          -- person credentials (user scope); wire {brand}-sk-1-
   user_id, name, key_prefix, key_hash, revoked_at, …
 
-member_api_keys        -- org principal credentials (org scope); wire plat5-mk-1-
+member_api_keys        -- org principal credentials (org scope); wire {brand}-mk-1-
   member_id, name, key_prefix, key_hash, revoked_at, …
 ```
 
@@ -293,6 +307,7 @@ No IdP user table and no FK to an external directory. `user_id` values are opaqu
 | Internal port | `3001` (`/health/*`, `/metrics`, validate, resolve) |
 | Database | Plat5 Postgres via `DATABASE_URL` |
 | Schema | **`identity`** (service-owned; tables + `schema_migrations`) |
+| `APIKEY_BRAND` | default `plat5`; same value as gateway |
 
 Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 
@@ -308,3 +323,4 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - Resource ACL, FGA, project permissions
 - Gateway `organization` scope on this service’s public routes
 - Auto-publishing these public routes — the operator applies the catalog (`routes.yml`)
+- Configurable `sk` / `mk` / `1`, independent full-prefix env vars, or dual-brand key accept
