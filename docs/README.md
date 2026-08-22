@@ -4,6 +4,8 @@ Contracts, standards, and conventions for Plat5. Follow them for gateway auth de
 
 Locked product invariants (what not to grow into): [`../AGENTS.md`](../AGENTS.md).
 
+Operator path (images + compose, not the CLI): [`self-hosting.md`](self-hosting.md).
+
 Per-service details live in each service's `README.md`.
 
 ## Contracts

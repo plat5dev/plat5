@@ -38,6 +38,7 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defau
 |-----|----------|
 | [`AGENTS.md`](AGENTS.md) | Locked invariants and stop conditions (for agents) |
 | [`docs/README.md`](docs/README.md) | Contract index |
+| [`docs/self-hosting.md`](docs/self-hosting.md) | Production: images, TLS, attach an app |
 | [`docs/idp-contract.md`](docs/idp-contract.md) | BYO IdP / JWT user-id claim |
 | [`docs/gateway-contract.md`](docs/gateway-contract.md) | Auth delegation, identity headers |
 | [`docs/routes.md`](docs/routes.md) | Route config format |

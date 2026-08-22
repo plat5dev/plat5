@@ -70,4 +70,6 @@ docker compose -f docker-compose.prod.yml -f docker-compose.prod.build.yml --env
 
 Required: `POSTGRES_PASSWORD`, `ADMIN_TOKEN`, `INTERNAL_AUTH_TOKEN`, `AUTH_ISSUER`, `AUTH_JWKS_URI`.
 
-Route registry admin port is **not** published in prod by default.
+`POSTGRES_PASSWORD` is interpolated into `DATABASE_URL` — use a URL-safe value (hex). Route registry admin port is **not** published in prod by default.
+
+Operator walkthrough (Auth, TLS, attach your API): [`../docs/self-hosting.md`](../docs/self-hosting.md).
