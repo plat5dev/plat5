@@ -55,15 +55,8 @@ type ValidateRequest struct {
 }
 
 type ValidateResponse struct {
-	Valid  bool      `json:"valid"`
-	UserID string    `json:"user_id,omitempty"`
-	Scopes *[]string `json:"scopes,omitempty"`
-}
-
-type validUserKeyResponse struct {
-	Valid  bool      `json:"valid"`
-	UserID string    `json:"user_id"`
-	Scopes *[]string `json:"scopes"`
+	Valid  bool   `json:"valid"`
+	UserID string `json:"user_id,omitempty"`
 }
 
 func (h *Handler) Create(c fiber.Ctx) error {
@@ -82,9 +75,9 @@ func (h *Handler) Create(c fiber.Ctx) error {
 	if err != nil {
 		return errors.FieldError("name", "Name is too long.")
 	}
-	scopes, err := apikey.ParseScopes(req.Scopes)
+	scopes, err := apikey.NormalizeScopes(req.Scopes)
 	if err != nil {
-		return err
+		return mapScopeError(err)
 	}
 
 	plaintext, err := apikey.Generate(h.prefix)
@@ -110,7 +103,7 @@ func (h *Handler) Create(c fiber.Ctx) error {
 		Key:       plaintext,
 		KeyPrefix: apiKey.KeyPrefix,
 		Name:      apiKey.Name,
-		Scopes:    apikey.PointerForJSON(apiKey.Scopes),
+		Scopes:    apikey.WireScopes(apiKey.Scopes),
 		CreatedAt: httpx.FormatTime(apiKey.CreatedAt),
 	})
 }
@@ -196,10 +189,10 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 	}
 
 	metrics.RecordKeyValidation(metrics.KeyScopeUser, true)
-	return c.JSON(validUserKeyResponse{
-		Valid:  true,
-		UserID: userKey.UserID,
-		Scopes: apikey.PointerForJSON(userKey.Scopes),
+	return c.JSON(fiber.Map{
+		"valid":   true,
+		"user_id": userKey.UserID,
+		"scopes":  apikey.WireScopesJSON(userKey.Scopes),
 	})
 }
 
@@ -222,8 +215,15 @@ func toKeyResponse(k *APIKey) KeyResponse {
 		ID:        k.ID,
 		KeyPrefix: k.KeyPrefix,
 		Name:      k.Name,
-		Scopes:    apikey.PointerForJSON(k.Scopes),
+		Scopes:    apikey.WireScopes(k.Scopes),
 		CreatedAt: httpx.FormatTime(k.CreatedAt),
 		RevokedAt: httpx.FormatTimePtr(k.RevokedAt),
 	}
+}
+
+func mapScopeError(err error) error {
+	if se, ok := err.(*apikey.ScopeError); ok {
+		return errors.FieldError("scopes", se.Message)
+	}
+	return errors.FieldError("scopes", errors.FallbackValidation)
 }
