@@ -25,9 +25,9 @@ use crate::auth::AuthStack;
 use crate::config::GatewayConfig;
 use crate::error::{ApiError, ErrorKind};
 use crate::metrics;
-use crate::rate_limit::RateLimitState;
-use crate::route_map::{Route, RouteMap};
-use crate::scopes;
+use crate::rate_limit::RateLimiter;
+use crate::route_config::{scopes_intersect, RouteRateLimit};
+use crate::route_map::{Route, RouteMap, RouteScope};
 
 pub use crate::admission::parse_user_id_claim;
 pub use context::GatewayContext;
@@ -35,13 +35,23 @@ use cors::CorsPolicy;
 
 const MAX_BODY_SIZE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 
+struct RateLimitFallback {
+    requests: u64,
+    window_seconds: u64,
+    by: Option<String>,
+}
+
 pub struct UserGateway {
     admissor: Admissor,
     route_map: Arc<ArcSwap<RouteMap>>,
     connect_timeout: Duration,
     read_timeout: Duration,
     cors: CorsPolicy,
-    limits: RateLimitState,
+    route_limiter: RateLimiter,
+    auth_failure_limiter: RateLimiter,
+    rate_limit_fallback: RateLimitFallback,
+    auth_failure_requests: u64,
+    auth_failure_window_seconds: u64,
 }
 
 impl UserGateway {
@@ -56,15 +66,15 @@ impl UserGateway {
             connect_timeout: cfg.upstream_connect_timeout,
             read_timeout: cfg.upstream_read_timeout,
             cors: CorsPolicy::new(cfg.allowed_origins.clone()),
-            limits: RateLimitState {
-                route: crate::rate_limit::RateLimiter::new(),
-                auth_failure: crate::rate_limit::RateLimiter::new(),
-                fallback_requests: cfg.rate_limit_requests,
-                fallback_window_seconds: cfg.rate_limit_window_seconds,
-                fallback_by: cfg.rate_limit_by,
-                auth_failure_requests: cfg.rate_limit_auth_failure_requests,
-                auth_failure_window_seconds: cfg.rate_limit_auth_failure_window_seconds,
+            route_limiter: RateLimiter::new(),
+            auth_failure_limiter: RateLimiter::new(),
+            rate_limit_fallback: RateLimitFallback {
+                requests: cfg.rate_limit_requests,
+                window_seconds: cfg.rate_limit_window_seconds,
+                by: cfg.rate_limit_by.clone(),
             },
+            auth_failure_requests: cfg.rate_limit_auth_failure_requests,
+            auth_failure_window_seconds: cfg.rate_limit_auth_failure_window_seconds,
         }
     }
 
@@ -120,6 +130,23 @@ impl UserGateway {
             .map(|(route, params)| (route.clone(), params))
     }
 
+    async fn note_unadmitted(
+        &self,
+        session: &mut Session,
+        ctx: &GatewayContext,
+    ) -> Result<Option<bool>> {
+        match self.auth_failure_limiter.allow(
+            &format!("ip:{}", client_ip(session)),
+            self.auth_failure_requests,
+            self.auth_failure_window_seconds,
+        ) {
+            Ok(()) => Ok(None),
+            Err(retry) => Ok(Some(
+                response::write_rate_limited(&self.cors, session, ctx, retry).await?,
+            )),
+        }
+    }
+
     async fn prepare_upstream(
         &self,
         session: &mut Session,
@@ -157,34 +184,44 @@ impl UserGateway {
         {
             Ok(a) => a,
             Err(err) => {
-                if response::is_unadmitted_client_auth(&err) {
-                    let ip = client_ip(session);
-                    if let Some(retry) = self.limits.check_auth_failure(&ip) {
-                        return response::write_rate_limited(&self.cors, session, ctx, retry).await;
+                if err.is_unadmitted_401() {
+                    if let Some(done) = self.note_unadmitted(session, ctx).await? {
+                        return Ok(done);
                     }
                 }
                 return response::write_admit_error(&self.cors, session, ctx, err).await;
             }
         };
 
-        let ip = client_ip(session);
-        let method = session.req_header().method.as_str();
-        if let Some(retry) = self.limits.check_route(route, method, &admission, &ip) {
-            return response::write_rate_limited(&self.cors, session, ctx, retry).await;
+        if let Some(required) = route
+            .required_scopes
+            .as_ref()
+            .filter(|s| !s.is_empty())
+        {
+            if let Some(granted) = admission.key_scopes() {
+                if !scopes_intersect(required, granted) {
+                    return response::write_json_error(
+                        &self.cors,
+                        session,
+                        ctx,
+                        403,
+                        ApiError::forbidden(Some(serde_json::json!({
+                            "permission": "required_scopes",
+                            "resource": "route",
+                            "resource_id": route.path,
+                        }))),
+                    )
+                    .await;
+                }
+            }
         }
 
-        if !scopes::key_satisfies_required_scopes(
-            route.required_scopes.as_deref(),
-            admission.key_scopes(),
-        ) {
-            return response::write_json_error(
-                &self.cors,
-                session,
-                ctx,
-                403,
-                ApiError::forbidden("required_scopes", "route", &route.path),
-            )
-            .await;
+        if let Some((limit, window, by)) = effective_rate_limit(route, &self.rate_limit_fallback) {
+            let subject = limit_subject(&by, &admission, &client_ip(session));
+            let key = format!("{} {} {}", ctx.method_label(), route.path, subject);
+            if let Err(retry) = self.route_limiter.allow(&key, limit, window) {
+                return response::write_rate_limited(&self.cors, session, ctx, retry).await;
+            }
         }
 
         upstream::record_admission_span(ctx, &admission);
@@ -214,32 +251,81 @@ impl UserGateway {
 
 fn client_ip(session: &Session) -> String {
     let headers = &session.req_header().headers;
-    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(first) = xff.split(',').next() {
-            let ip = first.trim();
-            if !ip.is_empty() {
-                return ip.to_string();
+    if let Some(v) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        if let Some(first) = v.split(',').next() {
+            let t = first.trim();
+            if !t.is_empty() {
+                return t.to_string();
             }
         }
     }
-    if let Some(real) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
-        let ip = real.trim();
-        if !ip.is_empty() {
-            return ip.to_string();
+    if let Some(v) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+        let t = v.trim();
+        if !t.is_empty() {
+            return t.to_string();
         }
     }
-    let Some(addr) = session.client_addr() else {
-        return "unknown".to_string();
-    };
-    let s = addr.to_string();
-    if let Some(rest) = s.strip_prefix('[') {
-        if let Some(end) = rest.find(']') {
-            return rest[..end].to_string();
+    match session.client_addr() {
+        Some(addr) => match addr.as_inet() {
+            Some(sock) => sock.ip().to_string(),
+            None => addr.to_string(),
+        },
+        None => "unknown".to_string(),
+    }
+}
+
+fn default_by(scope: RouteScope) -> String {
+    match scope {
+        RouteScope::Public => "ip".to_string(),
+        RouteScope::User => "user".to_string(),
+        RouteScope::Organization => "member".to_string(),
+    }
+}
+
+fn effective_rate_limit(
+    route: &Route,
+    fallback: &RateLimitFallback,
+) -> Option<(u64, u64, String)> {
+    match &route.rate_limit {
+        Some(RouteRateLimit::Unlimited) => None,
+        Some(RouteRateLimit::Limit(cfg)) => Some((
+            cfg.requests,
+            cfg.window_seconds,
+            cfg.by.clone().unwrap_or_else(|| default_by(route.scope)),
+        )),
+        None => {
+            if fallback.requests == 0 {
+                None
+            } else {
+                Some((
+                    fallback.requests,
+                    fallback.window_seconds,
+                    fallback
+                        .by
+                        .clone()
+                        .unwrap_or_else(|| default_by(route.scope)),
+                ))
+            }
         }
     }
-    match s.rsplit_once(':') {
-        Some((ip, _)) => ip.to_string(),
-        None => s,
+}
+
+fn limit_subject(by: &str, admission: &crate::admission::Admission, ip: &str) -> String {
+    use crate::admission::{Admission, OrgVia};
+    match by {
+        "user" => match admission {
+            Admission::User { user_id, .. } => format!("user:{user_id}"),
+            Admission::Organization {
+                via: OrgVia::User { user_id, .. },
+                ..
+            } => format!("user:{user_id}"),
+            _ => format!("ip:{ip}"),
+        },
+        "member" => match admission {
+            Admission::Organization { member_id, .. } => format!("member:{member_id}"),
+            _ => format!("ip:{ip}"),
+        },
+        _ => format!("ip:{ip}"),
     }
 }
 
@@ -369,9 +455,8 @@ impl ProxyHttp for UserGateway {
 
         let Some((route, params)) = self.resolve_route(&path, &method) else {
             warn!("no matching route");
-            let ip = client_ip(session);
-            if let Some(retry) = self.limits.check_auth_failure(&ip) {
-                return response::write_rate_limited(&self.cors, session, ctx, retry).await;
+            if let Some(done) = self.note_unadmitted(session, ctx).await? {
+                return Ok(done);
             }
             return response::write_json_error(
                 &self.cors,
