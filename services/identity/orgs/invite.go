@@ -1,7 +1,6 @@
 package orgs
 
 import (
-	"net/url"
 	"strings"
 	"time"
 
@@ -84,21 +83,4 @@ func InviteRedeemable(inv *Invite, now time.Time) bool {
 		return false
 	}
 	return now.Before(inv.ExpiresAt)
-}
-
-// BuildInviteURL appends invite= to an operator-configured Auth authorize URL.
-// Empty or unparseable authorizeURL yields "".
-func BuildInviteURL(authorizeURL, token string) string {
-	authorizeURL = strings.TrimSpace(authorizeURL)
-	if authorizeURL == "" || token == "" {
-		return ""
-	}
-	u, err := url.Parse(authorizeURL)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return ""
-	}
-	q := u.Query()
-	q.Set("invite", token)
-	u.RawQuery = q.Encode()
-	return u.String()
 }

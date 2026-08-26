@@ -18,14 +18,13 @@ const (
 // OTEL_* stays in the telemetry package (standard env contract).
 // There is no SMTP configuration: identity does not send invite (or any) email.
 type Config struct {
-	Port               string
-	InternalPort       string
-	DatabaseURL        string
-	InternalAuthToken  string
-	APIKeyBrand        string
-	UserKeyPrefix      string
-	MemberKeyPrefix    string
-	InviteAuthorizeURL string
+	Port              string
+	InternalPort      string
+	DatabaseURL       string
+	InternalAuthToken string
+	APIKeyBrand       string
+	UserKeyPrefix     string
+	MemberKeyPrefix   string
 }
 
 func Load() (Config, error) {
@@ -34,14 +33,13 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	return Config{
-		Port:               envOr("PORT", defaultPort),
-		InternalPort:       envOr("INTERNAL_PORT", defaultInternalPort),
-		DatabaseURL:        envOr("DATABASE_URL", defaultDatabaseURL),
-		InternalAuthToken:  strings.TrimSpace(os.Getenv("INTERNAL_AUTH_TOKEN")),
-		APIKeyBrand:        brand,
-		UserKeyPrefix:      userAPIKeyPrefix(brand),
-		MemberKeyPrefix:    memberAPIKeyPrefix(brand),
-		InviteAuthorizeURL: strings.TrimSpace(os.Getenv("INVITE_AUTHORIZE_URL")),
+		Port:              envOr("PORT", defaultPort),
+		InternalPort:      envOr("INTERNAL_PORT", defaultInternalPort),
+		DatabaseURL:       envOr("DATABASE_URL", defaultDatabaseURL),
+		InternalAuthToken: strings.TrimSpace(os.Getenv("INTERNAL_AUTH_TOKEN")),
+		APIKeyBrand:       brand,
+		UserKeyPrefix:     userAPIKeyPrefix(brand),
+		MemberKeyPrefix:   memberAPIKeyPrefix(brand),
 	}, nil
 }
 

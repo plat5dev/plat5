@@ -16,9 +16,7 @@ Public route catalog: [`routes.yml`](routes.yml). Apply via route-registry; not 
 
 `APIKEY_BRAND` (default `plat5`) must match the gateway.
 
-Identity does **not** send email. Invite create returns a token (and optional Auth URL). No SMTP env vars.
-
-Optional `INVITE_AUTHORIZE_URL`: Auth `/authorize` URL. When set, create-invite includes `url` with `invite`.
+Identity does **not** send email. Invite create returns a token once. The app builds `{origin}/login?invite=`. No SMTP env vars. Identity does not build Auth `/authorize` URLs.
 
 ## Local
 

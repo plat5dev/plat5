@@ -72,14 +72,3 @@ func TestLoadIgnoresSMTP(t *testing.T) {
 		}
 	}
 }
-
-func TestInviteAuthorizeURLOptional(t *testing.T) {
-	t.Setenv("INVITE_AUTHORIZE_URL", " https://auth.example.com/authorize?client_id=plat5 ")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.InviteAuthorizeURL != "https://auth.example.com/authorize?client_id=plat5" {
-		t.Fatalf("got %q", cfg.InviteAuthorizeURL)
-	}
-}

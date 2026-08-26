@@ -10,9 +10,8 @@ import (
 )
 
 type Handler struct {
-	store              *Store
-	invites            inviteStore
-	inviteAuthorizeURL string
+	store   *Store
+	invites inviteStore
 }
 
 func NewHandler(store *Store) *Handler {
