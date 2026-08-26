@@ -18,7 +18,7 @@ This file tracks deferred gateway improvements that are intentionally out of sco
 
 ## Rate Limiting
 
-- **Done (this slice):** In-process token bucket. Admitted routes inherit gateway fallback (`RATE_LIMIT_REQUESTS` / `WINDOW`); subject follows route scope (`public`→ip, `user`→user, `organization`→org). Per-route `{requests, window_seconds}` or `false` opt-out. `by` is not accepted. Separate always-on failed-auth IP limiter (`RATE_LIMIT_AUTH_FAILURE_*`) for unadmitted 401s and unmatched 404s. Envelope `RATE_LIMITED` + `Retry-After`. No Redis.
+- **Done (this slice):** In-process token bucket. Admitted routes inherit gateway fallback (`RATE_LIMIT_REQUESTS` / `WINDOW`); subject follows route scope (`public`→ip, `user`→user, `organization`→org). Per-route `{requests, window_seconds}` or `false` opt-out. Separate always-on failed-auth IP limiter (`RATE_LIMIT_AUTH_FAILURE_*`) for unadmitted 401s and unmatched 404s. Envelope `RATE_LIMITED` + `Retry-After`. No Redis.
 - **Still open:** `X-RateLimit-Limit` / `Remaining` / `Reset` headers; multi-instance aggregation.
 
 ## JWKS Conditional Refresh
