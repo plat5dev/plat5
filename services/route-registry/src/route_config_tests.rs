@@ -109,18 +109,7 @@ mod tests {
             RouteRateLimit::Limit(cfg) => {
                 assert_eq!(cfg.requests, 10);
                 assert_eq!(cfg.window_seconds, 60);
-                assert!(cfg.by.is_none());
             }
-            RouteRateLimit::Unlimited => panic!("expected object"),
-        }
-        let with_by: RouteRateLimit = serde_json::from_value(serde_json::json!({
-            "requests": 10,
-            "window_seconds": 60,
-            "by": "ip"
-        }))
-        .unwrap();
-        match with_by {
-            RouteRateLimit::Limit(cfg) => assert_eq!(cfg.by.as_deref(), Some("ip")),
             RouteRateLimit::Unlimited => panic!("expected object"),
         }
         assert!(serde_json::from_str::<RouteRateLimit>("true").is_err());
@@ -132,56 +121,16 @@ mod tests {
         r.rate_limit = Some(RouteRateLimit::Limit(RateLimitConfig {
             requests: 0,
             window_seconds: 60,
-            by: None,
         }));
         assert!(config_with(r).validate().is_err());
     }
 
     #[test]
-    fn rate_limit_by_is_rejected() {
-        for by in ["key", "member", "org", "ip", "user"] {
-            let mut r = route("/api/widgets", &["GET"]);
-            r.rate_limit = Some(RouteRateLimit::Limit(RateLimitConfig {
-                requests: 10,
-                window_seconds: 60,
-                by: Some(by.into()),
-            }));
-            let err = config_with(r).validate().unwrap_err();
-            let msg = err.to_string();
-            assert!(
-                msg.contains("rate_limit.by"),
-                "expected by rejection for {by}, got {msg}"
-            );
-        }
-    }
-
-    #[test]
-    fn nested_rate_limit_by_is_rejected() {
-        for by in ["key", "member", "org", "ip"] {
-            let r = parse_route(serde_json::json!({
-                "path": "/features",
-                "methods": {
-                    "POST": {
-                        "rate_limit": {"requests": 10, "window_seconds": 60, "by": by}
-                    }
-                }
-            }));
-            let err = config_with(r).validate().unwrap_err();
-            let msg = err.to_string();
-            assert!(
-                msg.contains("rate_limit.by"),
-                "expected nested by rejection for {by}, got {msg}"
-            );
-        }
-    }
-
-    #[test]
-    fn rate_limit_object_without_by_ok() {
+    fn rate_limit_object_ok() {
         let mut r = route("/api/widgets", &["GET"]);
         r.rate_limit = Some(RouteRateLimit::Limit(RateLimitConfig {
             requests: 10,
             window_seconds: 60,
-            by: None,
         }));
         config_with(r).validate().unwrap();
     }
@@ -252,7 +201,6 @@ mod tests {
             Some(RouteRateLimit::Limit(cfg)) => {
                 assert_eq!(cfg.requests, 100);
                 assert_eq!(cfg.window_seconds, 1);
-                assert!(cfg.by.is_none());
             }
             other => panic!("expected POST rate limit, got {other:?}"),
         }
