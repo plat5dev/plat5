@@ -16,6 +16,7 @@ const (
 
 // Config is process-level identity service configuration.
 // OTEL_* stays in the telemetry package (standard env contract).
+// There is no SMTP configuration: identity does not send invite (or any) email.
 type Config struct {
 	Port              string
 	InternalPort      string

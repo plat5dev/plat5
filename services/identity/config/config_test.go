@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"reflect"
+	"strings"
+	"testing"
+)
 
 func TestParseAPIKeyBrand(t *testing.T) {
 	ok := []string{"plat5", "acme", "a", "a1", "happ", "sk"}
@@ -48,5 +52,23 @@ func TestWirePrefixes(t *testing.T) {
 	}
 	if g := memberAPIKeyPrefix("acme"); g != "acme-mk-1-" {
 		t.Fatalf("member: %q", g)
+	}
+}
+
+func TestLoadIgnoresSMTP(t *testing.T) {
+	t.Setenv("SMTP_HOST", "mail.example.com")
+	t.Setenv("SMTP_USER", "u")
+	t.Setenv("SMTP_PASS", "p")
+	t.Setenv("SMTP_FROM", "noreply@example.com")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	typ := reflect.TypeOf(cfg)
+	for i := 0; i < typ.NumField(); i++ {
+		name := typ.Field(i).Name
+		if strings.Contains(strings.ToLower(name), "smtp") {
+			t.Fatalf("identity config must not have SMTP fields: %s", name)
+		}
 	}
 }

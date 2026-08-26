@@ -2,7 +2,7 @@ package orgs
 
 import "github.com/gofiber/fiber/v3"
 
-// MountPublic registers organization, member, and service-account routes.
+// MountPublic registers organization, member, invite, and service-account routes.
 // Caller should attach auth middleware on the group (e.g. RequireUserID).
 func (h *Handler) MountPublic(router fiber.Router) {
 	router.Post("/", h.CreateOrganization)
@@ -17,6 +17,10 @@ func (h *Handler) MountPublic(router fiber.Router) {
 	router.Patch("/:organization_id/members/:member_id", h.UpdateMember)
 	router.Delete("/:organization_id/members/:member_id", h.DeleteMember)
 
+	router.Get("/:organization_id/invites", h.ListInvites)
+	router.Post("/:organization_id/invites", h.CreateInvite)
+	router.Delete("/:organization_id/invites/:invite_id", h.RevokeInvite)
+
 	router.Post("/:organization_id/service-accounts", h.CreateServiceAccount)
 	router.Get("/:organization_id/service-accounts", h.ListServiceAccounts)
 	router.Get("/:organization_id/service-accounts/:service_account_id", h.GetServiceAccount)
@@ -24,7 +28,12 @@ func (h *Handler) MountPublic(router fiber.Router) {
 	router.Delete("/:organization_id/service-accounts/:service_account_id", h.DeleteServiceAccount)
 }
 
-// MountInternal registers resolve on a router already scoped under /internal
+// MountRedeem registers POST /redeem on a router scoped under /api/invites.
+func (h *Handler) MountRedeem(router fiber.Router) {
+	router.Post("/redeem", h.RedeemInvite)
+}
+
+// MountInternal registers member resolve on a router already scoped under /internal
 // (or full path if mounted at app root with path included by caller).
 func (h *Handler) MountInternal(router fiber.Router) {
 	router.Post("/members/resolve", h.Resolve)
