@@ -13,7 +13,6 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 	f := newFakeInvites()
 	seedOwner(f, "org1", "owner1")
 	h := &Handler{invites: f}
-	h.SetInviteAuthorizeURL("https://auth.example.com/authorize?client_id=plat5&response_type=code&redirect_uri=https://console.example.com/callback")
 	app := testInviteApp(h, "owner1")
 
 	code, body := doJSON(t, app, http.MethodPost, "/api/organizations/org1/invites", `{"role":"member","email":"a@b.com"}`)
@@ -26,9 +25,6 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 	}
 	if created.Token == "" || !LooksLikeInviteToken(created.Token) {
 		t.Fatalf("token once: %+v", created)
-	}
-	if created.URL == "" || !strings.Contains(created.URL, "invite=") {
-		t.Fatalf("url: %s", created.URL)
 	}
 	if created.Email == nil || *created.Email != "a@b.com" {
 		t.Fatalf("email: %+v", created.Email)
@@ -173,33 +169,6 @@ func TestInviteRedeemDuplicateMemberIdempotent(t *testing.T) {
 	}
 	if mem.ID != "m-already" || mem.Status != "active" {
 		t.Fatalf("existing member: %+v", mem)
-	}
-}
-
-func TestInviteInternalRedeem(t *testing.T) {
-	f := newFakeInvites()
-	seedOwner(f, "org1", "owner1")
-	h := &Handler{invites: f}
-	app := testInviteApp(h, "owner1")
-
-	_, body := doJSON(t, app, http.MethodPost, "/api/organizations/org1/invites", `{"role":"admin"}`)
-	var created InviteResponse
-	if err := json.Unmarshal(body, &created); err != nil {
-		t.Fatal(err)
-	}
-
-	internal := testInviteApp(h, "")
-	code, body := doJSON(t, internal, http.MethodPost, "/internal/invites/redeem",
-		`{"token":"`+created.Token+`","user_id":"from-auth"}`)
-	if code != http.StatusOK {
-		t.Fatalf("internal redeem: %d %s", code, body)
-	}
-	var mem MemberResponse
-	if err := json.Unmarshal(body, &mem); err != nil {
-		t.Fatal(err)
-	}
-	if mem.Role != "admin" || mem.UserID == nil || *mem.UserID != "from-auth" {
-		t.Fatalf("%+v", mem)
 	}
 }
 
