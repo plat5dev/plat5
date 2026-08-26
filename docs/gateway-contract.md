@@ -86,7 +86,7 @@ In-process per gateway instance. No Redis.
 | Fallback | `RATE_LIMIT_REQUESTS` (default 60; `0` = unlimited), `RATE_LIMIT_WINDOW_SECONDS` (default 60) |
 | Per-route | omitted inherits fallback (never silent unlimited); `{requests, window_seconds}` overrides; `false` opts out |
 | Who | All admitted routes (JWT and API key) |
-| Subject | `public`→ip, `user`→user, `organization`→org (including SA/member keys) |
+| Subject | Derived from route scope: `public`→ip, `user`→user, `organization`→org (including SA/member keys) |
 | Exceed | **429** `RATE_LIMITED`, type `api_error`, message `Too many requests. Try again in a moment.`, `details.retry_after_seconds`, `Retry-After` |
 | Failed-auth IP | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). Unadmitted 401s and unmatched 404s. Not per-route. |
 
