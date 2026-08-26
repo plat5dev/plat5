@@ -180,15 +180,6 @@ fn validate_rate_limit(
             ),
         });
     }
-    if cfg.by.is_some() {
-        return Err(ConfigError::InvalidRoute {
-            service: service.to_string(),
-            reason: format!(
-                "{} route '{}' rate_limit.by is not allowed; limiter subject follows route scope (public→ip, user→user, organization→org)",
-                scope_name, path
-            ),
-        });
-    }
     Ok(())
 }
 
