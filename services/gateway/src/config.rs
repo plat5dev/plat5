@@ -2,6 +2,7 @@ use std::env;
 use std::time::Duration;
 
 use crate::admission::parse_user_id_claim;
+use crate::route_config::RateLimitBy;
 
 const DEFAULT_PORT: &str = "5001";
 const DEFAULT_INTERNAL_PORT: &str = "8000";
@@ -13,6 +14,10 @@ const DEFAULT_APIKEY_CACHE_TTL_SECS: u64 = 300;
 const DEFAULT_MEMBER_CACHE_TTL_SECS: u64 = 300;
 const DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_UPSTREAM_READ_TIMEOUT_MS: u64 = 30_000;
+const DEFAULT_RATE_LIMIT_REQUESTS: u64 = 60;
+const DEFAULT_RATE_LIMIT_WINDOW_SECONDS: u64 = 60;
+const DEFAULT_RATE_LIMIT_AUTH_FAILURE_REQUESTS: u64 = 60;
+const DEFAULT_RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS: u64 = 60;
 
 /// Process configuration loaded from environment.
 #[derive(Clone, Debug)]
@@ -47,6 +52,14 @@ pub struct GatewayConfig {
     pub upstream_read_timeout: Duration,
     /// Empty = CORS `*`. Non-empty = allowlist.
     pub allowed_origins: Vec<String>,
+
+    /// Gateway fallback. `0` = unlimited fallback (routes may still override).
+    pub rate_limit_requests: u64,
+    pub rate_limit_window_seconds: u64,
+    /// When unset, `by` follows route scope (public→ip, user→user, organization→member).
+    pub rate_limit_by: Option<RateLimitBy>,
+    pub rate_limit_auth_failure_requests: u64,
+    pub rate_limit_auth_failure_window_seconds: u64,
 }
 
 #[derive(Debug)]
@@ -72,6 +85,32 @@ impl GatewayConfig {
         let auth_jwks_uri = require_env("AUTH_JWKS_URI")?;
         let user_apikey_validate_url = require_env("USER_APIKEY_VALIDATE_URL")?;
         let apikey_brand = apikey_brand_from_env()?;
+        let rate_limit_requests =
+            parse_u64_env("RATE_LIMIT_REQUESTS", DEFAULT_RATE_LIMIT_REQUESTS)?;
+        let rate_limit_window_seconds = parse_u64_env(
+            "RATE_LIMIT_WINDOW_SECONDS",
+            DEFAULT_RATE_LIMIT_WINDOW_SECONDS,
+        )?;
+        if rate_limit_requests > 0 && rate_limit_window_seconds == 0 {
+            return Err(GatewayConfigError::Invalid {
+                key: "RATE_LIMIT_WINDOW_SECONDS",
+                message: "must be > 0 when RATE_LIMIT_REQUESTS > 0".to_string(),
+            });
+        }
+        let rate_limit_auth_failure_requests = parse_u64_env(
+            "RATE_LIMIT_AUTH_FAILURE_REQUESTS",
+            DEFAULT_RATE_LIMIT_AUTH_FAILURE_REQUESTS,
+        )?;
+        let rate_limit_auth_failure_window_seconds = parse_u64_env(
+            "RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS",
+            DEFAULT_RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS,
+        )?;
+        if rate_limit_auth_failure_requests > 0 && rate_limit_auth_failure_window_seconds == 0 {
+            return Err(GatewayConfigError::Invalid {
+                key: "RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS",
+                message: "must be > 0 when RATE_LIMIT_AUTH_FAILURE_REQUESTS > 0".to_string(),
+            });
+        }
 
         Ok(Self {
             port: env::var("PORT").unwrap_or_else(|_| DEFAULT_PORT.to_string()),
@@ -114,6 +153,12 @@ impl GatewayConfig {
                 DEFAULT_UPSTREAM_READ_TIMEOUT_MS,
             )?),
             allowed_origins: csv_env("ALLOWED_ORIGINS"),
+
+            rate_limit_requests,
+            rate_limit_window_seconds,
+            rate_limit_by: parse_rate_limit_by_env()?,
+            rate_limit_auth_failure_requests,
+            rate_limit_auth_failure_window_seconds,
         })
     }
 }
@@ -142,6 +187,19 @@ fn parse_u64_env(key: &'static str, default: u64) -> Result<u64, GatewayConfigEr
             message: format!("{e}"),
         }),
         Err(_) => Ok(default),
+    }
+}
+
+fn parse_rate_limit_by_env() -> Result<Option<RateLimitBy>, GatewayConfigError> {
+    match env::var("RATE_LIMIT_BY") {
+        Err(_) => Ok(None),
+        Ok(raw) if raw.trim().is_empty() => Ok(None),
+        Ok(raw) => RateLimitBy::parse(&raw)
+            .map(Some)
+            .ok_or_else(|| GatewayConfigError::Invalid {
+                key: "RATE_LIMIT_BY",
+                message: "must be ip, user, or member".to_string(),
+            }),
     }
 }
 
@@ -216,5 +274,13 @@ mod tests {
     fn wire_prefixes() {
         assert_eq!(user_apikey_prefix("plat5"), "plat5-sk-1-");
         assert_eq!(member_apikey_prefix("acme"), "acme-mk-1-");
+    }
+
+    #[test]
+    fn parse_rate_limit_by() {
+        assert_eq!(RateLimitBy::parse("ip"), Some(RateLimitBy::Ip));
+        assert_eq!(RateLimitBy::parse(" user "), Some(RateLimitBy::User));
+        assert_eq!(RateLimitBy::parse("member"), Some(RateLimitBy::Member));
+        assert!(RateLimitBy::parse("key").is_none());
     }
 }

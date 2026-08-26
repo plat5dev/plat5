@@ -65,6 +65,7 @@ pub fn record_admission_span(ctx: &GatewayContext, admission: &Admission) {
             organization_id,
             member_id,
             via,
+            ..
         } => {
             span.record("organization.id", organization_id.as_str());
             span.record("member.id", member_id.as_str());

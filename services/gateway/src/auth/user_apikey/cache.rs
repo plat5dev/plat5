@@ -1,10 +1,17 @@
 use crate::auth::cache::TtlCache;
 use crate::auth::AuthType;
 
-/// In-memory cache for validated user API keys. Values are user ids.
+#[derive(Clone)]
+pub struct CachedUserApiKey {
+    pub user_id: String,
+    /// None = unrestricted.
+    pub scopes: Option<Vec<String>>,
+}
+
+/// In-memory cache for validated user API keys.
 #[derive(Clone)]
 pub struct UserApiKeyCache {
-    inner: TtlCache<String>,
+    inner: TtlCache<CachedUserApiKey>,
 }
 
 impl UserApiKeyCache {
@@ -14,11 +21,13 @@ impl UserApiKeyCache {
         }
     }
 
-    pub async fn get(&self, key: &str) -> Option<String> {
+    pub async fn get(&self, key: &str) -> Option<CachedUserApiKey> {
         self.inner.get_secret(key).await
     }
 
-    pub async fn put(&self, key: &str, user_id: String) {
-        self.inner.put_secret(key, user_id).await;
+    pub async fn put(&self, key: &str, user_id: String, scopes: Option<Vec<String>>) {
+        self.inner
+            .put_secret(key, CachedUserApiKey { user_id, scopes })
+            .await;
     }
 }

@@ -7,6 +7,8 @@ pub struct AuthContext {
     pub user_id: String,
     pub auth_type: AuthType,
     pub kid: Option<String>,
+    /// API key granted scopes. None = JWT or unrestricted key (skip route required_scopes).
+    pub key_scopes: Option<Vec<String>>,
 }
 
 /// How an organization-scoped request was admitted.
@@ -28,12 +30,50 @@ pub enum Admission {
         user_id: String,
         auth_type: AuthType,
         kid: Option<String>,
+        key_scopes: Option<Vec<String>>,
     },
     Organization {
         organization_id: String,
         member_id: String,
         via: OrgVia,
+        key_scopes: Option<Vec<String>>,
     },
+}
+
+impl Admission {
+    /// Granted API-key scopes when the credential is a restricted key.
+    /// None = JWT, unrestricted key, or public — skip required_scopes.
+    pub fn key_scopes(&self) -> Option<&[String]> {
+        match self {
+            Admission::User {
+                key_scopes: Some(s),
+                ..
+            }
+            | Admission::Organization {
+                key_scopes: Some(s),
+                ..
+            } => Some(s.as_slice()),
+            _ => None,
+        }
+    }
+
+    pub fn user_id(&self) -> Option<&str> {
+        match self {
+            Admission::User { user_id, .. } => Some(user_id.as_str()),
+            Admission::Organization {
+                via: OrgVia::User { user_id, .. },
+                ..
+            } => Some(user_id.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn member_id(&self) -> Option<&str> {
+        match self {
+            Admission::Organization { member_id, .. } => Some(member_id.as_str()),
+            _ => None,
+        }
+    }
 }
 
 pub enum ResolveDeny {
@@ -50,6 +90,16 @@ pub enum AdmitError {
     Unavailable,
     /// Route/config invariant broken (missing org param, etc.).
     Internal(&'static str),
+}
+
+impl AdmitError {
+    pub fn is_unadmitted_401(&self) -> bool {
+        match self {
+            AdmitError::MemberApiKeyInvalid => true,
+            AdmitError::Auth(err) => err.is_client_error(),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug)]

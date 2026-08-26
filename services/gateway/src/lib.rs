@@ -6,9 +6,11 @@ pub mod gateway;
 pub mod health;
 pub mod internal_http;
 pub mod metrics;
+pub mod rate_limit;
 pub mod route_config;
 pub mod route_map;
 pub mod route_registry;
+pub mod scopes;
 pub mod telemetry;
 
 pub use crate::gateway::{parse_user_id_claim, UserGateway};

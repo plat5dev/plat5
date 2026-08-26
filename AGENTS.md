@@ -55,7 +55,6 @@ Do not add these because they would be convenient:
 | Item | Ready looks like |
 |------|------------------|
 | Admission cache invalidation / negative cache | Named invariant for revoke/suspend latency; misses don’t stampede identity |
-| Rate limiting | At least per-IP on auth; invalid keys don’t hammer identity unbounded |
 | Apply `--prune` | Explicit CLI flag; not the default until that is the documented contract |
 | Consumer libraries | Per-language helpers for headers + error envelope + missing-header → 500 |
 

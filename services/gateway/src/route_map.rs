@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use regex::Regex;
 use tracing::warn;
 
-use crate::route_config::Config;
+use crate::route_config::{Config, RouteRateLimit};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RouteScope {
@@ -24,6 +24,8 @@ pub struct Route {
     pub scope: RouteScope,
     /// Path param name for organization id (`organization` scope only)
     pub organization_param: Option<String>,
+    pub required_scopes: Option<Vec<String>>,
+    pub rate_limit: Option<RouteRateLimit>,
 }
 
 impl Route {
@@ -118,6 +120,8 @@ impl RouteMap {
                         transform_path,
                         scope,
                         org_param.clone(),
+                        route_config.required_scopes.clone(),
+                        route_config.rate_limit.clone(),
                     ) {
                         warn!(
                             service = %service_name,
@@ -134,6 +138,7 @@ impl RouteMap {
         route_map
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_route(
         &mut self,
         base_url: &str,
@@ -142,6 +147,8 @@ impl RouteMap {
         transform_path: Option<String>,
         scope: RouteScope,
         organization_param: Option<String>,
+        required_scopes: Option<Vec<String>>,
+        rate_limit: Option<RouteRateLimit>,
     ) -> Result<(), String> {
         if scope == RouteScope::Organization {
             let param = organization_param
@@ -166,6 +173,8 @@ impl RouteMap {
             transform_path,
             scope,
             organization_param,
+            required_scopes,
+            rate_limit,
         };
 
         self.routes.push(CompiledRoute {
@@ -300,6 +309,9 @@ mod tests {
             path: path.to_string(),
             methods: methods.iter().map(|m| m.to_string()).collect(),
             transform: None,
+            required_scopes: None,
+            rate_limit: None,
+            ..Default::default()
         }
     }
 
@@ -384,6 +396,8 @@ mod tests {
                 None,
                 RouteScope::Organization,
                 Some("organization_id".into()),
+                None,
+                None,
             )
             .is_err());
         assert!(map
@@ -394,6 +408,8 @@ mod tests {
                 None,
                 RouteScope::Organization,
                 Some("organization_id".into()),
+                None,
+                None,
             )
             .is_ok());
         assert!(map
@@ -403,6 +419,8 @@ mod tests {
                 &["GET"],
                 None,
                 RouteScope::Organization,
+                None,
+                None,
                 None,
             )
             .is_err());
