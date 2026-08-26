@@ -151,10 +151,6 @@ pub enum RouteRateLimit {
 pub struct RateLimitConfig {
     pub requests: u64,
     pub window_seconds: u64,
-    /// Forbidden. Any value (including `org`) is a 422 at apply.
-    /// Limiter subject follows route scope, not this field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub by: Option<String>,
 }
 
 impl Serialize for RouteRateLimit {

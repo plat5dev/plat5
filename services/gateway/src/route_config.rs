@@ -67,7 +67,7 @@ pub struct RouteConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_scopes: Option<Vec<String>>,
     /// Omitted = inherit gateway fallback. `false` = unlimited. Object = override.
-    /// `{requests, window_seconds}` only — `by` is rejected at apply.
+    /// `{requests, window_seconds}` only. Subject follows route scope.
     /// Route-level value applies only to the flat methods list form.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limit: Option<RouteRateLimit>,
@@ -177,10 +177,6 @@ pub enum RouteRateLimit {
 pub struct RateLimitConfig {
     pub requests: u64,
     pub window_seconds: u64,
-    /// Forbidden. Any value (including `org`) is a 422 at apply.
-    /// Limiter subject follows route scope, not this field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub by: Option<String>,
 }
 
 impl Serialize for RouteRateLimit {
