@@ -1,8 +1,14 @@
+use serde::de::{self, Deserializer, IgnoredAny};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// etcd key prefix for gateway route registry entries.
 pub const ROUTES_PREFIX: &str = "edge/gateway/routes/";
+
+pub const MAX_SCOPE_COUNT: usize = 32;
+pub const MAX_SCOPE_LEN: usize = 64;
+
+const HTTP_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
@@ -32,12 +38,125 @@ pub struct ScopeConfig {
     pub routes: Vec<RouteConfig>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+/// Apply-time nested method body. Empty (`GET:` / `GET: {}`) means that verb, no extra constraints.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct MethodConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_scopes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limit: Option<RouteRateLimit>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum MethodsForm {
+    #[default]
+    List,
+    Nested(Vec<(String, MethodConfig)>),
+    Mixed,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct RouteConfig {
     pub path: String,
     pub methods: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transform: Option<TransformConfig>,
+    /// Optional API-key scope labels this route requires.
+    /// Omitted = any admitted principal. JWTs and unrestricted keys skip the check.
+    /// Route-level value applies only to the flat methods list form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_scopes: Option<Vec<String>>,
+    /// Omitted = inherit gateway fallback. `false` = unlimited. Object = override.
+    /// Route-level value applies only to the flat methods list form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limit: Option<RouteRateLimit>,
+    /// Nested methods map, if the YAML/JSON used the per-verb object form.
+    /// Cleared when expanded at apply. Never written to etcd.
+    #[serde(skip)]
+    pub(crate) methods_form: MethodsForm,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawMethods {
+    List(Vec<String>),
+    Nested(BTreeMap<String, Option<MethodConfig>>),
+    #[allow(dead_code)] // serde match only; payload unread
+    MixedSeq(Vec<IgnoredAny>),
+}
+
+#[derive(Deserialize)]
+struct RawRouteConfig {
+    path: String,
+    methods: RawMethods,
+    #[serde(default)]
+    transform: Option<TransformConfig>,
+    #[serde(default)]
+    required_scopes: Option<Vec<String>>,
+    #[serde(default)]
+    rate_limit: Option<RouteRateLimit>,
+}
+
+impl<'de> Deserialize<'de> for RouteConfig {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = RawRouteConfig::deserialize(deserializer)?;
+        match raw.methods {
+            RawMethods::List(methods) => Ok(RouteConfig {
+                path: raw.path,
+                methods,
+                transform: raw.transform,
+                required_scopes: raw.required_scopes,
+                rate_limit: raw.rate_limit,
+                methods_form: MethodsForm::List,
+            }),
+            RawMethods::Nested(map) => {
+                if map.is_empty() {
+                    return Ok(RouteConfig {
+                        path: raw.path,
+                        methods: Vec::new(),
+                        transform: raw.transform,
+                        required_scopes: raw.required_scopes,
+                        rate_limit: raw.rate_limit,
+                        methods_form: MethodsForm::Nested(Vec::new()),
+                    });
+                }
+                let entries: Vec<(String, MethodConfig)> = map
+                    .into_iter()
+                    .map(|(k, v)| (k, v.unwrap_or_default()))
+                    .collect();
+                let methods = entries.iter().map(|(m, _)| m.clone()).collect();
+                Ok(RouteConfig {
+                    path: raw.path,
+                    methods,
+                    transform: raw.transform,
+                    required_scopes: raw.required_scopes,
+                    rate_limit: raw.rate_limit,
+                    methods_form: MethodsForm::Nested(entries),
+                })
+            }
+            RawMethods::MixedSeq(_) => Ok(RouteConfig {
+                path: raw.path,
+                methods: Vec::new(),
+                transform: raw.transform,
+                required_scopes: raw.required_scopes,
+                rate_limit: raw.rate_limit,
+                methods_form: MethodsForm::Mixed,
+            }),
+        }
+    }
+}
+
+impl Default for RouteConfig {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            methods: Vec::new(),
+            transform: None,
+            required_scopes: None,
+            rate_limit: None,
+            methods_form: MethodsForm::List,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -46,222 +165,75 @@ pub struct TransformConfig {
     pub path: Option<String>,
 }
 
-impl Config {
-    /// Validate config is well-formed (source YAML or etcd JSON).
-    pub fn validate(&self) -> Result<(), ConfigError> {
-        for (name, service) in &self.services {
-            if service.public.is_none() && service.user.is_none() && service.organization.is_none()
-            {
-                return Err(ConfigError::InvalidRoute {
-                    service: name.clone(),
-                    reason: "service has no routes (public, user, or organization)".to_string(),
-                });
-            }
-
-            if let Some(ref public) = service.public {
-                validate_scope_routes(name, "public", public, None)?;
-            }
-            if let Some(ref user) = service.user {
-                validate_scope_routes(name, "user", user, None)?;
-            }
-            if let Some(ref org) = service.organization {
-                let param =
-                    org.organization_param
-                        .as_deref()
-                        .ok_or_else(|| ConfigError::InvalidRoute {
-                            service: name.clone(),
-                            reason: "organization scope requires organization_param".to_string(),
-                        })?;
-                if param.is_empty() {
-                    return Err(ConfigError::InvalidRoute {
-                        service: name.clone(),
-                        reason: "organization_param must not be empty".to_string(),
-                    });
-                }
-                validate_scope_routes(name, "organization", org, Some(param))?;
-            }
-        }
-        Ok(())
-    }
+/// Per-route rate limit. `false` opts out (unlimited). Object overrides the gateway fallback.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RouteRateLimit {
+    Unlimited,
+    Limit(RateLimitConfig),
 }
 
-impl ServiceConfig {
-    /// Expand `route_prefix` into each route path and clear prefixes.
-    /// Call before writing etcd (full paths only).
-    pub fn expand_route_prefixes(&mut self) -> Result<(), ConfigError> {
-        if let Some(ref mut public) = self.public {
-            expand_scope(public)?;
-        }
-        if let Some(ref mut user) = self.user {
-            expand_scope(user)?;
-        }
-        if let Some(ref mut organization) = self.organization {
-            expand_scope(organization)?;
-        }
-        Ok(())
-    }
-
-    /// Validate + expand a single service under `name` for registry write.
-    pub fn prepare_for_registry(mut self, name: &str) -> Result<Self, ConfigError> {
-        let check = Config {
-            services: HashMap::from([(name.to_string(), self.clone())]),
-        };
-        check.validate()?;
-        self.expand_route_prefixes()?;
-        let check = Config {
-            services: HashMap::from([(name.to_string(), self.clone())]),
-        };
-        check.validate()?;
-        Ok(self)
-    }
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct RateLimitConfig {
+    pub requests: u64,
+    pub window_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
 }
 
-fn expand_scope(scope: &mut ScopeConfig) -> Result<(), ConfigError> {
-    if let Some(prefix) = scope.route_prefix.take() {
-        for route in &mut scope.routes {
-            route.path = join_route_prefix(&prefix, &route.path).map_err(|reason| {
-                ConfigError::InvalidRoute {
-                    service: String::new(),
-                    reason,
-                }
-            })?;
-        }
-    }
-    Ok(())
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RateLimitBy {
+    Ip,
+    User,
+    Member,
 }
 
-/// Join rule: path must be `/` (exactly the prefix) or start with `/`.
-/// `path == "/"` → prefix with trailing slashes stripped (no forced trailing slash).
-pub fn join_route_prefix(prefix: &str, path: &str) -> Result<String, String> {
-    if path.is_empty() {
-        return Err("route path is empty".to_string());
-    }
-    if path != "/" && !path.starts_with('/') {
-        return Err(format!(
-            "route path '{}' must be '/' or start with '/'",
-            path
-        ));
-    }
-    let base = prefix.trim_end_matches('/');
-    if path == "/" {
-        if base.is_empty() {
-            return Ok("/".to_string());
-        }
-        return Ok(base.to_string());
-    }
-    Ok(format!("{}{}", base, path))
-}
-
-fn validate_scope_routes(
-    service: &str,
-    scope_name: &str,
-    scope: &ScopeConfig,
-    organization_param: Option<&str>,
-) -> Result<(), ConfigError> {
-    for route in &scope.routes {
-        if route.path.is_empty() {
-            return Err(ConfigError::InvalidRoute {
-                service: service.to_string(),
-                reason: format!("{} route path is empty", scope_name),
-            });
-        }
-        if route.methods.is_empty() {
-            return Err(ConfigError::InvalidRoute {
-                service: service.to_string(),
-                reason: format!("{} route '{}' has no methods", scope_name, route.path),
-            });
-        }
-
-        if let Some(ref prefix) = scope.route_prefix {
-            join_route_prefix(prefix, &route.path).map_err(|reason| ConfigError::InvalidRoute {
-                service: service.to_string(),
-                reason: format!("{}: {}", scope_name, reason),
-            })?;
-        }
-
-        if let Some(param) = organization_param {
-            let needle = format!("{{{}}}", param);
-            let expanded = if let Some(ref prefix) = scope.route_prefix {
-                join_route_prefix(prefix, &route.path).unwrap_or_else(|_| route.path.clone())
-            } else {
-                route.path.clone()
-            };
-            if !expanded.contains(&needle) {
-                return Err(ConfigError::InvalidRoute {
-                    service: service.to_string(),
-                    reason: format!(
-                        "organization route '{}' must include path param {{{}}}",
-                        expanded, param
-                    ),
-                });
-            }
+impl RateLimitBy {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "ip" => Some(Self::Ip),
+            "user" => Some(Self::User),
+            "member" => Some(Self::Member),
+            _ => None,
         }
     }
-    Ok(())
-}
 
-#[derive(Debug)]
-pub enum ConfigError {
-    InvalidRoute { service: String, reason: String },
-}
-
-impl std::fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    #[allow(dead_code)] // used by gateway; kept on both route_config copies
+    pub fn as_str(self) -> &'static str {
         match self {
-            ConfigError::InvalidRoute { service, reason } => {
-                if service.is_empty() {
-                    write!(f, "invalid route: {}", reason)
-                } else {
-                    write!(f, "invalid route for service '{}': {}", service, reason)
-                }
-            }
+            Self::Ip => "ip",
+            Self::User => "user",
+            Self::Member => "member",
         }
     }
 }
 
-impl std::error::Error for ConfigError {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn join_prefix_root_path() {
-        assert_eq!(
-            join_route_prefix("/api/organizations", "/").unwrap(),
-            "/api/organizations"
-        );
-    }
-
-    #[test]
-    fn join_prefix_subpath() {
-        assert_eq!(
-            join_route_prefix("/api/organizations", "/{organization_id}").unwrap(),
-            "/api/organizations/{organization_id}"
-        );
-    }
-
-    #[test]
-    fn prepare_expands_prefix() {
-        let svc = ServiceConfig {
-            url: "orgs:3000".into(),
-            public: None,
-            user: Some(ScopeConfig {
-                route_prefix: Some("/api/organizations".into()),
-                organization_param: None,
-                routes: vec![RouteConfig {
-                    path: "/".into(),
-                    methods: vec!["GET".into()],
-                    transform: None,
-                }],
-            }),
-            organization: None,
-        };
-        let prepared = svc.prepare_for_registry("organizations").unwrap();
-        assert!(prepared.user.as_ref().unwrap().route_prefix.is_none());
-        assert_eq!(
-            prepared.user.as_ref().unwrap().routes[0].path,
-            "/api/organizations"
-        );
+impl Serialize for RouteRateLimit {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            RouteRateLimit::Unlimited => serializer.serialize_bool(false),
+            RouteRateLimit::Limit(cfg) => cfg.serialize(serializer),
+        }
     }
 }
+
+impl<'de> Deserialize<'de> for RouteRateLimit {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Flag(bool),
+            Limit(RateLimitConfig),
+        }
+        match Raw::deserialize(deserializer)? {
+            Raw::Flag(false) => Ok(RouteRateLimit::Unlimited),
+            Raw::Flag(true) => Err(de::Error::custom(
+                "rate_limit: true is invalid; use false or {requests, window_seconds, by?}",
+            )),
+            Raw::Limit(cfg) => Ok(RouteRateLimit::Limit(cfg)),
+        }
+    }
+}
+
+include!("route_config_impl.rs");
+include!("route_config_rest.rs");
+include!("route_config_tests.rs");

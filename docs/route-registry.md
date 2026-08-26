@@ -111,7 +111,7 @@ Delete stores `config: null` and clears the etcd key. History remains. Restore o
 | | |
 |--|--|
 | Key | `edge/gateway/routes/{service_name}` |
-| Value | JSON `ServiceConfig` with **full paths** (`route_prefix` already expanded) |
+| Value | JSON `ServiceConfig` with **full paths** and list-form `methods` (`route_prefix` and nested methods maps already expanded) |
 
 ## Environment
 
@@ -134,7 +134,7 @@ Prod compose does **not** seed. Apply identity routes yourself (CLI or curl).
 
 ## Validation
 
-Route types and validation live in each of gateway and route-registry (`src/route_config.rs`). Keep them aligned deliberately; etcd JSON and [`routes.md`](routes.md) are the contract. Expand happens at write time only.
+Route types and validation live in each of gateway and route-registry (`src/route_config.rs`). Keep them aligned deliberately; etcd JSON and [`routes.md`](routes.md) are the contract. Expand (`route_prefix` and nested `methods` maps) happens at write time only.
 
 ## Related
 

@@ -49,6 +49,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
 | `PAYLOAD_TOO_LARGE` | 413 | `invalid_request_error` | Request body is too large. | `{ max_size_bytes }` |
+| `RATE_LIMITED` | 429 | `api_error` | Too many requests. Try again in a moment. | `{ retry_after_seconds }` |
 | `INTERNAL_ERROR` | 500 | `api_error` | An unexpected error occurred. | `null` |
 | `SERVICE_UNAVAILABLE` | 503 | `api_error` | Service temporarily unavailable. | `null` |
 
@@ -61,6 +62,17 @@ Returned by the **gateway**, not downstream services. If a downstream service re
 Canonical policy: [`identity-boundary.md`](identity-boundary.md).
 
 When `organization` scope is live: non-member / inactive / unknown org → **`NOT_FOUND` (404)**. Member resolve or key validate unavailable → **`SERVICE_UNAVAILABLE` (503)**. Bad credential → **`UNAUTHORIZED` (401)**.
+
+### `RATE_LIMITED`
+
+Returned by the **gateway**. HTTP **429**. `Retry-After` (seconds) is set to the same value as `details.retry_after_seconds`.
+
+Two independent in-process limiters (per gateway instance; no Redis):
+
+| Limiter | When | Key |
+|---------|------|-----|
+| Per-route (admitted) | After match + admission (JWT and API key). Omitted `rate_limit` inherits `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` (never silent unlimited). `rate_limit: false` opts out. | `by` on the route, else env `RATE_LIMIT_BY`, else scope default (`public`→ip, `user`→user, `organization`→member) |
+| Failed-auth IP | Unadmitted **401**s and unmatched **404**s. Not per-route. | Client IP. `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). `0` requests = off |
 
 ## Principles
 

@@ -14,6 +14,8 @@ type APIKey struct {
 	Name      string
 	KeyPrefix string
 	KeyHash   string
+	// Scopes is nil = unrestricted, empty = grants nothing.
+	Scopes    []string
 	CreatedAt time.Time
 	RevokedAt *time.Time
 }
@@ -22,13 +24,14 @@ func HashKey(key string) string {
 	return apikey.Hash(key)
 }
 
-func New(userID, name, key, prefix string) *APIKey {
+func New(userID, name, key, prefix string, scopes []string) *APIKey {
 	return &APIKey{
 		ID:        id.New(),
 		UserID:    userID,
 		Name:      name,
 		KeyPrefix: apikey.DisplayPrefix(key, prefix),
 		KeyHash:   apikey.Hash(key),
+		Scopes:    scopes,
 		CreatedAt: time.Now().UTC(),
 	}
 }

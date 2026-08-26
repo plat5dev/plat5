@@ -53,6 +53,7 @@ impl Admissor {
             user_id: auth.user_id,
             auth_type: auth.auth_type,
             kid: auth.kid,
+            key_scopes: auth.key_scopes,
         })
     }
 
@@ -128,6 +129,7 @@ impl Admissor {
                 auth_type: auth.auth_type,
                 kid: auth.kid,
             },
+            key_scopes: auth.key_scopes,
         })
     }
 
@@ -155,6 +157,7 @@ impl Admissor {
                 organization_id: path_organization_id.to_string(),
                 member_id: cached.member_id,
                 via: OrgVia::MemberKey,
+                key_scopes: cached.scopes,
             });
         }
 
@@ -200,9 +203,10 @@ impl Admissor {
             return Err(AdmitError::NotFound);
         }
 
+        let key_scopes = validation.scopes.clone();
         self.stack
             .member_apikey_cache
-            .put(key, member_id.clone(), key_org)
+            .put(key, member_id.clone(), key_org, key_scopes.clone())
             .await;
 
         debug!(
@@ -216,6 +220,7 @@ impl Admissor {
             organization_id: path_organization_id.to_string(),
             member_id,
             via: OrgVia::MemberKey,
+            key_scopes,
         })
     }
 
@@ -246,6 +251,7 @@ impl Admissor {
                         user_id,
                         auth_type: AuthType::Jwt,
                         kid: cached_claims.header.kid.clone(),
+                        key_scopes: None,
                     });
                 }
 
@@ -274,6 +280,7 @@ impl Admissor {
                     user_id,
                     auth_type: AuthType::Jwt,
                     kid: Some(kid),
+                    key_scopes: None,
                 })
             }
             _ => Err(AuthError::InvalidAuthorizationHeader),
@@ -294,11 +301,12 @@ impl Admissor {
             return Err(AuthError::InvalidUserApiKey);
         }
 
-        if let Some(user_id) = self.stack.user_apikey_cache.get(key).await {
+        if let Some(cached) = self.stack.user_apikey_cache.get(key).await {
             return Ok(AuthContext {
-                user_id,
+                user_id: cached.user_id,
                 auth_type: AuthType::UserApiKey,
                 kid: None,
+                key_scopes: cached.scopes,
             });
         }
 
@@ -324,12 +332,17 @@ impl Admissor {
             AuthError::UserApiKeyValidationUnavailable
         })?;
 
-        self.stack.user_apikey_cache.put(key, user_id.clone()).await;
+        let key_scopes = validation.scopes.clone();
+        self.stack
+            .user_apikey_cache
+            .put(key, user_id.clone(), key_scopes.clone())
+            .await;
 
         Ok(AuthContext {
             user_id,
             auth_type: AuthType::UserApiKey,
             kid: None,
+            key_scopes,
         })
     }
 

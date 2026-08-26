@@ -23,15 +23,17 @@ func NewHandler(store *Store, prefix string) *Handler {
 }
 
 type CreateRequest struct {
-	Name string `json:"name"`
+	Name   string    `json:"name"`
+	Scopes *[]string `json:"scopes"`
 }
 
 type CreateResponse struct {
-	ID        string `json:"id"`
-	Key       string `json:"key"`
-	KeyPrefix string `json:"key_prefix"`
-	Name      string `json:"name"`
-	CreatedAt string `json:"created_at"`
+	ID        string    `json:"id"`
+	Key       string    `json:"key"`
+	KeyPrefix string    `json:"key_prefix"`
+	Name      string    `json:"name"`
+	Scopes    *[]string `json:"scopes"`
+	CreatedAt string    `json:"created_at"`
 }
 
 type ListResponse struct {
@@ -40,11 +42,12 @@ type ListResponse struct {
 }
 
 type KeyResponse struct {
-	ID        string  `json:"id"`
-	KeyPrefix string  `json:"key_prefix"`
-	Name      string  `json:"name"`
-	CreatedAt string  `json:"created_at"`
-	RevokedAt *string `json:"revoked_at"`
+	ID        string    `json:"id"`
+	KeyPrefix string    `json:"key_prefix"`
+	Name      string    `json:"name"`
+	Scopes    *[]string `json:"scopes"`
+	CreatedAt string    `json:"created_at"`
+	RevokedAt *string   `json:"revoked_at"`
 }
 
 type ValidateRequest struct {
@@ -72,6 +75,10 @@ func (h *Handler) Create(c fiber.Ctx) error {
 	if err != nil {
 		return errors.FieldError("name", "Name is too long.")
 	}
+	scopes, err := apikey.NormalizeScopes(req.Scopes)
+	if err != nil {
+		return mapScopeError(err)
+	}
 
 	plaintext, err := apikey.Generate(h.prefix)
 	if err != nil {
@@ -79,7 +86,7 @@ func (h *Handler) Create(c fiber.Ctx) error {
 		return errors.InternalError()
 	}
 
-	apiKey := New(userID, name, plaintext, h.prefix)
+	apiKey := New(userID, name, plaintext, h.prefix, scopes)
 	if err := h.store.Create(ctx, apiKey); err != nil {
 		return httpx.MapDB(ctx, err, "failed to store user key", httpx.DBErr{})
 	}
@@ -96,6 +103,7 @@ func (h *Handler) Create(c fiber.Ctx) error {
 		Key:       plaintext,
 		KeyPrefix: apiKey.KeyPrefix,
 		Name:      apiKey.Name,
+		Scopes:    apikey.WireScopes(apiKey.Scopes),
 		CreatedAt: httpx.FormatTime(apiKey.CreatedAt),
 	})
 }
@@ -181,9 +189,10 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 	}
 
 	metrics.RecordKeyValidation(metrics.KeyScopeUser, true)
-	return c.JSON(ValidateResponse{
-		Valid:  true,
-		UserID: userKey.UserID,
+	return c.JSON(fiber.Map{
+		"valid":   true,
+		"user_id": userKey.UserID,
+		"scopes":  apikey.WireScopesJSON(userKey.Scopes),
 	})
 }
 
@@ -206,7 +215,15 @@ func toKeyResponse(k *APIKey) KeyResponse {
 		ID:        k.ID,
 		KeyPrefix: k.KeyPrefix,
 		Name:      k.Name,
+		Scopes:    apikey.WireScopes(k.Scopes),
 		CreatedAt: httpx.FormatTime(k.CreatedAt),
 		RevokedAt: httpx.FormatTimePtr(k.RevokedAt),
 	}
+}
+
+func mapScopeError(err error) error {
+	if se, ok := err.(*apikey.ScopeError); ok {
+		return errors.FieldError("scopes", se.Message)
+	}
+	return errors.FieldError("scopes", errors.FallbackValidation)
 }

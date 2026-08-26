@@ -24,7 +24,7 @@ pub fn apply_error_span_status(span: &Span, status: u16) {
             span.record("error.kind", "network");
             span.set_status(Status::error("service unavailable"));
         }
-        400 | 401 | 404 | 413 => {
+        400 | 401 | 403 | 404 | 413 | 429 => {
             span.set_status(Status::Ok);
         }
         _ => {}
@@ -38,6 +38,17 @@ pub async fn send_json_error(
     status: u16,
     error: ApiError,
 ) -> Result<()> {
+    send_json_error_headers(cors, session, ctx, status, error, &[]).await
+}
+
+pub async fn send_json_error_headers(
+    cors: &CorsPolicy,
+    session: &mut Session,
+    ctx: &GatewayContext,
+    status: u16,
+    error: ApiError,
+    extra_headers: &[(&'static str, String)],
+) -> Result<()> {
     let body = error.to_json_bytes(ctx.request_id.as_deref());
 
     if let Some(ref span) = ctx.root_span {
@@ -50,6 +61,9 @@ pub async fn send_json_error(
     cors.apply(&mut header, ctx.request_origin.as_deref())?;
     if let Some(ref request_id) = ctx.request_id {
         header.insert_header("X-Request-ID", request_id)?;
+    }
+    for (name, value) in extra_headers {
+        header.insert_header(*name, value.clone())?;
     }
     session
         .write_response_header(Box::new(header), false)
@@ -68,6 +82,24 @@ pub async fn write_json_error(
     error: ApiError,
 ) -> Result<bool> {
     send_json_error(cors, session, ctx, status, error).await?;
+    Ok(true)
+}
+
+pub async fn write_rate_limited(
+    cors: &CorsPolicy,
+    session: &mut Session,
+    ctx: &GatewayContext,
+    retry_after_seconds: u64,
+) -> Result<bool> {
+    send_json_error_headers(
+        cors,
+        session,
+        ctx,
+        429,
+        ApiError::rate_limited(retry_after_seconds),
+        &[("Retry-After", retry_after_seconds.to_string())],
+    )
+    .await?;
     Ok(true)
 }
 

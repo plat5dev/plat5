@@ -8,7 +8,7 @@ Boundary: [`identity-boundary.md`](identity-boundary.md). Routes: [`routes.md`](
 
 | Layer | Responsibility |
 |-------|---------------|
-| **Gateway** | Routing, authentication (JWT/API key), member admission on `organization` scope, identity header injection, CORS, trace propagation |
+| **Gateway** | Routing, authentication (JWT/API key), member admission on `organization` scope, API-key `required_scopes`, rate limits, identity header injection, CORS, trace propagation |
 | **Edge / Load Balancer** | TLS termination (e.g. Cloudflare Zero Trust tunnels) |
 | **Downstream services** | Business logic, data access, resource authorization |
 
@@ -60,9 +60,35 @@ services:
       routes:
         - path: /api/widgets
           methods: [GET, POST]
+          required_scopes: [widgets:read]
+        - path: /api/features
+          methods:
+            GET:
+              required_scopes: [org:read]
+            POST:
+              required_scopes: [org:write]
 ```
 
+`methods` may be a list (route-level `required_scopes` / `rate_limit` apply to every verb) or a nested map (per-verb). Nested maps are expanded at apply into one etcd row per verb; the gateway always sees `methods` as a string array. Full schema: [`routes.md`](routes.md).
+
 Services publish via the **route-registry** admin API (`POST /v1/apply`). Gateway loads at startup and watches etcd. Route existence is decoupled from service health — a downed service returns 503, not 404.
+
+### API key `required_scopes`
+
+After match + admission: if the route has `required_scopes` **and** the API key has a non-null scopes list, the lists must have a nonempty intersection or **403** `FORBIDDEN` (existing envelope). JWTs and unrestricted keys (`scopes: null`) skip. This is a credential constraint, not resource ACL / FGA. There is no `allowed_services`.
+
+### Rate limits
+
+In-process per gateway instance. No Redis.
+
+| | |
+|--|--|
+| Fallback | `RATE_LIMIT_REQUESTS` (default 60; `0` = unlimited), `RATE_LIMIT_WINDOW_SECONDS` (default 60), optional `RATE_LIMIT_BY` |
+| Per-route | omitted inherits fallback (never silent unlimited); `{requests, window_seconds, by?}` overrides; `false` opts out |
+| Who | All admitted routes (JWT and API key) |
+| `by` default | `public`→ip, `user`→user, `organization`→member |
+| Exceed | **429** `RATE_LIMITED`, type `api_error`, message `Too many requests. Try again in a moment.`, `details.retry_after_seconds`, `Retry-After` |
+| Failed-auth IP | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). Unadmitted 401s and unmatched 404s. Not per-route. |
 
 ## Rules for Services Behind the Gateway
 
@@ -97,6 +123,8 @@ Admission error policy (canonical): [`identity-boundary.md`](identity-boundary.m
 2. Member resolve unavailable → **503** `SERVICE_UNAVAILABLE`
 3. No member or status ≠ `active` → **404** `NOT_FOUND`
 4. Active hit → inject only `X-Organization-Id` + `X-Member-Id`
+5. Then `required_scopes` (restricted keys only) → **403** `FORBIDDEN` on miss
+6. Then per-route rate limit → **429** `RATE_LIMITED`
 
 ### Member API key (`{brand}-mk-1-…`)
 
@@ -104,6 +132,7 @@ Admission error policy (canonical): [`identity-boundary.md`](identity-boundary.m
 2. Member-key validate unavailable → **503** `SERVICE_UNAVAILABLE`
 3. `organization_id` ≠ path org → **404** `NOT_FOUND` (existence policy)
 4. Active member key for path org → inject only `X-Organization-Id` + `X-Member-Id`
+5. Then `required_scopes` / rate limit as above
 
 Gateway chooses validate URL by **wire prefix** before calling identity. Prefixes come from `APIKEY_BRAND` (same env as identity; unset → `plat5`): `{brand}-sk-1-` / `{brand}-mk-1-`. Contract: [`identity.md`](identity.md).
 
@@ -157,8 +186,10 @@ Gateway handles `OPTIONS` preflight and adds `Access-Control-Allow-*` on respons
 | Case | Code |
 |------|------|
 | Auth failure (bad/missing credential) | `UNAUTHORIZED` (401) — gateway only |
+| Restricted API key missing route `required_scopes` | `FORBIDDEN` (403) |
 | Route not registered | `NOT_FOUND` (404) |
 | Request body too large | `PAYLOAD_TOO_LARGE` (413) |
+| Rate limit (admitted route or failed-auth IP) | `RATE_LIMITED` (429); `Retry-After` |
 | Upstream or auth infra down (JWKS, key validate, member resolve) | `SERVICE_UNAVAILABLE` (503); proxy upstream failure may surface as **502** with the same `SERVICE_UNAVAILABLE` code |
 | Gateway internal failure mid-proxy | `INTERNAL_ERROR` (500) |
 | Missing expected identity headers in a service | `INTERNAL_ERROR` (500) |
