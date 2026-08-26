@@ -52,7 +52,6 @@ func main() {
 
 	orgStore := orgs.NewStore(pool)
 	orgHandler := orgs.NewHandler(orgStore)
-	orgHandler.SetInviteAuthorizeURL(cfg.InviteAuthorizeURL)
 	userKeyHandler := userkeys.NewHandler(userkeys.NewStore(pool), cfg.UserKeyPrefix)
 	memberKeyHandler := memberkeys.NewHandler(memberkeys.NewStore(pool), orgStore, cfg.MemberKeyPrefix)
 

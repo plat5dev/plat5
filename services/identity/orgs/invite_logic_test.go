@@ -87,20 +87,6 @@ func TestGenerateAndHashInviteToken(t *testing.T) {
 	}
 }
 
-func TestBuildInviteURL(t *testing.T) {
-	t.Parallel()
-	if got := BuildInviteURL("", "inv_abc"); got != "" {
-		t.Fatalf("empty: %q", got)
-	}
-	got := BuildInviteURL("https://auth.example.com/authorize?client_id=plat5", "inv_abc")
-	if !strings.Contains(got, "invite=inv_abc") || !strings.Contains(got, "client_id=plat5") {
-		t.Fatalf("url: %s", got)
-	}
-	if BuildInviteURL("not a url", "inv_abc") != "" {
-		t.Fatal("expected reject unparseable")
-	}
-}
-
 func TestCreateMemberKeepsAddByUserID(t *testing.T) {
 	t.Parallel()
 	req := CreateMemberRequest{UserID: "user_known", Role: "member"}
