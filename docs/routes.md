@@ -46,7 +46,7 @@ JSON in etcd (not YAML): registry validates and canonicalizes at write time; gat
 ### Environment Variables (route-registry)
 
 | Variable | Description | Default |
-|----------|-------------|---------|
+|----------|-------------|---------| 
 | `ETCD_URL` | etcd client endpoint | `http://localhost:2379` |
 | `DATABASE_URL` | Postgres (schema `routes`) | Required |
 | `ADMIN_TOKEN` | Bearer token for `/v1/*` | Required |
@@ -190,6 +190,12 @@ services:
           methods: [GET, POST]
         - path: /api/organizations/{organization_id}/members/{member_id}/api-keys/{key_id}
           methods: [DELETE]
+        - path: /api/organizations/{organization_id}/invites
+          methods: [GET, POST]
+        - path: /api/organizations/{organization_id}/invites/{invite_id}
+          methods: [DELETE]
+        - path: /api/invites/redeem
+          methods: [POST]
         - path: /api/organizations/{organization_id}/service-accounts
           methods: [GET, POST]
         - path: /api/organizations/{organization_id}/service-accounts/{service_account_id}
