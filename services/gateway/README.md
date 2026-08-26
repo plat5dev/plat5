@@ -30,7 +30,7 @@ cargo test --all-targets
 | `APIKEY_BRAND` | `plat5` | Same value as identity. `[a-z][a-z0-9]*`, max 32. Unset → `plat5`; empty → refuse boot |
 | `APIKEY_CACHE_TTL_SECS` | `300` | User + member API key cache TTL |
 | `MEMBER_RESOLVE_URL` | (optional) | Full URL for member resolve (`…/internal/members/resolve`); required for `organization` scope |
-| `MEMBER_CACHE_TTL_SECS` | `300` | Member cache TTL |
+| `MEMBER_CACHE_TTL_SECS` | `300` | Member resolve cache TTL |
 | `INTERNAL_AUTH_TOKEN` | unset | Sent as `X-Plat5-Internal-Token` to validate/resolve when set |
 | `RATE_LIMIT_REQUESTS` | `60` | Fallback per-route limit. `0` = unlimited fallback |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Fallback window |
