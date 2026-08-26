@@ -27,7 +27,7 @@ Public routes below are **not** auto-published. Apply `services/identity/routes.
 | **organization** | Isolation boundary users and service accounts join. |
 | **member** | Org principal. Exactly one of: a **user** or a **service account**. Wire id: `member_id`. |
 | **service account** | Non-human identity created **under an organization**. Always has a member row in that org. |
-| **api key** | Bearer secret. Either **user-scoped** or **member-scoped**. |
+| **api key** | Bearer secret. Either **user-scoped** or **member-scoped**. Optional `scopes` labels constrain which gateway routes the key may call. |
 
 ## Public API
 
@@ -38,8 +38,26 @@ No `/api/users` collection and no `/me`. Clients already know `user_id` from the
 | Method | Path | Notes |
 |--------|------|--------|
 | `POST` | `/api/users/{user_id}/api-keys` | Create; plaintext once — prefix **`{brand}-sk-1-`**. Optional `scopes`. |
-| `GET` | `/api/users/{user_id}/api-keys` | List (no hashes, no secret); echoes `scopes`; `limit` / `offset` / `has_more` |
+| `GET` | `/api/users/{user_id}/api-keys` | List (no hashes / no secret); echoes `scopes`; `limit` / `offset` / `has_more` |
 | `DELETE` | `/api/users/{user_id}/api-keys/{key_id}` | Soft-revoke; idempotent |
+
+#### Create body
+
+```json
+{ "name": "ci", "scopes": ["widgets:read"] }
+```
+
+`name` optional (default `Unnamed Key`, max 128). `scopes` optional:
+
+| Wire | Stored | Meaning |
+|------|--------|---------|
+| omitted or `null` | SQL `NULL` | Unrestricted |
+| `[]` | empty array | Grants nothing |
+| non-empty array | those labels | Restricted |
+
+Hygiene (422 `VALIDATION_ERROR` on `scopes`): each label `[a-z0-9:._-]+`, max 64 characters, max 32 labels, unique. Create and list echo `scopes` as `string[] | null` (`null` = unrestricted). Never echo the secret except on create (`key`).
+
+Create **201** also includes `"key": "{brand}-sk-1-…"` once.
 
 ### Organizations
 
@@ -141,8 +159,8 @@ Keys that authenticate **as a member** (org context). Used for automation / S2S 
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/api/organizations/{organization_id}/members/{member_id}/api-keys` | Create; plaintext once — prefix **`{brand}-mk-1-`**. Optional `scopes`. |
-| `GET` | `/api/organizations/{organization_id}/members/{member_id}/api-keys` | List (no secret); echoes `scopes` |
+| `POST` | `/api/organizations/{organization_id}/members/{member_id}/api-keys` | Create; plaintext once — prefix **`{brand}-mk-1-`**. Optional `scopes` (same semantics as user keys). |
+| `GET` | `/api/organizations/{organization_id}/members/{member_id}/api-keys` | List (echoes `scopes`, never the secret) |
 | `DELETE` | `/api/organizations/{organization_id}/members/{member_id}/api-keys/{key_id}` | Soft-revoke |
 
 **Who may manage keys**
@@ -153,24 +171,6 @@ Keys that authenticate **as a member** (org context). Used for automation / S2S 
 | `service_account` | Org admin/owner only |
 
 Member keys are a **separate product surface** from user keys: different table (`member_api_keys`), different plaintext prefix (`{brand}-mk-1-` vs `{brand}-sk-1-`), different validate endpoint. Same header name (`X-API-Key`) only. Hashing at rest is SHA-256 hex in both cases by coincidence, not a shared module requirement. List may include revoked keys (`revoked_at` set).
-
-### API key scopes
-
-Optional on mint for **both** user and member keys. Opaque labels — plat5 does not define a catalog.
-
-```json
-{ "name": "ci", "scopes": ["read", "reports.export"] }
-```
-
-| Input | Stored | Meaning |
-|-------|--------|---------|
-| omitted or `null` | `NULL` | Unrestricted (today’s keys) |
-| `[]` | empty array | Grants nothing |
-| nonempty array | that list | Labels the key carries |
-
-Hygiene: `[a-z0-9:._-]+`, max 32 labels, max 64 chars each, no duplicates. List/create echo `scopes` (`null` or array) and never the secret (plaintext only on create).
-
-Internal validate returns `scopes: string[] | null` (`null` = unrestricted) on `valid: true`.
 
 ### API key brand
 
@@ -234,8 +234,10 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
 | Result | Response |
 |--------|----------|
-| Valid user key | **200** `{ "valid": true, "user_id": "…", "scopes": null or ["…"] }` |
+| Valid user key | **200** `{ "valid": true, "user_id": "…", "scopes": null }` or `"scopes": ["widgets:read"]` or `"scopes": []` |
 | Wrong prefix / missing / revoked / unknown | **200** `{ "valid": false }` |
+
+`scopes` is `string[] | null`. `null` = unrestricted. Empty array = grants nothing.
 
 Gateway: prefix `{brand}-sk-1-` → this URL. Subject = `user_id` (same as JWT for scope checks). Cache: `APIKEY_CACHE_TTL_SECS` (default 300s).
 
@@ -251,7 +253,7 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
 | Result | Response |
 |--------|----------|
-| Valid active member key | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "scopes": null or ["…"] }` |
+| Valid active member key | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "scopes": null }` (`scopes` same as user keys) |
 | Wrong prefix / missing / revoked / inactive member / unknown | **200** `{ "valid": false }` |
 
 Gateway: prefix `{brand}-mk-1-` → this URL. **organization** scope only (see gateway contract). Does not use member resolve.
@@ -305,12 +307,11 @@ service_accounts
 
 user_api_keys          -- person credentials (user scope); wire {brand}-sk-1-
   user_id, name, key_prefix, key_hash, scopes, revoked_at, …
-
 member_api_keys        -- org principal credentials (org scope); wire {brand}-mk-1-
   member_id, name, key_prefix, key_hash, scopes, revoked_at, …
 ```
 
-`scopes` is `TEXT[]`: SQL `NULL` = unrestricted; `{}` = grants nothing.
+`scopes` is `TEXT[]`. SQL `NULL` = unrestricted. Empty array = grants nothing.
 
 Independent tables, independent packages (`userkeys` / `memberkeys`), independent validate endpoints. Not one polymorphic key system.
 
