@@ -52,6 +52,7 @@ func main() {
 
 	orgStore := orgs.NewStore(pool)
 	orgHandler := orgs.NewHandler(orgStore)
+	orgHandler.SetInviteAuthorizeURL(cfg.InviteAuthorizeURL)
 	userKeyHandler := userkeys.NewHandler(userkeys.NewStore(pool), cfg.UserKeyPrefix)
 	memberKeyHandler := memberkeys.NewHandler(memberkeys.NewStore(pool), orgStore, cfg.MemberKeyPrefix)
 
@@ -124,6 +125,7 @@ func newPublicApp(
 	orgsGroup := app.Group("/api/organizations", middleware.RequireUserID())
 	orgHandler.MountPublic(orgsGroup)
 	memberKeyHandler.MountPublic(orgsGroup)
+	orgHandler.MountRedeem(app.Group("/api/invites", middleware.RequireUserID()))
 	return app
 }
 

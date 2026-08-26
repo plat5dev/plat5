@@ -25,6 +25,7 @@ var (
 	requestsTotal   *prometheus.CounterVec
 	orgsCreated     prometheus.Counter
 	memberOps       *prometheus.CounterVec
+	inviteOps       *prometheus.CounterVec
 	resolveTotal    *prometheus.CounterVec
 	keysCreated     *prometheus.CounterVec
 	keysRevoked     *prometheus.CounterVec
@@ -57,6 +58,11 @@ func Init() {
 		memberOps = prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "member_operations_total",
 			Help: "Member mutations by operation",
+		}, []string{"operation"})
+
+		inviteOps = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "invite_operations_total",
+			Help: "Organization invite mutations by operation",
 		}, []string{"operation"})
 
 		resolveTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -102,6 +108,7 @@ func Init() {
 			requestsTotal,
 			orgsCreated,
 			memberOps,
+			inviteOps,
 			resolveTotal,
 			keysCreated,
 			keysRevoked,
@@ -138,6 +145,11 @@ func RecordOrgCreated() {
 func RecordMemberOp(operation string) {
 	Init()
 	memberOps.WithLabelValues(operation).Inc()
+}
+
+func RecordInviteOp(operation string) {
+	Init()
+	inviteOps.WithLabelValues(operation).Inc()
 }
 
 func RecordResolve(result string) {
