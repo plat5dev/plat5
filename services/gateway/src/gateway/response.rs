@@ -24,7 +24,7 @@ pub fn apply_error_span_status(span: &Span, status: u16) {
             span.record("error.kind", "network");
             span.set_status(Status::error("service unavailable"));
         }
-        400 | 401 | 404 | 413 => {
+        400 | 401 | 403 | 404 | 413 | 429 => {
             span.set_status(Status::Ok);
         }
         _ => {}
@@ -38,6 +38,17 @@ pub async fn send_json_error(
     status: u16,
     error: ApiError,
 ) -> Result<()> {
+    send_json_error_with_retry_after(cors, session, ctx, status, error, None).await
+}
+
+pub async fn send_json_error_with_retry_after(
+    cors: &CorsPolicy,
+    session: &mut Session,
+    ctx: &GatewayContext,
+    status: u16,
+    error: ApiError,
+    retry_after_seconds: Option<u64>,
+) -> Result<()> {
     let body = error.to_json_bytes(ctx.request_id.as_deref());
 
     if let Some(ref span) = ctx.root_span {
@@ -50,6 +61,9 @@ pub async fn send_json_error(
     cors.apply(&mut header, ctx.request_origin.as_deref())?;
     if let Some(ref request_id) = ctx.request_id {
         header.insert_header("X-Request-ID", request_id)?;
+    }
+    if let Some(secs) = retry_after_seconds {
+        header.insert_header("Retry-After", secs.max(1).to_string())?;
     }
     session
         .write_response_header(Box::new(header), false)
@@ -68,6 +82,25 @@ pub async fn write_json_error(
     error: ApiError,
 ) -> Result<bool> {
     send_json_error(cors, session, ctx, status, error).await?;
+    Ok(true)
+}
+
+pub async fn write_rate_limited(
+    cors: &CorsPolicy,
+    session: &mut Session,
+    ctx: &GatewayContext,
+    retry_after_seconds: u64,
+) -> Result<bool> {
+    let retry = retry_after_seconds.max(1);
+    send_json_error_with_retry_after(
+        cors,
+        session,
+        ctx,
+        429,
+        ApiError::rate_limited(retry),
+        Some(retry),
+    )
+    .await?;
     Ok(true)
 }
 
@@ -100,6 +133,14 @@ pub async fn write_admit_error(
             warn!(reason = msg, "admission internal error (config bug)");
             write_json_error(cors, session, ctx, 500, ApiError::internal_error()).await
         }
+    }
+}
+
+pub fn is_unadmitted_client_auth(err: &AdmitError) -> bool {
+    match err {
+        AdmitError::Auth(auth_err) => auth_err.is_client_error(),
+        AdmitError::MemberApiKeyInvalid => true,
+        _ => false,
     }
 }
 

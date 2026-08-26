@@ -18,9 +18,8 @@ This file tracks deferred gateway improvements that are intentionally out of sco
 
 ## Rate Limiting
 
-- **Current state:** No per-IP, per-user, or per-API-key rate limiting.
-- **Desired state:** Add basic per-IP rate limiting on auth endpoints at minimum. Full per-key rate limiting with `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` response headers is the long-term goal.
-- **Rationale:** Prevents brute-force attacks and protects downstream services from abuse. Invalid API keys and member resolve misses are not cached, so backends see every attempt until rate limiting exists.
+- **Done (this slice):** In-process token bucket. Admitted routes inherit gateway fallback (`RATE_LIMIT_REQUESTS` / `WINDOW` / optional `BY`); per-route override or `false` opt-out. Separate always-on failed-auth IP limiter (`RATE_LIMIT_AUTH_FAILURE_*`) for unadmitted 401s and unmatched 404s. Envelope `RATE_LIMITED` + `Retry-After`. No Redis.
+- **Still open:** `X-RateLimit-Limit` / `Remaining` / `Reset` headers; multi-instance aggregation.
 
 ## JWKS Conditional Refresh
 
