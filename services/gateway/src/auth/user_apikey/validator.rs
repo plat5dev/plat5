@@ -17,6 +17,8 @@ pub struct UserApiKeyValidator {
 pub struct UserApiKeyValidation {
     pub valid: bool,
     pub user_id: Option<String>,
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]

@@ -18,6 +18,8 @@ pub struct MemberApiKeyValidation {
     pub valid: bool,
     pub member_id: Option<String>,
     pub organization_id: Option<String>,
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]

@@ -5,6 +5,7 @@ use crate::auth::AuthType;
 pub struct CachedMemberApiKey {
     pub member_id: String,
     pub organization_id: String,
+    pub scopes: Option<Vec<String>>,
 }
 
 /// Cache for validated member API keys.
@@ -24,13 +25,20 @@ impl MemberApiKeyCache {
         self.inner.get_secret(key).await
     }
 
-    pub async fn put(&self, key: &str, member_id: String, organization_id: String) {
+    pub async fn put(
+        &self,
+        key: &str,
+        member_id: String,
+        organization_id: String,
+        scopes: Option<Vec<String>>,
+    ) {
         self.inner
             .put_secret(
                 key,
                 CachedMemberApiKey {
                     member_id,
                     organization_id,
+                    scopes,
                 },
             )
             .await;
