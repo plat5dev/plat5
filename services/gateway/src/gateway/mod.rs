@@ -25,7 +25,9 @@ use crate::auth::AuthStack;
 use crate::config::GatewayConfig;
 use crate::error::{ApiError, ErrorKind};
 use crate::metrics;
+use crate::rate_limit::RateLimitState;
 use crate::route_map::{Route, RouteMap};
+use crate::scopes;
 
 pub use crate::admission::parse_user_id_claim;
 pub use context::GatewayContext;
@@ -39,6 +41,7 @@ pub struct UserGateway {
     connect_timeout: Duration,
     read_timeout: Duration,
     cors: CorsPolicy,
+    limits: RateLimitState,
 }
 
 impl UserGateway {
@@ -53,6 +56,15 @@ impl UserGateway {
             connect_timeout: cfg.upstream_connect_timeout,
             read_timeout: cfg.upstream_read_timeout,
             cors: CorsPolicy::new(cfg.allowed_origins.clone()),
+            limits: RateLimitState {
+                route: crate::rate_limit::RateLimiter::new(),
+                auth_failure: crate::rate_limit::RateLimiter::new(),
+                fallback_requests: cfg.rate_limit_requests,
+                fallback_window_seconds: cfg.rate_limit_window_seconds,
+                fallback_by: cfg.rate_limit_by,
+                auth_failure_requests: cfg.rate_limit_auth_failure_requests,
+                auth_failure_window_seconds: cfg.rate_limit_auth_failure_window_seconds,
+            },
         }
     }
 
@@ -145,9 +157,35 @@ impl UserGateway {
         {
             Ok(a) => a,
             Err(err) => {
+                if response::is_unadmitted_client_auth(&err) {
+                    let ip = client_ip(session);
+                    if let Some(retry) = self.limits.check_auth_failure(&ip) {
+                        return response::write_rate_limited(&self.cors, session, ctx, retry).await;
+                    }
+                }
                 return response::write_admit_error(&self.cors, session, ctx, err).await;
             }
         };
+
+        let ip = client_ip(session);
+        let method = session.req_header().method.as_str();
+        if let Some(retry) = self.limits.check_route(route, method, &admission, &ip) {
+            return response::write_rate_limited(&self.cors, session, ctx, retry).await;
+        }
+
+        if !scopes::key_satisfies_required_scopes(
+            route.required_scopes.as_deref(),
+            admission.key_scopes(),
+        ) {
+            return response::write_json_error(
+                &self.cors,
+                session,
+                ctx,
+                403,
+                ApiError::forbidden("required_scopes", "route", &route.path),
+            )
+            .await;
+        }
 
         upstream::record_admission_span(ctx, &admission);
         if upstream::apply_admission_headers(session.req_header_mut(), &admission).is_err() {
@@ -171,6 +209,37 @@ impl UserGateway {
             self.read_timeout,
         )?;
         Ok(false)
+    }
+}
+
+fn client_ip(session: &Session) -> String {
+    let headers = &session.req_header().headers;
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        if let Some(first) = xff.split(',').next() {
+            let ip = first.trim();
+            if !ip.is_empty() {
+                return ip.to_string();
+            }
+        }
+    }
+    if let Some(real) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+        let ip = real.trim();
+        if !ip.is_empty() {
+            return ip.to_string();
+        }
+    }
+    let Some(addr) = session.client_addr() else {
+        return "unknown".to_string();
+    };
+    let s = addr.to_string();
+    if let Some(rest) = s.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            return rest[..end].to_string();
+        }
+    }
+    match s.rsplit_once(':') {
+        Some((ip, _)) => ip.to_string(),
+        None => s,
     }
 }
 
@@ -300,6 +369,10 @@ impl ProxyHttp for UserGateway {
 
         let Some((route, params)) = self.resolve_route(&path, &method) else {
             warn!("no matching route");
+            let ip = client_ip(session);
+            if let Some(retry) = self.limits.check_auth_failure(&ip) {
+                return response::write_rate_limited(&self.cors, session, ctx, retry).await;
+            }
             return response::write_json_error(
                 &self.cors,
                 session,
@@ -437,7 +510,7 @@ impl ProxyHttp for UserGateway {
             } else if matches!(status, 500..=599) {
                 span.record("error.kind", "internal");
                 span.set_status(Status::error(format!("http {status}")));
-            } else if matches!(status, 400 | 401 | 404 | 413) {
+            } else if matches!(status, 400 | 401 | 403 | 404 | 413 | 429) {
                 span.set_status(Status::Ok);
             }
         }
