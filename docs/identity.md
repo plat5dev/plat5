@@ -107,13 +107,15 @@ Prefix: `/api/organizations`
 
 ### Invites
 
-Token/link invites. **No pending member rows.** Membership is created only on redeem, as `active`. Identity does **not** send email and has **no SMTP env**. The create response returns the plaintext token **once** (same idea as API keys). Whoever hosts the console may send mail, or not.
+Token invites. **No pending member rows.** Membership is created only on redeem, as `active`. Identity does **not** send email and has **no SMTP env**. The create response returns the plaintext token **once** (same idea as API keys). Whoever hosts the console may send mail, or not.
+
+Copy-link is `{app_origin}/login?invite=` — the **app** builds that URL from the minted token, stashes `invite=` across OIDC, then `POST /api/invites/redeem` after callback. Auth does **not** carry `invite=`. Identity does not build Auth `/authorize` URLs.
 
 `POST /members` add-by-`user_id` is unchanged and still immediately `active`.
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/api/organizations/{organization_id}/invites` | Admin or owner (same as add member). Body `{ "role?", "email?", "expires_in_seconds?" }`. Token once. Optional `url` when `INVITE_AUTHORIZE_URL` is set. |
+| `POST` | `/api/organizations/{organization_id}/invites` | Admin or owner (same as add member). Body `{ "role?", "email?", "expires_in_seconds?" }`. Token once. |
 | `GET` | `/api/organizations/{organization_id}/invites` | Active member; **no** token |
 | `DELETE` | `/api/organizations/{organization_id}/invites/{invite_id}` | Admin or owner; revoke (idempotent) |
 | `POST` | `/api/invites/redeem` | Invitee; body `{ "token" }` + `X-User-Id`. Inserts **active** member. Already a member → **200** idempotent (token still consumed). Unknown / expired / revoked / used → **404** `NOT_FOUND` (no org leak). |
@@ -138,7 +140,6 @@ Token prefix `inv_`. Hashed at rest (SHA-256 hex). One-shot: `redeemed_at` set o
   "email": "a@b.com",
   "token_prefix": "inv_abcd",
   "token": "inv_…",
-  "url": "https://auth.example.com/authorize?…&invite=inv_…",
   "expires_at": "...",
   "created_by": "...",
   "created_at": "...",
@@ -148,21 +149,7 @@ Token prefix `inv_`. Hashed at rest (SHA-256 hex). One-shot: `redeemed_at` set o
 }
 ```
 
-`url` is omitted unless `INVITE_AUTHORIZE_URL` is set (Auth `/authorize` URL; identity appends `invite`). List/get never return `token`.
-
-### Internal invite redeem
-
-For an IdP that has a **public** identity or gateway URL (Auth must not join the plat5 Docker network):
-
-```
-POST /internal/invites/redeem
-Content-Type: application/json
-X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
-
-{ "token": "inv_…", "user_id": "…" }
-```
-
-Same redeem rules as the public route (active member, idempotent if already a member, 404 for unknown/used/expired/revoked).
+List/get never return `token`. Identity does not return an invite `url`; the app builds `{app_origin}/login?invite=`.
 
 ### Service accounts
 
@@ -334,8 +321,6 @@ Gateway may cache active resolves (`MEMBER_CACHE_TTL_SECS`, default 300s). Remov
 
 Member API keys do **not** use this endpoint for admission: validate already returns `member_id` + `organization_id`.
 
-Internal invite redeem is documented under **Invites**.
-
 ## Data model (logical)
 
 ```
@@ -368,11 +353,10 @@ No IdP user table and no FK to an external directory. `user_id` values are opaqu
 | `service.name` | `identity` |
 | `service.namespace` | `identity` |
 | Public port | `3000` |
-| Internal port | `3001` (`/health/*`, `/metrics`, validate, resolve, invite redeem) |
+| Internal port | `3001` (`/health/*`, `/metrics`, validate, resolve) |
 | Database | Plat5 Postgres via `DATABASE_URL` |
 | Schema | **`identity`** (service-owned; tables + `schema_migrations`) |
 | `APIKEY_BRAND` | default `plat5`; same value as gateway |
-| `INVITE_AUTHORIZE_URL` | optional Auth `/authorize` URL; create-invite includes `url` with `invite` |
 
 Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 
@@ -384,7 +368,7 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - Org `settings` / config bag
 - `GET /api/users` or `/api/users/me`
 - Platform-owned user rows / IdP account linking (opaque `user_id` only)
-- SMTP / sending invite email (create returns a token/link; the console may send mail)
+- SMTP / sending invite email (create returns a token; the console may send mail)
 - Pending member rows (membership is created only on invite redeem, status `active`)
 - Resource ACL, FGA, project permissions
 - Gateway `organization` scope on this service’s public routes
