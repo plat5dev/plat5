@@ -93,6 +93,8 @@ services:
 | `path` | `string` | HTTP path (`/` or starts with `/`). Supports `{param}`. |
 | `methods` | `array<string>` | Allowed HTTP methods. |
 | `transform` | `object?` | Optional path rewrite (see below). |
+| `required_scopes` | `array<string>?` | If set, API keys with a non-null scopes list need a nonempty intersection. JWTs and unrestricted keys skip. Omitted = any admitted principal. |
+| `rate_limit` | `object \| false?` | Omitted inherits gateway fallback (never silent unlimited). `{ requests, window_seconds, by? }` overrides. `false` opts out (unlimited). |
 
 A service must define at least one scope. Multiple scopes may be present.
 
@@ -108,6 +110,26 @@ user:
 ```
 
 When `transform.path` is present, the gateway rewrites the request path before proxying. **`transform.path` is always an absolute upstream path** (not relative to any `route_prefix`).
+
+### `required_scopes` (optional, any scope)
+
+Opaque labels. Same hygiene as API key scopes (`[a-z0-9:._-]+`, max 32, max 64 chars, nonempty if set). Validated at apply; projected in etcd JSON.
+
+After match + admission: if this list is present **and** the credential is an API key whose validate payload has a non-null `scopes` array, require a nonempty intersection. Else **403** `FORBIDDEN`. Unrestricted keys (`scopes: null`) and JWTs skip.
+
+### `rate_limit` (optional, any scope)
+
+| YAML | Meaning |
+|------|---------|
+| omitted | Inherit gateway fallback (`RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS`; `0` requests = unlimited fallback). **Never** silent unlimited. |
+| `false` | Opt out — unlimited for this route |
+| `{ requests, window_seconds, by? }` | Override. `requests` and `window_seconds` > 0. `by` is `ip`, `user`, or `member`. |
+
+When `by` is omitted (route and env), it follows scope: `public`→`ip`, `user`→`user`, `organization`→`member`. `RATE_LIMIT_BY` sets a gateway default when the route omits `by`.
+
+Applies to **admitted** traffic (JWT and API key), in-process per gateway instance (token bucket). No Redis. Over limit → **429** `RATE_LIMITED` (`api_error`), message `Too many requests. Try again in a moment.`, `details.retry_after_seconds`, `Retry-After` header.
+
+Failed-auth is **not** per-route. See gateway contract: `RATE_LIMIT_AUTH_FAILURE_*` covers unadmitted 401s and unmatched 404s.
 
 ## Scopes
 
@@ -221,6 +243,8 @@ Registry validates **before etcd**. Gateway validates again at load:
 - At least one scope (`public`, `user`, and/or `organization`)
 - `organization` scope requires `organization_param`; every expanded org path includes `{param}`
 - `route_prefix` join rules at registry; etcd stores full paths only
+- `required_scopes` if set: nonempty, hygiene `[a-z0-9:._-]+`, max 32 labels, max 64 chars, no duplicates
+- `rate_limit`: `false` or `{ requests > 0, window_seconds > 0, by?: ip|user|member }`
 - Duplicate service names in merged registry: first wins, warning
 - Malformed JSON values skipped with warning; other routes continue
 
