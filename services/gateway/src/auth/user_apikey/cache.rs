@@ -4,6 +4,7 @@ use crate::auth::AuthType;
 #[derive(Clone)]
 pub struct CachedUserApiKey {
     pub user_id: String,
+    /// None = unrestricted.
     pub scopes: Option<Vec<String>>,
 }
 
@@ -26,7 +27,10 @@ impl UserApiKeyCache {
 
     pub async fn put(&self, key: &str, user_id: String, scopes: Option<Vec<String>>) {
         self.inner
-            .put_secret(key, CachedUserApiKey { user_id, scopes })
+            .put_secret(
+                key,
+                CachedUserApiKey { user_id, scopes },
+            )
             .await;
     }
 }

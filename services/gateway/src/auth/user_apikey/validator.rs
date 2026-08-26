@@ -17,6 +17,7 @@ pub struct UserApiKeyValidator {
 pub struct UserApiKeyValidation {
     pub valid: bool,
     pub user_id: Option<String>,
+    /// None = unrestricted (JSON null). Some([]) grants nothing.
     #[serde(default)]
     pub scopes: Option<Vec<String>>,
 }

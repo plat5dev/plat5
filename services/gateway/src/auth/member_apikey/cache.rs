@@ -5,6 +5,7 @@ use crate::auth::AuthType;
 pub struct CachedMemberApiKey {
     pub member_id: String,
     pub organization_id: String,
+    /// None = unrestricted.
     pub scopes: Option<Vec<String>>,
 }
 
