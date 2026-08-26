@@ -703,7 +703,7 @@ mod tests {
         assert_eq!(unlimited, RouteRateLimit::Unlimited);
 
         let obj: RouteRateLimit =
-            serde_json::from_str(r#"{"requests":10,"window_seconds":60,"by":"ip"}"#).unwrap();
+            serde_json::from_str(r#"{\"requests\":10,\"window_seconds\":60,\"by\":\"ip\"}"#).unwrap();
         match obj {
             RouteRateLimit::Limit(cfg) => {
                 assert_eq!(cfg.requests, 10);
@@ -742,7 +742,7 @@ mod tests {
     #[test]
     fn flat_methods_list_still_validates() {
         let r = parse_route(
-            r#"{"path":"/features","methods":["GET","POST"],"required_scopes":["org:read"]}"#,
+            r#"{\"path\":\"/features\",\"methods\":[\"GET\",\"POST\"],\"required_scopes\":[\"org:read\"]}"#,
         );
         assert_eq!(r.methods, vec!["GET", "POST"]);
         assert_eq!(
@@ -759,12 +759,12 @@ mod tests {
     fn nested_get_post_different_scopes_expands_to_two_routes() {
         let r = parse_route(
             r#"{
-                "path": "/features",
-                "methods": {
-                    "GET": {"required_scopes": ["org:read"]},
-                    "POST": {
-                        "required_scopes": ["org:write"],
-                        "rate_limit": {"requests": 100, "window_seconds": 1, "by": "ip"}
+                \"path\": \"/features\",
+                \"methods\": {
+                    \"GET\": {\"required_scopes\": [\"org:read\"]},
+                    \"POST\": {
+                        \"required_scopes\": [\"org:write\"],
+                        \"rate_limit\": {\"requests\": 100, \"window_seconds\": 1, \"by\": \"ip\"}
                     }
                 }
             }"#,
@@ -811,7 +811,7 @@ mod tests {
 
     #[test]
     fn mixing_list_and_map_fails() {
-        let r = parse_route(r#"{"path":"/features","methods":["GET",{"POST":{}}]}"#);
+        let r = parse_route(r#"{\"path\":\"/features\",\"methods\":[\"GET\",{\"POST\":{}}]}"#);
         let mut services = HashMap::new();
         services.insert("w".into(), user_service(vec![r]));
         let err = Config { services }.validate().unwrap_err();
@@ -821,7 +821,7 @@ mod tests {
 
     #[test]
     fn empty_nested_methods_map_fails() {
-        let r = parse_route(r#"{"path":"/features","methods":{}}"#);
+        let r = parse_route(r#"{\"path\":\"/features\",\"methods\":{}}"#);
         let mut services = HashMap::new();
         services.insert("w".into(), user_service(vec![r]));
         let err = Config { services }.validate().unwrap_err();
@@ -834,7 +834,7 @@ mod tests {
 
     #[test]
     fn nested_method_empty_body_ok() {
-        let r = parse_route(r#"{"path":"/features","methods":{"GET":null,"POST":{}}}"#);
+        let r = parse_route(r#"{\"path\":\"/features\",\"methods\":{\"GET\":null,\"POST\":{}}}"#);
         let prepared = user_service(vec![r])
             .prepare_for_registry("w")
             .expect("empty method body is valid");
@@ -850,9 +850,9 @@ mod tests {
     #[test]
     fn duplicate_path_method_after_expand_fails() {
         let nested = parse_route(
-            r#"{"path":"/features","methods":{"GET":{"required_scopes":["org:read"]}}}"#,
+            r#"{\"path\":\"/features\",\"methods\":{\"GET\":{\"required_scopes\":[\"org:read\"]}}}"#,
         );
-        let flat = parse_route(r#"{"path":"/features","methods":["GET"]}"#);
+        let flat = parse_route(r#"{\"path\":\"/features\",\"methods\":[\"GET\"]}"#);
         let err = user_service(vec![nested, flat])
             .prepare_for_registry("w")
             .unwrap_err();
@@ -861,5 +861,27 @@ mod tests {
             msg.contains("duplicate"),
             "expected duplicate path+method, got {msg}"
         );
+    }
+
+    #[test]
+    fn yaml_nested_empty_body_ok() {
+        let yaml = r#"
+path: /features
+methods:
+  GET:
+  POST: {}
+"#;
+        let r: RouteConfig = serde_yaml::from_str(yaml).expect("yaml empty method body");
+        let prepared = user_service(vec![r])
+            .prepare_for_registry("w")
+            .expect("yaml empty method body is valid");
+        let routes = &prepared.user.as_ref().unwrap().routes;
+        assert_eq!(routes.len(), 2);
+        for rt in routes {
+            assert!(rt.required_scopes.is_none());
+            assert!(rt.rate_limit.is_none());
+            assert_eq!(rt.methods.len(), 1);
+            assert!(matches!(rt.methods_form, MethodsForm::List));
+        }
     }
 }
