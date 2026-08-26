@@ -18,7 +18,7 @@ Public route catalog: [`routes.yml`](routes.yml). Apply via route-registry; not 
 
 Identity does **not** send email. Invite create returns a token (and optional Auth URL). No SMTP env vars.
 
-Optional `INVITE_AUTHORIZE_URL`: Auth `/authorize` URL. When set, create-invite includes `url` with `invite_token`.
+Optional `INVITE_AUTHORIZE_URL`: Auth `/authorize` URL. When set, create-invite includes `url` with `invite`.
 
 ## Local
 

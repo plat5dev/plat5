@@ -86,7 +86,7 @@ func InviteRedeemable(inv *Invite, now time.Time) bool {
 	return now.Before(inv.ExpiresAt)
 }
 
-// BuildInviteURL appends invite_token to an operator-configured Auth authorize URL.
+// BuildInviteURL appends invite= to an operator-configured Auth authorize URL.
 // Empty or unparseable authorizeURL yields "".
 func BuildInviteURL(authorizeURL, token string) string {
 	authorizeURL = strings.TrimSpace(authorizeURL)
@@ -98,7 +98,7 @@ func BuildInviteURL(authorizeURL, token string) string {
 		return ""
 	}
 	q := u.Query()
-	q.Set("invite_token", token)
+	q.Set("invite", token)
 	u.RawQuery = q.Encode()
 	return u.String()
 }

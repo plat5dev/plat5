@@ -93,7 +93,7 @@ func TestBuildInviteURL(t *testing.T) {
 		t.Fatalf("empty: %q", got)
 	}
 	got := BuildInviteURL("https://auth.example.com/authorize?client_id=plat5", "inv_abc")
-	if !strings.Contains(got, "invite_token=inv_abc") || !strings.Contains(got, "client_id=plat5") {
+	if !strings.Contains(got, "invite=inv_abc") || !strings.Contains(got, "client_id=plat5") {
 		t.Fatalf("url: %s", got)
 	}
 	if BuildInviteURL("not a url", "inv_abc") != "" {
