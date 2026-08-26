@@ -26,15 +26,17 @@ func NewHandler(store *Store, orgStore *orgs.Store, prefix string) *Handler {
 }
 
 type CreateRequest struct {
-	Name string `json:"name"`
+	Name   string    `json:"name"`
+	Scopes *[]string `json:"scopes"`
 }
 
 type CreateResponse struct {
-	ID        string `json:"id"`
-	Key       string `json:"key"`
-	KeyPrefix string `json:"key_prefix"`
-	Name      string `json:"name"`
-	CreatedAt string `json:"created_at"`
+	ID        string    `json:"id"`
+	Key       string    `json:"key"`
+	KeyPrefix string    `json:"key_prefix"`
+	Name      string    `json:"name"`
+	Scopes    *[]string `json:"scopes"`
+	CreatedAt string    `json:"created_at"`
 }
 
 type ListResponse struct {
@@ -43,11 +45,12 @@ type ListResponse struct {
 }
 
 type KeyResponse struct {
-	ID        string  `json:"id"`
-	KeyPrefix string  `json:"key_prefix"`
-	Name      string  `json:"name"`
-	CreatedAt string  `json:"created_at"`
-	RevokedAt *string `json:"revoked_at"`
+	ID        string    `json:"id"`
+	KeyPrefix string    `json:"key_prefix"`
+	Name      string    `json:"name"`
+	Scopes    *[]string `json:"scopes"`
+	CreatedAt string    `json:"created_at"`
+	RevokedAt *string   `json:"revoked_at"`
 }
 
 type ValidateRequest struct {
@@ -55,9 +58,17 @@ type ValidateRequest struct {
 }
 
 type ValidateResponse struct {
-	Valid          bool   `json:"valid"`
-	MemberID       string `json:"member_id,omitempty"`
-	OrganizationID string `json:"organization_id,omitempty"`
+	Valid          bool      `json:"valid"`
+	MemberID       string    `json:"member_id,omitempty"`
+	OrganizationID string    `json:"organization_id,omitempty"`
+	Scopes         *[]string `json:"scopes,omitempty"`
+}
+
+type validMemberKeyResponse struct {
+	Valid          bool      `json:"valid"`
+	MemberID       string    `json:"member_id"`
+	OrganizationID string    `json:"organization_id"`
+	Scopes         *[]string `json:"scopes"`
 }
 
 func (h *Handler) Create(c fiber.Ctx) error {
@@ -82,6 +93,10 @@ func (h *Handler) Create(c fiber.Ctx) error {
 	if err != nil {
 		return errors.FieldError("name", "Name is too long.")
 	}
+	scopes, err := apikey.ParseScopes(req.Scopes)
+	if err != nil {
+		return err
+	}
 
 	plaintext, err := apikey.Generate(h.prefix)
 	if err != nil {
@@ -89,7 +104,7 @@ func (h *Handler) Create(c fiber.Ctx) error {
 		return errors.InternalError()
 	}
 
-	apiKey := New(memberID, name, plaintext, h.prefix)
+	apiKey := New(memberID, name, plaintext, h.prefix, scopes)
 	if err := h.store.Create(ctx, apiKey); err != nil {
 		return httpx.MapDB(ctx, err, "failed to store member key", httpx.DBErr{})
 	}
@@ -107,6 +122,7 @@ func (h *Handler) Create(c fiber.Ctx) error {
 		Key:       plaintext,
 		KeyPrefix: apiKey.KeyPrefix,
 		Name:      apiKey.Name,
+		Scopes:    apikey.PointerForJSON(apiKey.Scopes),
 		CreatedAt: httpx.FormatTime(apiKey.CreatedAt),
 	})
 }
@@ -202,10 +218,11 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 	}
 
 	metrics.RecordKeyValidation(metrics.KeyScopeMember, true)
-	return c.JSON(ValidateResponse{
+	return c.JSON(validMemberKeyResponse{
 		Valid:          true,
 		MemberID:       memberKey.Key.MemberID,
 		OrganizationID: memberKey.OrganizationID,
+		Scopes:         apikey.PointerForJSON(memberKey.Key.Scopes),
 	})
 }
 
@@ -240,6 +257,7 @@ func toKeyResponse(k *APIKey) KeyResponse {
 		ID:        k.ID,
 		KeyPrefix: k.KeyPrefix,
 		Name:      k.Name,
+		Scopes:    apikey.PointerForJSON(k.Scopes),
 		CreatedAt: httpx.FormatTime(k.CreatedAt),
 		RevokedAt: httpx.FormatTimePtr(k.RevokedAt),
 	}
