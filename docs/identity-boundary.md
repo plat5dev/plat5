@@ -79,6 +79,7 @@ identity: load member for (user_id, organization_id); enforce admin rules; respo
 | Case | HTTP / code |
 |------|-------------|
 | Bad or missing credential | **401** `UNAUTHORIZED` |
+| API key with a scopes list that misses `required_scopes` | **403** `FORBIDDEN` |
 | Non-member, unknown org, or member not `active` (org-context) | **404** `NOT_FOUND` |
 | Member resolve / key validate down or timeout | **503** `SERVICE_UNAVAILABLE` |
 | Missing expected identity headers on a protected route (downstream) | **500** `INTERNAL_ERROR` (platform bug) |
