@@ -27,7 +27,7 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 	if created.Token == "" || !LooksLikeInviteToken(created.Token) {
 		t.Fatalf("token once: %+v", created)
 	}
-	if created.URL == "" || !strings.Contains(created.URL, "invite_token=") {
+	if created.URL == "" || !strings.Contains(created.URL, "invite=") {
 		t.Fatalf("url: %s", created.URL)
 	}
 	if created.Email == nil || *created.Email != "a@b.com" {
