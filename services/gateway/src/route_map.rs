@@ -311,6 +311,7 @@ mod tests {
             transform: None,
             required_scopes: None,
             rate_limit: None,
+            ..Default::default()
         }
     }
 
