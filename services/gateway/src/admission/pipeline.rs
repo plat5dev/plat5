@@ -206,12 +206,7 @@ impl Admissor {
         let key_scopes = validation.scopes.clone();
         self.stack
             .member_apikey_cache
-            .put(
-                key,
-                member_id.clone(),
-                key_org,
-                key_scopes.clone(),
-            )
+            .put(key, member_id.clone(), key_org, key_scopes.clone())
             .await;
 
         debug!(
