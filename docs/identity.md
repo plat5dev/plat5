@@ -1,6 +1,6 @@
 # Identity service
 
-Plat5 **identity** service: organizations, members, service accounts, API keys, and internal auth helpers for the gateway.
+Plat5 **identity** service: organizations, members, invites, service accounts, API keys, and internal auth helpers for the gateway.
 
 Boundary: [`identity-boundary.md`](identity-boundary.md). Errors: [`api-errors.md`](api-errors.md), [`error-copy.md`](error-copy.md). Gateway: [`gateway-contract.md`](gateway-contract.md).
 
@@ -28,6 +28,7 @@ Public routes below are **not** auto-published. Apply `services/identity/routes.
 | **member** | Org principal. Exactly one of: a **user** or a **service account**. Wire id: `member_id`. |
 | **service account** | Non-human identity created **under an organization**. Always has a member row in that org. |
 | **api key** | Bearer secret. Either **user-scoped** or **member-scoped**. |
+| **invite** | One-shot org join token. No pending member row; redeem inserts an **active** member. Identity does not send email. |
 
 ## Public API
 
@@ -78,12 +79,12 @@ Prefix: `/api/organizations`
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/api/organizations/{organization_id}/members` | Active member |
-| `POST` | `/api/organizations/{organization_id}/members` | Admin or owner; add **user** — body `{ "user_id", "role?" }`. Target `user_id` must already be known (IdP id). No invites. |
+| `POST` | `/api/organizations/{organization_id}/members` | Admin or owner; add **user** — body `{ "user_id", "role?" }`. Target `user_id` must already be known (IdP id). Immediate `active`. Unchanged by invites. |
 | `GET` | `/api/organizations/{organization_id}/members/{member_id}` | Active member |
 | `PATCH` | `/api/organizations/{organization_id}/members/{member_id}` | Role/status; admin/owner (self-leave allowed for humans) |
 | `DELETE` | `/api/organizations/{organization_id}/members/{member_id}` | Soft-remove; self or admin/owner |
 
-`POST` adds a **user** member only (immediately `active`). Service accounts are created via the service-accounts API (member row included). There is no invite or pending state.
+`POST` adds a **user** member only (immediately `active`). Service accounts are created via the service-accounts API (member row included). Invites are a **separate** resource (below); they do not create pending member rows.
 
 #### Member response
 
@@ -103,6 +104,65 @@ Prefix: `/api/organizations`
 ```
 
 `principal` is `"user"` or `"service_account"`. Exactly one of `user_id` / `service_account_id` is non-null.
+
+### Invites
+
+Token/link invites. **No pending member rows.** Membership is created only on redeem, as `active`. Identity does **not** send email and has **no SMTP env**. The create response returns the plaintext token **once** (same idea as API keys). Whoever hosts the console may send mail, or not.
+
+`POST /members` add-by-`user_id` is unchanged and still immediately `active`.
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `POST` | `/api/organizations/{organization_id}/invites` | Admin or owner (same as add member). Body `{ "role?", "email?", "expires_in_seconds?" }`. Token once. Optional `url` when `INVITE_AUTHORIZE_URL` is set. |
+| `GET` | `/api/organizations/{organization_id}/invites` | Active member; **no** token |
+| `DELETE` | `/api/organizations/{organization_id}/invites/{invite_id}` | Admin or owner; revoke (idempotent) |
+| `POST` | `/api/invites/redeem` | Invitee; body `{ "token" }` + `X-User-Id`. Inserts **active** member. Already a member → **200** idempotent (token still consumed). Unknown / expired / revoked / used → **404** `NOT_FOUND` (no org leak). |
+
+#### Create body
+
+```json
+{ "role": "member", "email": "a@b.com", "expires_in_seconds": 604800 }
+```
+
+`role` default `member` (owner role requires an owner actor, same as `POST /members`). `email` is optional display metadata; it is **not** mailed. `expires_in_seconds` default 7 days, min 60, max 30 days.
+
+Token prefix `inv_`. Hashed at rest (SHA-256 hex). One-shot: `redeemed_at` set on successful redeem.
+
+#### Create response (token once)
+
+```json
+{
+  "id": "...",
+  "organization_id": "...",
+  "role": "member",
+  "email": "a@b.com",
+  "token_prefix": "inv_abcd",
+  "token": "inv_…",
+  "url": "https://auth.example.com/authorize?…&invite_token=inv_…",
+  "expires_at": "...",
+  "created_by": "...",
+  "created_at": "...",
+  "revoked_at": null,
+  "redeemed_at": null,
+  "redeemed_by": null
+}
+```
+
+`url` is omitted unless `INVITE_AUTHORIZE_URL` is set (Auth `/authorize` URL; identity appends `invite_token`). List/get never return `token`.
+
+### Internal invite redeem
+
+For an IdP that has a **public** identity or gateway URL (Auth must not join the plat5 Docker network):
+
+```
+POST /internal/invites/redeem
+Content-Type: application/json
+X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
+
+{ "token": "inv_…", "user_id": "…" }
+```
+
+Same redeem rules as the public route (active member, idempotent if already a member, 404 for unknown/used/expired/revoked).
 
 ### Service accounts
 
@@ -274,6 +334,8 @@ Gateway may cache active resolves (`MEMBER_CACHE_TTL_SECS`, default 300s). Remov
 
 Member API keys do **not** use this endpoint for admission: validate already returns `member_id` + `organization_id`.
 
+Internal invite redeem is documented under **Invites**.
+
 ## Data model (logical)
 
 ```
@@ -284,6 +346,8 @@ members
 service_accounts
   organization_id
   name, created_by_user_id, …
+organization_invites   -- hashed token; no pending members
+  organization_id, role, email?, token_hash, expires_at, redeemed_at, revoked_at, …
 
 user_api_keys          -- person credentials (user scope); wire {brand}-sk-1-
   user_id, name, key_prefix, key_hash, revoked_at, …
@@ -304,10 +368,11 @@ No IdP user table and no FK to an external directory. `user_id` values are opaqu
 | `service.name` | `identity` |
 | `service.namespace` | `identity` |
 | Public port | `3000` |
-| Internal port | `3001` (`/health/*`, `/metrics`, validate, resolve) |
+| Internal port | `3001` (`/health/*`, `/metrics`, validate, resolve, invite redeem) |
 | Database | Plat5 Postgres via `DATABASE_URL` |
 | Schema | **`identity`** (service-owned; tables + `schema_migrations`) |
 | `APIKEY_BRAND` | default `plat5`; same value as gateway |
+| `INVITE_AUTHORIZE_URL` | optional Auth `/authorize` URL; create-invite includes `url` with `invite_token` |
 
 Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 
@@ -319,7 +384,8 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - Org `settings` / config bag
 - `GET /api/users` or `/api/users/me`
 - Platform-owned user rows / IdP account linking (opaque `user_id` only)
-- Invites, email, or pending membership
+- SMTP / sending invite email (create returns a token/link; the console may send mail)
+- Pending member rows (membership is created only on invite redeem, status `active`)
 - Resource ACL, FGA, project permissions
 - Gateway `organization` scope on this service’s public routes
 - Auto-publishing these public routes — the operator applies the catalog (`routes.yml`)
