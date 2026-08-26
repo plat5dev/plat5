@@ -202,7 +202,6 @@ func (h *Handler) RevokeInvite(c fiber.Ctx) error {
 }
 
 func (h *Handler) RedeemInvite(c fiber.Ctx) error {
-	ctx := c.Context()
 	userID := middleware.GetUserID(c)
 
 	var req RedeemInviteRequest
