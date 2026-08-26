@@ -61,7 +61,15 @@ services:
         - path: /api/widgets
           methods: [GET, POST]
           required_scopes: [widgets:read]
+        - path: /api/features
+          methods:
+            GET:
+              required_scopes: [org:read]
+            POST:
+              required_scopes: [org:write]
 ```
+
+`methods` may be a list (route-level `required_scopes` / `rate_limit` apply to every verb) or a nested map (per-verb). Nested maps are expanded at apply into one etcd row per verb; the gateway always sees `methods` as a string array. Full schema: [`routes.md`](routes.md).
 
 Services publish via the **route-registry** admin API (`POST /v1/apply`). Gateway loads at startup and watches etcd. Route existence is decoupled from service health — a downed service returns 503, not 404.
 
