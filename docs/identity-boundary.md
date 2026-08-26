@@ -10,10 +10,11 @@ Headers and service rules: [`gateway-contract.md`](gateway-contract.md). Routes:
 |-------|----------|--------|
 | **Authentication** | Who is this? | Gateway + **IdP (JWT)** / identity API keys (credentials stripped before upstream) |
 | **Organization context** | Is this credential an **active** member of this organization? | Gateway + **identity** (member resolve or member-scoped key) |
+| **API key route scopes** | Does this restricted key share a label with `required_scopes`? | Gateway after admission. JWTs and unrestricted keys skip. Not resource ACL. |
 | **Resource authorization** | Can this member do X to project/doc/…? | **Business services** — not gateway headers |
 | **Org administration** | Who may add or change members, manage service accounts, transfer ownership? | **identity** only (member role lives here) |
 
-**Stop condition for the gateway:** If a check needs a resource-type registry, relation graph, or permission matrix on the wire, it does not belong in the gateway.
+**Stop condition for the gateway:** If a check needs a resource-type registry, relation graph, or permission matrix on the wire, it does not belong in the gateway. Route `required_scopes` is a credential intersection, not that.
 
 ## Route scopes → subject
 
@@ -48,8 +49,8 @@ Business services on `organization` scope get `organization_id` + `member_id` on
 | Credential | Admission |
 |------------|-----------|
 | User JWT | Authn → `user_id` → **member resolve** `(user_id, organization_id)` → inject org headers |
-| User API key | Validate → `user_id` → same resolve → inject |
-| Member API key | Validate → `member_id` + `organization_id` → path org must match + member active → inject (no resolve call) |
+| User API key | Validate → `user_id` (+ `scopes`) → same resolve → inject → `required_scopes` if the key is restricted |
+| Member API key | Validate → `member_id` + `organization_id` + `scopes` → path org must match + member active → inject (no resolve call) → `required_scopes` if restricted |
 
 ### Default multi-org UX (business route)
 
@@ -79,7 +80,9 @@ identity: load member for (user_id, organization_id); enforce admin rules; respo
 | Case | HTTP / code |
 |------|-------------|
 | Bad or missing credential | **401** `UNAUTHORIZED` |
+| Restricted API key missing route `required_scopes` | **403** `FORBIDDEN` |
 | Non-member, unknown org, or member not `active` (org-context) | **404** `NOT_FOUND` |
+| Admitted route or failed-auth IP over limit | **429** `RATE_LIMITED` |
 | Member resolve / key validate down or timeout | **503** `SERVICE_UNAVAILABLE` |
 | Missing expected identity headers on a protected route (downstream) | **500** `INTERNAL_ERROR` (platform bug) |
 
