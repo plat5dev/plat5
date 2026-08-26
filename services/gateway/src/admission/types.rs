@@ -56,6 +56,24 @@ impl Admission {
             _ => None,
         }
     }
+
+    pub fn user_id(&self) -> Option<&str> {
+        match self {
+            Admission::User { user_id, .. } => Some(user_id.as_str()),
+            Admission::Organization {
+                via: OrgVia::User { user_id, .. },
+                ..
+            } => Some(user_id.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn member_id(&self) -> Option<&str> {
+        match self {
+            Admission::Organization { member_id, .. } => Some(member_id.as_str()),
+            _ => None,
+        }
+    }
 }
 
 pub enum ResolveDeny {
