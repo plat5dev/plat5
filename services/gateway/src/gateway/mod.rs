@@ -71,7 +71,7 @@ impl UserGateway {
             rate_limit_fallback: RateLimitFallback {
                 requests: cfg.rate_limit_requests,
                 window_seconds: cfg.rate_limit_window_seconds,
-                by: cfg.rate_limit_by.clone(),
+                by: cfg.rate_limit_by.map(|b| b.as_str().to_string()),
             },
             auth_failure_requests: cfg.rate_limit_auth_failure_requests,
             auth_failure_window_seconds: cfg.rate_limit_auth_failure_window_seconds,
@@ -193,11 +193,7 @@ impl UserGateway {
             }
         };
 
-        if let Some(required) = route
-            .required_scopes
-            .as_ref()
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(required) = route.required_scopes.as_ref().filter(|s| !s.is_empty()) {
             if let Some(granted) = admission.key_scopes() {
                 if !scopes_intersect(required, granted) {
                     return response::write_json_error(
@@ -282,10 +278,7 @@ fn default_by(scope: RouteScope) -> String {
     }
 }
 
-fn effective_rate_limit(
-    route: &Route,
-    fallback: &RateLimitFallback,
-) -> Option<(u64, u64, String)> {
+fn effective_rate_limit(route: &Route, fallback: &RateLimitFallback) -> Option<(u64, u64, String)> {
     match &route.rate_limit {
         Some(RouteRateLimit::Unlimited) => None,
         Some(RouteRateLimit::Limit(cfg)) => Some((
