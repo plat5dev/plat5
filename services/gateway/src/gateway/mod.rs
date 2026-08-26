@@ -38,7 +38,6 @@ const MAX_BODY_SIZE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 struct RateLimitFallback {
     requests: u64,
     window_seconds: u64,
-    by: Option<String>,
 }
 
 pub struct UserGateway {
@@ -71,7 +70,6 @@ impl UserGateway {
             rate_limit_fallback: RateLimitFallback {
                 requests: cfg.rate_limit_requests,
                 window_seconds: cfg.rate_limit_window_seconds,
-                by: cfg.rate_limit_by.map(|b| b.as_str().to_string()),
             },
             auth_failure_requests: cfg.rate_limit_auth_failure_requests,
             auth_failure_window_seconds: cfg.rate_limit_auth_failure_window_seconds,
@@ -212,8 +210,8 @@ impl UserGateway {
             }
         }
 
-        if let Some((limit, window, by)) = effective_rate_limit(route, &self.rate_limit_fallback) {
-            let subject = limit_subject(&by, &admission, &client_ip(session));
+        if let Some((limit, window)) = effective_rate_limit(route, &self.rate_limit_fallback) {
+            let subject = limit_subject(route.scope, &admission, &client_ip(session));
             let key = format!("{} {} {}", ctx.method_label(), route.path, subject);
             if let Err(retry) = self.route_limiter.allow(&key, limit, window) {
                 return response::write_rate_limited(&self.cors, session, ctx, retry).await;
@@ -270,55 +268,32 @@ fn client_ip(session: &Session) -> String {
     }
 }
 
-fn default_by(scope: RouteScope) -> String {
-    match scope {
-        RouteScope::Public => "ip".to_string(),
-        RouteScope::User => "user".to_string(),
-        RouteScope::Organization => "member".to_string(),
-    }
-}
-
-fn effective_rate_limit(route: &Route, fallback: &RateLimitFallback) -> Option<(u64, u64, String)> {
+fn effective_rate_limit(route: &Route, fallback: &RateLimitFallback) -> Option<(u64, u64)> {
     match &route.rate_limit {
         Some(RouteRateLimit::Unlimited) => None,
-        Some(RouteRateLimit::Limit(cfg)) => Some((
-            cfg.requests,
-            cfg.window_seconds,
-            cfg.by.clone().unwrap_or_else(|| default_by(route.scope)),
-        )),
+        Some(RouteRateLimit::Limit(cfg)) => Some((cfg.requests, cfg.window_seconds)),
         None => {
             if fallback.requests == 0 {
                 None
             } else {
-                Some((
-                    fallback.requests,
-                    fallback.window_seconds,
-                    fallback
-                        .by
-                        .clone()
-                        .unwrap_or_else(|| default_by(route.scope)),
-                ))
+                Some((fallback.requests, fallback.window_seconds))
             }
         }
     }
 }
 
-fn limit_subject(by: &str, admission: &crate::admission::Admission, ip: &str) -> String {
-    use crate::admission::{Admission, OrgVia};
-    match by {
-        "user" => match admission {
+fn limit_subject(scope: RouteScope, admission: &crate::admission::Admission, ip: &str) -> String {
+    use crate::admission::Admission;
+    match scope {
+        RouteScope::Public => format!("ip:{ip}"),
+        RouteScope::User => match admission {
             Admission::User { user_id, .. } => format!("user:{user_id}"),
-            Admission::Organization {
-                via: OrgVia::User { user_id, .. },
-                ..
-            } => format!("user:{user_id}"),
             _ => format!("ip:{ip}"),
         },
-        "member" => match admission {
-            Admission::Organization { member_id, .. } => format!("member:{member_id}"),
+        RouteScope::Organization => match admission {
+            Admission::Organization { organization_id, .. } => format!("org:{organization_id}"),
             _ => format!("ip:{ip}"),
         },
-        _ => format!("ip:{ip}"),
     }
 }
 
@@ -611,5 +586,70 @@ impl ProxyHttp for UserGateway {
         );
 
         ctx.finish_root_span();
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::admission::{Admission, OrgVia};
+    use crate::auth::AuthType;
+
+    fn org_admission(org: &str, member: &str, member_key: bool) -> Admission {
+        Admission::Organization {
+            organization_id: org.into(),
+            member_id: member.into(),
+            via: if member_key {
+                OrgVia::MemberKey
+            } else {
+                OrgVia::User {
+                    user_id: "user-1".into(),
+                    auth_type: AuthType::Jwt,
+                    kid: None,
+                }
+            },
+            key_scopes: None,
+        }
+    }
+
+    #[test]
+    fn public_scope_limits_by_ip() {
+        assert_eq!(
+            limit_subject(RouteScope::Public, &Admission::Public, "1.2.3.4"),
+            "ip:1.2.3.4"
+        );
+    }
+
+    #[test]
+    fn user_scope_limits_by_user_id() {
+        let admission = Admission::User {
+            user_id: "user-9".into(),
+            auth_type: AuthType::Jwt,
+            kid: None,
+            key_scopes: None,
+        };
+        assert_eq!(
+            limit_subject(RouteScope::User, &admission, "1.2.3.4"),
+            "user:user-9"
+        );
+    }
+
+    #[test]
+    fn organization_scope_limits_by_org_id_not_member() {
+        let jwt = org_admission("org-1", "member-9", false);
+        assert_eq!(
+            limit_subject(RouteScope::Organization, &jwt, "1.2.3.4"),
+            "org:org-1"
+        );
+        let sa = org_admission("org-1", "sa-member", true);
+        assert_eq!(
+            limit_subject(RouteScope::Organization, &sa, "9.9.9.9"),
+            "org:org-1"
+        );
+        assert_ne!(
+            limit_subject(RouteScope::Organization, &jwt, "1.2.3.4"),
+            "member:member-9"
+        );
     }
 }
