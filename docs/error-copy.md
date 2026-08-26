@@ -42,10 +42,11 @@ Use these only when a more specific sentence does not apply.
 | `NOT_FOUND` | 404 | Resource not found. |
 | `CONFLICT` | 409 | That already exists. |
 | `PAYLOAD_TOO_LARGE` | 413 | Request body is too large. |
+| `RATE_LIMITED` | 429 | Too many requests. Try again in a moment. |
 | `INTERNAL_ERROR` | 500 | An unexpected error occurred. |
 | `SERVICE_UNAVAILABLE` | 503 | Service temporarily unavailable. |
 
-`UNAUTHORIZED` / `NOT_FOUND` / `INTERNAL_ERROR` / `SERVICE_UNAVAILABLE` stay generic on purpose.
+`UNAUTHORIZED` / `NOT_FOUND` / `INTERNAL_ERROR` / `SERVICE_UNAVAILABLE` stay generic on purpose. `RATE_LIMITED` stays this sentence (retry is in `details.retry_after_seconds` and `Retry-After`, not in `message`).
 
 ## Identity — specific `message`
 
@@ -88,6 +89,11 @@ Use these only when a more specific sentence does not apply.
 | When | `message` |
 |------|-----------|
 | Name > 128 | Name is too long. |
+| Scope label empty | A scope label is required. |
+| Scope label > 64 | A scope label is too long. |
+| Scope charset | Scopes can only use lowercase letters, numbers, colons, dots, underscores, and dashes. |
+| Too many scopes (> 32) | Too many scopes. |
+| Duplicate scope labels | Duplicate scope labels are not allowed. |
 
 Internal validate/resolve (`key` / `key_id` / `user_id`+`organization_id` required) are not product UI. Fallback 422 is enough. Do not polish those sentences for the dashboard.
 
@@ -99,7 +105,7 @@ Rare in Happ UI. Fallback 422 is enough.
 
 `AppError::validation` puts the validation text in `message`. Operator-facing, not Happ.
 
-Gateway-owned 401/404/413/500/503 keep the fallback table.
+Gateway-owned 401/403/404/413/429/500/503 keep the fallback table.
 
 ## Out of this repo
 

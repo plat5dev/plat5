@@ -49,8 +49,11 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
 | `PAYLOAD_TOO_LARGE` | 413 | `invalid_request_error` | Request body is too large. | `{ max_size_bytes }` |
+| `RATE_LIMITED` | 429 | `api_error` | Too many requests. Try again in a moment. | `{ retry_after_seconds }` |
 | `INTERNAL_ERROR` | 500 | `api_error` | An unexpected error occurred. | `null` |
 | `SERVICE_UNAVAILABLE` | 503 | `api_error` | Service temporarily unavailable. | `null` |
+
+`RATE_LIMITED` also sets the **`Retry-After`** response header (seconds). Gateway-owned.
 
 ### `UNAUTHORIZED`
 
@@ -61,6 +64,14 @@ Returned by the **gateway**, not downstream services. If a downstream service re
 Canonical policy: [`identity-boundary.md`](identity-boundary.md).
 
 When `organization` scope is live: non-member / inactive / unknown org → **`NOT_FOUND` (404)**. Member resolve or key validate unavailable → **`SERVICE_UNAVAILABLE` (503)**. Bad credential → **`UNAUTHORIZED` (401)**.
+
+### Key scopes (gateway)
+
+After a successful admission: if the matched route has `required_scopes` and the credential is an API key with a **non-null** scopes list, the lists must have a nonempty intersection. Else **`FORBIDDEN` (403)**. JWTs and unrestricted keys (scopes `null`) skip the check. See [`gateway-contract.md`](gateway-contract.md).
+
+### Rate limits (gateway)
+
+Admitted traffic uses the per-route limiter (omitted `rate_limit` inherits gateway fallback; `rate_limit: false` is unlimited). Unadmitted **401**s and unmatched **404**s use a separate always-on per-IP limiter. Over limit → **`RATE_LIMITED` (429)**.
 
 ## Principles
 
