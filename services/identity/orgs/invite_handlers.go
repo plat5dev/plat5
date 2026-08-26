@@ -31,10 +31,6 @@ func (h *Handler) inviteStore() inviteStore {
 	return h.store
 }
 
-func (h *Handler) SetInviteAuthorizeURL(raw string) {
-	h.inviteAuthorizeURL = strings.TrimSpace(raw)
-}
-
 type CreateInviteRequest struct {
 	Role             string `json:"role"`
 	Email            string `json:"email"`
@@ -48,7 +44,6 @@ type InviteResponse struct {
 	Email          *string `json:"email"`
 	TokenPrefix    string  `json:"token_prefix"`
 	Token          string  `json:"token,omitempty"`
-	URL            string  `json:"url,omitempty"`
 	ExpiresAt      string  `json:"expires_at"`
 	CreatedBy      string  `json:"created_by"`
 	CreatedAt      string  `json:"created_at"`
@@ -63,8 +58,7 @@ type ListInvitesResponse struct {
 }
 
 type RedeemInviteRequest struct {
-	Token  string `json:"token"`
-	UserID string `json:"user_id"`
+	Token string `json:"token"`
 }
 
 func (h *Handler) requireInviteActor(ctx context.Context, orgID, userID string) (*Member, error) {
@@ -138,9 +132,6 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 	metrics.RecordInviteOp("create")
 	out := toInviteResponse(inv)
 	out.Token = plaintext
-	if url := BuildInviteURL(h.inviteAuthorizeURL, plaintext); url != "" {
-		out.URL = url
-	}
 	return c.Status(fiber.StatusCreated).JSON(out)
 }
 
@@ -209,22 +200,6 @@ func (h *Handler) RedeemInvite(c fiber.Ctx) error {
 		return err
 	}
 	return h.redeem(c, strings.TrimSpace(req.Token), userID)
-}
-
-func (h *Handler) RedeemInviteInternal(c fiber.Ctx) error {
-	var req RedeemInviteRequest
-	if err := c.Bind().Body(&req); err != nil {
-		return err
-	}
-	token := strings.TrimSpace(req.Token)
-	userID := strings.TrimSpace(req.UserID)
-	if token == "" || userID == "" {
-		return errors.ValidationFields(errors.FallbackValidation,
-			errors.Field{Path: "token", Message: errors.FallbackValidation},
-			errors.Field{Path: "user_id", Message: errors.FallbackValidation},
-		)
-	}
-	return h.redeem(c, token, userID)
 }
 
 func (h *Handler) redeem(c fiber.Ctx, token, userID string) error {

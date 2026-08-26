@@ -138,7 +138,6 @@ func testInviteApp(h *Handler, userID string) *fiber.App {
 	app.Get("/api/organizations/:organization_id/invites", h.ListInvites)
 	app.Delete("/api/organizations/:organization_id/invites/:invite_id", h.RevokeInvite)
 	app.Post("/api/invites/redeem", h.RedeemInvite)
-	app.Post("/internal/invites/redeem", h.RedeemInviteInternal)
 	return app
 }
 
