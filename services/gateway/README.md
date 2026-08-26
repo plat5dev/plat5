@@ -1,6 +1,6 @@
 # Gateway
 
-Rust reverse proxy built on Pingora. Handles request routing, JWT/API key authentication, API key scope checks, in-process rate limits, identity header injection, stripping of `Authorization` / `X-API-Key` before upstream, trace propagation, and CORS. TLS is terminated at the edge (not in this process).
+Rust reverse proxy built on Pingora. Handles request routing, JWT/API key authentication, identity header injection, stripping of `Authorization` / `X-API-Key` before upstream, trace propagation, and CORS. TLS is terminated at the edge (not in this process).
 
 ## Local Development
 
@@ -32,6 +32,11 @@ cargo test --all-targets
 | `MEMBER_RESOLVE_URL` | (optional) | Full URL for member resolve (`…/internal/members/resolve`); required for `organization` scope |
 | `MEMBER_CACHE_TTL_SECS` | `300` | Member resolve cache TTL |
 | `INTERNAL_AUTH_TOKEN` | unset | Sent as `X-Plat5-Internal-Token` to validate/resolve when set |
+| `RATE_LIMIT_REQUESTS` | `60` | Fallback per-route limit. `0` = unlimited fallback |
+| `RATE_LIMIT_WINDOW_SECONDS` | `60` | Fallback window |
+| `RATE_LIMIT_BY` | unset | Optional fallback `by` (`ip` / `user` / `member`). Unset → follows scope |
+| `RATE_LIMIT_AUTH_FAILURE_REQUESTS` | `60` | Failed-auth IP limiter. `0` = off |
+| `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` | `60` | Failed-auth IP window |
 | `UPSTREAM_CONNECT_TIMEOUT_MS` | `10000` | Upstream connection timeout |
 | `UPSTREAM_READ_TIMEOUT_MS` | `30000` | Upstream read timeout |
 | `OTEL_SERVICE_NAME` | `gateway` | Resource `service.name` |
@@ -48,11 +53,6 @@ cargo test --all-targets
 | `OTEL_TRACES_SAMPLER_RATIO` | `1` | Trace sampling ratio |
 | `OTEL_SDK_DISABLED` | unset | `true` → no OTLP; stdout + `/metrics` remain |
 | `ALLOWED_ORIGINS` | (empty → `*`) | Comma-separated CORS origin allowlist. Empty allows `*`; non-empty reflects matching `Origin` and sets `Vary: Origin` |
-| `RATE_LIMIT_REQUESTS` | `60` | Fallback max requests per window for admitted routes. `0` = unlimited fallback |
-| `RATE_LIMIT_WINDOW_SECONDS` | `60` | Fallback window. Must be > 0 when requests > 0 |
-| `RATE_LIMIT_BY` | unset | Optional `ip`, `user`, or `member`. Unset → follows scope (public→ip, user→user, organization→member) |
-| `RATE_LIMIT_AUTH_FAILURE_REQUESTS` | `60` | Per-IP limiter for unadmitted 401s and unmatched 404s. `0` = off |
-| `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` | `60` | Window for the failed-auth limiter |
 
 ## Telemetry
 
