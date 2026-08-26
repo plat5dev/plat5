@@ -71,7 +71,7 @@ Two independent in-process limiters (per gateway instance; no Redis):
 
 | Limiter | When | Key |
 |---------|------|-----|
-| Per-route (admitted) | After match + admission (JWT and API key). Omitted `rate_limit` inherits `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` (never silent unlimited). `rate_limit: false` opts out. | `by` on the route, else env `RATE_LIMIT_BY`, else scope default (`public`→ip, `user`→user, `organization`→member) |
+| Per-route (admitted) | After match + admission (JWT and API key). Omitted `rate_limit` inherits `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` (never silent unlimited). `rate_limit: false` opts out. `{requests, window_seconds}` overrides. Any `by` is 422 at apply. | Route scope: `public`→ip, `user`→user, `organization`→org (org id, including SA/member keys) |
 | Failed-auth IP | Unadmitted **401**s and unmatched **404**s. Not per-route. | Client IP. `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). `0` requests = off |
 
 ## Principles

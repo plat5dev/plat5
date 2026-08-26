@@ -32,9 +32,8 @@ cargo test --all-targets
 | `MEMBER_RESOLVE_URL` | (optional) | Full URL for member resolve (`…/internal/members/resolve`); required for `organization` scope |
 | `MEMBER_CACHE_TTL_SECS` | `300` | Member resolve cache TTL |
 | `INTERNAL_AUTH_TOKEN` | unset | Sent as `X-Plat5-Internal-Token` to validate/resolve when set |
-| `RATE_LIMIT_REQUESTS` | `60` | Fallback per-route limit. `0` = unlimited fallback |
+| `RATE_LIMIT_REQUESTS` | `60` | Fallback per-route limit. `0` = unlimited fallback. Subject follows route scope (`public`→ip, `user`→user, `organization`→org) |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Fallback window |
-| `RATE_LIMIT_BY` | unset | Optional fallback `by` (`ip` / `user` / `member`). Unset → follows scope |
 | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` | `60` | Failed-auth IP limiter. `0` = off |
 | `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` | `60` | Failed-auth IP window |
 | `UPSTREAM_CONNECT_TIMEOUT_MS` | `10000` | Upstream connection timeout |
