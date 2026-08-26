@@ -30,11 +30,10 @@ cargo test --all-targets
 | `APIKEY_BRAND` | `plat5` | Same value as identity. `[a-z][a-z0-9]*`, max 32. Unset → `plat5`; empty → refuse boot |
 | `APIKEY_CACHE_TTL_SECS` | `300` | User + member API key cache TTL |
 | `MEMBER_RESOLVE_URL` | (optional) | Full URL for member resolve (`…/internal/members/resolve`); required for `organization` scope |
-| `MEMBER_CACHE_TTL_SECS` | `300` | Member resolve cache TTL |
+| `MEMBER_CACHE_TTL_SECS` | `300` | Member cache TTL |
 | `INTERNAL_AUTH_TOKEN` | unset | Sent as `X-Plat5-Internal-Token` to validate/resolve when set |
 | `RATE_LIMIT_REQUESTS` | `60` | Fallback per-route limit. `0` = unlimited fallback |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Fallback window |
-| `RATE_LIMIT_BY` | unset | Optional fallback `by` (`ip` / `user` / `member`). Unset → follows scope |
 | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` | `60` | Failed-auth IP limiter. `0` = off |
 | `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` | `60` | Failed-auth IP window |
 | `UPSTREAM_CONNECT_TIMEOUT_MS` | `10000` | Upstream connection timeout |
@@ -53,6 +52,8 @@ cargo test --all-targets
 | `OTEL_TRACES_SAMPLER_RATIO` | `1` | Trace sampling ratio |
 | `OTEL_SDK_DISABLED` | unset | `true` → no OTLP; stdout + `/metrics` remain |
 | `ALLOWED_ORIGINS` | (empty → `*`) | Comma-separated CORS origin allowlist. Empty allows `*`; non-empty reflects matching `Origin` and sets `Vary: Origin` |
+
+Limiter subject follows route scope: `public`→ip, `user`→user, `organization`→org (JWT, user keys, SA/member keys).
 
 ## Telemetry
 
