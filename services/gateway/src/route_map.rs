@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use regex::Regex;
 use tracing::warn;
 
-use crate::route_config::Config;
+use crate::route_config::{Config, RouteRateLimit};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RouteScope {
@@ -24,6 +24,8 @@ pub struct Route {
     pub scope: RouteScope,
     /// Path param name for organization id (`organization` scope only)
     pub organization_param: Option<String>,
+    pub required_scopes: Option<Vec<String>>,
+    pub rate_limit: Option<RouteRateLimit>,
 }
 
 impl Route {
@@ -111,14 +113,16 @@ impl RouteMap {
                     let transform_path =
                         route_config.transform.as_ref().and_then(|t| t.path.clone());
 
-                    if let Err(e) = route_map.add_route(
-                        base_url,
-                        &route_config.path,
-                        &methods,
+                    if let Err(e) = route_map.add_route(Route {
+                        base_url: base_url.to_string(),
+                        path: route_config.path.clone(),
+                        methods: methods.iter().map(|m| (*m).to_string()).collect(),
                         transform_path,
                         scope,
-                        org_param.clone(),
-                    ) {
+                        organization_param: org_param.clone(),
+                        required_scopes: route_config.required_scopes.clone(),
+                        rate_limit: route_config.rate_limit.clone(),
+                    }) {
                         warn!(
                             service = %service_name,
                             path = %route_config.path,
@@ -134,39 +138,23 @@ impl RouteMap {
         route_map
     }
 
-    pub fn add_route(
-        &mut self,
-        base_url: &str,
-        path: &str,
-        methods: &[&str],
-        transform_path: Option<String>,
-        scope: RouteScope,
-        organization_param: Option<String>,
-    ) -> Result<(), String> {
-        if scope == RouteScope::Organization {
-            let param = organization_param
+    pub fn add_route(&mut self, route: Route) -> Result<(), String> {
+        if route.scope == RouteScope::Organization {
+            let param = route
+                .organization_param
                 .as_deref()
                 .filter(|p| !p.is_empty())
                 .ok_or_else(|| "organization route missing organization_param".to_string())?;
             let needle = format!("{{{param}}}");
-            if !path.contains(&needle) {
+            if !route.path.contains(&needle) {
                 return Err(format!(
                     "organization route path must include path param {needle}"
                 ));
             }
         }
 
-        let re = path_to_regex(path).map_err(|e| e.to_string())?;
-        let (static_segments, param_count) = path_specificity(path);
-
-        let route = Route {
-            base_url: base_url.to_string(),
-            path: path.to_string(),
-            methods: methods.iter().map(|m| m.to_string()).collect(),
-            transform_path,
-            scope,
-            organization_param,
-        };
+        let re = path_to_regex(&route.path).map_err(|e| e.to_string())?;
+        let (static_segments, param_count) = path_specificity(&route.path);
 
         self.routes.push(CompiledRoute {
             regex: re,
@@ -300,6 +288,8 @@ mod tests {
             path: path.to_string(),
             methods: methods.iter().map(|m| m.to_string()).collect(),
             transform: None,
+            required_scopes: None,
+            rate_limit: None,
         }
     }
 
@@ -373,38 +363,64 @@ mod tests {
         assert!(path_to_regex("/api/{}").is_err());
     }
 
+    fn org_route(path: &str, org_param: Option<String>) -> Route {
+        Route {
+            base_url: "http://x".into(),
+            path: path.into(),
+            methods: HashSet::from(["GET".into()]),
+            transform_path: None,
+            scope: RouteScope::Organization,
+            organization_param: org_param,
+            required_scopes: None,
+            rate_limit: None,
+        }
+    }
+
     #[test]
     fn org_route_requires_param_in_path() {
         let mut map = RouteMap::new();
         assert!(map
-            .add_route(
-                "http://x",
-                "/api/widgets",
-                &["GET"],
-                None,
-                RouteScope::Organization,
-                Some("organization_id".into()),
-            )
+            .add_route(org_route("/api/widgets", Some("organization_id".into())))
             .is_err());
         assert!(map
-            .add_route(
-                "http://x",
+            .add_route(org_route(
                 "/api/orgs/{organization_id}/widgets",
-                &["GET"],
-                None,
-                RouteScope::Organization,
                 Some("organization_id".into()),
-            )
+            ))
             .is_ok());
         assert!(map
-            .add_route(
-                "http://x",
-                "/api/orgs/{organization_id}",
-                &["GET"],
-                None,
-                RouteScope::Organization,
-                None,
-            )
+            .add_route(org_route("/api/orgs/{organization_id}", None))
             .is_err());
+    }
+
+    #[test]
+    fn from_config_keeps_required_scopes_and_rate_limit() {
+        let mut scoped = route("/api/x", &["GET"]);
+        scoped.required_scopes = Some(vec!["read".into()]);
+        scoped.rate_limit = Some(crate::route_config::RouteRateLimit::Unlimited);
+        let mut services = HashMap::new();
+        services.insert(
+            "a".to_string(),
+            ServiceConfig {
+                url: "http://a".into(),
+                public: None,
+                user: Some(ScopeConfig {
+                    route_prefix: None,
+                    organization_param: None,
+                    routes: vec![scoped],
+                }),
+                organization: None,
+            },
+        );
+        let map = RouteMap::from_config(&Config { services });
+        let (r, _) = map.find_route("/api/x", "GET").unwrap();
+        assert_eq!(
+            r.required_scopes.as_deref(),
+            Some(["read".to_string()].as_slice())
+        );
+        assert_eq!(
+            r.rate_limit,
+            Some(crate::route_config::RouteRateLimit::Unlimited)
+        );
     }
 }
