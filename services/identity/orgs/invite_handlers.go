@@ -1,0 +1,263 @@
+package orgs
+
+import (
+	"context"
+	stderrors "errors"
+	"strings"
+	"time"
+
+	"github.com/gofiber/fiber/v3"
+
+	"github.com/plat5dev/plat5/identity/errors"
+	"github.com/plat5dev/plat5/identity/internal/httpx"
+	"github.com/plat5dev/plat5/identity/metrics"
+	"github.com/plat5dev/plat5/identity/middleware"
+)
+
+// inviteStore is the persistence used by invite handlers. *Store implements it.
+// Tests inject a fake.
+type inviteStore interface {
+	GetActiveMemberForUser(ctx context.Context, organizationID, userID string) (*Member, error)
+	CreateInvite(ctx context.Context, inv *Invite) error
+	ListInvites(ctx context.Context, organizationID string, limit, offset int) ([]*Invite, bool, error)
+	RevokeInvite(ctx context.Context, organizationID, inviteID string) (*Invite, error)
+	RedeemInvite(ctx context.Context, tokenHash, userID string) (*Member, error)
+}
+
+func (h *Handler) inviteStore() inviteStore {
+	if h.invites != nil {
+		return h.invites
+	}
+	return h.store
+}
+
+func (h *Handler) SetInviteAuthorizeURL(raw string) {
+	h.inviteAuthorizeURL = strings.TrimSpace(raw)
+}
+
+type CreateInviteRequest struct {
+	Role             string `json:"role"`
+	Email            string `json:"email"`
+	ExpiresInSeconds *int   `json:"expires_in_seconds"`
+}
+
+type InviteResponse struct {
+	ID             string  `json:"id"`
+	OrganizationID string  `json:"organization_id"`
+	Role           string  `json:"role"`
+	Email          *string `json:"email"`
+	TokenPrefix    string  `json:"token_prefix"`
+	Token          string  `json:"token,omitempty"`
+	URL            string  `json:"url,omitempty"`
+	ExpiresAt      string  `json:"expires_at"`
+	CreatedBy      string  `json:"created_by"`
+	CreatedAt      string  `json:"created_at"`
+	RevokedAt      *string `json:"revoked_at"`
+	RedeemedAt     *string `json:"redeemed_at"`
+	RedeemedBy     *string `json:"redeemed_by"`
+}
+
+type ListInvitesResponse struct {
+	Invites []InviteResponse `json:"invites"`
+	HasMore bool             `json:"has_more"`
+}
+
+type RedeemInviteRequest struct {
+	Token  string `json:"token"`
+	UserID string `json:"user_id"`
+}
+
+func (h *Handler) requireInviteActor(ctx context.Context, orgID, userID string) (*Member, error) {
+	m, err := h.inviteStore().GetActiveMemberForUser(ctx, orgID, userID)
+	if err != nil {
+		if stderrors.Is(err, ErrNotFound) {
+			return nil, errors.NotFoundError("organization", orgID)
+		}
+		return nil, httpx.MapDB(ctx, err, "failed to load member", httpx.DBErr{})
+	}
+	return m, nil
+}
+
+func (h *Handler) CreateInvite(c fiber.Ctx) error {
+	ctx := c.Context()
+	userID := middleware.GetUserID(c)
+	orgID := c.Params("organization_id")
+
+	actor, err := h.requireInviteActor(ctx, orgID, userID)
+	if err != nil {
+		return err
+	}
+
+	var req CreateInviteRequest
+	if len(c.Body()) > 0 {
+		if err := c.Bind().Body(&req); err != nil {
+			return err
+		}
+	}
+
+	role, err := ParseRole(req.Role, RoleMember)
+	if err != nil {
+		return err
+	}
+	if err := CanCreateMember(actor, role, orgID); err != nil {
+		return err
+	}
+
+	email, err := ParseInviteEmail(req.Email)
+	if err != nil {
+		return err
+	}
+	ttl, err := ParseInviteTTL(req.ExpiresInSeconds)
+	if err != nil {
+		return err
+	}
+
+	plaintext, err := GenerateInviteToken()
+	if err != nil {
+		httpx.LogError(ctx, "failed to generate invite token", err, errors.KindInternal)
+		return errors.InternalError()
+	}
+
+	now := time.Now().UTC()
+	inv := &Invite{
+		ID:             NewULID(),
+		OrganizationID: orgID,
+		Role:           role,
+		Email:          email,
+		TokenHash:      HashInviteToken(plaintext),
+		TokenPrefix:    InviteDisplayPrefix(plaintext),
+		CreatedBy:      userID,
+		ExpiresAt:      now.Add(ttl),
+		CreatedAt:      now,
+	}
+
+	if err := h.inviteStore().CreateInvite(ctx, inv); err != nil {
+		return httpx.MapDB(ctx, err, "failed to create invite", httpx.DBErr{})
+	}
+
+	metrics.RecordInviteOp("create")
+	out := toInviteResponse(inv)
+	out.Token = plaintext
+	if url := BuildInviteURL(h.inviteAuthorizeURL, plaintext); url != "" {
+		out.URL = url
+	}
+	return c.Status(fiber.StatusCreated).JSON(out)
+}
+
+func (h *Handler) ListInvites(c fiber.Ctx) error {
+	ctx := c.Context()
+	userID := middleware.GetUserID(c)
+	orgID := c.Params("organization_id")
+
+	if _, err := h.requireInviteActor(ctx, orgID, userID); err != nil {
+		return err
+	}
+
+	limit, offset, err := httpx.ParseListParams(c)
+	if err != nil {
+		return err
+	}
+
+	list, hasMore, err := h.inviteStore().ListInvites(ctx, orgID, limit, offset)
+	if err != nil {
+		return httpx.MapDB(ctx, err, "failed to list invites", httpx.DBErr{})
+	}
+
+	out := ListInvitesResponse{
+		Invites: make([]InviteResponse, 0, len(list)),
+		HasMore: hasMore,
+	}
+	for _, inv := range list {
+		out.Invites = append(out.Invites, toInviteResponse(inv))
+	}
+	return c.JSON(out)
+}
+
+func (h *Handler) RevokeInvite(c fiber.Ctx) error {
+	ctx := c.Context()
+	userID := middleware.GetUserID(c)
+	orgID := c.Params("organization_id")
+	inviteID := c.Params("invite_id")
+
+	actor, err := h.requireInviteActor(ctx, orgID, userID)
+	if err != nil {
+		return err
+	}
+	if err := RequireAdminOrOwner(actor, "invite.revoke", "invite", inviteID); err != nil {
+		return err
+	}
+	if inviteID == "" {
+		return errors.FieldError("invite_id", errors.FallbackValidation)
+	}
+
+	_, err = h.inviteStore().RevokeInvite(ctx, orgID, inviteID)
+	if err != nil {
+		return httpx.MapDB(ctx, err, "failed to revoke invite", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "invite", ResourceID: inviteID,
+		})
+	}
+
+	metrics.RecordInviteOp("revoke")
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (h *Handler) RedeemInvite(c fiber.Ctx) error {
+	ctx := c.Context()
+	userID := middleware.GetUserID(c)
+
+	var req RedeemInviteRequest
+	if err := c.Bind().Body(&req); err != nil {
+		return err
+	}
+	return h.redeem(c, strings.TrimSpace(req.Token), userID)
+}
+
+func (h *Handler) RedeemInviteInternal(c fiber.Ctx) error {
+	var req RedeemInviteRequest
+	if err := c.Bind().Body(&req); err != nil {
+		return err
+	}
+	token := strings.TrimSpace(req.Token)
+	userID := strings.TrimSpace(req.UserID)
+	if token == "" || userID == "" {
+		return errors.ValidationFields(errors.FallbackValidation,
+			errors.Field{Path: "token", Message: errors.FallbackValidation},
+			errors.Field{Path: "user_id", Message: errors.FallbackValidation},
+		)
+	}
+	return h.redeem(c, token, userID)
+}
+
+func (h *Handler) redeem(c fiber.Ctx, token, userID string) error {
+	ctx := c.Context()
+	if token == "" || !LooksLikeInviteToken(token) {
+		return errors.NotFoundError("invite", nil)
+	}
+
+	member, err := h.inviteStore().RedeemInvite(ctx, HashInviteToken(token), userID)
+	if err != nil {
+		return httpx.MapDB(ctx, err, "failed to redeem invite", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "invite", ResourceID: nil,
+		})
+	}
+
+	metrics.RecordInviteOp("redeem")
+	metrics.RecordMemberOp("create")
+	return c.JSON(toMemberResponse(member))
+}
+
+func toInviteResponse(inv *Invite) InviteResponse {
+	return InviteResponse{
+		ID:             inv.ID,
+		OrganizationID: inv.OrganizationID,
+		Role:           string(inv.Role),
+		Email:          inv.Email,
+		TokenPrefix:    inv.TokenPrefix,
+		ExpiresAt:      httpx.FormatTime(inv.ExpiresAt),
+		CreatedBy:      inv.CreatedBy,
+		CreatedAt:      httpx.FormatTime(inv.CreatedAt),
+		RevokedAt:      httpx.FormatTimePtr(inv.RevokedAt),
+		RedeemedAt:     httpx.FormatTimePtr(inv.RedeemedAt),
+		RedeemedBy:     inv.RedeemedBy,
+	}
+}
