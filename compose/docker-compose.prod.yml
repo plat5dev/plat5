@@ -1,5 +1,5 @@
 # Image-mode production stack.
-# Pin: PLAT5_VERSION=v0.1.6 (default). Local source build:
+# Pin: PLAT5_VERSION=v0.1.8 (default). Local source build:
 #   docker compose -f docker-compose.prod.yml -f docker-compose.prod.build.yml --env-file .env up --build -d
 name: plat5
 
@@ -60,7 +60,7 @@ services:
     restart: unless-stopped
 
   route-registry:
-    image: ghcr.io/plat5dev/route-registry:${PLAT5_VERSION:-v0.1.6}
+    image: ghcr.io/plat5dev/route-registry:${PLAT5_VERSION:-v0.1.8}
     labels:
       service.name: route-registry
       service.namespace: edge
@@ -93,7 +93,7 @@ services:
     restart: unless-stopped
 
   gateway:
-    image: ghcr.io/plat5dev/gateway:${PLAT5_VERSION:-v0.1.6}
+    image: ghcr.io/plat5dev/gateway:${PLAT5_VERSION:-v0.1.8}
     labels:
       service.name: gateway
       service.namespace: edge
@@ -142,7 +142,7 @@ services:
     restart: unless-stopped
 
   identity:
-    image: ghcr.io/plat5dev/identity:${PLAT5_VERSION:-v0.1.6}
+    image: ghcr.io/plat5dev/identity:${PLAT5_VERSION:-v0.1.8}
     labels:
       service.name: identity
       service.namespace: identity
