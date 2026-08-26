@@ -14,7 +14,7 @@ type APIKey struct {
 	Name      string
 	KeyPrefix string
 	KeyHash   string
-	// Scopes is nil when unrestricted; empty means the key grants nothing.
+	// Scopes is nil = unrestricted, empty = grants nothing.
 	Scopes    []string
 	CreatedAt time.Time
 	RevokedAt *time.Time
