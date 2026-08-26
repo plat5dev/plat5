@@ -100,12 +100,11 @@ mod tests {
         assert_eq!(unlimited, RouteRateLimit::Unlimited);
 
         let obj: RouteRateLimit =
-            serde_json::from_str(r#"{"requests":10,"window_seconds":60,"by":"ip"}"#).unwrap();
+            serde_json::from_str(r#"{"requests":10,"window_seconds":60}"#).unwrap();
         match obj {
             RouteRateLimit::Limit(cfg) => {
                 assert_eq!(cfg.requests, 10);
                 assert_eq!(cfg.window_seconds, 60);
-                assert_eq!(cfg.by.as_deref(), Some("ip"));
             }
             RouteRateLimit::Unlimited => panic!("expected object"),
         }
@@ -119,7 +118,6 @@ mod tests {
         r.rate_limit = Some(RouteRateLimit::Limit(RateLimitConfig {
             requests: 0,
             window_seconds: 60,
-            by: None,
         }));
         let mut services = HashMap::new();
         services.insert("w".into(), user_service(vec![r]));
@@ -161,7 +159,7 @@ mod tests {
                     "GET": {"required_scopes": ["org:read"]},
                     "POST": {
                         "required_scopes": ["org:write"],
-                        "rate_limit": {"requests": 100, "window_seconds": 1, "by": "ip"}
+                        "rate_limit": {"requests": 100, "window_seconds": 1}
                     }
                 }
             }"#,
@@ -196,7 +194,6 @@ mod tests {
             Some(RouteRateLimit::Limit(cfg)) => {
                 assert_eq!(cfg.requests, 100);
                 assert_eq!(cfg.window_seconds, 1);
-                assert_eq!(cfg.by.as_deref(), Some("ip"));
             }
             other => panic!("expected POST rate limit, got {other:?}"),
         }
