@@ -7,7 +7,7 @@ pub struct AuthContext {
     pub user_id: String,
     pub auth_type: AuthType,
     pub kid: Option<String>,
-    /// None = JWT or unrestricted API key. Some = key scope list (empty grants nothing).
+    /// API key granted scopes. None = JWT or unrestricted key (skip route required_scopes).
     pub key_scopes: Option<Vec<String>>,
 }
 
@@ -41,29 +41,18 @@ pub enum Admission {
 }
 
 impl Admission {
+    /// Granted API-key scopes when the credential is a restricted key.
+    /// None = JWT, unrestricted key, or public — skip required_scopes.
     pub fn key_scopes(&self) -> Option<&[String]> {
         match self {
-            Admission::Public => None,
-            Admission::User { key_scopes, .. } | Admission::Organization { key_scopes, .. } => {
-                key_scopes.as_deref()
-            }
-        }
-    }
-
-    pub fn user_id(&self) -> Option<&str> {
-        match self {
-            Admission::User { user_id, .. } => Some(user_id.as_str()),
-            Admission::Organization {
-                via: OrgVia::User { user_id, .. },
+            Admission::User {
+                key_scopes: Some(s),
                 ..
-            } => Some(user_id.as_str()),
-            _ => None,
-        }
-    }
-
-    pub fn member_id(&self) -> Option<&str> {
-        match self {
-            Admission::Organization { member_id, .. } => Some(member_id.as_str()),
+            }
+            | Admission::Organization {
+                key_scopes: Some(s),
+                ..
+            } => Some(s.as_slice()),
             _ => None,
         }
     }
@@ -83,6 +72,16 @@ pub enum AdmitError {
     Unavailable,
     /// Route/config invariant broken (missing org param, etc.).
     Internal(&'static str),
+}
+
+impl AdmitError {
+    pub fn is_unadmitted_401(&self) -> bool {
+        match self {
+            AdmitError::MemberApiKeyInvalid => true,
+            AdmitError::Auth(err) => err.is_client_error(),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug)]

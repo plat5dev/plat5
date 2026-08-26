@@ -38,16 +38,16 @@ pub async fn send_json_error(
     status: u16,
     error: ApiError,
 ) -> Result<()> {
-    send_json_error_with_retry_after(cors, session, ctx, status, error, None).await
+    send_json_error_headers(cors, session, ctx, status, error, &[]).await
 }
 
-pub async fn send_json_error_with_retry_after(
+pub async fn send_json_error_headers(
     cors: &CorsPolicy,
     session: &mut Session,
     ctx: &GatewayContext,
     status: u16,
     error: ApiError,
-    retry_after_seconds: Option<u64>,
+    extra_headers: &[(&str, String)],
 ) -> Result<()> {
     let body = error.to_json_bytes(ctx.request_id.as_deref());
 
@@ -62,8 +62,8 @@ pub async fn send_json_error_with_retry_after(
     if let Some(ref request_id) = ctx.request_id {
         header.insert_header("X-Request-ID", request_id)?;
     }
-    if let Some(secs) = retry_after_seconds {
-        header.insert_header("Retry-After", secs.max(1).to_string())?;
+    for (name, value) in extra_headers {
+        header.insert_header(*name, value)?;
     }
     session
         .write_response_header(Box::new(header), false)
@@ -91,14 +91,13 @@ pub async fn write_rate_limited(
     ctx: &GatewayContext,
     retry_after_seconds: u64,
 ) -> Result<bool> {
-    let retry = retry_after_seconds.max(1);
-    send_json_error_with_retry_after(
+    send_json_error_headers(
         cors,
         session,
         ctx,
         429,
-        ApiError::rate_limited(retry),
-        Some(retry),
+        ApiError::rate_limited(retry_after_seconds),
+        &[("Retry-After", retry_after_seconds.to_string())],
     )
     .await?;
     Ok(true)
@@ -133,14 +132,6 @@ pub async fn write_admit_error(
             warn!(reason = msg, "admission internal error (config bug)");
             write_json_error(cors, session, ctx, 500, ApiError::internal_error()).await
         }
-    }
-}
-
-pub fn is_unadmitted_client_auth(err: &AdmitError) -> bool {
-    match err {
-        AdmitError::Auth(auth_err) => auth_err.is_client_error(),
-        AdmitError::MemberApiKeyInvalid => true,
-        _ => false,
     }
 }
 
