@@ -2,7 +2,6 @@ use std::env;
 use std::time::Duration;
 
 use crate::admission::parse_user_id_claim;
-use crate::route_config::RateLimitBy;
 
 const DEFAULT_PORT: &str = "5001";
 const DEFAULT_INTERNAL_PORT: &str = "8000";
@@ -54,10 +53,9 @@ pub struct GatewayConfig {
     pub allowed_origins: Vec<String>,
 
     /// Gateway fallback. `0` = unlimited fallback (routes may still override).
+    /// Subject follows route scope (public→ip, user→user, organization→org).
     pub rate_limit_requests: u64,
     pub rate_limit_window_seconds: u64,
-    /// When unset, `by` follows route scope (public→ip, user→user, organization→member).
-    pub rate_limit_by: Option<RateLimitBy>,
     pub rate_limit_auth_failure_requests: u64,
     pub rate_limit_auth_failure_window_seconds: u64,
 }
@@ -156,7 +154,6 @@ impl GatewayConfig {
 
             rate_limit_requests,
             rate_limit_window_seconds,
-            rate_limit_by: parse_rate_limit_by_env()?,
             rate_limit_auth_failure_requests,
             rate_limit_auth_failure_window_seconds,
         })
@@ -187,19 +184,6 @@ fn parse_u64_env(key: &'static str, default: u64) -> Result<u64, GatewayConfigEr
             message: format!("{e}"),
         }),
         Err(_) => Ok(default),
-    }
-}
-
-fn parse_rate_limit_by_env() -> Result<Option<RateLimitBy>, GatewayConfigError> {
-    match env::var("RATE_LIMIT_BY") {
-        Err(_) => Ok(None),
-        Ok(raw) if raw.trim().is_empty() => Ok(None),
-        Ok(raw) => RateLimitBy::parse(&raw)
-            .map(Some)
-            .ok_or_else(|| GatewayConfigError::Invalid {
-                key: "RATE_LIMIT_BY",
-                message: "must be ip, user, or member".to_string(),
-            }),
     }
 }
 
@@ -276,11 +260,62 @@ mod tests {
         assert_eq!(member_apikey_prefix("acme"), "acme-mk-1-");
     }
 
+    /// `parse_rate_limit_by` / `RATE_LIMIT_BY` are gone. Exhaustive match fails
+    /// to compile if `rate_limit_by` is reintroduced on GatewayConfig.
     #[test]
-    fn parse_rate_limit_by() {
-        assert_eq!(RateLimitBy::parse("ip"), Some(RateLimitBy::Ip));
-        assert_eq!(RateLimitBy::parse(" user "), Some(RateLimitBy::User));
-        assert_eq!(RateLimitBy::parse("member"), Some(RateLimitBy::Member));
-        assert!(RateLimitBy::parse("key").is_none());
+    fn parse_rate_limit_by_is_gone() {
+        fn assert_no_rate_limit_by(cfg: GatewayConfig) {
+            let GatewayConfig {
+                port,
+                internal_port,
+                etcd_url,
+                auth_issuer,
+                auth_jwks_uri,
+                auth_allowed_audiences,
+                auth_user_id_claim,
+                user_apikey_validate_url,
+                member_apikey_validate_url,
+                member_resolve_url,
+                internal_auth_token,
+                apikey_brand,
+                user_key_prefix,
+                member_key_prefix,
+                apikey_cache_ttl_secs,
+                member_cache_ttl_secs,
+                upstream_connect_timeout,
+                upstream_read_timeout,
+                allowed_origins,
+                rate_limit_requests,
+                rate_limit_window_seconds,
+                rate_limit_auth_failure_requests,
+                rate_limit_auth_failure_window_seconds,
+            } = cfg;
+            let _ = (
+                port,
+                internal_port,
+                etcd_url,
+                auth_issuer,
+                auth_jwks_uri,
+                auth_allowed_audiences,
+                auth_user_id_claim,
+                user_apikey_validate_url,
+                member_apikey_validate_url,
+                member_resolve_url,
+                internal_auth_token,
+                apikey_brand,
+                user_key_prefix,
+                member_key_prefix,
+                apikey_cache_ttl_secs,
+                member_cache_ttl_secs,
+                upstream_connect_timeout,
+                upstream_read_timeout,
+                allowed_origins,
+                rate_limit_requests,
+                rate_limit_window_seconds,
+                rate_limit_auth_failure_requests,
+                rate_limit_auth_failure_window_seconds,
+            );
+        }
+        let _ = assert_no_rate_limit_by;
     }
 }
