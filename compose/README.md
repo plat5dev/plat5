@@ -47,7 +47,7 @@ Gateway uses `host.docker.internal` so a host-published IdP does not need a shar
 
 `APIKEY_BRAND` (default `plat5`) is the same value on gateway and identity. Wire prefixes are `{brand}-sk-1-` / `{brand}-mk-1-`. See [`../docs/identity.md`](../docs/identity.md).
 
-Gateway rate limits (in-process): `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` (default 60/60; `0` requests = unlimited fallback), optional `RATE_LIMIT_BY`, and always-on `RATE_LIMIT_AUTH_FAILURE_*` (default 60/60). See [`../docs/gateway-contract.md`](../docs/gateway-contract.md).
+Gateway rate limits (in-process): `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` (default 60/60; `0` requests = unlimited fallback). Limiter subject follows route scope (`public`→ip, `user`→user, `organization`→org). Always-on `RATE_LIMIT_AUTH_FAILURE_*` (default 60/60) covers unadmitted 401s and unmatched 404s. See [`../docs/gateway-contract.md`](../docs/gateway-contract.md).
 
 See [`../docs/idp-contract.md`](../docs/idp-contract.md).
 
