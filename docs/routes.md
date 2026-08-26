@@ -268,12 +268,6 @@ services:
           methods: [GET, POST]
         - path: /api/organizations/{organization_id}/members/{member_id}/api-keys/{key_id}
           methods: [DELETE]
-        - path: /api/organizations/{organization_id}/invites
-          methods: [GET, POST]
-        - path: /api/organizations/{organization_id}/invites/{invite_id}
-          methods: [DELETE]
-        - path: /api/invites/redeem
-          methods: [POST]
         - path: /api/organizations/{organization_id}/service-accounts
           methods: [GET, POST]
         - path: /api/organizations/{organization_id}/service-accounts/{service_account_id}
