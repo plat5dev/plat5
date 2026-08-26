@@ -47,7 +47,7 @@ pub async fn send_json_error_headers(
     ctx: &GatewayContext,
     status: u16,
     error: ApiError,
-    extra_headers: &[(&str, String)],
+    extra_headers: &[(&'static str, String)],
 ) -> Result<()> {
     let body = error.to_json_bytes(ctx.request_id.as_deref());
 
@@ -63,7 +63,7 @@ pub async fn send_json_error_headers(
         header.insert_header("X-Request-ID", request_id)?;
     }
     for (name, value) in extra_headers {
-        header.insert_header(*name, value)?;
+        header.insert_header(*name, value.clone())?;
     }
     session
         .write_response_header(Box::new(header), false)
