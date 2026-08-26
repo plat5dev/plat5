@@ -60,6 +60,19 @@ impl ApiError {
         }
     }
 
+    pub fn forbidden(permission: &str, resource: &str, resource_id: &str) -> Self {
+        Self {
+            error_type: "invalid_request_error".to_string(),
+            code: "FORBIDDEN".to_string(),
+            message: "You don't have permission to do that.".to_string(),
+            details: Some(serde_json::json!({
+                "permission": permission,
+                "resource": resource,
+                "resource_id": resource_id
+            })),
+        }
+    }
+
     pub fn not_found() -> Self {
         Self {
             error_type: "invalid_request_error".to_string(),
@@ -76,6 +89,17 @@ impl ApiError {
             message: "Request body is too large.".to_string(),
             details: Some(serde_json::json!({
                 "max_size_bytes": max_size_bytes
+            })),
+        }
+    }
+
+    pub fn rate_limited(retry_after_seconds: u64) -> Self {
+        Self {
+            error_type: "api_error".to_string(),
+            code: "RATE_LIMITED".to_string(),
+            message: "Too many requests. Try again in a moment.".to_string(),
+            details: Some(serde_json::json!({
+                "retry_after_seconds": retry_after_seconds
             })),
         }
     }
@@ -153,6 +177,37 @@ mod tests {
         assert_eq!(parsed["error"]["type"], "invalid_request_error");
         assert_eq!(parsed["error"]["code"], "PAYLOAD_TOO_LARGE");
         assert_eq!(parsed["error"]["details"]["max_size_bytes"], 10_485_760);
+    }
+
+    #[test]
+    fn test_forbidden_serialization() {
+        let err = ApiError::forbidden("required_scopes", "route", "/api/x");
+        let json = String::from_utf8(err.to_json_bytes(None)).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["error"]["type"], "invalid_request_error");
+        assert_eq!(parsed["error"]["code"], "FORBIDDEN");
+        assert_eq!(
+            parsed["error"]["message"],
+            "You don't have permission to do that."
+        );
+        assert_eq!(parsed["error"]["details"]["permission"], "required_scopes");
+        assert_eq!(parsed["error"]["details"]["resource"], "route");
+        assert_eq!(parsed["error"]["details"]["resource_id"], "/api/x");
+    }
+
+    #[test]
+    fn test_rate_limited_serialization() {
+        let err = ApiError::rate_limited(12);
+        let json = String::from_utf8(err.to_json_bytes(Some("req-429"))).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["error"]["type"], "api_error");
+        assert_eq!(parsed["error"]["code"], "RATE_LIMITED");
+        assert_eq!(
+            parsed["error"]["message"],
+            "Too many requests. Try again in a moment."
+        );
+        assert_eq!(parsed["error"]["details"]["retry_after_seconds"], 12);
+        assert_eq!(parsed["error"]["request_id"], "req-429");
     }
 
     #[test]
