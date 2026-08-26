@@ -1,6 +1,6 @@
 # Gateway
 
-Rust reverse proxy built on Pingora. Handles request routing, JWT/API key authentication, identity header injection, stripping of `Authorization` / `X-API-Key` before upstream, trace propagation, and CORS. TLS is terminated at the edge (not in this process).
+Rust reverse proxy built on Pingora. Handles request routing, JWT/API key authentication, API key scope checks, in-process rate limits, identity header injection, stripping of `Authorization` / `X-API-Key` before upstream, trace propagation, and CORS. TLS is terminated at the edge (not in this process).
 
 ## Local Development
 
@@ -48,6 +48,11 @@ cargo test --all-targets
 | `OTEL_TRACES_SAMPLER_RATIO` | `1` | Trace sampling ratio |
 | `OTEL_SDK_DISABLED` | unset | `true` → no OTLP; stdout + `/metrics` remain |
 | `ALLOWED_ORIGINS` | (empty → `*`) | Comma-separated CORS origin allowlist. Empty allows `*`; non-empty reflects matching `Origin` and sets `Vary: Origin` |
+| `RATE_LIMIT_REQUESTS` | `60` | Fallback max requests per window for admitted routes. `0` = unlimited fallback |
+| `RATE_LIMIT_WINDOW_SECONDS` | `60` | Fallback window. Must be > 0 when requests > 0 |
+| `RATE_LIMIT_BY` | unset | Optional `ip`, `user`, or `member`. Unset → follows scope (public→ip, user→user, organization→member) |
+| `RATE_LIMIT_AUTH_FAILURE_REQUESTS` | `60` | Per-IP limiter for unadmitted 401s and unmatched 404s. `0` = off |
+| `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` | `60` | Window for the failed-auth limiter |
 
 ## Telemetry
 
@@ -81,5 +86,5 @@ The gateway loads route configuration from etcd (watch). Writes go through **rou
 
 ## Span Status
 
-- **Client errors** (400, 401, 404, 413): span status `Ok`.
+- **Client errors** (400, 401, 403, 404, 413, 429): span status `Ok`.
 - **Unexpected failures** (5xx, proxy/network errors): span status `Error`, set `error.kind`.

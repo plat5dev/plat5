@@ -7,6 +7,8 @@ pub struct AuthContext {
     pub user_id: String,
     pub auth_type: AuthType,
     pub kid: Option<String>,
+    /// None = JWT or unrestricted API key. Some = key scope list (empty grants nothing).
+    pub key_scopes: Option<Vec<String>>,
 }
 
 /// How an organization-scoped request was admitted.
@@ -28,12 +30,43 @@ pub enum Admission {
         user_id: String,
         auth_type: AuthType,
         kid: Option<String>,
+        key_scopes: Option<Vec<String>>,
     },
     Organization {
         organization_id: String,
         member_id: String,
         via: OrgVia,
+        key_scopes: Option<Vec<String>>,
     },
+}
+
+impl Admission {
+    pub fn key_scopes(&self) -> Option<&[String]> {
+        match self {
+            Admission::Public => None,
+            Admission::User { key_scopes, .. } | Admission::Organization { key_scopes, .. } => {
+                key_scopes.as_deref()
+            }
+        }
+    }
+
+    pub fn user_id(&self) -> Option<&str> {
+        match self {
+            Admission::User { user_id, .. } => Some(user_id.as_str()),
+            Admission::Organization {
+                via: OrgVia::User { user_id, .. },
+                ..
+            } => Some(user_id.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn member_id(&self) -> Option<&str> {
+        match self {
+            Admission::Organization { member_id, .. } => Some(member_id.as_str()),
+            _ => None,
+        }
+    }
 }
 
 pub enum ResolveDeny {
