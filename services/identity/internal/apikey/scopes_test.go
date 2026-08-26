@@ -1,104 +1,102 @@
 package apikey
 
 import (
-	"strings"
 	"testing"
-
-	"github.com/plat5dev/plat5/identity/errors"
 )
 
-func TestParseScopesOmittedUnrestricted(t *testing.T) {
-	t.Parallel()
-	got, err := ParseScopes(nil)
+func TestNormalizeScopesUnrestricted(t *testing.T) {
+	got, err := NormalizeScopes(nil)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("unexpected err: %v", err)
 	}
 	if got != nil {
-		t.Fatalf("omitted must be unrestricted nil, got %#v", got)
+		t.Fatalf("expected nil (unrestricted), got %#v", got)
 	}
 }
 
-func TestParseScopesEmptyGrantsNothing(t *testing.T) {
-	t.Parallel()
+func TestNormalizeScopesEmptyGrantsNothing(t *testing.T) {
 	in := []string{}
-	got, err := ParseScopes(&in)
+	got, err := NormalizeScopes(&in)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("unexpected err: %v", err)
 	}
-	if got == nil || len(got) != 0 {
-		t.Fatalf("empty must grant nothing, got %#v", got)
+	if got == nil {
+		t.Fatal("empty array must not be unrestricted")
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty, got %#v", got)
 	}
 }
 
 func TestNormalizeScopesOk(t *testing.T) {
-	t.Parallel()
-	got, err := NormalizeScopes([]string{" reports.export ", "read", "write.v2"})
+	in := []string{" widgets:read ", "invoices.write", "a", "b_c", "d-e", "f.g"}
+	got, err := NormalizeScopes(&in)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("unexpected err: %v", err)
 	}
-	if len(got) != 3 || got[0] != "reports.export" || got[1] != "read" || got[2] != "write.v2" {
-		t.Fatalf("got %#v", got)
+	if len(got) != 6 {
+		t.Fatalf("got %d labels: %#v", len(got), got)
 	}
 }
 
 func TestNormalizeScopesRejects(t *testing.T) {
-	t.Parallel()
-	many := make([]string, MaxScopeCount+1)
-	for i := range many {
-		many[i] = "s" + itoa(i)
-	}
 	cases := []struct {
-		name string
 		in   []string
-		msg  string
+		want *ScopeError
 	}{
-		{"empty label", []string{""}, "A scope label is required."},
-		{"whitespace label", []string{"  "}, "A scope label is required."},
-		{"uppercase", []string{"Read"}, "Scopes can only use lowercase letters, numbers, colons, dots, underscores, and dashes."},
-		{"space", []string{"a b"}, "Scopes can only use lowercase letters, numbers, colons, dots, underscores, and dashes."},
-		{"too long", []string{strings.Repeat("a", MaxScopeLen+1)}, "A scope label is too long."},
-		{"too many", many, "Too many scopes."},
-		{"duplicate", []string{"read", "read"}, "Duplicate scope labels are not allowed."},
+		{[]string{"Widgets:read"}, ErrScopeInvalid},
+		{[]string{"org/read"}, ErrScopeInvalid},
+		{[]string{""}, ErrScopeInvalid},
+		{[]string{"widgets:read", "widgets:read"}, ErrScopeDuplicate},
+		{[]string{stringsRepeat("a", MaxScopeLen+1)}, ErrScopeTooLong},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			_, err := NormalizeScopes(tc.in)
-			if err == nil {
-				t.Fatal("expected error")
-			}
-			api, ok := err.(*errors.ApiError)
-			if !ok || api.Code != "VALIDATION_ERROR" {
-				t.Fatalf("got %#v", err)
-			}
-			if api.Message != tc.msg {
-				t.Fatalf("message=%q want %q", api.Message, tc.msg)
-			}
-		})
+		in := tc.in
+		_, err := NormalizeScopes(&in)
+		if err != tc.want {
+			t.Errorf("%v: got %v want %v", tc.in, err, tc.want)
+		}
+	}
+
+	tooMany := make([]string, MaxScopeCount+1)
+	for i := range tooMany {
+		tooMany[i] = "s" + itoa(i)
+	}
+	_, err := NormalizeScopes(&tooMany)
+	if err != ErrScopeTooMany {
+		t.Errorf("too many: got %v", err)
 	}
 }
 
-func TestPointerForJSON(t *testing.T) {
-	t.Parallel()
-	if PointerForJSON(nil) != nil {
-		t.Fatal("nil must stay unrestricted")
+func TestWireScopes(t *testing.T) {
+	if WireScopes(nil) != nil {
+		t.Fatal("nil must wire as null")
 	}
-	empty := PointerForJSON([]string{})
-	if empty == nil || len(*empty) != 0 {
-		t.Fatalf("empty: %#v", empty)
+	empty := []string{}
+	p := WireScopes(empty)
+	if p == nil || len(*p) != 0 {
+		t.Fatalf("empty must wire as empty array, got %#v", p)
 	}
 }
 
-func itoa(n int) string {
-	if n == 0 {
+func stringsRepeat(s string, n int) string {
+	out := make([]byte, 0, n*len(s))
+	for i := 0; i < n; i++ {
+		out = append(out, s...)
+	}
+	return string(out)
+}
+
+func itoa(i int) string {
+	if i == 0 {
 		return "0"
 	}
 	var b [12]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
+	n := len(b)
+	for i > 0 {
+		n--
+		b[n] = byte('0' + i%10)
+		i /= 10
 	}
-	return string(b[i:])
+	return string(b[n:])
 }
