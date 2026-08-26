@@ -53,8 +53,6 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `INTERNAL_ERROR` | 500 | `api_error` | An unexpected error occurred. | `null` |
 | `SERVICE_UNAVAILABLE` | 503 | `api_error` | Service temporarily unavailable. | `null` |
 
-`RATE_LIMITED` also sets the **`Retry-After`** response header (seconds). Gateway-owned.
-
 ### `UNAUTHORIZED`
 
 Returned by the **gateway**, not downstream services. If a downstream service receives a request without expected gateway-injected headers for its scope, that is a gateway bug → `INTERNAL_ERROR` (500). See [`gateway-contract.md`](gateway-contract.md) and [`identity-boundary.md`](identity-boundary.md).
@@ -65,13 +63,16 @@ Canonical policy: [`identity-boundary.md`](identity-boundary.md).
 
 When `organization` scope is live: non-member / inactive / unknown org → **`NOT_FOUND` (404)**. Member resolve or key validate unavailable → **`SERVICE_UNAVAILABLE` (503)**. Bad credential → **`UNAUTHORIZED` (401)**.
 
-### Key scopes (gateway)
+### `RATE_LIMITED`
 
-After a successful admission: if the matched route has `required_scopes` and the credential is an API key with a **non-null** scopes list, the lists must have a nonempty intersection. Else **`FORBIDDEN` (403)**. JWTs and unrestricted keys (scopes `null`) skip the check. See [`gateway-contract.md`](gateway-contract.md).
+Returned by the **gateway**. HTTP **429**. `Retry-After` (seconds) is set to the same value as `details.retry_after_seconds`.
 
-### Rate limits (gateway)
+Two independent in-process limiters (per gateway instance; no Redis):
 
-Admitted traffic uses the per-route limiter (omitted `rate_limit` inherits gateway fallback; `rate_limit: false` is unlimited). Unadmitted **401**s and unmatched **404**s use a separate always-on per-IP limiter. Over limit → **`RATE_LIMITED` (429)**.
+| Limiter | When | Key |
+|---------|------|-----|
+| Per-route (admitted) | After match + admission (JWT and API key). Omitted `rate_limit` inherits `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` (never silent unlimited). `rate_limit: false` opts out. | `by` on the route, else env `RATE_LIMIT_BY`, else scope default (`public`→ip, `user`→user, `organization`→member) |
+| Failed-auth IP | Unadmitted **401**s and unmatched **404**s. Not per-route. | Client IP. `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). `0` requests = off |
 
 ## Principles
 

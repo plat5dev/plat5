@@ -33,10 +33,6 @@ Read the doc, don’t re-derive:
 | Apply is **upsert** of services in the file. Not prune | route-registry.md |
 | etcd prefix: `edge/gateway/routes/` | routes.md |
 | Gateway stop: no resource-type registry / relation graph / permission matrix | identity-boundary |
-| API key `scopes` are opaque labels (`[a-z0-9:._-]+`). Omitted/null = unrestricted; `[]` = grants nothing. Do not bake product scope names into plat5 | identity.md |
-| After admission, if the route has `required_scopes` and the credential is an API key with a non-null scopes list, require a nonempty intersection — else **403** `FORBIDDEN`. JWTs and unrestricted keys skip | gateway-contract.md, routes.md |
-| Omitted per-route `rate_limit` inherits gateway fallback (`RATE_LIMIT_REQUESTS` / `WINDOW`; `0` = unlimited fallback). Never silent unlimited. `rate_limit: false` opts out. In-process per instance; no Redis | gateway-contract.md, routes.md |
-| Failed-auth IP limiter is separate and always-on (`RATE_LIMIT_AUTH_FAILURE_*`): unadmitted **401**s and unmatched **404**s. **403** / admitted traffic uses the route limiter | gateway-contract.md |
 
 ## Stop conditions
 
@@ -53,8 +49,6 @@ Do not add these because they would be convenient:
 - Treating omitted identity routes as “feature off” (the process still serves them on the network)
 - Auto-merge of new identity paths into existing operator YAML
 - Shared `route-config` crate until a third consumer exists (two copies are deliberate)
-- A closed catalog of API key scope strings in plat5
-- Redis (or any shared store) for gateway rate limits
 
 ## Deferred (not review findings)
 
@@ -63,7 +57,6 @@ Do not add these because they would be convenient:
 | Admission cache invalidation / negative cache | Named invariant for revoke/suspend latency; misses don’t stampede identity |
 | Apply `--prune` | Explicit CLI flag; not the default until that is the documented contract |
 | Consumer libraries | Per-language helpers for headers + error envelope + missing-header → 500 |
-| Multi-instance rate-limit aggregation | Shared limiter only if the contract names it; today each gateway process is independent |
 
 Unfinished implementation of the above is not an architecture defect. A **doc that pretends they exist** is.
 
