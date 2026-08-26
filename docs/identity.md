@@ -138,7 +138,7 @@ Token prefix `inv_`. Hashed at rest (SHA-256 hex). One-shot: `redeemed_at` set o
   "email": "a@b.com",
   "token_prefix": "inv_abcd",
   "token": "inv_…",
-  "url": "https://auth.example.com/authorize?…&invite_token=inv_…",
+  "url": "https://auth.example.com/authorize?…&invite=inv_…",
   "expires_at": "...",
   "created_by": "...",
   "created_at": "...",
@@ -148,7 +148,7 @@ Token prefix `inv_`. Hashed at rest (SHA-256 hex). One-shot: `redeemed_at` set o
 }
 ```
 
-`url` is omitted unless `INVITE_AUTHORIZE_URL` is set (Auth `/authorize` URL; identity appends `invite_token`). List/get never return `token`.
+`url` is omitted unless `INVITE_AUTHORIZE_URL` is set (Auth `/authorize` URL; identity appends `invite`). List/get never return `token`.
 
 ### Internal invite redeem
 
@@ -372,7 +372,7 @@ No IdP user table and no FK to an external directory. `user_id` values are opaqu
 | Database | Plat5 Postgres via `DATABASE_URL` |
 | Schema | **`identity`** (service-owned; tables + `schema_migrations`) |
 | `APIKEY_BRAND` | default `plat5`; same value as gateway |
-| `INVITE_AUTHORIZE_URL` | optional Auth `/authorize` URL; create-invite includes `url` with `invite_token` |
+| `INVITE_AUTHORIZE_URL` | optional Auth `/authorize` URL; create-invite includes `url` with `invite` |
 
 Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 
