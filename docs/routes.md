@@ -112,7 +112,7 @@ Same path, different per-verb `required_scopes` / `rate_limit` — nested `metho
 | `methods` | `array<string>` \| `map<string, MethodConfig>` | List form: allowed HTTP methods. Map form: per-verb config (see below). Do not mix list and map on the same route (`422`). |
 | `transform` | `object?` | Optional path rewrite (see below). Route-level only — not per-method. |
 | `required_scopes` | `string[]?` | Optional. Omitted = any admitted principal. If set, a **restricted** API key must share at least one label. JWTs and unrestricted keys skip. Validated at apply. Route-level value applies only to the flat methods list. |
-| `rate_limit` | `false` \| `{requests, window_seconds}` \| omitted | Omitted **inherits** gateway fallback (never silent unlimited). `false` opts out (unlimited). Object overrides. Subject follows route scope (`public`→ip, `user`→user, `organization`→org). `by` is not accepted. Route-level value applies only to the flat methods list. |
+| `rate_limit` | `false` \| `{requests, window_seconds}` \| omitted | Omitted **inherits** gateway fallback (never silent unlimited). `false` opts out (unlimited). Object overrides. Subject follows route scope (`public`→ip, `user`→user, `organization`→org). Route-level value applies only to the flat methods list. |
 
 A service must define at least one scope. Multiple scopes may be present.
 
@@ -163,9 +163,9 @@ Applies to **all admitted** routes (JWT and API key), in-process per gateway ins
 |------|--------|
 | omitted | Inherit `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS`. `0` requests = unlimited fallback. |
 | `false` | Unlimited for this route |
-| `{requests, window_seconds}` | Override. `requests` and `window_seconds` must be > 0. No `by`. |
+| `{requests, window_seconds}` | Override. `requests` and `window_seconds` must be > 0. |
 
-Limiter subject is derived from route scope: `public`→ip, `user`→user, `organization`→org (`Admission::Organization.organization_id`, including SA/member keys). Any `by` (flat or nested methods) is a **422** `VALIDATION_ERROR` at apply — not silently ignored. `by: org` is not a valid field.
+Limiter subject is derived from route scope: `public`→ip, `user`→user, `organization`→org (`Admission::Organization.organization_id`, including SA/member keys).
 
 Exceed → **429** `RATE_LIMITED`, `Retry-After`, `details.retry_after_seconds`. See [`api-errors.md`](api-errors.md).
 
@@ -310,7 +310,7 @@ Registry validates **before etcd**. Gateway validates again at load (expanded li
 - `organization` scope requires `organization_param`; every expanded org path includes `{param}`
 - `route_prefix` join rules at registry; etcd stores full paths only
 - `required_scopes` if present: non-empty, `[a-z0-9:._-]+`, max 64 chars, max 32, unique
-- `rate_limit` if object: `requests` > 0, `window_seconds` > 0. `by` is not allowed (flat or nested). `true` is invalid
+- `rate_limit` if object: `requests` > 0, `window_seconds` > 0. `true` is invalid
 - Duplicate service names in merged registry: first wins, warning
 - Malformed JSON values skipped with warning; other routes continue
 
