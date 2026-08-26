@@ -95,6 +95,10 @@ Existence policy: non-member and unknown org look the same (**404**), including 
 
 Do not return `UNAUTHORIZED` for missing identity headers — the gateway already authenticated (or should have rejected) the client.
 
+## Invites
+
+Org invites live in **identity** (`organization_invites`). Create/list/revoke are user-scope org-admin APIs. Redeem is user-scope (`POST /api/invites/redeem`) or internal (`POST /internal/invites/redeem`) for an IdP that can reach a **public** identity/gateway URL. Auth must not join the plat5 Docker network. Identity does not send email.
+
 ## What is not Plat5 identity (here)
 
 - Project / document / generic resource ACL in the gateway
@@ -104,4 +108,5 @@ Do not return `UNAUTHORIZED` for missing identity headers — the gateway alread
 - Member role as platform wire identity (role stays in identity)
 - Service accounts as a parallel auth system (they are members with keys)
 - Multi-org service accounts
-- Invites / email join (add member by known `user_id` only)
+- SMTP in identity (invites return a token/link; the console sends mail if it wants)
+- Pending member rows (invite redeem inserts an **active** member; add-by-`user_id` remains)
