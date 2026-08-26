@@ -30,6 +30,12 @@ mod tests {
         serde_json::from_value(value).expect("route json")
     }
 
+    fn config_with(route: RouteConfig) -> Config {
+        let mut services = HashMap::new();
+        services.insert("w".into(), user_service(vec![route]));
+        Config { services }
+    }
+
     #[test]
     fn join_prefix_root_path() {
         assert_eq!(
@@ -70,9 +76,7 @@ mod tests {
     fn required_scopes_ok() {
         let mut r = route("/api/widgets", &["GET"]);
         r.required_scopes = Some(vec!["widgets:read".into(), "invoices.write".into()]);
-        let mut services = HashMap::new();
-        services.insert("w".into(), user_service(vec![r]));
-        Config { services }.validate().unwrap();
+        config_with(r).validate().unwrap();
     }
 
     #[test]
@@ -85,10 +89,8 @@ mod tests {
         ] {
             let mut r = route("/api/widgets", &["GET"]);
             r.required_scopes = Some(labels.clone());
-            let mut services = HashMap::new();
-            services.insert("w".into(), user_service(vec![r]));
             assert!(
-                Config { services }.validate().is_err(),
+                config_with(r).validate().is_err(),
                 "expected error for {labels:?}"
             );
         }
@@ -100,16 +102,25 @@ mod tests {
         assert_eq!(unlimited, RouteRateLimit::Unlimited);
         let obj: RouteRateLimit = serde_json::from_value(serde_json::json!({
             "requests": 10,
-            "window_seconds": 60,
-            "by": "ip"
+            "window_seconds": 60
         }))
         .unwrap();
         match obj {
             RouteRateLimit::Limit(cfg) => {
                 assert_eq!(cfg.requests, 10);
                 assert_eq!(cfg.window_seconds, 60);
-                assert_eq!(cfg.by.as_deref(), Some("ip"));
+                assert!(cfg.by.is_none());
             }
+            RouteRateLimit::Unlimited => panic!("expected object"),
+        }
+        let with_by: RouteRateLimit = serde_json::from_value(serde_json::json!({
+            "requests": 10,
+            "window_seconds": 60,
+            "by": "ip"
+        }))
+        .unwrap();
+        match with_by {
+            RouteRateLimit::Limit(cfg) => assert_eq!(cfg.by.as_deref(), Some("ip")),
             RouteRateLimit::Unlimited => panic!("expected object"),
         }
         assert!(serde_json::from_str::<RouteRateLimit>("true").is_err());
@@ -123,9 +134,56 @@ mod tests {
             window_seconds: 60,
             by: None,
         }));
-        let mut services = HashMap::new();
-        services.insert("w".into(), user_service(vec![r]));
-        assert!(Config { services }.validate().is_err());
+        assert!(config_with(r).validate().is_err());
+    }
+
+    #[test]
+    fn rate_limit_by_is_rejected() {
+        for by in ["key", "member", "org", "ip", "user"] {
+            let mut r = route("/api/widgets", &["GET"]);
+            r.rate_limit = Some(RouteRateLimit::Limit(RateLimitConfig {
+                requests: 10,
+                window_seconds: 60,
+                by: Some(by.into()),
+            }));
+            let err = config_with(r).validate().unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("rate_limit.by"),
+                "expected by rejection for {by}, got {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_rate_limit_by_is_rejected() {
+        for by in ["key", "member", "org", "ip"] {
+            let r = parse_route(serde_json::json!({
+                "path": "/features",
+                "methods": {
+                    "POST": {
+                        "rate_limit": {"requests": 10, "window_seconds": 60, "by": by}
+                    }
+                }
+            }));
+            let err = config_with(r).validate().unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("rate_limit.by"),
+                "expected nested by rejection for {by}, got {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn rate_limit_object_without_by_ok() {
+        let mut r = route("/api/widgets", &["GET"]);
+        r.rate_limit = Some(RouteRateLimit::Limit(RateLimitConfig {
+            requests: 10,
+            window_seconds: 60,
+            by: None,
+        }));
+        config_with(r).validate().unwrap();
     }
 
     #[test]
@@ -151,9 +209,7 @@ mod tests {
             Some(["org:read".to_string()].as_slice())
         );
         assert!(matches!(r.methods_form, MethodsForm::List));
-        let mut services = HashMap::new();
-        services.insert("w".into(), user_service(vec![r]));
-        Config { services }.validate().unwrap();
+        config_with(r).validate().unwrap();
     }
 
     #[test]
@@ -164,7 +220,7 @@ mod tests {
                 "GET": {"required_scopes": ["org:read"]},
                 "POST": {
                     "required_scopes": ["org:write"],
-                    "rate_limit": {"requests": 100, "window_seconds": 1, "by": "ip"}
+                    "rate_limit": {"requests": 100, "window_seconds": 1}
                 }
             }
         }));
@@ -196,7 +252,7 @@ mod tests {
             Some(RouteRateLimit::Limit(cfg)) => {
                 assert_eq!(cfg.requests, 100);
                 assert_eq!(cfg.window_seconds, 1);
-                assert_eq!(cfg.by.as_deref(), Some("ip"));
+                assert!(cfg.by.is_none());
             }
             other => panic!("expected POST rate limit, got {other:?}"),
         }
@@ -211,9 +267,7 @@ mod tests {
             "path": "/features",
             "methods": ["GET", {"POST": {}}]
         }));
-        let mut services = HashMap::new();
-        services.insert("w".into(), user_service(vec![r]));
-        let err = Config { services }.validate().unwrap_err();
+        let err = config_with(r).validate().unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("mix"), "expected mix error, got {msg}");
     }
@@ -221,9 +275,7 @@ mod tests {
     #[test]
     fn empty_nested_methods_map_fails() {
         let r = parse_route(serde_json::json!({"path": "/features", "methods": {}}));
-        let mut services = HashMap::new();
-        services.insert("w".into(), user_service(vec![r]));
-        let err = Config { services }.validate().unwrap_err();
+        let err = config_with(r).validate().unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("methods map must not be empty") || msg.contains("no methods"),
