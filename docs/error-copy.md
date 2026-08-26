@@ -86,16 +86,6 @@ Use these only when a more specific sentence does not apply.
 | Name > 128 | Name is too long. |
 | PATCH with no name | Nothing to update. |
 
-### Invites
-
-| When | `message` |
-|------|-----------|
-| `expires_in_seconds` out of range | Expiry must be between 60 seconds and 30 days. |
-| `email` > 320 | That email is too long. |
-| Bad role | Role must be member, admin, or owner. |
-
-Unknown / expired / revoked / already-used tokens use the generic **404** `Resource not found.` (existence policy; do not name the org). Already a member on a still-valid token is **200**, not 409.
-
 ### API keys (user + member)
 
 | When | `message` |
