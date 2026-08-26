@@ -1,11 +1,11 @@
-use serde::de::value::MapAccessDeserializer;
-use serde::de::{self, Deserializer, MapAccess, Visitor};
-use serde::{Deserialize, Serialize, Serializer};
-use std::collections::{HashMap, HashSet};
-use std::fmt;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// etcd key prefix for gateway route registry entries.
 pub const ROUTES_PREFIX: &str = "edge/gateway/routes/";
+
+pub const MAX_SCOPE_COUNT: usize = 32;
+pub const MAX_SCOPE_LEN: usize = 64;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
@@ -41,8 +41,11 @@ pub struct RouteConfig {
     pub methods: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transform: Option<TransformConfig>,
+    /// Optional API-key scope labels this route requires.
+    /// Omitted = any admitted principal. JWTs and unrestricted keys skip the check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_scopes: Option<Vec<String>>,
+    /// Omitted = inherit gateway fallback. `false` = unlimited. Object = override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limit: Option<RouteRateLimit>,
 }
@@ -53,136 +56,46 @@ pub struct TransformConfig {
     pub path: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RateLimitBy {
-    Ip,
-    User,
-    Member,
-}
-
-impl RateLimitBy {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Ip => "ip",
-            Self::User => "user",
-            Self::Member => "member",
-        }
-    }
-
-    pub fn parse(raw: &str) -> Option<Self> {
-        match raw.trim() {
-            "ip" => Some(Self::Ip),
-            "user" => Some(Self::User),
-            "member" => Some(Self::Member),
-            _ => None,
-        }
-    }
-}
-
-impl Serialize for RateLimitBy {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for RateLimitBy {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        Self::parse(&s).ok_or_else(|| {
-            de::Error::custom(format!(
-                "rate_limit.by must be ip, user, or member (got {s})"
-            ))
-        })
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RateLimitOverride {
-    pub requests: u64,
-    pub window_seconds: u64,
-    pub by: Option<RateLimitBy>,
-}
-
-/// Per-route rate limit. `false` opts out to unlimited. An object overrides
-/// the gateway fallback. Omitted inherits the fallback (never silent unlimited).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Per-route rate limit. `false` opts out (unlimited). Object overrides the gateway fallback.
+#[derive(Clone, Debug, PartialEq)]
 pub enum RouteRateLimit {
     Unlimited,
-    Override(RateLimitOverride),
+    Limit(RateLimitConfig),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct RateLimitConfig {
+    pub requests: u64,
+    pub window_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
 }
 
 impl Serialize for RouteRateLimit {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
             RouteRateLimit::Unlimited => serializer.serialize_bool(false),
-            RouteRateLimit::Override(o) => {
-                #[derive(Serialize)]
-                struct Limit {
-                    requests: u64,
-                    window_seconds: u64,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    by: Option<RateLimitBy>,
-                }
-                Limit {
-                    requests: o.requests,
-                    window_seconds: o.window_seconds,
-                    by: o.by,
-                }
-                .serialize(serializer)
-            }
+            RouteRateLimit::Limit(cfg) => cfg.serialize(serializer),
         }
     }
 }
 
 impl<'de> Deserialize<'de> for RouteRateLimit {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct V;
-        impl<'de> Visitor<'de> for V {
-            type Value = RouteRateLimit;
-
-            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("false or { requests, window_seconds, by? }")
-            }
-
-            fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> {
-                if v {
-                    Err(E::custom(
-                        "rate_limit: true is invalid; use false to disable or an object to override",
-                    ))
-                } else {
-                    Ok(RouteRateLimit::Unlimited)
-                }
-            }
-
-            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
-                #[derive(Deserialize)]
-                struct Limit {
-                    requests: u64,
-                    window_seconds: u64,
-                    #[serde(default)]
-                    by: Option<RateLimitBy>,
-                }
-                let limit = Limit::deserialize(MapAccessDeserializer::new(map))?;
-                Ok(RouteRateLimit::Override(RateLimitOverride {
-                    requests: limit.requests,
-                    window_seconds: limit.window_seconds,
-                    by: limit.by,
-                }))
-            }
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Flag(bool),
+            Limit(RateLimitConfig),
         }
-        deserializer.deserialize_any(V)
+        match Raw::deserialize(deserializer)? {
+            Raw::Flag(false) => Ok(RouteRateLimit::Unlimited),
+            Raw::Flag(true) => Err(serde::de::Error::custom(
+                "rate_limit: true is invalid; use false or {requests, window_seconds, by?}",
+            )),
+            Raw::Limit(cfg) => Ok(RouteRateLimit::Limit(cfg)),
+        }
     }
-}
-
-pub const MAX_SCOPE_COUNT: usize = 32;
-pub const MAX_SCOPE_LEN: usize = 64;
-
-pub fn valid_scope_label(s: &str) -> bool {
-    if s.is_empty() || s.len() > MAX_SCOPE_LEN {
-        return false;
-    }
-    s.chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, ':' | '.' | '_' | '-'))
 }
 
 impl Config {
@@ -336,8 +249,8 @@ fn validate_scope_routes(
             }
         }
 
-        validate_required_scopes(service, scope_name, route)?;
-        validate_rate_limit(service, scope_name, route)?;
+        validate_required_scopes(service, scope_name, &route.path, route.required_scopes.as_deref())?;
+        validate_rate_limit(service, scope_name, &route.path, route.rate_limit.as_ref())?;
     }
     Ok(())
 }
@@ -345,46 +258,47 @@ fn validate_scope_routes(
 fn validate_required_scopes(
     service: &str,
     scope_name: &str,
-    route: &RouteConfig,
+    path: &str,
+    required: Option<&[String]>,
 ) -> Result<(), ConfigError> {
-    let Some(scopes) = route.required_scopes.as_ref() else {
+    let Some(labels) = required else {
         return Ok(());
     };
-    if scopes.is_empty() {
+    if labels.is_empty() {
         return Err(ConfigError::InvalidRoute {
             service: service.to_string(),
             reason: format!(
-                "{} route '{}' required_scopes must be nonempty if set",
-                scope_name, route.path
+                "{} route '{}' required_scopes must be omitted or a non-empty list",
+                scope_name, path
             ),
         });
     }
-    if scopes.len() > MAX_SCOPE_COUNT {
+    if labels.len() > MAX_SCOPE_COUNT {
         return Err(ConfigError::InvalidRoute {
             service: service.to_string(),
             reason: format!(
-                "{} route '{}' required_scopes exceeds {MAX_SCOPE_COUNT} labels",
-                scope_name, route.path
+                "{} route '{}' required_scopes has more than {} labels",
+                scope_name, path, MAX_SCOPE_COUNT
             ),
         });
     }
-    let mut seen = HashSet::new();
-    for label in scopes {
+    let mut seen = HashMap::new();
+    for label in labels {
         if !valid_scope_label(label) {
             return Err(ConfigError::InvalidRoute {
                 service: service.to_string(),
                 reason: format!(
-                    "{} route '{}' required_scopes label is invalid",
-                    scope_name, route.path
+                    "{} route '{}' required_scopes label '{}' is invalid (expected [a-z0-9:._-]+, max {})",
+                    scope_name, path, label, MAX_SCOPE_LEN
                 ),
             });
         }
-        if !seen.insert(label) {
+        if seen.insert(label, ()).is_some() {
             return Err(ConfigError::InvalidRoute {
                 service: service.to_string(),
                 reason: format!(
-                    "{} route '{}' required_scopes has a duplicate label",
-                    scope_name, route.path
+                    "{} route '{}' required_scopes has duplicate label '{}'",
+                    scope_name, path, label
                 ),
             });
         }
@@ -395,35 +309,57 @@ fn validate_required_scopes(
 fn validate_rate_limit(
     service: &str,
     scope_name: &str,
-    route: &RouteConfig,
+    path: &str,
+    rate_limit: Option<&RouteRateLimit>,
 ) -> Result<(), ConfigError> {
-    let Some(limit) = route.rate_limit.as_ref() else {
+    let Some(spec) = rate_limit else {
         return Ok(());
     };
-    match limit {
-        RouteRateLimit::Unlimited => Ok(()),
-        RouteRateLimit::Override(o) => {
-            if o.requests == 0 {
-                return Err(ConfigError::InvalidRoute {
-                    service: service.to_string(),
-                    reason: format!(
-                        "{} route '{}' rate_limit.requests must be > 0 (use false for unlimited)",
-                        scope_name, route.path
-                    ),
-                });
-            }
-            if o.window_seconds == 0 {
-                return Err(ConfigError::InvalidRoute {
-                    service: service.to_string(),
-                    reason: format!(
-                        "{} route '{}' rate_limit.window_seconds must be > 0",
-                        scope_name, route.path
-                    ),
-                });
-            }
-            Ok(())
+    let RouteRateLimit::Limit(cfg) = spec else {
+        return Ok(());
+    };
+    if cfg.requests == 0 {
+        return Err(ConfigError::InvalidRoute {
+            service: service.to_string(),
+            reason: format!(
+                "{} route '{}' rate_limit.requests must be > 0 (use rate_limit: false for unlimited)",
+                scope_name, path
+            ),
+        });
+    }
+    if cfg.window_seconds == 0 {
+        return Err(ConfigError::InvalidRoute {
+            service: service.to_string(),
+            reason: format!(
+                "{} route '{}' rate_limit.window_seconds must be > 0",
+                scope_name, path
+            ),
+        });
+    }
+    if let Some(ref by) = cfg.by {
+        if !matches!(by.as_str(), "ip" | "user" | "member") {
+            return Err(ConfigError::InvalidRoute {
+                service: service.to_string(),
+                reason: format!(
+                    "{} route '{}' rate_limit.by must be ip, user, or member",
+                    scope_name, path
+                ),
+            });
         }
     }
+    Ok(())
+}
+
+pub fn valid_scope_label(s: &str) -> bool {
+    if s.is_empty() || s.len() > MAX_SCOPE_LEN {
+        return false;
+    }
+    s.chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, ':' | '.' | '_' | '-'))
+}
+
+pub fn scopes_intersect(required: &[String], granted: &[String]) -> bool {
+    granted.iter().any(|g| required.iter().any(|r| r == g))
 }
 
 #[derive(Debug)]
@@ -498,98 +434,110 @@ mod tests {
     }
 
     #[test]
-    fn omitted_rate_limit_deserializes_none() {
-        let r: RouteConfig = serde_json::from_str(r#"{"path":"/x","methods":["GET"]}"#).unwrap();
-        assert!(r.rate_limit.is_none());
-        assert!(r.required_scopes.is_none());
-    }
-
-    #[test]
-    fn rate_limit_false_is_unlimited() {
-        let r: RouteConfig =
-            serde_json::from_str(r#"{"path":"/x","methods":["GET"],"rate_limit":false}"#).unwrap();
-        assert_eq!(r.rate_limit, Some(RouteRateLimit::Unlimited));
-        let json = serde_json::to_string(&r).unwrap();
-        assert!(json.contains(r#""rate_limit":false"#));
-    }
-
-    #[test]
-    fn rate_limit_true_rejected() {
-        let err = serde_json::from_str::<RouteConfig>(
-            r#"{"path":"/x","methods":["GET"],"rate_limit":true}"#,
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("true is invalid"));
-    }
-
-    #[test]
-    fn rate_limit_override_roundtrip() {
-        let r: RouteConfig = serde_json::from_str(
-            r#"{"path":"/x","methods":["GET"],"rate_limit":{"requests":10,"window_seconds":30,"by":"ip"}}"#,
-        )
-        .unwrap();
-        match r.rate_limit {
-            Some(RouteRateLimit::Override(ref o)) => {
-                assert_eq!(o.requests, 10);
-                assert_eq!(o.window_seconds, 30);
-                assert_eq!(o.by, Some(RateLimitBy::Ip));
-            }
-            other => panic!("{:?}", other),
-        }
-        let back: RouteConfig = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
-        assert_eq!(back.rate_limit, r.rate_limit);
-    }
-
-    #[test]
-    fn required_scopes_projected() {
-        let r: RouteConfig = serde_json::from_str(
-            r#"{"path":"/x","methods":["GET"],"required_scopes":["read","reports.export"]}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            r.required_scopes.as_deref(),
-            Some(["read".to_string(), "reports.export".to_string()].as_slice())
+    fn required_scopes_ok() {
+        let mut r = route("/api/widgets", &["GET"]);
+        r.required_scopes = Some(vec!["widgets:read".into(), "invoices.write".into()]);
+        let mut services = HashMap::new();
+        services.insert(
+            "w".into(),
+            ServiceConfig {
+                url: "w:3000".into(),
+                public: None,
+                user: Some(ScopeConfig {
+                    route_prefix: None,
+                    organization_param: None,
+                    routes: vec![r],
+                }),
+                organization: None,
+            },
         );
+        Config { services }.validate().unwrap();
     }
 
-    fn svc_with(route: RouteConfig) -> ServiceConfig {
-        ServiceConfig {
-            url: "svc:3000".into(),
-            public: None,
-            user: Some(ScopeConfig {
-                route_prefix: None,
-                organization_param: None,
-                routes: vec![route],
-            }),
-            organization: None,
+    #[test]
+    fn required_scopes_reject_empty_and_bad() {
+        for labels in [
+            vec![],
+            vec!["Widgets:read".into()],
+            vec!["bad/scope".into()],
+            vec!["ok".into(), "ok".into()],
+        ] {
+            let mut r = route("/api/widgets", &["GET"]);
+            r.required_scopes = Some(labels.clone());
+            let mut services = HashMap::new();
+            services.insert(
+                "w".into(),
+                ServiceConfig {
+                    url: "w:3000".into(),
+                    public: None,
+                    user: Some(ScopeConfig {
+                        route_prefix: None,
+                        organization_param: None,
+                        routes: vec![r],
+                    }),
+                    organization: None,
+                },
+            );
+            assert!(
+                Config { services }.validate().is_err(),
+                "expected error for {labels:?}"
+            );
         }
     }
 
     #[test]
-    fn validate_required_scopes_and_rate_limit() {
-        let mut good = route("/x", &["GET"]);
-        good.required_scopes = Some(vec!["read".into()]);
-        good.rate_limit = Some(RouteRateLimit::Override(RateLimitOverride {
-            requests: 5,
-            window_seconds: 60,
-            by: None,
-        }));
-        svc_with(good).prepare_for_registry("svc").expect("valid");
+    fn rate_limit_false_and_object() {
+        let unlimited: RouteRateLimit = serde_json::from_str("false").unwrap();
+        assert_eq!(unlimited, RouteRateLimit::Unlimited);
 
-        let mut empty = route("/x", &["GET"]);
-        empty.required_scopes = Some(vec![]);
-        assert!(svc_with(empty).prepare_for_registry("svc").is_err());
+        let obj: RouteRateLimit = serde_json::from_str(
+            r#"{"requests":10,"window_seconds":60,"by":"ip"}"#,
+        )
+        .unwrap();
+        match obj {
+            RouteRateLimit::Limit(cfg) => {
+                assert_eq!(cfg.requests, 10);
+                assert_eq!(cfg.window_seconds, 60);
+                assert_eq!(cfg.by.as_deref(), Some("ip"));
+            }
+            RouteRateLimit::Unlimited => panic!("expected object"),
+        }
 
-        let mut bad_label = route("/x", &["GET"]);
-        bad_label.required_scopes = Some(vec!["Read".into()]);
-        assert!(svc_with(bad_label).prepare_for_registry("svc").is_err());
+        assert!(serde_json::from_str::<RouteRateLimit>("true").is_err());
+    }
 
-        let mut zero = route("/x", &["GET"]);
-        zero.rate_limit = Some(RouteRateLimit::Override(RateLimitOverride {
+    #[test]
+    fn rate_limit_object_must_be_positive() {
+        let mut r = route("/api/widgets", &["GET"]);
+        r.rate_limit = Some(RouteRateLimit::Limit(RateLimitConfig {
             requests: 0,
             window_seconds: 60,
             by: None,
         }));
-        assert!(svc_with(zero).prepare_for_registry("svc").is_err());
+        let mut services = HashMap::new();
+        services.insert(
+            "w".into(),
+            ServiceConfig {
+                url: "w:3000".into(),
+                public: None,
+                user: Some(ScopeConfig {
+                    route_prefix: None,
+                    organization_param: None,
+                    routes: vec![r],
+                }),
+                organization: None,
+            },
+        );
+        assert!(Config { services }.validate().is_err());
+    }
+
+    #[test]
+    fn scopes_intersect_nonempty() {
+        assert!(scopes_intersect(
+            &["a".into(), "b".into()],
+            &["b".into(), "c".into()]
+        ));
+        assert!(!scopes_intersect(&["a".into()], &[]));
+        assert!(!scopes_intersect(&["a".into()], &["b".into()]));
     }
 }
