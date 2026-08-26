@@ -180,17 +180,6 @@ fn validate_rate_limit(
             ),
         });
     }
-    if let Some(ref by) = cfg.by {
-        if RateLimitBy::parse(by).is_none() {
-            return Err(ConfigError::InvalidRoute {
-                service: service.to_string(),
-                reason: format!(
-                    "{} route '{}' rate_limit.by must be ip, user, or member",
-                    scope_name, path
-                ),
-            });
-        }
-    }
     Ok(())
 }
 

@@ -151,35 +151,6 @@ pub enum RouteRateLimit {
 pub struct RateLimitConfig {
     pub requests: u64,
     pub window_seconds: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub by: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RateLimitBy {
-    Ip,
-    User,
-    Member,
-}
-
-impl RateLimitBy {
-    pub fn parse(raw: &str) -> Option<Self> {
-        match raw.trim() {
-            "ip" => Some(Self::Ip),
-            "user" => Some(Self::User),
-            "member" => Some(Self::Member),
-            _ => None,
-        }
-    }
-
-    #[allow(dead_code)] // used by gateway; kept on both route_config copies
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Ip => "ip",
-            Self::User => "user",
-            Self::Member => "member",
-        }
-    }
 }
 
 impl Serialize for RouteRateLimit {
@@ -202,7 +173,7 @@ impl<'de> Deserialize<'de> for RouteRateLimit {
         match Raw::deserialize(deserializer)? {
             Raw::Flag(false) => Ok(RouteRateLimit::Unlimited),
             Raw::Flag(true) => Err(de::Error::custom(
-                "rate_limit: true is invalid; use false or {requests, window_seconds, by?}",
+                "rate_limit: true is invalid; use false or {requests, window_seconds}",
             )),
             Raw::Limit(cfg) => Ok(RouteRateLimit::Limit(cfg)),
         }
