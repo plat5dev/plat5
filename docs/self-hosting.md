@@ -193,7 +193,7 @@ Gateway ready requires JWKS loaded (`/health/ready` on internal `:8000`).
 
 ## Footguns
 
-- Template `AUTH_USER_ID_CLAIM=sub` is wrong for Plat5 Auth (`properties.user_id`).
+- Do not set `AUTH_USER_ID_CLAIM=sub` with Plat5 Auth (`sub` is `user:<sha1 prefix>`, not the ULID). Template default is `properties.user_id`; use `sub` for generic OIDC IdPs.
 - `plat5.yml` / `plat5 start` do not operate this stack.
 - `docker compose down -v` wipes identity orgs/keys and Auth users.
 - Recreating etcd without Postgres is ok (projection rebuilds). Wiping Postgres loses desired routes — re-apply.
