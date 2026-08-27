@@ -10,7 +10,7 @@ Headers and service rules: [`gateway-contract.md`](gateway-contract.md). Routes:
 |-------|----------|--------|
 | **Authentication** | Who is this? | Gateway + **IdP (JWT)** / identity API keys (credentials stripped before upstream) |
 | **Organization context** | Is this credential an **active** member of this organization? | Gateway + **identity** (member resolve or member-scoped key) |
-| **API key route scopes** | Does this restricted key share a label with `required_scopes`? | Gateway after admission. JWTs and unrestricted keys skip. Not resource ACL. |
+| **API key route scopes** | Does this restricted key share a label with `required_scopes`? | Gateway after admission. Restricted = non-null `scopes` (`[]` or labels). JWTs and `null` skip. Omitted `required_scopes` → any admitted principal. Not resource ACL. |
 | **Resource authorization** | Can this member do X to project/doc/…? | **Business services** — not gateway headers |
 | **Org administration** | Who may add or change members, manage service accounts, transfer ownership? | **identity** only (member role lives here) |
 

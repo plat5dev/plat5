@@ -24,7 +24,7 @@ Envelope shape does not change. Codes do not multiply into Stripe’s long `para
 
 - Do not add Stripe `param` (we have `details.fields`).
 - Do not add a catalog of Stripe-like codes (`parameter_missing`, …).
-- Do not map plat5 fields in Happ (or any consumer) to invent sentences.
+- Do not invent sentences from `details` or field paths. Show `error.message`.
 - Do not put `request_id`, HTTP status, or `code` in product UI.
 - Do not leak internals in `message` (SQL, stack, bind-error junk). Bind failures stay a fallback sentence.
 - Existence policy stays 404 + generic `Resource not found.` Do not say “you are not a member.”
@@ -106,20 +106,16 @@ Unknown / expired / revoked / already-used tokens use the generic **404** `Resou
 | More than 32 scopes | Too many scopes. |
 | Duplicate scope labels | Scope labels must be unique. |
 
-Internal validate/resolve (`key` / `key_id` / `user_id`+`organization_id` required) are not product UI. Fallback 422 is enough. Do not polish those sentences for the dashboard.
+Internal validate/resolve (`key` / `key_id` / `user_id`+`organization_id` required) are not product UI. Fallback 422 is enough.
 
 ### Pagination (`limit` / `offset`)
 
-Rare in Happ UI. Fallback 422 is enough.
+Fallback 422 is enough.
 
 ## Route-registry
 
-`AppError::validation` puts the validation text in `message`. Operator-facing, not Happ.
+`AppError::validation` puts the validation text in `message`. Operator-facing.
 
 Gateway-owned 401/403/404/413/429/500/503 keep the fallback table.
-
-## Out of this repo
-
-Happ web already shows `error.message` only. After identity ships, org/member/key alerts pick this up. Happ-owned 422/409 copy is already done in `e10s`.
 
 Siblings (`cli`, `template-*`, `web-demo`): update only if they snapshot exact plat5 `message` strings.

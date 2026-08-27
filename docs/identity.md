@@ -27,7 +27,7 @@ Public routes below are **not** auto-published. Apply `services/identity/routes.
 | **organization** | Isolation boundary users and service accounts join. |
 | **member** | Org principal. Exactly one of: a **user** or a **service account**. Wire id: `member_id`. |
 | **service account** | Non-human identity created **under an organization**. Always has a member row in that org. |
-| **api key** | Bearer secret. Either **user-scoped** or **member-scoped**. Optional `scopes` labels constrain which gateway routes the key may call. |
+| **api key** | Bearer secret. Either **user-scoped** or **member-scoped**. Optional `scopes` labels: a restricted key (non-null list) must intersect route `required_scopes`; unlabeled routes still admit. |
 | **invite** | One-shot org join token. No pending member row; redeem inserts an **active** member. Identity does not send email. |
 
 ## Public API
@@ -50,11 +50,15 @@ No `/api/users` collection and no `/me`. Clients already know `user_id` from the
 
 `name` optional (default `Unnamed Key`, max 128). `scopes` optional:
 
-| Wire | Stored | Meaning |
-|------|--------|---------|
-| omitted or `null` | SQL `NULL` | Unrestricted |
-| `[]` | empty array | Grants nothing |
-| non-empty array | those labels | Restricted |
+| Wire | Stored | Route with `required_scopes` | Unlabeled authenticated route |
+|------|--------|------------------------------|-------------------------------|
+| omitted or `null` | SQL `NULL` | skip (allowed) | allowed |
+| `[]` | empty array | **403** | allowed |
+| non-empty array | those labels | allowed if nonempty intersection | allowed |
+
+Restricted = non-null list (`[]` or labels). JWT and `null` skip the check. Unlabeled = any admitted principal.
+
+Identity catalog routes have no `required_scopes`. A restricted **user** key still calls them (org admin included). Do not add `required_scopes` to this catalog. Member keys are `organization` scope only and never hit these routes. Gateway: [`gateway-contract.md`](gateway-contract.md), [`routes.md`](routes.md).
 
 Hygiene (422 `VALIDATION_ERROR` on `scopes`): each label `[a-z0-9:._-]+`, max 64 characters, max 32 labels, unique. Create and list echo `scopes` as `string[] | null` (`null` = unrestricted). Never echo the secret except on create (`key`).
 
@@ -284,7 +288,7 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 | Valid user key | **200** `{ "valid": true, "user_id": "…", "scopes": null }` or `"scopes": ["widgets:read"]` or `"scopes": []` |
 | Wrong prefix / missing / revoked / unknown | **200** `{ "valid": false }` |
 
-`scopes` is `string[] | null`. `null` = unrestricted. Empty array = grants nothing.
+`scopes` is `string[] | null`. `null` = unrestricted (skip `required_scopes`). `[]` = restricted, no labels (**403** on routes with `required_scopes`; unlabeled still admit).
 
 Gateway: prefix `{brand}-sk-1-` → this URL. Subject = `user_id` (same as JWT for scope checks). Cache: `APIKEY_CACHE_TTL_SECS` (default 300s).
 
@@ -360,7 +364,7 @@ member_api_keys        -- org principal credentials (org scope); wire {brand}-mk
   member_id, name, key_prefix, key_hash, scopes, revoked_at, …
 ```
 
-`scopes` is `TEXT[]`. SQL `NULL` = unrestricted. Empty array = grants nothing.
+`scopes` is `TEXT[]`. SQL `NULL` = unrestricted. Empty array = restricted, no labels (same rule as mint).
 
 Independent tables, independent packages (`userkeys` / `memberkeys`), independent validate endpoints. Not one polymorphic key system.
 
@@ -392,6 +396,8 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - SMTP / sending invite email (create returns a token; the console may send mail)
 - Pending member rows (membership is created only on invite redeem, status `active`)
 - Resource ACL, FGA, project permissions
+- Key `scopes` as deny-all, or default-deny on unlabeled routes
+- `required_scopes` on this service’s public catalog routes
 - Gateway `organization` scope on this service’s public routes
 - Auto-publishing these public routes — the operator applies the catalog (`routes.yml`)
 - Configurable `sk` / `mk` / `1`, independent full-prefix env vars, or dual-brand key accept

@@ -111,7 +111,7 @@ Same path, different per-verb `required_scopes` / `rate_limit` — nested `metho
 | `path` | `string` | HTTP path (`/` or starts with `/`). Supports `{param}`. |
 | `methods` | `array<string>` \| `map<string, MethodConfig>` | List form: allowed HTTP methods. Map form: per-verb config (see below). Do not mix list and map on the same route (`422`). |
 | `transform` | `object?` | Optional path rewrite (see below). Route-level only — not per-method. |
-| `required_scopes` | `string[]?` | Optional. Omitted = any admitted principal. If set, a **restricted** API key must share at least one label. JWTs and unrestricted keys skip. Validated at apply. Route-level value applies only to the flat methods list. |
+| `required_scopes` | `string[]?` | Optional. Omitted = any admitted principal (including restricted keys). If set, a **restricted** API key (`scopes` non-null, including `[]`) must share at least one label. JWTs and unrestricted keys (`scopes: null`) skip. Validated at apply. Route-level value applies only to the flat methods list. |
 | `rate_limit` | `false` \| `{requests, window_seconds}` \| omitted | Omitted **inherits** gateway fallback (never silent unlimited). `false` opts out (unlimited). Object overrides. Limiter subject follows route scope (`public`→ip, `user`→user, `organization`→org). Route-level value applies only to the flat methods list. |
 
 A service must define at least one scope. Multiple scopes may be present.
@@ -153,7 +153,7 @@ Labels are opaque. There is no grant/implication graph: `org:write` does not imp
 
 Labels follow the same hygiene as key mint: `[a-z0-9:._-]+`, max 64 chars, max 32, unique, non-empty list if present.
 
-After match + admission: if the route has `required_scopes` **and** the credential is an API key with a non-null scopes list, the two lists must have a nonempty intersection or the gateway returns **403** `FORBIDDEN` (existing envelope). JWT and unrestricted keys (`scopes: null`) skip.
+After match + admission: if the route has `required_scopes` **and** the credential is an API key with a non-null scopes list, the two lists must have a nonempty intersection or the gateway returns **403** `FORBIDDEN` (existing envelope). JWT and unrestricted keys (`scopes: null`) skip. `scopes: []` is restricted and cannot intersect — **403** on these routes, still admitted on unlabeled routes.
 
 ### `rate_limit`
 

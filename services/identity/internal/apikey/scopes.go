@@ -30,7 +30,7 @@ var (
 )
 
 // NormalizeScopes maps mint input to a stored list.
-// nil / omitted → unrestricted (nil). Empty slice → grants nothing.
+// nil / omitted → unrestricted (nil). Empty slice → restricted, no labels.
 func NormalizeScopes(raw *[]string) ([]string, error) {
 	if raw == nil {
 		return nil, nil

@@ -75,7 +75,7 @@ Services publish via the **route-registry** admin API (`POST /v1/apply`). Gatewa
 
 ### API key `required_scopes`
 
-After match + admission: if the route has `required_scopes` **and** the API key has a non-null scopes list, the lists must have a nonempty intersection or **403** `FORBIDDEN` (existing envelope). JWTs and unrestricted keys (`scopes: null`) skip. This is a credential constraint, not resource ACL / FGA. There is no `allowed_services`.
+After match + admission: if the route has `required_scopes` **and** the API key has a non-null scopes list, the lists must have a nonempty intersection or **403** `FORBIDDEN` (existing envelope). JWTs and unrestricted keys (`scopes: null`) skip. A key with `scopes: []` is restricted (empty list) — it cannot satisfy any `required_scopes` and gets **403** there; unlabeled routes still admit it. This is a credential constraint, not resource ACL / FGA. There is no `allowed_services`.
 
 ### Rate limits
 

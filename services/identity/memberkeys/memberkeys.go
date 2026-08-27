@@ -14,7 +14,7 @@ type APIKey struct {
 	Name      string
 	KeyPrefix string
 	KeyHash   string
-	// Scopes is nil = unrestricted, empty = grants nothing.
+	// Scopes is nil = unrestricted; empty = restricted, no labels (403 on required_scopes routes).
 	Scopes    []string
 	CreatedAt time.Time
 	RevokedAt *time.Time
