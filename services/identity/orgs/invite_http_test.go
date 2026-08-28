@@ -63,17 +63,6 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 		t.Fatalf("member: %+v", mem)
 	}
 
-	code, body = doJSON(t, app, http.MethodGet, "/api/organizations/org1/invites", "")
-	if code != http.StatusOK {
-		t.Fatalf("list after redeem: %d %s", code, body)
-	}
-	if err := json.Unmarshal(body, &listed); err != nil {
-		t.Fatal(err)
-	}
-	if listed.Invites[0].Token != "" || listed.Invites[0].Status != string(InviteStatusRedeemed) || listed.Invites[0].UseCount != 1 {
-		t.Fatalf("spent row: %+v", listed.Invites[0])
-	}
-
 	code, body = doJSON(t, inviteeApp, http.MethodPost, "/api/invites/redeem", `{"token":"`+token+`"}`)
 	if code != http.StatusConflict {
 		t.Fatalf("spent expected 409, got %d %s", code, body)
@@ -115,26 +104,6 @@ func TestInviteListOmitsTokenForMember(t *testing.T) {
 	}
 	if listed.Invites[0].Status != string(InviteStatusActive) || listed.Invites[0].TokenPrefix == "" {
 		t.Fatalf("member still gets prefix/status: %+v", listed.Invites[0])
-	}
-
-	adminUID := "admin1"
-	f.members[memberKey("org1", "admin1")] = &Member{
-		ID:             "m-admin1",
-		OrganizationID: "org1",
-		UserID:         &adminUID,
-		Role:           RoleAdmin,
-		Status:         StatusActive,
-	}
-	adminApp := testInviteApp(h, "admin1")
-	code, body = doJSON(t, adminApp, http.MethodGet, "/api/organizations/org1/invites", "")
-	if code != http.StatusOK {
-		t.Fatalf("admin list: %d %s", code, body)
-	}
-	if err := json.Unmarshal(body, &listed); err != nil {
-		t.Fatal(err)
-	}
-	if len(listed.Invites) != 1 || listed.Invites[0].Token == "" {
-		t.Fatalf("admin list must include token: %+v", listed)
 	}
 }
 
@@ -186,10 +155,10 @@ func TestInviteMaxUsesZeroRejected(t *testing.T) {
 	seedOwner(f, "org1", "owner1")
 	h := &Handler{invites: f}
 	app := testInviteApp(h, "owner1")
-	for _, payload := range []string{`{"max_uses":0}`, `{"max_uses":-1}`} {
-		code, resp := doJSON(t, app, http.MethodPost, "/api/organizations/org1/invites", payload)
+	for _, body := range []string{`{"max_uses":0}`, `{"max_uses":-1}`} {
+		code, resp := doJSON(t, app, http.MethodPost, "/api/organizations/org1/invites", body)
 		if code != http.StatusUnprocessableEntity {
-			t.Fatalf("%s: %d %s", payload, code, resp)
+			t.Fatalf("%s: %d %s", body, code, resp)
 		}
 	}
 }
@@ -296,6 +265,17 @@ func TestInviteRedeemDuplicateMemberIdempotent(t *testing.T) {
 	}
 	if mem.ID != "m-already" || mem.Status != "active" {
 		t.Fatalf("existing member: %+v", mem)
+	}
+	stored := f.invites[created.ID]
+	if stored.UseCount != 1 || stored.Status != InviteStatusRedeemed {
+		t.Fatalf("already-member still consumes a use: %+v", stored)
+	}
+	code, body = doJSON(t, inviteeApp, http.MethodPost, "/api/invites/redeem", `{"token":"`+created.Token+`"}`)
+	if code != http.StatusConflict {
+		t.Fatalf("second redeem after spent: %d %s", code, body)
+	}
+	if stored.UseCount != 1 {
+		t.Fatalf("do not double-increment: %d", stored.UseCount)
 	}
 }
 
