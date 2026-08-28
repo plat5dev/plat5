@@ -120,8 +120,8 @@ func (f *fakeInvites) RevokeInvite(_ context.Context, organizationID, inviteID s
 	if inv.Status == InviteStatusActive && !now.Before(inv.ExpiresAt) {
 		expireInvite(inv)
 	} else if inv.Status == InviteStatusActive {
-		inv.Token = nil
 		inv.Status = InviteStatusRevoked
+		inv.Token = nil
 		if inv.RevokedAt == nil {
 			inv.RevokedAt = &now
 		}
