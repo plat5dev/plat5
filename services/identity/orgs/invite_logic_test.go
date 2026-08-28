@@ -73,15 +73,7 @@ func TestInviteRedeemable(t *testing.T) {
 	if InviteRedeemable(inv, now) {
 		t.Fatal("revoked status")
 	}
-	inv.Status = InviteStatusActive
-	revoked := now
-	inv.RevokedAt = &revoked
-	if InviteRedeemable(inv, now) {
-		t.Fatal("revoked")
-	}
-	inv.RevokedAt = nil
 	inv.Status = InviteStatusRedeemed
-	inv.RedeemedAt = &now
 	if InviteRedeemable(inv, now.Add(-time.Minute)) {
 		t.Fatal("already used")
 	}

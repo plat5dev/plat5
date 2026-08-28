@@ -100,7 +100,7 @@ Do not return `UNAUTHORIZED` for missing identity headers — the gateway alread
 
 ## Invites
 
-Org invites live in **identity** (`organization_invites`). Create/revoke are user-scope org-admin APIs. List is any active member; plaintext `token` only for admin/owner while the row is `active`. Redeem is user-scope `POST /api/invites/redeem` (authenticated invitee, `X-User-Id`). Clients build `/invites?invite=` from `token`. Identity does not return a URL and does not send email. Auth does not carry `invite=`. Unknown token → 404. Redeemed / revoked / expired → 409 `CONFLICT` (`details.status`).
+Org invites live in **identity** (`organization_invites`). Create/revoke are user-scope org-admin APIs. List is any active member; plaintext `token` only for admin/owner while the row is `active`. Redeem is user-scope `POST /api/invites/redeem` (authenticated invitee, `X-User-Id`). Identity does not return a URL and does not send email. Auth does not carry `invite=`. Unknown token → 404. Redeemed / revoked / expired → 409 `CONFLICT` (`{ field: "status", value }`).
 
 ## What is not Plat5 identity (here)
 
@@ -111,5 +111,5 @@ Org invites live in **identity** (`organization_invites`). Create/revoke are use
 - Member role as platform wire identity (role stays in identity)
 - Service accounts as a parallel auth system (they are members with keys)
 - Multi-org service accounts
-- SMTP in identity (invites return a token; clients build `/invites?invite=`; the console sends mail if it wants)
+- SMTP in identity (invites return a token; the console sends mail if it wants)
 - Pending member rows (invite redeem inserts an **active** member; add-by-`user_id` remains)

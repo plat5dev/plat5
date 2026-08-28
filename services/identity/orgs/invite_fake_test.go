@@ -46,18 +46,6 @@ func cloneInvite(inv *Invite) *Invite {
 		n := *inv.MaxUses
 		cp.MaxUses = &n
 	}
-	if inv.RedeemedAt != nil {
-		t := *inv.RedeemedAt
-		cp.RedeemedAt = &t
-	}
-	if inv.RedeemedBy != nil {
-		s := *inv.RedeemedBy
-		cp.RedeemedBy = &s
-	}
-	if inv.RevokedAt != nil {
-		t := *inv.RevokedAt
-		cp.RevokedAt = &t
-	}
 	return &cp
 }
 
@@ -122,9 +110,6 @@ func (f *fakeInvites) RevokeInvite(_ context.Context, organizationID, inviteID s
 	} else if inv.Status == InviteStatusActive {
 		inv.Status = InviteStatusRevoked
 		inv.Token = nil
-		if inv.RevokedAt == nil {
-			inv.RevokedAt = &now
-		}
 	}
 	return cloneInvite(inv), nil
 }
@@ -150,9 +135,6 @@ func (f *fakeInvites) RedeemInvite(_ context.Context, tokenHash, userID string) 
 	existing := f.members[key]
 	inv.UseCount++
 	if inv.MaxUses != nil && inv.UseCount >= *inv.MaxUses {
-		nowCopy := now
-		inv.RedeemedAt = &nowCopy
-		inv.RedeemedBy = &userID
 		inv.Status = InviteStatusRedeemed
 		inv.Token = nil
 	}

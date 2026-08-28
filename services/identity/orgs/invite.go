@@ -41,9 +41,6 @@ type Invite struct {
 	UseCount       int
 	CreatedBy      string
 	ExpiresAt      time.Time
-	RedeemedAt     *time.Time
-	RedeemedBy     *string
-	RevokedAt      *time.Time
 	CreatedAt      time.Time
 }
 
@@ -156,10 +153,7 @@ func InviteRedeemable(inv *Invite, now time.Time) bool {
 	if inv == nil {
 		return false
 	}
-	if inv.Status == InviteStatusRedeemed || inv.Status == InviteStatusRevoked || inv.Status == InviteStatusExpired {
-		return false
-	}
-	if inv.RevokedAt != nil || inv.RedeemedAt != nil {
+	if inv.Status != InviteStatusActive {
 		return false
 	}
 	if !now.Before(inv.ExpiresAt) {

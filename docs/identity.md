@@ -131,7 +131,7 @@ Prefix: `/api/organizations`
 
 Token invites. **No pending member rows.** Membership is created only on redeem, as `active`. Identity does **not** send email and has **no SMTP env**. Whoever hosts the console may send mail, or not.
 
-An invite is `active` while it can still be redeemed. Terminal statuses: `redeemed`, `revoked`, `expired`. Plaintext `token` is stored and returned only while `active`. `token_hash` is always stored (redeem lookup) and kept after the row is terminal. Identity does **not** return a URL; clients build `/invites?invite=` from `token`. Auth does **not** carry `invite=`.
+An invite is `active` while it can still be redeemed. Terminal statuses: `redeemed`, `revoked`, `expired`. Plaintext `token` is stored and returned only while `active`. `token_hash` is always stored (redeem lookup) and kept after the row is terminal. Identity does **not** return a URL. Auth does **not** carry `invite=`.
 
 List, redeem, and revoke expire lazily: if `expires_at` is in the past and status is still `active`, persist `expired` and null `token`.
 
@@ -142,7 +142,7 @@ List, redeem, and revoke expire lazily: if `expires_at` is in the past and statu
 | `POST` | `/api/organizations/{organization_id}/invites` | Admin or owner (same as add member). Body `{ "role?", "email?", "expires_in_seconds?", "max_uses?" }`. Returns `token`. |
 | `GET` | `/api/organizations/{organization_id}/invites` | Active member. `token` only for **admin/owner** while `active`. Everyone else gets prefix, status, role, expiry — not a blank list. |
 | `DELETE` | `/api/organizations/{organization_id}/invites/{invite_id}` | Admin or owner; revoke (idempotent). Sets status `revoked`, `token` null. Hash stays. |
-| `POST` | `/api/invites/redeem` | Invitee; body `{ "token" }` + `X-User-Id`. Inserts **active** member. Already a member on a still-`active` token → **200** idempotent (counts as a use). Unknown token → **404** `NOT_FOUND` (no org leak). Redeemed / revoked / expired → **409** `CONFLICT` with `details.status`. |
+| `POST` | `/api/invites/redeem` | Invitee; body `{ "token" }` + `X-User-Id`. Inserts **active** member. Already a member on a still-`active` token → **200** idempotent (counts as a use). Unknown token → **404** `NOT_FOUND` (no org leak). Redeemed / revoked / expired → **409** `CONFLICT` (`field` is `status`, `value` is the terminal status). |
 
 #### Create body
 
@@ -169,10 +169,7 @@ Token prefix `inv_`. `token_hash` is SHA-256 hex. `use_count` increments on succ
   "use_count": 0,
   "expires_at": "...",
   "created_by": "...",
-  "created_at": "...",
-  "revoked_at": null,
-  "redeemed_at": null,
-  "redeemed_by": null
+  "created_at": "..."
 }
 ```
 
@@ -398,7 +395,7 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - Org `settings` / config bag
 - `GET /api/users` or `/api/users/me`
 - Platform-owned user rows / IdP account linking (opaque `user_id` only)
-- SMTP / sending invite email (identity returns a token; clients build `/invites?invite=`; the console may send mail)
+- SMTP / sending invite email (identity returns a token; the console may send mail)
 - Pending member rows (membership is created only on invite redeem, status `active`)
 - Resource ACL, FGA, project permissions
 - Key `scopes` as deny-all, or default-deny on unlabeled routes

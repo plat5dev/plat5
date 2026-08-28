@@ -16,7 +16,7 @@ Public route catalog: [`routes.yml`](routes.yml). Apply via route-registry; not 
 
 `APIKEY_BRAND` (default `plat5`) must match the gateway.
 
-Identity does **not** send email and does not return a URL. List returns `token` for admin/owner while the invite is active. Clients build `/invites?invite=` from the token. Auth does not carry `invite=`. No SMTP env vars.
+Identity does **not** send email and does not return a URL. List returns `token` for admin/owner while the invite is active. Auth does not carry `invite=`. No SMTP env vars.
 
 ## Local
 

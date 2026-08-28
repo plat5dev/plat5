@@ -48,9 +48,6 @@ type InviteResponse struct {
 	ExpiresAt      string  `json:"expires_at"`
 	CreatedBy      string  `json:"created_by"`
 	CreatedAt      string  `json:"created_at"`
-	RevokedAt      *string `json:"revoked_at"`
-	RedeemedAt     *string `json:"redeemed_at"`
-	RedeemedBy     *string `json:"redeemed_by"`
 }
 
 type ListInvitesResponse struct {
@@ -81,7 +78,7 @@ func inviteConflict(status InviteStatus) error {
 	case InviteStatusExpired:
 		msg = "This invite has expired."
 	}
-	return errors.ConflictStatusError(msg, "invite", string(status))
+	return errors.ConflictError(msg, "status", string(status))
 }
 
 func (h *Handler) CreateInvite(c fiber.Ctx) error {
@@ -257,9 +254,6 @@ func toInviteResponse(inv *Invite, includeToken bool) InviteResponse {
 		ExpiresAt:      httpx.FormatTime(inv.ExpiresAt),
 		CreatedBy:      inv.CreatedBy,
 		CreatedAt:      httpx.FormatTime(inv.CreatedAt),
-		RevokedAt:      httpx.FormatTimePtr(inv.RevokedAt),
-		RedeemedAt:     httpx.FormatTimePtr(inv.RedeemedAt),
-		RedeemedBy:     inv.RedeemedBy,
 	}
 	if includeToken && inv.Token != nil && inv.Status == InviteStatusActive {
 		out.Token = *inv.Token

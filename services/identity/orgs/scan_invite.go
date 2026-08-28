@@ -17,9 +17,6 @@ func scanInvite(row dbx.Scannable) (*Invite, error) {
 		&inv.TokenPrefix,
 		&inv.CreatedBy,
 		&inv.ExpiresAt,
-		&inv.RedeemedAt,
-		&inv.RedeemedBy,
-		&inv.RevokedAt,
 		&inv.CreatedAt,
 		&inv.Token,
 		&status,
@@ -35,5 +32,4 @@ func scanInvite(row dbx.Scannable) (*Invite, error) {
 }
 
 const inviteSelectCols = `id, organization_id, role, email, token_hash, token_prefix,
-			created_by, expires_at, redeemed_at, redeemed_by, revoked_at, created_at,
-			token, status, max_uses, use_count`
+			created_by, expires_at, created_at, token, status, max_uses, use_count`

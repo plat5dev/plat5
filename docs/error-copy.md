@@ -98,7 +98,7 @@ Use these only when a more specific sentence does not apply.
 | Redeem of a revoked invite | This invite is no longer valid. |
 | Redeem of an expired invite | This invite has expired. |
 
-Unknown tokens use the generic **404** `Resource not found.` (existence policy; do not name the org). Redeemed / revoked / expired tokens are **409** `CONFLICT` with `details.status`. Already a member on a still-`active` token is **200**, not 409.
+Unknown tokens use the generic **404** `Resource not found.` (existence policy; do not name the org). Redeemed / revoked / expired tokens are **409** `CONFLICT` with `{ "field": "status", "value": "redeemed" | "revoked" | "expired" }`. Already a member on a still-`active` token is **200**, not 409.
 
 ### API keys (user + member)
 

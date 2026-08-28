@@ -340,7 +340,7 @@ func assertConflictStatus(t *testing.T, body []byte, status string) {
 		t.Fatalf("code: %s", body)
 	}
 	details, _ := errObj["details"].(map[string]any)
-	if details["status"] != status {
-		t.Fatalf("status want %s: %s", status, body)
+	if details["field"] != "status" || details["value"] != status {
+		t.Fatalf("details want field=status value=%s: %s", status, body)
 	}
 }

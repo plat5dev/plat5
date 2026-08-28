@@ -105,10 +105,6 @@ func (s *Store) RevokeInvite(ctx context.Context, organizationID, inviteID strin
 			token = CASE
 				WHEN status = 'active' THEN NULL
 				ELSE token
-			END,
-			revoked_at = CASE
-				WHEN status = 'active' AND expires_at > $1 THEN COALESCE(revoked_at, $1)
-				ELSE revoked_at
 			END
 		WHERE id = $2 AND organization_id = $3
 		RETURNING `+inviteSelectCols+`
@@ -225,9 +221,9 @@ func (s *Store) RedeemInvite(ctx context.Context, tokenHash, userID string) (*Me
 	if spent {
 		_, err = tx.Exec(ctx, `
 			UPDATE organization_invites
-			SET use_count = $2, status = 'redeemed', token = NULL, redeemed_at = $3, redeemed_by = $4
+			SET use_count = $2, status = 'redeemed', token = NULL
 			WHERE id = $1 AND status = 'active'
-		`, inv.ID, next, now, userID)
+		`, inv.ID, next)
 	} else {
 		_, err = tx.Exec(ctx, `
 			UPDATE organization_invites
