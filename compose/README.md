@@ -24,7 +24,7 @@ Internal control-plane token default: `dev-internal-token` (`INTERNAL_AUTH_TOKEN
 ## Apply routes
 
 ```bash
-curl -sS -X POST http://localhost:5002/v1/apply \
+curl -sS -X POST http://localhost:5002/apply \
   -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/yaml" \
   --data-binary @../services/identity/routes.yml

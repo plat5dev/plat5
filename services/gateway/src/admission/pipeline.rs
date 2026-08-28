@@ -161,12 +161,7 @@ impl Admissor {
             });
         }
 
-        let validator = self.stack.member_apikey_validator.as_ref().ok_or_else(|| {
-            warn!("member api key presented but MEMBER_APIKEY_VALIDATE_URL unset");
-            AdmitError::Unavailable
-        })?;
-
-        let validation = match validator.validate(key).await {
+        let validation = match self.stack.member_apikey_validator.validate(key).await {
             Ok(v) => v,
             Err(MemberApiKeyError::InvalidKey) => return Err(AdmitError::MemberApiKeyInvalid),
             Err(MemberApiKeyError::ServiceError(msg)) => {
@@ -355,13 +350,12 @@ impl Admissor {
             return Ok(member_id);
         }
 
-        let resolver = self
+        match self
             .stack
             .member_resolver
-            .as_ref()
-            .ok_or(ResolveDeny::Unavailable)?;
-
-        match resolver.resolve(user_id, organization_id).await {
+            .resolve(user_id, organization_id)
+            .await
+        {
             Ok(resolved) => {
                 if resolved.status != "active" {
                     return Err(ResolveDeny::NotFound);

@@ -142,12 +142,12 @@ services:
 
 ```bash
 # from a throwaway client on plat5_plat5
-curl -sS -X POST http://route-registry:5002/v1/apply \
+curl -sS -X POST http://route-registry:5002/apply \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/yaml" \
   --data-binary @services/identity/routes.yml
 
-curl -sS -X POST http://route-registry:5002/v1/apply \
+curl -sS -X POST http://route-registry:5002/apply \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/yaml" \
   --data-binary @routes.yml

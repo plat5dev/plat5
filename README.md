@@ -55,7 +55,7 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defau
 3. Apply routes:
 
 ```bash
-curl -sS -X POST http://localhost:5002/v1/apply \
+curl -sS -X POST http://localhost:5002/apply \
   -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/yaml" \
   --data-binary @routes.yml

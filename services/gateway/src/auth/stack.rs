@@ -20,9 +20,9 @@ pub struct AuthStack {
     pub member_key_prefix: String,
     pub user_apikey_validator: UserApiKeyValidator,
     pub user_apikey_cache: UserApiKeyCache,
-    pub member_apikey_validator: Option<MemberApiKeyValidator>,
+    pub member_apikey_validator: MemberApiKeyValidator,
     pub member_apikey_cache: MemberApiKeyCache,
-    pub member_resolver: Option<MemberResolver>,
+    pub member_resolver: MemberResolver,
     pub member_cache: MemberCache,
 }
 
@@ -32,14 +32,9 @@ impl AuthStack {
 
         let user_apikey_validator =
             UserApiKeyValidator::new(cfg.user_apikey_validate_url.clone(), http.clone());
-        let member_apikey_validator = cfg
-            .member_apikey_validate_url
-            .clone()
-            .map(|url| MemberApiKeyValidator::new(url, http.clone()));
-        let member_resolver = cfg
-            .member_resolve_url
-            .clone()
-            .map(|url| MemberResolver::new(url, http));
+        let member_apikey_validator =
+            MemberApiKeyValidator::new(cfg.member_apikey_validate_url.clone(), http.clone());
+        let member_resolver = MemberResolver::new(cfg.member_resolve_url.clone(), http);
 
         Self {
             jwt_validator,

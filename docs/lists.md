@@ -4,7 +4,7 @@ How Plat5 **identity** public lists work.
 
 Business services behind the gateway are **not** required to copy this. If you want the same client shape as identity, use this.
 
-Route-registry admin lists (`GET /v1/services`, revisions) are get-all. Do not paginate those.
+Route-registry admin lists (`GET /services`, revisions) are get-all. Do not paginate those.
 
 ## Query
 

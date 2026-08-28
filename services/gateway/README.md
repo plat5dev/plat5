@@ -26,10 +26,10 @@ cargo test --all-targets
 | `AUTH_ALLOWED_AUDIENCES` | (empty) | Comma-separated allowed `aud` values |
 | `AUTH_USER_ID_CLAIM` | `properties.user_id` | Dotted claim path for Plat5 user id (`sub` for many OIDC IdPs) |
 | `USER_APIKEY_VALIDATE_URL` | (required) | User key validate (`…/internal/user-keys/validate`); keys `{brand}-sk-1-…` |
-| `MEMBER_APIKEY_VALIDATE_URL` | (optional) | Member key validate (`…/internal/member-keys/validate`); keys `{brand}-mk-1-…`; org scope (503 if unset when presented) |
+| `MEMBER_APIKEY_VALIDATE_URL` | (required) | Member key validate (`…/internal/member-keys/validate`); keys `{brand}-mk-1-…` |
 | `APIKEY_BRAND` | `plat5` | Same value as identity. `[a-z][a-z0-9]*`, max 32. Unset → `plat5`; empty → refuse boot |
 | `APIKEY_CACHE_TTL_SECS` | `300` | User + member API key cache TTL |
-| `MEMBER_RESOLVE_URL` | (optional) | Full URL for member resolve (`…/internal/members/resolve`); required for `organization` scope |
+| `MEMBER_RESOLVE_URL` | (required) | Member resolve (`…/internal/members/resolve`) |
 | `MEMBER_CACHE_TTL_SECS` | `300` | Member resolve cache TTL |
 | `INTERNAL_AUTH_TOKEN` | unset | Sent as `X-Plat5-Internal-Token` to validate/resolve when set |
 | `RATE_LIMIT_REQUESTS` | `60` | Fallback per-route limit. `0` = unlimited fallback |

@@ -101,7 +101,7 @@ Prefix: `/api/organizations`
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/api/organizations/{organization_id}/members` | Active member |
-| `POST` | `/api/organizations/{organization_id}/members` | Admin or owner; add **user** — body `{ "user_id", "role?" }`. Target `user_id` must already be known (IdP id). Immediate `active`. Unchanged by invites. |
+| `POST` | `/api/organizations/{organization_id}/members` | Admin or owner; add **user** — body `{ "user_id", "role?" }`. Target `user_id` must already be known (IdP id). Immediate `active`. |
 | `GET` | `/api/organizations/{organization_id}/members/{member_id}` | Active member |
 | `PATCH` | `/api/organizations/{organization_id}/members/{member_id}` | Role/status; admin/owner (self-leave allowed for humans) |
 | `DELETE` | `/api/organizations/{organization_id}/members/{member_id}` | Soft-remove; self or admin/owner |
@@ -134,8 +134,6 @@ Token invites. **No pending member rows.** Membership is created only on redeem,
 An invite is `active` while it can still be redeemed. Terminal statuses: `redeemed`, `revoked`, `expired`. Plaintext `token` is stored and returned only while `active`. `token_hash` is always stored (redeem lookup) and kept after the row is terminal. Identity does **not** return a URL. Auth does **not** carry `invite=`.
 
 List, redeem, and revoke expire lazily: if `expires_at` is in the past and status is still `active`, persist `expired` and null `token`.
-
-`POST /members` add-by-`user_id` is unchanged and still immediately `active`.
 
 | Method | Path | Notes |
 |--------|------|--------|
@@ -271,7 +269,7 @@ Public lists: [`lists.md`](lists.md). `limit` / `starting_after` / `has_more`. S
 
 Not published on the gateway. Served only on **`INTERNAL_PORT`**. Optional `INTERNAL_AUTH_TOKEN` → header `X-Plat5-Internal-Token` (constant-time compare). Unset = network-trust only (dev).
 
-Gateway env: `USER_APIKEY_VALIDATE_URL`, `MEMBER_APIKEY_VALIDATE_URL` (when member-key admission is on), `MEMBER_RESOLVE_URL`, same `INTERNAL_AUTH_TOKEN`, same `APIKEY_BRAND`.
+Gateway env: `USER_APIKEY_VALIDATE_URL`, `MEMBER_APIKEY_VALIDATE_URL`, `MEMBER_RESOLVE_URL`, same `INTERNAL_AUTH_TOKEN`, same `APIKEY_BRAND`. All three URLs are required to boot.
 
 There is **no** combined key validate and **no** `key_type`. Gateway picks the endpoint from the key’s wire prefix before calling identity.
 
@@ -357,7 +355,7 @@ members
 service_accounts
   organization_id
   name, created_by_user_id, …
-organization_invites   -- token while active; token_hash always; no pending members
+organization_invites   -- token while active; token_hash always
   organization_id, role, email?, token?, token_hash, status, max_uses, use_count, expires_at, …
 
 user_api_keys          -- person credentials (user scope); wire {brand}-sk-1-

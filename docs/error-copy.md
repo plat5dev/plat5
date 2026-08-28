@@ -2,8 +2,6 @@
 
 Copy appendix for [`api-errors.md`](api-errors.md).
 
-**Status:** shipped.
-
 ## Locked
 
 Stripe’s split, in our envelope:

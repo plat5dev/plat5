@@ -7,7 +7,7 @@ Gateway still **loads and watches** etcd; it does not talk to Postgres.
 ## Pipeline
 
 ```
-routes.yml → POST /v1/apply (or PUT /v1/services/{name})
+routes.yml → POST /apply (or PUT /services/{name})
   → Postgres schema `routes` (revision)
   → etcd `edge/gateway/routes/{name}`
   → gateway watch
@@ -26,16 +26,10 @@ Prod compose does **not** publish the admin port by default.
 
 ## Auth
 
-All `/v1/*` routes require an admin token:
+Admin API routes require:
 
 ```
 Authorization: Bearer <ADMIN_TOKEN>
-```
-
-or
-
-```
-X-Plat5-Admin-Token: <ADMIN_TOKEN>
 ```
 
 Local default: `dev-admin-token` (`ADMIN_TOKEN` env). Required and non-empty in all environments.
@@ -44,14 +38,14 @@ Local default: `dev-admin-token` (`ADMIN_TOKEN` env). Required and non-empty in 
 
 | Method | Path | Body | Notes |
 |--------|------|------|--------|
-| `POST` | `/v1/apply` | `routes.yml` shape (`services: {…}`) JSON or YAML | Validate, expand, one PG transaction, project |
-| `GET` | `/v1/services` | — | Current (non-deleted) services |
-| `GET` | `/v1/services/{name}` | — | Current config plus `name` / `revision` |
-| `PUT` | `/v1/services/{name}` | `ServiceConfig` JSON | New revision + project |
-| `DELETE` | `/v1/services/{name}` | — | Tombstone revision; remove etcd key |
-| `GET` | `/v1/services/{name}/revisions` | — | History (includes delete revisions) |
-| `GET` | `/v1/services/{name}/revisions/{rev}` | — | One revision (`config` is `null` if delete) |
-| `POST` | `/v1/services/{name}/revisions/{rev}/restore` | — | New revision copying that config |
+| `POST` | `/apply` | `routes.yml` shape (`services: {…}`) JSON or YAML | Validate, expand, one PG transaction, project |
+| `GET` | `/services` | — | Current (non-deleted) services |
+| `GET` | `/services/{name}` | — | Current config plus `name` / `revision` |
+| `PUT` | `/services/{name}` | `ServiceConfig` JSON | New revision + project |
+| `DELETE` | `/services/{name}` | — | Tombstone revision; remove etcd key |
+| `GET` | `/services/{name}/revisions` | — | History (includes delete revisions) |
+| `GET` | `/services/{name}/revisions/{rev}` | — | One revision (`config` is `null` if delete) |
+| `POST` | `/services/{name}/revisions/{rev}/restore` | — | New revision copying that config |
 
 Apply is **upsert** of the services in the file. Services not in the file are left alone. There is no prune.
 
@@ -68,7 +62,7 @@ plat5 routes apply ./routes.yml
 curl:
 
 ```bash
-curl -sS -X POST http://localhost:5002/v1/apply \
+curl -sS -X POST http://localhost:5002/apply \
   -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/yaml" \
   --data-binary @routes.yml

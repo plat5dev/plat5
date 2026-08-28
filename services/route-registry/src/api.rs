@@ -21,18 +21,18 @@ use crate::AppState;
 
 pub fn public_router(state: AppState) -> Router {
     let authed = Router::new()
-        .route("/v1/services", get(list_services))
+        .route("/services", get(list_services))
         .route(
-            "/v1/services/{name}",
+            "/services/{name}",
             get(get_service).put(put_service).delete(delete_service),
         )
-        .route("/v1/services/{name}/revisions", get(list_revisions))
-        .route("/v1/services/{name}/revisions/{rev}", get(get_revision))
+        .route("/services/{name}/revisions", get(list_revisions))
+        .route("/services/{name}/revisions/{rev}", get(get_revision))
         .route(
-            "/v1/services/{name}/revisions/{rev}/restore",
+            "/services/{name}/revisions/{rev}/restore",
             post(restore_revision),
         )
-        .route("/v1/apply", post(apply_routes))
+        .route("/apply", post(apply_routes))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             admin_auth_middleware,
@@ -123,13 +123,7 @@ async fn admin_auth_middleware(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(|t| t == state.admin_token)
-        .unwrap_or(false)
-        || request
-            .headers()
-            .get("x-plat5-admin-token")
-            .and_then(|v| v.to_str().ok())
-            .map(|t| t == state.admin_token)
-            .unwrap_or(false);
+        .unwrap_or(false);
 
     if !authorized {
         return Err(AppError::unauthorized(request_id));

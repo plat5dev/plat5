@@ -46,7 +46,7 @@ Org-scope identity is `X-Organization-Id` + `X-Member-Id` only. Member **role** 
 
 ## Route Configuration
 
-Routes live in etcd under `edge/gateway/routes/`. Scopes are `public` / `user` / `organization` blocks — not a flat `auth:` flag. Full schema and publish path: [`routes.md`](routes.md).
+Routes live in etcd under `edge/gateway/routes/`. Scopes are `public` / `user` / `organization` blocks. Full schema and publish path: [`routes.md`](routes.md).
 
 ```yaml
 services:
@@ -71,11 +71,11 @@ services:
 
 `methods` may be a list (route-level `required_scopes` / `rate_limit` apply to every verb) or a nested map (per-verb). Nested maps are expanded at apply into one etcd row per verb; the gateway always sees `methods` as a string array. Full schema: [`routes.md`](routes.md).
 
-Services publish via the **route-registry** admin API (`POST /v1/apply`). Gateway loads at startup and watches etcd. Route existence is decoupled from service health — a downed service returns 503, not 404.
+Services publish via the **route-registry** admin API (`POST /apply`). Gateway loads at startup and watches etcd. Route existence is decoupled from service health — a downed service returns 503, not 404.
 
 ### API key `required_scopes`
 
-After match + admission: if the route has `required_scopes` **and** the API key has a non-null scopes list, the lists must have a nonempty intersection or **403** `FORBIDDEN` (existing envelope). JWTs and unrestricted keys (`scopes: null`) skip. A key with `scopes: []` is restricted (empty list) — it cannot satisfy any `required_scopes` and gets **403** there; unlabeled routes still admit it. This is a credential constraint, not resource ACL / FGA. There is no `allowed_services`.
+After match + admission: if the route has `required_scopes` **and** the API key has a non-null scopes list, the lists must have a nonempty intersection or **403** `FORBIDDEN`. JWTs and unrestricted keys (`scopes: null`) skip. A key with `scopes: []` is restricted (empty list) — it cannot satisfy any `required_scopes` and gets **403** there; unlabeled routes still admit it. This is a credential constraint, not resource ACL / FGA. There is no `allowed_services`.
 
 ### Rate limits
 

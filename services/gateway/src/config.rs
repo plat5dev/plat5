@@ -32,8 +32,8 @@ pub struct GatewayConfig {
     pub auth_user_id_claim: Vec<String>,
 
     pub user_apikey_validate_url: String,
-    pub member_apikey_validate_url: Option<String>,
-    pub member_resolve_url: Option<String>,
+    pub member_apikey_validate_url: String,
+    pub member_resolve_url: String,
     pub internal_auth_token: Option<String>,
 
     /// `APIKEY_BRAND`; same value as identity. Unset → `plat5`.
@@ -81,6 +81,8 @@ impl GatewayConfig {
         let auth_issuer = require_env("AUTH_ISSUER")?;
         let auth_jwks_uri = require_env("AUTH_JWKS_URI")?;
         let user_apikey_validate_url = require_env("USER_APIKEY_VALIDATE_URL")?;
+        let member_apikey_validate_url = require_env("MEMBER_APIKEY_VALIDATE_URL")?;
+        let member_resolve_url = require_env("MEMBER_RESOLVE_URL")?;
         let apikey_brand = apikey_brand_from_env()?;
         let rate_limit_requests =
             parse_u64_env("RATE_LIMIT_REQUESTS", DEFAULT_RATE_LIMIT_REQUESTS)?;
@@ -124,8 +126,8 @@ impl GatewayConfig {
             ),
 
             user_apikey_validate_url,
-            member_apikey_validate_url: optional_nonempty_env("MEMBER_APIKEY_VALIDATE_URL"),
-            member_resolve_url: optional_nonempty_env("MEMBER_RESOLVE_URL"),
+            member_apikey_validate_url,
+            member_resolve_url,
             internal_auth_token: optional_nonempty_env("INTERNAL_AUTH_TOKEN"),
 
             apikey_brand: apikey_brand.clone(),

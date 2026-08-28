@@ -27,11 +27,11 @@ Long-running service. Validates config, expands `route_prefix` and nested `metho
 
 - **Local admin URL:** `http://localhost:5002`
 - **Auth:** `Authorization: Bearer <ADMIN_TOKEN>`
-- **Apply:** `POST /v1/apply` with a `routes.yml` body (JSON or YAML) — **upsert** of the services in the file (not a full-map prune)
+- **Apply:** `POST /apply` with a `routes.yml` body (JSON or YAML) — **upsert** of the services in the file (not a full-map prune)
 - **Identity:** public identity routes are operator-owned. Catalog: [`services/identity/routes.yml`](../services/identity/routes.yml). Apply it (or a subset). Dev compose may seed missing services from that file on first boot; it does not overwrite. Prod does not seed.
 
 ```bash
-curl -sS -X POST http://localhost:5002/v1/apply \
+curl -sS -X POST http://localhost:5002/apply \
   -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/yaml" \
   --data-binary @routes.yml
@@ -49,14 +49,14 @@ JSON in etcd (not YAML): registry validates and canonicalizes at write time; gat
 |----------|-------------|---------| 
 | `ETCD_URL` | etcd client endpoint | `http://localhost:2379` |
 | `DATABASE_URL` | Postgres (schema `routes`) | Required |
-| `ADMIN_TOKEN` | Bearer token for `/v1/*` | Required |
+| `ADMIN_TOKEN` | Bearer token for admin API | Required |
 | `SEED_ROUTES_DIR` | Optional; upsert **missing** services from YAML (dev) | empty |
 | `PORT` | Admin API port | `5002` |
 | `INTERNAL_PORT` | Health port | `5003` |
 
 ## Config Format (`routes.yml`)
 
-Auth is **scopes** (`public`, `user`, `organization`) — not a flat per-route `auth:` field.
+Auth is **scopes** (`public`, `user`, `organization`).
 
 ```yaml
 services:
@@ -122,7 +122,7 @@ There is no `allowed_services` field.
 
 Two forms. Do not mix them on the same route (`422`).
 
-**Flat list** (unchanged). Optional route-level `required_scopes` / `rate_limit` apply to every method in the list. Templates that do not set scopes keep using this.
+**Flat list.** Optional route-level `required_scopes` / `rate_limit` apply to every method in the list.
 
 ```yaml
 - path: /features
@@ -131,7 +131,7 @@ Two forms. Do not mix them on the same route (`422`).
   rate_limit: { requests: 60, window_seconds: 60 }
 ```
 
-**Nested map** (new). Each key is an uppercase HTTP verb (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`). The body may set `required_scopes` and/or `rate_limit` for that verb only. An empty body (`GET:` or `GET: {}`) means that method with no extra constraints. An empty methods map is rejected.
+**Nested map.** Each key is an uppercase HTTP verb (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`). The body may set `required_scopes` and/or `rate_limit` for that verb only. An empty body (`GET:` or `GET: {}`) means that method with no extra constraints. An empty methods map is rejected.
 
 ```yaml
 - path: /features
@@ -145,7 +145,7 @@ Two forms. Do not mix them on the same route (`422`).
         window_seconds: 1
 ```
 
-Nested maps are an **apply-time YAML convenience**. Registry `prepare_for_registry` / prefix expand turns each verb into its own `RouteConfig` row (same `path`, `methods: [THAT_VERB]`, `required_scopes` / `rate_limit` taken from that method entry). `transform` stays on the path. After expand, etcd JSON keeps today's shape: `methods` is always a string array. Gateway matching still treats `methods` as `Vec<String>`. Duplicate `path`+method after expand → `422`.
+Nested maps are an **apply-time YAML convenience**. Registry `prepare_for_registry` / prefix expand turns each verb into its own `RouteConfig` row (same `path`, `methods: [THAT_VERB]`, `required_scopes` / `rate_limit` taken from that method entry). `transform` stays on the path. After expand, etcd `methods` is always a string array. Duplicate `path`+method after expand → `422`.
 
 Labels are opaque. There is no grant/implication graph: `org:write` does not imply `org:read`.
 
@@ -153,7 +153,7 @@ Labels are opaque. There is no grant/implication graph: `org:write` does not imp
 
 Labels follow the same hygiene as key mint: `[a-z0-9:._-]+`, max 64 chars, max 32, unique, non-empty list if present.
 
-After match + admission: if the route has `required_scopes` **and** the credential is an API key with a non-null scopes list, the two lists must have a nonempty intersection or the gateway returns **403** `FORBIDDEN` (existing envelope). JWT and unrestricted keys (`scopes: null`) skip. `scopes: []` is restricted and cannot intersect — **403** on these routes, still admitted on unlabeled routes.
+After match + admission: if the route has `required_scopes` **and** the credential is an API key with a non-null scopes list, the two lists must have a nonempty intersection or the gateway returns **403** `FORBIDDEN`. JWT and unrestricted keys (`scopes: null`) skip. `scopes: []` is restricted and cannot intersect — **403** on these routes, still admitted on unlabeled routes.
 
 ### `rate_limit`
 

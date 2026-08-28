@@ -111,7 +111,6 @@ services:
     ports:
       - "5001:5001"
     environment:
-      SERVER_NAME: gateway
       PORT: 5001
       INTERNAL_PORT: 8000
       # Any IdP via host/public URL — do not join the IdP Docker network.

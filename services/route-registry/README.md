@@ -54,14 +54,14 @@ Started with Plat5 compose. Dev admin API: `http://localhost:5002`.
 
 ```bash
 export ADMIN_TOKEN=dev-admin-token
-curl -sS http://localhost:5002/v1/services \
+curl -sS http://localhost:5002/services \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
 ## Apply routes
 
 ```bash
-curl -sS -X POST http://localhost:5002/v1/apply \
+curl -sS -X POST http://localhost:5002/apply \
   -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/yaml" \
   --data-binary @./routes.yml

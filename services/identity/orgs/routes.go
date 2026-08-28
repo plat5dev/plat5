@@ -33,8 +33,7 @@ func (h *Handler) MountRedeem(router fiber.Router) {
 	router.Post("/redeem", h.RedeemInvite)
 }
 
-// MountInternal registers member resolve on a router already scoped under /internal
-// (or full path if mounted at app root with path included by caller).
+// MountInternal registers member resolve on a router scoped under /internal.
 func (h *Handler) MountInternal(router fiber.Router) {
 	router.Post("/members/resolve", h.Resolve)
 }
