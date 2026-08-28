@@ -23,7 +23,7 @@ Read the doc, don’t re-derive:
 | Service accounts are members with keys, not a parallel auth system | identity.md |
 | A service account lives in exactly one org | identity.md |
 | User keys and member keys are two products (prefix + table + validate URL) | identity.md |
-| Add member by known `user_id` (immediate `active`) or one-shot invite redeem. No pending members | identity.md |
+| Add member by known `user_id` (immediate `active`) or invite redeem. No pending members | identity.md |
 | Existence: unknown org / non-member / inactive → **404** | identity-boundary |
 | Missing expected identity headers → **500** (gateway bug), not 401 | identity-boundary |
 | JWT / IdP required to boot. API keys are an alternative credential, not an IdP-free mode | [`docs/idp-contract.md`](docs/idp-contract.md) |

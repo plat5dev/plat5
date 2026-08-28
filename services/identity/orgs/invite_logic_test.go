@@ -40,22 +40,47 @@ func TestParseInviteEmail(t *testing.T) {
 	}
 }
 
+func TestParseMaxUses(t *testing.T) {
+	t.Parallel()
+	got, err := ParseMaxUses(maxUsesField{})
+	if err != nil || got == nil || *got != 1 {
+		t.Fatalf("omitted: %v %v", got, err)
+	}
+	got, err = ParseMaxUses(maxUsesField{present: true, unlimited: true})
+	if err != nil || got != nil {
+		t.Fatalf("null: %v %v", got, err)
+	}
+	got, err = ParseMaxUses(maxUsesField{present: true, n: 3})
+	if err != nil || got == nil || *got != 3 {
+		t.Fatalf("3: %v %v", got, err)
+	}
+	if _, err := ParseMaxUses(maxUsesField{present: true, n: 0}); err == nil {
+		t.Fatal("expected 0 error")
+	}
+}
+
 func TestInviteRedeemable(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
-	inv := &Invite{ExpiresAt: now.Add(time.Hour)}
+	inv := &Invite{Status: InviteStatusActive, ExpiresAt: now.Add(time.Hour)}
 	if !InviteRedeemable(inv, now) {
 		t.Fatal("expected redeemable")
 	}
 	if InviteRedeemable(inv, inv.ExpiresAt) {
 		t.Fatal("expired at exact expiry")
 	}
+	inv.Status = InviteStatusRevoked
+	if InviteRedeemable(inv, now) {
+		t.Fatal("revoked status")
+	}
+	inv.Status = InviteStatusActive
 	revoked := now
 	inv.RevokedAt = &revoked
 	if InviteRedeemable(inv, now) {
 		t.Fatal("revoked")
 	}
 	inv.RevokedAt = nil
+	inv.Status = InviteStatusRedeemed
 	inv.RedeemedAt = &now
 	if InviteRedeemable(inv, now.Add(-time.Minute)) {
 		t.Fatal("already used")
