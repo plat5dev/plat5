@@ -98,7 +98,7 @@ func (s *Store) GetByHash(ctx context.Context, keyHash string) (*Validated, erro
 	}, nil
 }
 
-func (s *Store) List(ctx context.Context, memberID string, limit int, startingAfter string) ([]*APIKey, *string, error) {
+func (s *Store) List(ctx context.Context, memberID string, limit int, startingAfter string) ([]*APIKey, bool, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_member_api_keys", dbx.DefaultTimeout,
 		attribute.String("member.id", memberID),
 	)
@@ -117,7 +117,7 @@ func (s *Store) List(ctx context.Context, memberID string, limit int, startingAf
 		LIMIT $3
 	`, memberID, after, limit+1)
 	if err != nil {
-		return nil, nil, op.Fail(err)
+		return nil, false, op.Fail(err)
 	}
 	defer rows.Close()
 
@@ -133,23 +133,21 @@ func (s *Store) List(ctx context.Context, memberID string, limit int, startingAf
 			&key.CreatedAt,
 			&key.RevokedAt,
 		); err != nil {
-			return nil, nil, op.Fail(err)
+			return nil, false, op.Fail(err)
 		}
 		out = append(out, &key)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, op.Fail(err)
+		return nil, false, op.Fail(err)
 	}
 
-	var last *string
-	if len(out) > limit {
+	hasMore := len(out) > limit
+	if hasMore {
 		out = out[:limit]
-		n := out[len(out)-1].ID
-		last = &n
 	}
 	op.Attr(attribute.Int("keys.count", len(out)))
 	op.OK("listed")
-	return out, last, nil
+	return out, hasMore, nil
 }
 
 // Revoke soft-revokes idempotently (COALESCE keeps first revoked_at).

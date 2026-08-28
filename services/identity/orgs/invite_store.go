@@ -35,7 +35,7 @@ func (s *Store) CreateInvite(ctx context.Context, inv *Invite) error {
 	return nil
 }
 
-func (s *Store) ListInvites(ctx context.Context, organizationID string, limit int, startingAfter string) ([]*Invite, *string, error) {
+func (s *Store) ListInvites(ctx context.Context, organizationID string, limit int, startingAfter string) ([]*Invite, bool, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_invites", dbx.DefaultTimeout,
 		attribute.String("organization.id", organizationID),
 	)
@@ -49,7 +49,7 @@ func (s *Store) ListInvites(ctx context.Context, organizationID string, limit in
 		WHERE organization_id = $1 AND status = 'active' AND expires_at <= $2
 	`, organizationID, now)
 	if err != nil {
-		return nil, nil, op.Fail(err)
+		return nil, false, op.Fail(err)
 	}
 
 	var after any
@@ -65,7 +65,7 @@ func (s *Store) ListInvites(ctx context.Context, organizationID string, limit in
 		LIMIT $3
 	`, organizationID, after, limit+1)
 	if err != nil {
-		return nil, nil, op.Fail(err)
+		return nil, false, op.Fail(err)
 	}
 	defer rows.Close()
 
@@ -73,23 +73,21 @@ func (s *Store) ListInvites(ctx context.Context, organizationID string, limit in
 	for rows.Next() {
 		inv, err := scanInvite(rows)
 		if err != nil {
-			return nil, nil, op.Fail(err)
+			return nil, false, op.Fail(err)
 		}
 		out = append(out, inv)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, op.Fail(err)
+		return nil, false, op.Fail(err)
 	}
 
-	var last *string
-	if len(out) > limit {
+	hasMore := len(out) > limit
+	if hasMore {
 		out = out[:limit]
-		n := out[len(out)-1].ID
-		last = &n
 	}
 	op.Attr(attribute.Int("invites.count", len(out)))
 	op.OK("ok")
-	return out, last, nil
+	return out, hasMore, nil
 }
 
 func (s *Store) RevokeInvite(ctx context.Context, organizationID, inviteID string) (*Invite, error) {

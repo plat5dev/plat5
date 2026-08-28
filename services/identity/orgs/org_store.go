@@ -81,7 +81,7 @@ func (s *Store) GetOrganization(ctx context.Context, organizationID string) (*Or
 	return org, nil
 }
 
-func (s *Store) ListOrganizationsForUser(ctx context.Context, userID string, limit int, startingAfter string) ([]*Organization, *string, error) {
+func (s *Store) ListOrganizationsForUser(ctx context.Context, userID string, limit int, startingAfter string) ([]*Organization, bool, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_organizations_for_user", dbx.DefaultTimeout,
 		attribute.String("user.id", userID),
 	)
@@ -102,7 +102,7 @@ func (s *Store) ListOrganizationsForUser(ctx context.Context, userID string, lim
 		LIMIT $3
 	`, userID, after, limit+1)
 	if err != nil {
-		return nil, nil, op.Fail(err)
+		return nil, false, op.Fail(err)
 	}
 	defer rows.Close()
 
@@ -110,23 +110,21 @@ func (s *Store) ListOrganizationsForUser(ctx context.Context, userID string, lim
 	for rows.Next() {
 		org, err := scanOrg(rows)
 		if err != nil {
-			return nil, nil, op.Fail(err)
+			return nil, false, op.Fail(err)
 		}
 		out = append(out, org)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, op.Fail(err)
+		return nil, false, op.Fail(err)
 	}
 
-	var last *string
-	if len(out) > limit {
+	hasMore := len(out) > limit
+	if hasMore {
 		out = out[:limit]
-		n := out[len(out)-1].ID
-		last = &n
 	}
 	op.Attr(attribute.Int("organizations.count", len(out)))
 	op.OK("ok")
-	return out, last, nil
+	return out, hasMore, nil
 }
 
 func (s *Store) UpdateOrganization(ctx context.Context, org *Organization) error {

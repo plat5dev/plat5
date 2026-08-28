@@ -17,7 +17,7 @@ import (
 type inviteStore interface {
 	GetActiveMemberForUser(ctx context.Context, organizationID, userID string) (*Member, error)
 	CreateInvite(ctx context.Context, inv *Invite) error
-	ListInvites(ctx context.Context, organizationID string, limit int, startingAfter string) ([]*Invite, *string, error)
+	ListInvites(ctx context.Context, organizationID string, limit int, startingAfter string) ([]*Invite, bool, error)
 	RevokeInvite(ctx context.Context, organizationID, inviteID string) (*Invite, error)
 	RedeemInvite(ctx context.Context, tokenHash, userID string) (*Member, error)
 }
@@ -52,7 +52,7 @@ type InviteResponse struct {
 
 type ListInvitesResponse struct {
 	Invites []InviteResponse `json:"invites"`
-	Last    *string          `json:"last"`
+	HasMore bool             `json:"has_more"`
 }
 
 type RedeemInviteRequest struct {
@@ -165,7 +165,7 @@ func (h *Handler) ListInvites(c fiber.Ctx) error {
 		return err
 	}
 
-	list, last, err := h.inviteStore().ListInvites(ctx, orgID, limit, startingAfter)
+	list, hasMore, err := h.inviteStore().ListInvites(ctx, orgID, limit, startingAfter)
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to list invites", httpx.DBErr{})
 	}
@@ -173,7 +173,7 @@ func (h *Handler) ListInvites(c fiber.Ctx) error {
 	includeToken := actor.Role == RoleAdmin || actor.Role == RoleOwner
 	out := ListInvitesResponse{
 		Invites: make([]InviteResponse, 0, len(list)),
-		Last:    last,
+		HasMore: hasMore,
 	}
 	for _, inv := range list {
 		out.Invites = append(out.Invites, toInviteResponse(inv, includeToken))

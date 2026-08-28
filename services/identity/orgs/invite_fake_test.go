@@ -73,7 +73,7 @@ func (f *fakeInvites) CreateInvite(_ context.Context, inv *Invite) error {
 	return nil
 }
 
-func (f *fakeInvites) ListInvites(_ context.Context, organizationID string, limit int, startingAfter string) ([]*Invite, *string, error) {
+func (f *fakeInvites) ListInvites(_ context.Context, organizationID string, limit int, startingAfter string) ([]*Invite, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := time.Now().UTC()
@@ -91,13 +91,11 @@ func (f *fakeInvites) ListInvites(_ context.Context, organizationID string, limi
 		all = append(all, cloneInvite(inv))
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
-	var last *string
-	if len(all) > limit {
+	hasMore := len(all) > limit
+	if hasMore {
 		all = all[:limit]
-		n := all[len(all)-1].ID
-		last = &n
 	}
-	return all, last, nil
+	return all, hasMore, nil
 }
 
 func (f *fakeInvites) RevokeInvite(_ context.Context, organizationID, inviteID string) (*Invite, error) {

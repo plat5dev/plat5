@@ -84,7 +84,7 @@ func (s *Store) ResolveMember(ctx context.Context, userID, organizationID string
 	return m, nil
 }
 
-func (s *Store) ListMembers(ctx context.Context, organizationID string, limit int, startingAfter string) ([]*Member, *string, error) {
+func (s *Store) ListMembers(ctx context.Context, organizationID string, limit int, startingAfter string) ([]*Member, bool, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_members", dbx.DefaultTimeout,
 		attribute.String("organization.id", organizationID),
 	)
@@ -104,7 +104,7 @@ func (s *Store) ListMembers(ctx context.Context, organizationID string, limit in
 		LIMIT $3
 	`, organizationID, after, limit+1)
 	if err != nil {
-		return nil, nil, op.Fail(err)
+		return nil, false, op.Fail(err)
 	}
 	defer rows.Close()
 
@@ -112,23 +112,21 @@ func (s *Store) ListMembers(ctx context.Context, organizationID string, limit in
 	for rows.Next() {
 		m, err := scanMember(rows)
 		if err != nil {
-			return nil, nil, op.Fail(err)
+			return nil, false, op.Fail(err)
 		}
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, op.Fail(err)
+		return nil, false, op.Fail(err)
 	}
 
-	var last *string
-	if len(out) > limit {
+	hasMore := len(out) > limit
+	if hasMore {
 		out = out[:limit]
-		n := out[len(out)-1].ID
-		last = &n
 	}
 	op.Attr(attribute.Int("members.count", len(out)))
 	op.OK("ok")
-	return out, last, nil
+	return out, hasMore, nil
 }
 
 // CreateUserMember inserts a new user member, or reactivates a removed one.
