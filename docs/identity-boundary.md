@@ -100,7 +100,7 @@ Do not return `UNAUTHORIZED` for missing identity headers — the gateway alread
 
 ## Invites
 
-Org invites live in **identity** (`organization_invites`). Create/list/revoke are user-scope org-admin APIs. Redeem is user-scope `POST /api/invites/redeem` (authenticated invitee, `X-User-Id`). Copy-link is `{app_origin}/login?invite=`; the app stashes the token and redeems after OIDC callback. Auth does not carry `invite=`. Identity does not send email and does not build Auth `/authorize` URLs.
+Org invites live in **identity** (`organization_invites`). Create/revoke are user-scope org-admin APIs. List is any active member; plaintext `token` only for admin/owner while the row is `active`. Redeem is user-scope `POST /api/invites/redeem` (authenticated invitee, `X-User-Id`). Identity does not return a URL and does not send email. Auth does not carry `invite=`. Unknown token → 404. Redeemed / revoked / expired → 409 `CONFLICT` (`{ field: "status", value }`).
 
 ## What is not Plat5 identity (here)
 

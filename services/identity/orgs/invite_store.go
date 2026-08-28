@@ -17,17 +17,18 @@ func (s *Store) CreateInvite(ctx context.Context, inv *Invite) error {
 	defer cancel()
 	defer op.End()
 
+	status := inv.Status
+	if status == "" {
+		status = InviteStatusActive
+	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO organization_invites (
 			id, organization_id, role, email, token_hash, token_prefix,
-			created_by, expires_at, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			created_by, expires_at, created_at, token, status, max_uses, use_count
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`, inv.ID, inv.OrganizationID, inv.Role, inv.Email, inv.TokenHash, inv.TokenPrefix,
-		inv.CreatedBy, inv.ExpiresAt, inv.CreatedAt)
+		inv.CreatedBy, inv.ExpiresAt, inv.CreatedAt, inv.Token, status, inv.MaxUses, inv.UseCount)
 	if err != nil {
-		if dbx.IsUniqueViolation(err) {
-			return op.Fail(err)
-		}
 		return op.Fail(err)
 	}
 	op.OK("created")
@@ -41,9 +42,18 @@ func (s *Store) ListInvites(ctx context.Context, organizationID string, limit, o
 	defer cancel()
 	defer op.End()
 
+	now := time.Now().UTC()
+	_, err := s.pool.Exec(ctx, `
+		UPDATE organization_invites
+		SET status = 'expired', token = NULL
+		WHERE organization_id = $1 AND status = 'active' AND expires_at <= $2
+	`, organizationID, now)
+	if err != nil {
+		return nil, false, op.Fail(err)
+	}
+
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, organization_id, role, email, token_hash, token_prefix,
-			created_by, expires_at, redeemed_at, redeemed_by, revoked_at, created_at
+		SELECT `+inviteSelectCols+`
 		FROM organization_invites
 		WHERE organization_id = $1
 		ORDER BY created_at DESC
@@ -75,7 +85,6 @@ func (s *Store) ListInvites(ctx context.Context, organizationID string, limit, o
 	return out, hasMore, nil
 }
 
-// RevokeInvite soft-revokes idempotently (COALESCE keeps first revoked_at).
 func (s *Store) RevokeInvite(ctx context.Context, organizationID, inviteID string) (*Invite, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "revoke_invite", dbx.DefaultTimeout,
 		attribute.String("organization.id", organizationID),
@@ -87,10 +96,18 @@ func (s *Store) RevokeInvite(ctx context.Context, organizationID, inviteID strin
 	now := time.Now().UTC()
 	inv, err := scanInvite(s.pool.QueryRow(ctx, `
 		UPDATE organization_invites
-		SET revoked_at = COALESCE(revoked_at, $1)
+		SET
+			status = CASE
+				WHEN status = 'active' AND expires_at <= $1 THEN 'expired'
+				WHEN status = 'active' THEN 'revoked'
+				ELSE status
+			END,
+			token = CASE
+				WHEN status = 'active' THEN NULL
+				ELSE token
+			END
 		WHERE id = $2 AND organization_id = $3
-		RETURNING id, organization_id, role, email, token_hash, token_prefix,
-			created_by, expires_at, redeemed_at, redeemed_by, revoked_at, created_at
+		RETURNING `+inviteSelectCols+`
 	`, now, inviteID, organizationID))
 	if err != nil {
 		if dbx.IsNoRows(err) {
@@ -102,9 +119,6 @@ func (s *Store) RevokeInvite(ctx context.Context, organizationID, inviteID strin
 	return inv, nil
 }
 
-// RedeemInvite consumes a valid invite and inserts (or reactivates) an active
-// user member. Already a member (non-removed) is idempotent success and still
-// consumes the token. Unknown / expired / revoked / used → ErrNotFound.
 func (s *Store) RedeemInvite(ctx context.Context, tokenHash, userID string) (*Member, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "redeem_invite", dbx.DefaultTimeout,
 		attribute.String("user.id", userID),
@@ -119,8 +133,7 @@ func (s *Store) RedeemInvite(ctx context.Context, tokenHash, userID string) (*Me
 	defer tx.Rollback(ctx)
 
 	inv, err := scanInvite(tx.QueryRow(ctx, `
-		SELECT id, organization_id, role, email, token_hash, token_prefix,
-			created_by, expires_at, redeemed_at, redeemed_by, revoked_at, created_at
+		SELECT `+inviteSelectCols+`
 		FROM organization_invites
 		WHERE token_hash = $1
 		FOR UPDATE
@@ -133,8 +146,22 @@ func (s *Store) RedeemInvite(ctx context.Context, tokenHash, userID string) (*Me
 	}
 
 	now := time.Now().UTC()
-	if !InviteRedeemable(inv, now) {
-		return nil, op.Expected("not found", ErrNotFound)
+	if inv.Status == InviteStatusActive && !now.Before(inv.ExpiresAt) {
+		_, err = tx.Exec(ctx, `
+			UPDATE organization_invites
+			SET status = 'expired', token = NULL
+			WHERE id = $1 AND status = 'active'
+		`, inv.ID)
+		if err != nil {
+			return nil, op.Fail(err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, op.Fail(err)
+		}
+		return nil, op.Expected("expired", &InviteDeadError{Status: InviteStatusExpired})
+	}
+	if inv.Status != InviteStatusActive {
+		return nil, op.Expected("dead", &InviteDeadError{Status: inv.Status})
 	}
 
 	existing, err := scanMember(tx.QueryRow(ctx, `
@@ -189,11 +216,21 @@ func (s *Store) RedeemInvite(ctx context.Context, tokenHash, userID string) (*Me
 		member = m
 	}
 
-	_, err = tx.Exec(ctx, `
-		UPDATE organization_invites
-		SET redeemed_at = $2, redeemed_by = $3
-		WHERE id = $1 AND redeemed_at IS NULL AND revoked_at IS NULL
-	`, inv.ID, now, userID)
+	next := inv.UseCount + 1
+	spent := inv.MaxUses != nil && next >= *inv.MaxUses
+	if spent {
+		_, err = tx.Exec(ctx, `
+			UPDATE organization_invites
+			SET use_count = $2, status = 'redeemed', token = NULL
+			WHERE id = $1 AND status = 'active'
+		`, inv.ID, next)
+	} else {
+		_, err = tx.Exec(ctx, `
+			UPDATE organization_invites
+			SET use_count = $2
+			WHERE id = $1 AND status = 'active'
+		`, inv.ID, next)
+	}
 	if err != nil {
 		return nil, op.Fail(err)
 	}

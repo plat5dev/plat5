@@ -24,7 +24,13 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 		t.Fatal(err)
 	}
 	if created.Token == "" || !LooksLikeInviteToken(created.Token) {
-		t.Fatalf("token once: %+v", created)
+		t.Fatalf("token: %+v", created)
+	}
+	if created.Status != string(InviteStatusActive) {
+		t.Fatalf("status: %+v", created)
+	}
+	if created.MaxUses == nil || *created.MaxUses != 1 {
+		t.Fatalf("default max_uses: %+v", created.MaxUses)
 	}
 	if created.Email == nil || *created.Email != "a@b.com" {
 		t.Fatalf("email: %+v", created.Email)
@@ -40,8 +46,8 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 	if err := json.Unmarshal(body, &listed); err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Invites) != 1 || listed.Invites[0].Token != "" {
-		t.Fatalf("list must omit token: %+v", listed)
+	if len(listed.Invites) != 1 || listed.Invites[0].Token != token {
+		t.Fatalf("owner list must include token: %+v", listed)
 	}
 
 	inviteeApp := testInviteApp(h, "invitee1")
@@ -56,18 +62,136 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 	if mem.Status != string(StatusActive) || mem.UserID == nil || *mem.UserID != "invitee1" {
 		t.Fatalf("member: %+v", mem)
 	}
-	if mem.OrganizationID != "org1" || mem.Role != "member" {
-		t.Fatalf("org/role: %+v", mem)
+
+	code, body = doJSON(t, app, http.MethodGet, "/api/organizations/org1/invites", "")
+	if code != http.StatusOK {
+		t.Fatalf("list after redeem: %d %s", code, body)
+	}
+	listed = ListInvitesResponse{}
+	if err := json.Unmarshal(body, &listed); err != nil {
+		t.Fatal(err)
+	}
+	if listed.Invites[0].Token != "" || listed.Invites[0].Status != string(InviteStatusRedeemed) || listed.Invites[0].UseCount != 1 {
+		t.Fatalf("spent row: %+v", listed.Invites[0])
 	}
 
 	code, body = doJSON(t, inviteeApp, http.MethodPost, "/api/invites/redeem", `{"token":"`+token+`"}`)
-	if code != http.StatusNotFound {
-		t.Fatalf("one-shot expected 404, got %d %s", code, body)
+	if code != http.StatusConflict {
+		t.Fatalf("spent expected 409, got %d %s", code, body)
 	}
+	assertConflictStatus(t, body, "redeemed")
 
 	code, _ = doJSON(t, app, http.MethodDelete, "/api/organizations/org1/invites/"+inviteID, "")
 	if code != http.StatusNoContent {
 		t.Fatalf("revoke already-used: %d", code)
+	}
+}
+
+func TestInviteListOmitsTokenForMember(t *testing.T) {
+	f := newFakeInvites()
+	seedOwner(f, "org1", "owner1")
+	seedMember(f, "org1", "mem1")
+	h := &Handler{invites: f}
+	ownerApp := testInviteApp(h, "owner1")
+	_, body := doJSON(t, ownerApp, http.MethodPost, "/api/organizations/org1/invites", `{}`)
+	var created InviteResponse
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatal(err)
+	}
+
+	memApp := testInviteApp(h, "mem1")
+	code, body := doJSON(t, memApp, http.MethodGet, "/api/organizations/org1/invites", "")
+	if code != http.StatusOK {
+		t.Fatalf("member list: %d %s", code, body)
+	}
+	var listed ListInvitesResponse
+	if err := json.Unmarshal(body, &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Invites) != 1 {
+		t.Fatalf("member should see the row: %+v", listed)
+	}
+	if listed.Invites[0].Token != "" {
+		t.Fatalf("member list must omit token: %+v", listed.Invites[0])
+	}
+	if listed.Invites[0].Status != string(InviteStatusActive) || listed.Invites[0].TokenPrefix == "" {
+		t.Fatalf("member still gets prefix/status: %+v", listed.Invites[0])
+	}
+
+	adminUID := "admin1"
+	f.members[memberKey("org1", "admin1")] = &Member{
+		ID:             "m-admin1",
+		OrganizationID: "org1",
+		UserID:         &adminUID,
+		Role:           RoleAdmin,
+		Status:         StatusActive,
+	}
+	adminApp := testInviteApp(h, "admin1")
+	code, body = doJSON(t, adminApp, http.MethodGet, "/api/organizations/org1/invites", "")
+	if code != http.StatusOK {
+		t.Fatalf("admin list: %d %s", code, body)
+	}
+	if err := json.Unmarshal(body, &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Invites) != 1 || listed.Invites[0].Token == "" {
+		t.Fatalf("admin list must include token: %+v", listed)
+	}
+}
+
+func TestInviteMaxUsesUnlimitedStaysActive(t *testing.T) {
+	f := newFakeInvites()
+	seedOwner(f, "org1", "owner1")
+	h := &Handler{invites: f}
+	app := testInviteApp(h, "owner1")
+
+	code, body := doJSON(t, app, http.MethodPost, "/api/organizations/org1/invites", `{"max_uses":null}`)
+	if code != http.StatusCreated {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	var created InviteResponse
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.MaxUses != nil {
+		t.Fatalf("unlimited must be null max_uses: %+v", created.MaxUses)
+	}
+	token := created.Token
+
+	a := testInviteApp(h, "u1")
+	code, body = doJSON(t, a, http.MethodPost, "/api/invites/redeem", `{"token":"`+token+`"}`)
+	if code != http.StatusOK {
+		t.Fatalf("first redeem: %d %s", code, body)
+	}
+	code, body = doJSON(t, app, http.MethodGet, "/api/organizations/org1/invites", "")
+	if code != http.StatusOK {
+		t.Fatal(code)
+	}
+	var listed ListInvitesResponse
+	if err := json.Unmarshal(body, &listed); err != nil {
+		t.Fatal(err)
+	}
+	if listed.Invites[0].Token != token || listed.Invites[0].Status != string(InviteStatusActive) || listed.Invites[0].UseCount != 1 {
+		t.Fatalf("still active with token: %+v", listed.Invites[0])
+	}
+
+	b := testInviteApp(h, "u2")
+	code, body = doJSON(t, b, http.MethodPost, "/api/invites/redeem", `{"token":"`+token+`"}`)
+	if code != http.StatusOK {
+		t.Fatalf("second redeem: %d %s", code, body)
+	}
+}
+
+func TestInviteMaxUsesZeroRejected(t *testing.T) {
+	f := newFakeInvites()
+	seedOwner(f, "org1", "owner1")
+	h := &Handler{invites: f}
+	app := testInviteApp(h, "owner1")
+	for _, payload := range []string{`{"max_uses":0}`, `{"max_uses":-1}`} {
+		code, resp := doJSON(t, app, http.MethodPost, "/api/organizations/org1/invites", payload)
+		if code != http.StatusUnprocessableEntity {
+			t.Fatalf("%s: %d %s", payload, code, resp)
+		}
 	}
 }
 
@@ -86,8 +210,10 @@ func TestInviteExpireRevokeAndUnknown(t *testing.T) {
 		ID:             "inv-expired",
 		OrganizationID: "org1",
 		Role:           RoleMember,
+		Token:          &expiredTok,
 		TokenHash:      HashInviteToken(expiredTok),
 		TokenPrefix:    InviteDisplayPrefix(expiredTok),
+		Status:         InviteStatusActive,
 		CreatedBy:      "owner1",
 		ExpiresAt:      now.Add(-time.Minute),
 		CreatedAt:      now.Add(-time.Hour),
@@ -97,12 +223,13 @@ func TestInviteExpireRevokeAndUnknown(t *testing.T) {
 	}
 
 	inviteeApp := testInviteApp(h, "u2")
-	code, _ := doJSON(t, inviteeApp, http.MethodPost, "/api/invites/redeem", `{"token":"`+expiredTok+`"}`)
-	if code != http.StatusNotFound {
-		t.Fatalf("expired: %d", code)
+	code, body := doJSON(t, inviteeApp, http.MethodPost, "/api/invites/redeem", `{"token":"`+expiredTok+`"}`)
+	if code != http.StatusConflict {
+		t.Fatalf("expired: %d %s", code, body)
 	}
+	assertConflictStatus(t, body, "expired")
 
-	code, body := doJSON(t, app, http.MethodPost, "/api/organizations/org1/invites", `{}`)
+	code, body = doJSON(t, app, http.MethodPost, "/api/organizations/org1/invites", `{}`)
 	if code != http.StatusCreated {
 		t.Fatalf("create: %d %s", code, body)
 	}
@@ -116,10 +243,11 @@ func TestInviteExpireRevokeAndUnknown(t *testing.T) {
 	if code != http.StatusNoContent {
 		t.Fatalf("revoke: %d", code)
 	}
-	code, _ = doJSON(t, inviteeApp, http.MethodPost, "/api/invites/redeem", `{"token":"`+liveTok+`"}`)
-	if code != http.StatusNotFound {
-		t.Fatalf("revoked: %d", code)
+	code, body = doJSON(t, inviteeApp, http.MethodPost, "/api/invites/redeem", `{"token":"`+liveTok+`"}`)
+	if code != http.StatusConflict {
+		t.Fatalf("revoked: %d %s", code, body)
 	}
+	assertConflictStatus(t, body, "revoked")
 
 	code, body = doJSON(t, inviteeApp, http.MethodPost, "/api/invites/redeem", `{"token":"inv_notarealtoken00000000000000000000000000"}`)
 	if code != http.StatusNotFound {
@@ -198,5 +326,21 @@ func TestInviteNoPendingMemberOnCreate(t *testing.T) {
 	doJSON(t, app, http.MethodPost, "/api/organizations/org1/invites", `{}`)
 	if len(f.members) != 1 {
 		t.Fatalf("create invite must not insert a member, got %d", len(f.members))
+	}
+}
+
+func assertConflictStatus(t *testing.T, body []byte, status string) {
+	t.Helper()
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatal(err)
+	}
+	errObj, _ := env["error"].(map[string]any)
+	if errObj["code"] != "CONFLICT" {
+		t.Fatalf("code: %s", body)
+	}
+	details, _ := errObj["details"].(map[string]any)
+	if details["field"] != "status" || details["value"] != status {
+		t.Fatalf("details want field=status value=%s: %s", status, body)
 	}
 }

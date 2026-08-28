@@ -14,8 +14,6 @@ import (
 	"github.com/plat5dev/plat5/identity/middleware"
 )
 
-// inviteStore is the persistence used by invite handlers. *Store implements it.
-// Tests inject a fake.
 type inviteStore interface {
 	GetActiveMemberForUser(ctx context.Context, organizationID, userID string) (*Member, error)
 	CreateInvite(ctx context.Context, inv *Invite) error
@@ -44,12 +42,12 @@ type InviteResponse struct {
 	Email          *string `json:"email"`
 	TokenPrefix    string  `json:"token_prefix"`
 	Token          string  `json:"token,omitempty"`
+	Status         string  `json:"status"`
+	MaxUses        *int    `json:"max_uses"`
+	UseCount       int     `json:"use_count"`
 	ExpiresAt      string  `json:"expires_at"`
 	CreatedBy      string  `json:"created_by"`
 	CreatedAt      string  `json:"created_at"`
-	RevokedAt      *string `json:"revoked_at"`
-	RedeemedAt     *string `json:"redeemed_at"`
-	RedeemedBy     *string `json:"redeemed_by"`
 }
 
 type ListInvitesResponse struct {
@@ -70,6 +68,17 @@ func (h *Handler) requireInviteActor(ctx context.Context, orgID, userID string) 
 		return nil, httpx.MapDB(ctx, err, "failed to load member", httpx.DBErr{})
 	}
 	return m, nil
+}
+
+func inviteConflict(status InviteStatus) error {
+	msg := "This invite is no longer valid."
+	switch status {
+	case InviteStatusRedeemed:
+		msg = "This invite has already been used."
+	case InviteStatusExpired:
+		msg = "This invite has expired."
+	}
+	return errors.ConflictError(msg, "status", string(status))
 }
 
 func (h *Handler) CreateInvite(c fiber.Ctx) error {
@@ -105,6 +114,10 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	maxUses, err := ParseMaxUsesJSON(c.Body())
+	if err != nil {
+		return err
+	}
 
 	plaintext, err := GenerateInviteToken()
 	if err != nil {
@@ -118,8 +131,12 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 		OrganizationID: orgID,
 		Role:           role,
 		Email:          email,
+		Token:          &plaintext,
 		TokenHash:      HashInviteToken(plaintext),
 		TokenPrefix:    InviteDisplayPrefix(plaintext),
+		Status:         InviteStatusActive,
+		MaxUses:        maxUses,
+		UseCount:       0,
 		CreatedBy:      userID,
 		ExpiresAt:      now.Add(ttl),
 		CreatedAt:      now,
@@ -130,9 +147,7 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 	}
 
 	metrics.RecordInviteOp("create")
-	out := toInviteResponse(inv)
-	out.Token = plaintext
-	return c.Status(fiber.StatusCreated).JSON(out)
+	return c.Status(fiber.StatusCreated).JSON(toInviteResponse(inv, true))
 }
 
 func (h *Handler) ListInvites(c fiber.Ctx) error {
@@ -140,7 +155,8 @@ func (h *Handler) ListInvites(c fiber.Ctx) error {
 	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
 
-	if _, err := h.requireInviteActor(ctx, orgID, userID); err != nil {
+	actor, err := h.requireInviteActor(ctx, orgID, userID)
+	if err != nil {
 		return err
 	}
 
@@ -154,12 +170,13 @@ func (h *Handler) ListInvites(c fiber.Ctx) error {
 		return httpx.MapDB(ctx, err, "failed to list invites", httpx.DBErr{})
 	}
 
+	includeToken := actor.Role == RoleAdmin || actor.Role == RoleOwner
 	out := ListInvitesResponse{
 		Invites: make([]InviteResponse, 0, len(list)),
 		HasMore: hasMore,
 	}
 	for _, inv := range list {
-		out.Invites = append(out.Invites, toInviteResponse(inv))
+		out.Invites = append(out.Invites, toInviteResponse(inv, includeToken))
 	}
 	return c.JSON(out)
 }
@@ -210,6 +227,10 @@ func (h *Handler) redeem(c fiber.Ctx, token, userID string) error {
 
 	member, err := h.inviteStore().RedeemInvite(ctx, HashInviteToken(token), userID)
 	if err != nil {
+		var dead *InviteDeadError
+		if stderrors.As(err, &dead) {
+			return inviteConflict(dead.Status)
+		}
 		return httpx.MapDB(ctx, err, "failed to redeem invite", httpx.DBErr{
 			NotFound: ErrNotFound, Resource: "invite", ResourceID: nil,
 		})
@@ -220,18 +241,25 @@ func (h *Handler) redeem(c fiber.Ctx, token, userID string) error {
 	return c.JSON(toMemberResponse(member))
 }
 
-func toInviteResponse(inv *Invite) InviteResponse {
-	return InviteResponse{
+func toInviteResponse(inv *Invite, includeToken bool) InviteResponse {
+	out := InviteResponse{
 		ID:             inv.ID,
 		OrganizationID: inv.OrganizationID,
 		Role:           string(inv.Role),
 		Email:          inv.Email,
 		TokenPrefix:    inv.TokenPrefix,
+		Status:         string(inv.Status),
+		MaxUses:        inv.MaxUses,
+		UseCount:       inv.UseCount,
 		ExpiresAt:      httpx.FormatTime(inv.ExpiresAt),
 		CreatedBy:      inv.CreatedBy,
 		CreatedAt:      httpx.FormatTime(inv.CreatedAt),
-		RevokedAt:      httpx.FormatTimePtr(inv.RevokedAt),
-		RedeemedAt:     httpx.FormatTimePtr(inv.RedeemedAt),
-		RedeemedBy:     inv.RedeemedBy,
 	}
+	if includeToken && inv.Token != nil && inv.Status == InviteStatusActive {
+		out.Token = *inv.Token
+	}
+	if out.Status == "" {
+		out.Status = string(InviteStatusActive)
+	}
+	return out
 }

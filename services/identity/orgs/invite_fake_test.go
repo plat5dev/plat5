@@ -32,6 +32,23 @@ func newFakeInvites() *fakeInvites {
 
 func memberKey(orgID, userID string) string { return orgID + "/" + userID }
 
+func cloneInvite(inv *Invite) *Invite {
+	cp := *inv
+	if inv.Email != nil {
+		e := *inv.Email
+		cp.Email = &e
+	}
+	if inv.Token != nil {
+		t := *inv.Token
+		cp.Token = &t
+	}
+	if inv.MaxUses != nil {
+		n := *inv.MaxUses
+		cp.MaxUses = &n
+	}
+	return &cp
+}
+
 func (f *fakeInvites) GetActiveMemberForUser(_ context.Context, organizationID, userID string) (*Member, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -46,25 +63,28 @@ func (f *fakeInvites) GetActiveMemberForUser(_ context.Context, organizationID, 
 func (f *fakeInvites) CreateInvite(_ context.Context, inv *Invite) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	cp := *inv
-	if cp.Email != nil {
-		e := *cp.Email
-		cp.Email = &e
+	cp := cloneInvite(inv)
+	if cp.Status == "" {
+		cp.Status = InviteStatusActive
 	}
-	f.invites[inv.ID] = &cp
-	f.byHash[inv.TokenHash] = &cp
+	f.invites[inv.ID] = cp
+	f.byHash[inv.TokenHash] = cp
 	return nil
 }
 
 func (f *fakeInvites) ListInvites(_ context.Context, organizationID string, limit, offset int) ([]*Invite, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	now := time.Now().UTC()
 	var all []*Invite
 	for _, inv := range f.invites {
-		if inv.OrganizationID == organizationID {
-			cp := *inv
-			all = append(all, &cp)
+		if inv.OrganizationID != organizationID {
+			continue
 		}
+		if inv.Status == InviteStatusActive && !now.Before(inv.ExpiresAt) {
+			expireInvite(inv)
+		}
+		all = append(all, cloneInvite(inv))
 	}
 	if offset > len(all) {
 		offset = len(all)
@@ -84,27 +104,40 @@ func (f *fakeInvites) RevokeInvite(_ context.Context, organizationID, inviteID s
 	if inv == nil || inv.OrganizationID != organizationID {
 		return nil, ErrNotFound
 	}
-	if inv.RevokedAt == nil {
-		now := time.Now().UTC()
-		inv.RevokedAt = &now
+	now := time.Now().UTC()
+	if inv.Status == InviteStatusActive && !now.Before(inv.ExpiresAt) {
+		expireInvite(inv)
+	} else if inv.Status == InviteStatusActive {
+		inv.Status = InviteStatusRevoked
+		inv.Token = nil
 	}
-	cp := *inv
-	return &cp, nil
+	return cloneInvite(inv), nil
 }
 
 func (f *fakeInvites) RedeemInvite(_ context.Context, tokenHash, userID string) (*Member, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	inv := f.byHash[tokenHash]
-	now := time.Now().UTC()
-	if !InviteRedeemable(inv, now) {
+	if inv == nil {
 		return nil, ErrNotFound
+	}
+	now := time.Now().UTC()
+	if inv.Status == InviteStatusActive && !now.Before(inv.ExpiresAt) {
+		expireInvite(inv)
+	}
+	if inv.Status != InviteStatusActive {
+		return nil, &InviteDeadError{Status: inv.Status}
+	}
+	if !InviteRedeemable(inv, now) {
+		return nil, &InviteDeadError{Status: InviteStatusExpired}
 	}
 	key := memberKey(inv.OrganizationID, userID)
 	existing := f.members[key]
-	nowCopy := now
-	inv.RedeemedAt = &nowCopy
-	inv.RedeemedBy = &userID
+	inv.UseCount++
+	if inv.MaxUses != nil && inv.UseCount >= *inv.MaxUses {
+		inv.Status = InviteStatusRedeemed
+		inv.Token = nil
+	}
 	if existing != nil && existing.Status != StatusRemoved {
 		cp := *existing
 		return &cp, nil
@@ -170,6 +203,17 @@ func seedOwner(f *fakeInvites, orgID, userID string) {
 		OrganizationID: orgID,
 		UserID:         &uid,
 		Role:           RoleOwner,
+		Status:         StatusActive,
+	}
+}
+
+func seedMember(f *fakeInvites, orgID, userID string) {
+	uid := userID
+	f.members[memberKey(orgID, userID)] = &Member{
+		ID:             "m-" + userID,
+		OrganizationID: orgID,
+		UserID:         &uid,
+		Role:           RoleMember,
 		Status:         StatusActive,
 	}
 }

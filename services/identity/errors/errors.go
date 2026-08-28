@@ -70,7 +70,6 @@ func InvalidRequestError() *ApiError {
 	}
 }
 
-// FieldError is VALIDATION_ERROR for a single path. message is the product sentence.
 func FieldError(path, message string) *ApiError {
 	if message == "" {
 		message = FallbackValidation
@@ -78,7 +77,6 @@ func FieldError(path, message string) *ApiError {
 	return ValidationFields(message, Field{Path: path, Message: message})
 }
 
-// ValidationFields builds VALIDATION_ERROR with details.fields.
 func ValidationFields(message string, fields ...Field) *ApiError {
 	if message == "" {
 		message = FallbackValidation

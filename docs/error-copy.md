@@ -93,8 +93,12 @@ Use these only when a more specific sentence does not apply.
 | `expires_in_seconds` out of range | Expiry must be between 60 seconds and 30 days. |
 | `email` > 320 | That email is too long. |
 | Bad role | Role must be member, admin, or owner. |
+| `max_uses` 0 or negative | Max uses must be at least 1. |
+| Redeem of a redeemed invite | This invite has already been used. |
+| Redeem of a revoked invite | This invite is no longer valid. |
+| Redeem of an expired invite | This invite has expired. |
 
-Unknown / expired / revoked / already-used tokens use the generic **404** `Resource not found.` (existence policy; do not name the org). Already a member on a still-valid token is **200**, not 409.
+Unknown tokens use the generic **404** `Resource not found.` (existence policy; do not name the org). Redeemed / revoked / expired tokens are **409** `CONFLICT` with `{ "field": "status", "value": "redeemed" | "revoked" | "expired" }`. Already a member on a still-`active` token is **200**, not 409.
 
 ### API keys (user + member)
 
