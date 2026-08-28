@@ -2,6 +2,7 @@ package orgs
 
 import (
 	"context"
+	"encoding/json"
 	stderrors "errors"
 	"strings"
 	"time"
@@ -52,6 +53,7 @@ type InviteResponse struct {
 	RevokedAt      *string `json:"revoked_at"`
 	RedeemedAt     *string `json:"redeemed_at"`
 	RedeemedBy     *string `json:"redeemed_by"`
+	includeToken   bool    `json:"-"`
 }
 
 type ListInvitesResponse struct {
@@ -245,6 +247,54 @@ func (h *Handler) redeem(c fiber.Ctx, token, userID string) error {
 	return c.JSON(toMemberResponse(member))
 }
 
+func (r InviteResponse) MarshalJSON() ([]byte, error) {
+	type out struct {
+		ID             string          `json:"id"`
+		OrganizationID string          `json:"organization_id"`
+		Role           string          `json:"role"`
+		Email          *string         `json:"email"`
+		TokenPrefix    string          `json:"token_prefix"`
+		Token          json.RawMessage `json:"token,omitempty"`
+		Status         string          `json:"status"`
+		MaxUses        *int            `json:"max_uses"`
+		UseCount       int             `json:"use_count"`
+		ExpiresAt      string          `json:"expires_at"`
+		CreatedBy      string          `json:"created_by"`
+		CreatedAt      string          `json:"created_at"`
+		RevokedAt      *string         `json:"revoked_at"`
+		RedeemedAt     *string         `json:"redeemed_at"`
+		RedeemedBy     *string         `json:"redeemed_by"`
+	}
+	o := out{
+		ID:             r.ID,
+		OrganizationID: r.OrganizationID,
+		Role:           r.Role,
+		Email:          r.Email,
+		TokenPrefix:    r.TokenPrefix,
+		Status:         r.Status,
+		MaxUses:        r.MaxUses,
+		UseCount:       r.UseCount,
+		ExpiresAt:      r.ExpiresAt,
+		CreatedBy:      r.CreatedBy,
+		CreatedAt:      r.CreatedAt,
+		RevokedAt:      r.RevokedAt,
+		RedeemedAt:     r.RedeemedAt,
+		RedeemedBy:     r.RedeemedBy,
+	}
+	if r.includeToken {
+		if r.Token == "" {
+			o.Token = json.RawMessage("null")
+		} else {
+			b, err := json.Marshal(r.Token)
+			if err != nil {
+				return nil, err
+			}
+			o.Token = b
+		}
+	}
+	return json.Marshal(o)
+}
+
 func toInviteResponse(inv *Invite, includeToken bool) InviteResponse {
 	out := InviteResponse{
 		ID:             inv.ID,
@@ -261,6 +311,7 @@ func toInviteResponse(inv *Invite, includeToken bool) InviteResponse {
 		RevokedAt:      httpx.FormatTimePtr(inv.RevokedAt),
 		RedeemedAt:     httpx.FormatTimePtr(inv.RedeemedAt),
 		RedeemedBy:     inv.RedeemedBy,
+		includeToken:   includeToken,
 	}
 	if includeToken && inv.Token != nil && inv.Status == InviteStatusActive {
 		out.Token = *inv.Token
