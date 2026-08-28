@@ -29,7 +29,7 @@ type ServiceAccountResponse struct {
 
 type ListServiceAccountsResponse struct {
 	ServiceAccounts []ServiceAccountResponse `json:"service_accounts"`
-	Next            *string                  `json:"next"`
+	Last            *string                  `json:"last"`
 }
 
 func (h *Handler) CreateServiceAccount(c fiber.Ctx) error {
@@ -83,14 +83,14 @@ func (h *Handler) ListServiceAccounts(c fiber.Ctx) error {
 		return err
 	}
 
-	list, next, err := h.store.ListServiceAccounts(ctx, orgID, limit, startingAfter)
+	list, last, err := h.store.ListServiceAccounts(ctx, orgID, limit, startingAfter)
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to list service accounts", httpx.DBErr{})
 	}
 
 	out := ListServiceAccountsResponse{
 		ServiceAccounts: make([]ServiceAccountResponse, 0, len(list)),
-		Next:            next,
+		Last:            last,
 	}
 	for _, sa := range list {
 		out.ServiceAccounts = append(out.ServiceAccounts, toServiceAccountResponse(sa))

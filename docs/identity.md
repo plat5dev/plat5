@@ -265,7 +265,7 @@ At least one **active owner** must remain. Sole owner cannot leave, be removed, 
 
 ## Pagination
 
-Public lists: [`lists.md`](lists.md). `limit` / `starting_after` / `next`. Sort `id` ascending.
+Public lists: [`lists.md`](lists.md). `limit` / `starting_after` / `last`. Sort `id` ascending.
 
 ## Internal APIs
 

@@ -52,7 +52,7 @@ type InviteResponse struct {
 
 type ListInvitesResponse struct {
 	Invites []InviteResponse `json:"invites"`
-	Next    *string          `json:"next"`
+	Last    *string          `json:"last"`
 }
 
 type RedeemInviteRequest struct {
@@ -165,7 +165,7 @@ func (h *Handler) ListInvites(c fiber.Ctx) error {
 		return err
 	}
 
-	list, next, err := h.inviteStore().ListInvites(ctx, orgID, limit, startingAfter)
+	list, last, err := h.inviteStore().ListInvites(ctx, orgID, limit, startingAfter)
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to list invites", httpx.DBErr{})
 	}
@@ -173,7 +173,7 @@ func (h *Handler) ListInvites(c fiber.Ctx) error {
 	includeToken := actor.Role == RoleAdmin || actor.Role == RoleOwner
 	out := ListInvitesResponse{
 		Invites: make([]InviteResponse, 0, len(list)),
-		Next:    next,
+		Last:    last,
 	}
 	for _, inv := range list {
 		out.Invites = append(out.Invites, toInviteResponse(inv, includeToken))

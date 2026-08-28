@@ -38,7 +38,7 @@ type MemberResponse struct {
 
 type ListMembersResponse struct {
 	Members []MemberResponse `json:"members"`
-	Next    *string          `json:"next"`
+	Last    *string          `json:"last"`
 }
 
 type ResolveRequest struct {
@@ -67,14 +67,14 @@ func (h *Handler) ListMembers(c fiber.Ctx) error {
 		return err
 	}
 
-	list, next, err := h.store.ListMembers(ctx, orgID, limit, startingAfter)
+	list, last, err := h.store.ListMembers(ctx, orgID, limit, startingAfter)
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to list members", httpx.DBErr{})
 	}
 
 	out := ListMembersResponse{
 		Members: make([]MemberResponse, 0, len(list)),
-		Next:    next,
+		Last:    last,
 	}
 	for _, m := range list {
 		out.Members = append(out.Members, toMemberResponse(m))

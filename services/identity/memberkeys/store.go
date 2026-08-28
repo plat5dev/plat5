@@ -141,15 +141,15 @@ func (s *Store) List(ctx context.Context, memberID string, limit int, startingAf
 		return nil, nil, op.Fail(err)
 	}
 
-	var next *string
+	var last *string
 	if len(out) > limit {
 		out = out[:limit]
 		n := out[len(out)-1].ID
-		next = &n
+		last = &n
 	}
 	op.Attr(attribute.Int("keys.count", len(out)))
 	op.OK("listed")
-	return out, next, nil
+	return out, last, nil
 }
 
 // Revoke soft-revokes idempotently (COALESCE keeps first revoked_at).

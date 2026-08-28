@@ -81,15 +81,15 @@ func (s *Store) ListInvites(ctx context.Context, organizationID string, limit in
 		return nil, nil, op.Fail(err)
 	}
 
-	var next *string
+	var last *string
 	if len(out) > limit {
 		out = out[:limit]
 		n := out[len(out)-1].ID
-		next = &n
+		last = &n
 	}
 	op.Attr(attribute.Int("invites.count", len(out)))
 	op.OK("ok")
-	return out, next, nil
+	return out, last, nil
 }
 
 func (s *Store) RevokeInvite(ctx context.Context, organizationID, inviteID string) (*Invite, error) {

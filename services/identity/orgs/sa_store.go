@@ -148,15 +148,15 @@ func (s *Store) ListServiceAccounts(ctx context.Context, organizationID string, 
 		return nil, nil, op.Fail(err)
 	}
 
-	var next *string
+	var last *string
 	if len(out) > limit {
 		out = out[:limit]
 		n := out[len(out)-1].ID
-		next = &n
+		last = &n
 	}
 	op.Attr(attribute.Int("service_accounts.count", len(out)))
 	op.OK("ok")
-	return out, next, nil
+	return out, last, nil
 }
 
 func (s *Store) UpdateServiceAccount(ctx context.Context, organizationID, serviceAccountID string, name string) (*ServiceAccount, error) {

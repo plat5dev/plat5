@@ -91,13 +91,13 @@ func (f *fakeInvites) ListInvites(_ context.Context, organizationID string, limi
 		all = append(all, cloneInvite(inv))
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
-	var next *string
+	var last *string
 	if len(all) > limit {
 		all = all[:limit]
 		n := all[len(all)-1].ID
-		next = &n
+		last = &n
 	}
-	return all, next, nil
+	return all, last, nil
 }
 
 func (f *fakeInvites) RevokeInvite(_ context.Context, organizationID, inviteID string) (*Invite, error) {

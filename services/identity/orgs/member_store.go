@@ -120,15 +120,15 @@ func (s *Store) ListMembers(ctx context.Context, organizationID string, limit in
 		return nil, nil, op.Fail(err)
 	}
 
-	var next *string
+	var last *string
 	if len(out) > limit {
 		out = out[:limit]
 		n := out[len(out)-1].ID
-		next = &n
+		last = &n
 	}
 	op.Attr(attribute.Int("members.count", len(out)))
 	op.OK("ok")
-	return out, next, nil
+	return out, last, nil
 }
 
 // CreateUserMember inserts a new user member, or reactivates a removed one.

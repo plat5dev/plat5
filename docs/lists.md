@@ -11,7 +11,7 @@ Route-registry admin lists (`GET /v1/services`, revisions) are get-all. Do not p
 | Param | |
 |-------|--|
 | `limit` | Optional. Default **50**, max **100**. Over-max is **clamped**, not 422. `< 1` or non-integer → **422** `VALIDATION_ERROR`. |
-| `starting_after` | Optional. Exclusive cursor: the `id` of the last item on the previous page (`next` from that response). Omit on the first page. |
+| `starting_after` | Optional. Exclusive cursor: `last` from the previous page. Omit on the first page. |
 
 No `offset`. No `page`. No `ending_before`.
 
@@ -26,16 +26,16 @@ Always **`id` ascending**. IDs are ULIDs (time-sortable). No other sort.
 ```json
 {
   "organizations": [ ... ],
-  "next": "01HZX..."
+  "last": "01HZX..."
 }
 ```
 
 | Field | |
 |-------|--|
 | named collection | Plural resource key (`organizations`, `members`, `invites`, `service_accounts`, `keys`). Not `data`. |
-| `next` | ULID of the last item on this page, or `null`. Always present. `null` means last page. |
+| `last` | ULID of the last item on this page, or `null`. Always present. `null` means last page. |
 
-Pass `next` as `starting_after` on the following request. Do not send `starting_after` when `next` is `null`.
+Pass `last` as `starting_after` on the following request. Do not send `starting_after` when `last` is `null`.
 
 No `has_more`. No `total`. `limit` is not echoed.
 

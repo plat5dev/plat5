@@ -41,7 +41,7 @@ type CreateResponse struct {
 
 type ListResponse struct {
 	Keys []KeyResponse `json:"keys"`
-	Next *string       `json:"next"`
+	Last *string       `json:"last"`
 }
 
 type KeyResponse struct {
@@ -134,14 +134,14 @@ func (h *Handler) List(c fiber.Ctx) error {
 		return err
 	}
 
-	list, next, err := h.store.List(ctx, memberID, limit, startingAfter)
+	list, last, err := h.store.List(ctx, memberID, limit, startingAfter)
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to list member keys", httpx.DBErr{})
 	}
 
 	out := ListResponse{
 		Keys: make([]KeyResponse, 0, len(list)),
-		Next: next,
+		Last: last,
 	}
 	for _, k := range list {
 		out.Keys = append(out.Keys, toKeyResponse(k))

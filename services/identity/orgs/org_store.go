@@ -118,15 +118,15 @@ func (s *Store) ListOrganizationsForUser(ctx context.Context, userID string, lim
 		return nil, nil, op.Fail(err)
 	}
 
-	var next *string
+	var last *string
 	if len(out) > limit {
 		out = out[:limit]
 		n := out[len(out)-1].ID
-		next = &n
+		last = &n
 	}
 	op.Attr(attribute.Int("organizations.count", len(out)))
 	op.OK("ok")
-	return out, next, nil
+	return out, last, nil
 }
 
 func (s *Store) UpdateOrganization(ctx context.Context, org *Organization) error {

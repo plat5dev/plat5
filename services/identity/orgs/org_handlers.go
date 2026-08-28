@@ -32,7 +32,7 @@ type OrgResponse struct {
 
 type ListOrgsResponse struct {
 	Organizations []OrgResponse `json:"organizations"`
-	Next          *string       `json:"next"`
+	Last          *string       `json:"last"`
 }
 
 func (h *Handler) CreateOrganization(c fiber.Ctx) error {
@@ -86,14 +86,14 @@ func (h *Handler) ListOrganizations(c fiber.Ctx) error {
 		return err
 	}
 
-	list, next, err := h.store.ListOrganizationsForUser(ctx, userID, limit, startingAfter)
+	list, last, err := h.store.ListOrganizationsForUser(ctx, userID, limit, startingAfter)
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to list organizations", httpx.DBErr{})
 	}
 
 	out := ListOrgsResponse{
 		Organizations: make([]OrgResponse, 0, len(list)),
-		Next:          next,
+		Last:          last,
 	}
 	for _, o := range list {
 		out.Organizations = append(out.Organizations, toOrgResponse(o))
