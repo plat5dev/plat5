@@ -28,7 +28,7 @@ Public routes below are **not** auto-published. Apply `services/identity/routes.
 | **member** | Org principal. Exactly one of: a **user** or a **service account**. Wire id: `member_id`. |
 | **service account** | Non-human identity created **under an organization**. Always has a member row in that org. |
 | **api key** | Bearer secret. Either **user-scoped** or **member-scoped**. Optional `scopes` labels: a restricted key (non-null list) must intersect route `required_scopes`; unlabeled routes still admit. |
-| **invite** | One-shot org join token. No pending member row; redeem inserts an **active** member. Identity does not send email. |
+| **invite** | Org join token (`active` / `redeemed` / `revoked` / `expired`). No pending member row; redeem inserts an **active** member. Identity does not send email. |
 
 ## Public API
 
@@ -128,31 +128,32 @@ Prefix: `/api/organizations`
 `principal` is `"user"` or `"service_account"`. Exactly one of `user_id` / `service_account_id` is non-null.
 
 ### Invites
+Token invites. **No pending member rows.** Membership is created only on redeem, as `active`. Identity does **not** send email and has **no SMTP env**. Whoever hosts the console may send mail, or not.
 
-Token invites. **No pending member rows.** Membership is created only on redeem, as `active`. Identity does **not** send email and has **no SMTP env**. The create response returns the plaintext token **once** (same idea as API keys). Whoever hosts the console may send mail, or not.
+An invite is `active` while it can still be redeemed. Terminal statuses: `redeemed`, `revoked`, `expired`. Plaintext `token` is stored and returned only while `active`. `token_hash` is always stored (redeem lookup) and kept after the row is terminal. Identity does **not** return a URL; clients build `/invites?invite=` from `token`. Auth does **not** carry `invite=`.
 
-Copy-link is `{app_origin}/login?invite=` — the **app** builds that URL from the minted token, stashes `invite=` across OIDC, then `POST /api/invites/redeem` after callback. Auth does **not** carry `invite=`. Identity does not build Auth `/authorize` URLs.
+List, redeem, and revoke expire lazily: if `expires_at` is in the past and status is still `active`, persist `expired` and null `token`.
 
 `POST /members` add-by-`user_id` is unchanged and still immediately `active`.
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/api/organizations/{organization_id}/invites` | Admin or owner (same as add member). Body `{ "role?", "email?", "expires_in_seconds?" }`. Token once. |
-| `GET` | `/api/organizations/{organization_id}/invites` | Active member; **no** token |
-| `DELETE` | `/api/organizations/{organization_id}/invites/{invite_id}` | Admin or owner; revoke (idempotent) |
-| `POST` | `/api/invites/redeem` | Invitee; body `{ "token" }` + `X-User-Id`. Inserts **active** member. Already a member → **200** idempotent (token still consumed). Unknown / expired / revoked / used → **404** `NOT_FOUND` (no org leak). |
+| `POST` | `/api/organizations/{organization_id}/invites` | Admin or owner (same as add member). Body `{ "role?", "email?", "expires_in_seconds?", "max_uses?" }`. Returns `token`. |
+| `GET` | `/api/organizations/{organization_id}/invites` | Active member. `token` only for **admin/owner** while `active`. Everyone else gets prefix, status, role, expiry — not a blank list. |
+| `DELETE` | `/api/organizations/{organization_id}/invites/{invite_id}` | Admin or owner; revoke (idempotent). Sets status `revoked`, `token` null. Hash stays. |
+| `POST` | `/api/invites/redeem` | Invitee; body `{ "token" }` + `X-User-Id`. Inserts **active** member. Already a member on a still-`active` token → **200** idempotent (counts as a use). Unknown token → **404** `NOT_FOUND` (no org leak). Redeemed / revoked / expired → **409** `CONFLICT` with `details.status`. |
 
 #### Create body
 
 ```json
-{ "role": "member", "email": "a@b.com", "expires_in_seconds": 604800 }
+{ "role": "member", "email": "a@b.com", "expires_in_seconds": 604800, "max_uses": 1 }
 ```
 
-`role` default `member` (owner role requires an owner actor, same as `POST /members`). `email` is optional display metadata; it is **not** mailed. `expires_in_seconds` default 7 days, min 60, max 30 days.
+`role` default `member` (owner role requires an owner actor, same as `POST /members`). `email` is optional display metadata; it is **not** mailed. `expires_in_seconds` default 7 days, min 60, max 30 days. `max_uses` omitted → 1. JSON `null` → unlimited. `0` and negatives → **422**.
 
-Token prefix `inv_`. Hashed at rest (SHA-256 hex). One-shot: `redeemed_at` set on successful redeem.
+Token prefix `inv_`. `token_hash` is SHA-256 hex. `use_count` increments on successful redeem. When `use_count` reaches `max_uses`, status becomes `redeemed` and `token` is nulled. Unlimited (`max_uses` null) stays `active` with `token`.
 
-#### Create response (token once)
+#### Create / list row
 
 ```json
 {
@@ -162,6 +163,9 @@ Token prefix `inv_`. Hashed at rest (SHA-256 hex). One-shot: `redeemed_at` set o
   "email": "a@b.com",
   "token_prefix": "inv_abcd",
   "token": "inv_…",
+  "status": "active",
+  "max_uses": 1,
+  "use_count": 0,
   "expires_at": "...",
   "created_by": "...",
   "created_at": "...",
@@ -171,7 +175,7 @@ Token prefix `inv_`. Hashed at rest (SHA-256 hex). One-shot: `redeemed_at` set o
 }
 ```
 
-List/get never return `token`. Identity does not return an invite `url`; the app builds `{app_origin}/login?invite=`.
+`token` is omitted on list for non-admin/non-owner, and omitted for every caller once the row is terminal. Identity does not return an invite `url`.
 
 ### Service accounts
 
@@ -355,8 +359,8 @@ members
 service_accounts
   organization_id
   name, created_by_user_id, …
-organization_invites   -- hashed token; no pending members
-  organization_id, role, email?, token_hash, expires_at, redeemed_at, revoked_at, …
+organization_invites   -- token while active; token_hash always; no pending members
+  organization_id, role, email?, token?, token_hash, status, max_uses, use_count, expires_at, …
 
 user_api_keys          -- person credentials (user scope); wire {brand}-sk-1-
   user_id, name, key_prefix, key_hash, scopes, revoked_at, …
@@ -393,7 +397,7 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - Org `settings` / config bag
 - `GET /api/users` or `/api/users/me`
 - Platform-owned user rows / IdP account linking (opaque `user_id` only)
-- SMTP / sending invite email (create returns a token; the console may send mail)
+- SMTP / sending invite email (identity returns a token; clients build `/invites?invite=`; the console may send mail)
 - Pending member rows (membership is created only on invite redeem, status `active`)
 - Resource ACL, FGA, project permissions
 - Key `scopes` as deny-all, or default-deny on unlabeled routes
