@@ -70,7 +70,6 @@ func InvalidRequestError() *ApiError {
 	}
 }
 
-// FieldError is VALIDATION_ERROR for a single path. message is the product sentence.
 func FieldError(path, message string) *ApiError {
 	if message == "" {
 		message = FallbackValidation
@@ -78,7 +77,6 @@ func FieldError(path, message string) *ApiError {
 	return ValidationFields(message, Field{Path: path, Message: message})
 }
 
-// ValidationFields builds VALIDATION_ERROR with details.fields.
 func ValidationFields(message string, fields ...Field) *ApiError {
 	if message == "" {
 		message = FallbackValidation
@@ -126,6 +124,23 @@ func ConflictError(message, field string, value interface{}) *ApiError {
 		Details: map[string]interface{}{
 			"field": field,
 			"value": value,
+		},
+		Status: fiber.StatusConflict,
+		Kind:   KindValidation,
+	}
+}
+
+func ConflictStatusError(message, resource, status string) *ApiError {
+	if message == "" {
+		message = "That already exists."
+	}
+	return &ApiError{
+		Type:    "invalid_request_error",
+		Code:    "CONFLICT",
+		Message: message,
+		Details: map[string]interface{}{
+			"resource": resource,
+			"status":   status,
 		},
 		Status: fiber.StatusConflict,
 		Kind:   KindValidation,
