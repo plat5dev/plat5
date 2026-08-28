@@ -1,6 +1,7 @@
 package orgs
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -16,21 +17,43 @@ const (
 	MaxInviteEmailLen = 320
 )
 
-// Invite is a one-shot org membership token. No pending member row is created
-// until redeem; redeem inserts an active member.
+type InviteStatus string
+
+const (
+	InviteStatusActive   InviteStatus = "active"
+	InviteStatusRedeemed InviteStatus = "redeemed"
+	InviteStatusRevoked  InviteStatus = "revoked"
+	InviteStatusExpired  InviteStatus = "expired"
+)
+
+// Invite is an org membership token. No pending member row is created until
+// redeem; redeem inserts an active member.
 type Invite struct {
 	ID             string
 	OrganizationID string
 	Role           Role
 	Email          *string
+	Token          *string
 	TokenHash      string
 	TokenPrefix    string
+	Status         InviteStatus
+	MaxUses        *int
+	UseCount       int
 	CreatedBy      string
 	ExpiresAt      time.Time
 	RedeemedAt     *time.Time
 	RedeemedBy     *string
 	RevokedAt      *time.Time
 	CreatedAt      time.Time
+}
+
+// InviteDeadError is a hash hit on a terminal invite (redeemed/revoked/expired).
+type InviteDeadError struct {
+	Status InviteStatus
+}
+
+func (e *InviteDeadError) Error() string {
+	return "invite " + string(e.Status)
 }
 
 func GenerateInviteToken() (string, error) {
@@ -72,15 +95,62 @@ func ParseInviteEmail(raw string) (*string, error) {
 	return &email, nil
 }
 
-// InviteRedeemable is true when the token can still be consumed.
-// Unknown / expired / revoked / already used all map to the same 404 at the HTTP layer
-// so a used token does not leak org internals.
+// maxUsesField: omitted → default 1; JSON null → unlimited; 0/negative → 422.
+type maxUsesField struct {
+	present   bool
+	unlimited bool
+	n         int
+}
+
+func (m *maxUsesField) UnmarshalJSON(b []byte) error {
+	m.present = true
+	if string(b) == "null" {
+		m.unlimited = true
+		return nil
+	}
+	var n int
+	if err := json.Unmarshal(b, &n); err != nil {
+		return err
+	}
+	m.n = n
+	return nil
+}
+
+func ParseMaxUses(f maxUsesField) (*int, error) {
+	if !f.present {
+		one := 1
+		return &one, nil
+	}
+	if f.unlimited {
+		return nil, nil
+	}
+	if f.n < 1 {
+		return nil, errors.FieldError("max_uses", "Max uses must be at least 1.")
+	}
+	n := f.n
+	return &n, nil
+}
+
 func InviteRedeemable(inv *Invite, now time.Time) bool {
 	if inv == nil {
+		return false
+	}
+	if inv.Status == InviteStatusRedeemed || inv.Status == InviteStatusRevoked || inv.Status == InviteStatusExpired {
 		return false
 	}
 	if inv.RevokedAt != nil || inv.RedeemedAt != nil {
 		return false
 	}
-	return now.Before(inv.ExpiresAt)
+	if !now.Before(inv.ExpiresAt) {
+		return false
+	}
+	if inv.MaxUses != nil && inv.UseCount >= *inv.MaxUses {
+		return false
+	}
+	return true
+}
+
+func expireInvite(inv *Invite) {
+	inv.Status = InviteStatusExpired
+	inv.Token = nil
 }
