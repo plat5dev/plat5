@@ -131,6 +131,27 @@ func ParseMaxUses(f maxUsesField) (*int, error) {
 	return &n, nil
 }
 
+// ParseMaxUsesJSON: omitted → 1; JSON null → unlimited; 0/negative → 422.
+func ParseMaxUsesJSON(body []byte) (*int, error) {
+	if len(body) == 0 {
+		return ParseMaxUses(maxUsesField{})
+	}
+	var probe struct {
+		MaxUses json.RawMessage `json:"max_uses"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return nil, errors.InvalidRequestError()
+	}
+	if len(probe.MaxUses) == 0 {
+		return ParseMaxUses(maxUsesField{})
+	}
+	var f maxUsesField
+	if err := f.UnmarshalJSON(probe.MaxUses); err != nil {
+		return nil, errors.FieldError("max_uses", "Max uses must be at least 1.")
+	}
+	return ParseMaxUses(f)
+}
+
 func InviteRedeemable(inv *Invite, now time.Time) bool {
 	if inv == nil {
 		return false

@@ -30,10 +30,9 @@ func (h *Handler) inviteStore() inviteStore {
 }
 
 type CreateInviteRequest struct {
-	Role             string       `json:"role"`
-	Email            string       `json:"email"`
-	ExpiresInSeconds *int         `json:"expires_in_seconds"`
-	MaxUses          maxUsesField `json:"max_uses"`
+	Role             string `json:"role"`
+	Email            string `json:"email"`
+	ExpiresInSeconds *int   `json:"expires_in_seconds"`
 }
 
 type InviteResponse struct {
@@ -118,7 +117,7 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	maxUses, err := ParseMaxUses(req.MaxUses)
+	maxUses, err := ParseMaxUsesJSON(c.Body())
 	if err != nil {
 		return err
 	}
