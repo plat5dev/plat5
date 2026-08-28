@@ -67,6 +67,7 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("list after redeem: %d %s", code, body)
 	}
+	listed = ListInvitesResponse{}
 	if err := json.Unmarshal(body, &listed); err != nil {
 		t.Fatal(err)
 	}
