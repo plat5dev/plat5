@@ -128,6 +128,7 @@ Prefix: `/api/organizations`
 `principal` is `"user"` or `"service_account"`. Exactly one of `user_id` / `service_account_id` is non-null.
 
 ### Invites
+
 Token invites. **No pending member rows.** Membership is created only on redeem, as `active`. Identity does **not** send email and has **no SMTP env**. Whoever hosts the console may send mail, or not.
 
 An invite is `active` while it can still be redeemed. Terminal statuses: `redeemed`, `revoked`, `expired`. Plaintext `token` is stored and returned only while `active`. `token_hash` is always stored (redeem lookup) and kept after the row is terminal. Identity does **not** return a URL; clients build `/invites?invite=` from `token`. Auth does **not** carry `invite=`.
