@@ -112,7 +112,7 @@ Unknown tokens use the generic **404** `Resource not found.` (existence policy; 
 
 Internal validate/resolve (`key` / `key_id` / `user_id`+`organization_id` required) are not product UI. Fallback 422 is enough.
 
-### Pagination (`limit` / `offset`)
+### Pagination (`limit` / `starting_after`)
 
 Fallback 422 is enough.
 

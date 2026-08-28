@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/plat5dev/plat5/identity/errors"
+	"github.com/plat5dev/plat5/identity/internal/id"
 )
 
 const (
@@ -21,26 +22,23 @@ const (
 	MaxListLimit     = 100
 )
 
-func ParseListParams(c fiber.Ctx) (limit, offset int, err error) {
+func ParseListParams(c fiber.Ctx) (limit int, startingAfter string, err error) {
 	limit = DefaultListLimit
 	if v := strings.TrimSpace(c.Query("limit")); v != "" {
 		n, parseErr := strconv.Atoi(v)
 		if parseErr != nil || n < 1 {
-			return 0, 0, errors.FieldError("limit", errors.FallbackValidation)
+			return 0, "", errors.FieldError("limit", errors.FallbackValidation)
 		}
 		limit = n
 	}
 	if limit > MaxListLimit {
 		limit = MaxListLimit
 	}
-	if v := strings.TrimSpace(c.Query("offset")); v != "" {
-		n, parseErr := strconv.Atoi(v)
-		if parseErr != nil || n < 0 {
-			return 0, 0, errors.FieldError("offset", errors.FallbackValidation)
-		}
-		offset = n
+	startingAfter = strings.TrimSpace(c.Query("starting_after"))
+	if startingAfter != "" && !id.Valid(startingAfter) {
+		return 0, "", errors.FieldError("starting_after", errors.FallbackValidation)
 	}
-	return limit, offset, nil
+	return limit, startingAfter, nil
 }
 
 func FormatTime(t time.Time) string {

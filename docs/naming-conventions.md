@@ -59,6 +59,7 @@ When changing labels: update compose labels and `OTEL_SERVICE_NAMESPACE` togethe
   - Internal (private network, not on the gateway): `/internal/...`
 - Do **not** use `/api/v1` or `/public/v1`. Version resources or media types later if needed.
 - Resource names are plural nouns: `/widgets`, `/users`, `/organizations`, `/members`
+- Identity list query/body: [`lists.md`](lists.md). Business services may copy it; they are not required to.
 - Actions use HTTP methods, not verbs in paths:
   - `POST /api/widgets` — create
   - `GET /api/widgets/{id}` — read
@@ -126,3 +127,4 @@ Member **role** is not a gateway header. Always (all scopes): `X-Request-ID`, `t
 | [`container-labels.md`](container-labels.md) | Namespace values |
 | [`gateway-contract.md`](gateway-contract.md) | Headers and service rules |
 | [`routes.md`](routes.md) | Route scopes and publish |
+| [`lists.md`](lists.md) | Identity list pagination (optional for business APIs) |

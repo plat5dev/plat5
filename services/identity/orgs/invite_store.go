@@ -35,7 +35,7 @@ func (s *Store) CreateInvite(ctx context.Context, inv *Invite) error {
 	return nil
 }
 
-func (s *Store) ListInvites(ctx context.Context, organizationID string, limit, offset int) ([]*Invite, bool, error) {
+func (s *Store) ListInvites(ctx context.Context, organizationID string, limit int, startingAfter string) ([]*Invite, *string, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_invites", dbx.DefaultTimeout,
 		attribute.String("organization.id", organizationID),
 	)
@@ -49,18 +49,23 @@ func (s *Store) ListInvites(ctx context.Context, organizationID string, limit, o
 		WHERE organization_id = $1 AND status = 'active' AND expires_at <= $2
 	`, organizationID, now)
 	if err != nil {
-		return nil, false, op.Fail(err)
+		return nil, nil, op.Fail(err)
 	}
 
+	var after any
+	if startingAfter != "" {
+		after = startingAfter
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+inviteSelectCols+`
 		FROM organization_invites
 		WHERE organization_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3
-	`, organizationID, limit+1, offset)
+		AND ($2::text IS NULL OR id > $2)
+		ORDER BY id ASC
+		LIMIT $3
+	`, organizationID, after, limit+1)
 	if err != nil {
-		return nil, false, op.Fail(err)
+		return nil, nil, op.Fail(err)
 	}
 	defer rows.Close()
 
@@ -68,21 +73,23 @@ func (s *Store) ListInvites(ctx context.Context, organizationID string, limit, o
 	for rows.Next() {
 		inv, err := scanInvite(rows)
 		if err != nil {
-			return nil, false, op.Fail(err)
+			return nil, nil, op.Fail(err)
 		}
 		out = append(out, inv)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, op.Fail(err)
+		return nil, nil, op.Fail(err)
 	}
 
-	hasMore := len(out) > limit
-	if hasMore {
+	var next *string
+	if len(out) > limit {
 		out = out[:limit]
+		n := out[len(out)-1].ID
+		next = &n
 	}
 	op.Attr(attribute.Int("invites.count", len(out)))
 	op.OK("ok")
-	return out, hasMore, nil
+	return out, next, nil
 }
 
 func (s *Store) RevokeInvite(ctx context.Context, organizationID, inviteID string) (*Invite, error) {

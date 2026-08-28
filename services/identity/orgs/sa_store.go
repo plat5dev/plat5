@@ -114,20 +114,25 @@ func (s *Store) GetServiceAccount(ctx context.Context, organizationID, serviceAc
 	return sa, nil
 }
 
-func (s *Store) ListServiceAccounts(ctx context.Context, organizationID string, limit, offset int) ([]*ServiceAccount, bool, error) {
+func (s *Store) ListServiceAccounts(ctx context.Context, organizationID string, limit int, startingAfter string) ([]*ServiceAccount, *string, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_service_accounts", dbx.DefaultTimeout,
 		attribute.String("organization.id", organizationID),
 	)
 	defer cancel()
 	defer op.End()
 
+	var after any
+	if startingAfter != "" {
+		after = startingAfter
+	}
 	rows, err := s.pool.Query(ctx, saSelect+`
 		WHERE sa.organization_id = $1
-		ORDER BY sa.created_at DESC
-		LIMIT $2 OFFSET $3
-	`, organizationID, limit+1, offset)
+		AND ($2::text IS NULL OR sa.id > $2)
+		ORDER BY sa.id ASC
+		LIMIT $3
+	`, organizationID, after, limit+1)
 	if err != nil {
-		return nil, false, op.Fail(err)
+		return nil, nil, op.Fail(err)
 	}
 	defer rows.Close()
 
@@ -135,21 +140,23 @@ func (s *Store) ListServiceAccounts(ctx context.Context, organizationID string, 
 	for rows.Next() {
 		sa, err := scanServiceAccount(rows)
 		if err != nil {
-			return nil, false, op.Fail(err)
+			return nil, nil, op.Fail(err)
 		}
 		out = append(out, sa)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, op.Fail(err)
+		return nil, nil, op.Fail(err)
 	}
 
-	hasMore := len(out) > limit
-	if hasMore {
+	var next *string
+	if len(out) > limit {
 		out = out[:limit]
+		n := out[len(out)-1].ID
+		next = &n
 	}
 	op.Attr(attribute.Int("service_accounts.count", len(out)))
 	op.OK("ok")
-	return out, hasMore, nil
+	return out, next, nil
 }
 
 func (s *Store) UpdateServiceAccount(ctx context.Context, organizationID, serviceAccountID string, name string) (*ServiceAccount, error) {

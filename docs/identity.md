@@ -2,7 +2,7 @@
 
 Plat5 **identity** service: organizations, members, invites, service accounts, API keys, and internal auth helpers for the gateway.
 
-Boundary: [`identity-boundary.md`](identity-boundary.md). Errors: [`api-errors.md`](api-errors.md), [`error-copy.md`](error-copy.md). Gateway: [`gateway-contract.md`](gateway-contract.md).
+Boundary: [`identity-boundary.md`](identity-boundary.md). Errors: [`api-errors.md`](api-errors.md), [`error-copy.md`](error-copy.md). Gateway: [`gateway-contract.md`](gateway-contract.md). Lists: [`lists.md`](lists.md).
 
 ## Scope and headers
 
@@ -39,7 +39,7 @@ No `/api/users` collection and no `/me`. Clients already know `user_id` from the
 | Method | Path | Notes |
 |--------|------|--------|
 | `POST` | `/api/users/{user_id}/api-keys` | Create; plaintext once — prefix **`{brand}-sk-1-`**. Optional `scopes`. |
-| `GET` | `/api/users/{user_id}/api-keys` | List (no hashes / no secret); echoes `scopes`; `limit` / `offset` / `has_more` |
+| `GET` | `/api/users/{user_id}/api-keys` | List (no hashes / no secret); echoes `scopes` |
 | `DELETE` | `/api/users/{user_id}/api-keys/{key_id}` | Soft-revoke; idempotent |
 
 #### Create body
@@ -265,7 +265,7 @@ At least one **active owner** must remain. Sole owner cannot leave, be removed, 
 
 ## Pagination
 
-List endpoints accept `limit` (default 50, max 100) and `offset` (default 0). Responses include `has_more`.
+Public lists: [`lists.md`](lists.md). `limit` / `starting_after` / `next`. Sort `id` ascending.
 
 ## Internal APIs
 

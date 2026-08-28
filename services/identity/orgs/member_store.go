@@ -84,22 +84,27 @@ func (s *Store) ResolveMember(ctx context.Context, userID, organizationID string
 	return m, nil
 }
 
-func (s *Store) ListMembers(ctx context.Context, organizationID string, limit, offset int) ([]*Member, bool, error) {
+func (s *Store) ListMembers(ctx context.Context, organizationID string, limit int, startingAfter string) ([]*Member, *string, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_members", dbx.DefaultTimeout,
 		attribute.String("organization.id", organizationID),
 	)
 	defer cancel()
 	defer op.End()
 
+	var after any
+	if startingAfter != "" {
+		after = startingAfter
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at
 		FROM members
 		WHERE organization_id = $1 AND status <> 'removed'
-		ORDER BY created_at ASC
-		LIMIT $2 OFFSET $3
-	`, organizationID, limit+1, offset)
+		AND ($2::text IS NULL OR id > $2)
+		ORDER BY id ASC
+		LIMIT $3
+	`, organizationID, after, limit+1)
 	if err != nil {
-		return nil, false, op.Fail(err)
+		return nil, nil, op.Fail(err)
 	}
 	defer rows.Close()
 
@@ -107,21 +112,23 @@ func (s *Store) ListMembers(ctx context.Context, organizationID string, limit, o
 	for rows.Next() {
 		m, err := scanMember(rows)
 		if err != nil {
-			return nil, false, op.Fail(err)
+			return nil, nil, op.Fail(err)
 		}
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, op.Fail(err)
+		return nil, nil, op.Fail(err)
 	}
 
-	hasMore := len(out) > limit
-	if hasMore {
+	var next *string
+	if len(out) > limit {
 		out = out[:limit]
+		n := out[len(out)-1].ID
+		next = &n
 	}
 	op.Attr(attribute.Int("members.count", len(out)))
 	op.OK("ok")
-	return out, hasMore, nil
+	return out, next, nil
 }
 
 // CreateUserMember inserts a new user member, or reactivates a removed one.

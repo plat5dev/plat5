@@ -81,23 +81,28 @@ func (s *Store) GetOrganization(ctx context.Context, organizationID string) (*Or
 	return org, nil
 }
 
-func (s *Store) ListOrganizationsForUser(ctx context.Context, userID string, limit, offset int) ([]*Organization, bool, error) {
+func (s *Store) ListOrganizationsForUser(ctx context.Context, userID string, limit int, startingAfter string) ([]*Organization, *string, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_organizations_for_user", dbx.DefaultTimeout,
 		attribute.String("user.id", userID),
 	)
 	defer cancel()
 	defer op.End()
 
+	var after any
+	if startingAfter != "" {
+		after = startingAfter
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT o.id, o.name, o.slug, o.created_at, o.updated_at
 		FROM organizations o
 		INNER JOIN members m ON m.organization_id = o.id
 		WHERE m.user_id = $1 AND m.status = 'active'
-		ORDER BY o.created_at DESC
-		LIMIT $2 OFFSET $3
-	`, userID, limit+1, offset)
+		AND ($2::text IS NULL OR o.id > $2)
+		ORDER BY o.id ASC
+		LIMIT $3
+	`, userID, after, limit+1)
 	if err != nil {
-		return nil, false, op.Fail(err)
+		return nil, nil, op.Fail(err)
 	}
 	defer rows.Close()
 
@@ -105,21 +110,23 @@ func (s *Store) ListOrganizationsForUser(ctx context.Context, userID string, lim
 	for rows.Next() {
 		org, err := scanOrg(rows)
 		if err != nil {
-			return nil, false, op.Fail(err)
+			return nil, nil, op.Fail(err)
 		}
 		out = append(out, org)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, op.Fail(err)
+		return nil, nil, op.Fail(err)
 	}
 
-	hasMore := len(out) > limit
-	if hasMore {
+	var next *string
+	if len(out) > limit {
 		out = out[:limit]
+		n := out[len(out)-1].ID
+		next = &n
 	}
 	op.Attr(attribute.Int("organizations.count", len(out)))
 	op.OK("ok")
-	return out, hasMore, nil
+	return out, next, nil
 }
 
 func (s *Store) UpdateOrganization(ctx context.Context, org *Organization) error {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http/httptest"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -72,7 +73,7 @@ func (f *fakeInvites) CreateInvite(_ context.Context, inv *Invite) error {
 	return nil
 }
 
-func (f *fakeInvites) ListInvites(_ context.Context, organizationID string, limit, offset int) ([]*Invite, bool, error) {
+func (f *fakeInvites) ListInvites(_ context.Context, organizationID string, limit int, startingAfter string) ([]*Invite, *string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := time.Now().UTC()
@@ -84,17 +85,19 @@ func (f *fakeInvites) ListInvites(_ context.Context, organizationID string, limi
 		if inv.Status == InviteStatusActive && !now.Before(inv.ExpiresAt) {
 			expireInvite(inv)
 		}
+		if startingAfter != "" && inv.ID <= startingAfter {
+			continue
+		}
 		all = append(all, cloneInvite(inv))
 	}
-	if offset > len(all) {
-		offset = len(all)
+	sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+	var next *string
+	if len(all) > limit {
+		all = all[:limit]
+		n := all[len(all)-1].ID
+		next = &n
 	}
-	end := offset + limit
-	if end > len(all) {
-		end = len(all)
-	}
-	out := all[offset:end]
-	return out, end < len(all), nil
+	return all, next, nil
 }
 
 func (f *fakeInvites) RevokeInvite(_ context.Context, organizationID, inviteID string) (*Invite, error) {

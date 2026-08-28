@@ -11,3 +11,9 @@ import (
 func New() string {
 	return ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader).String()
 }
+
+// Valid reports whether s is a ULID. No case folding.
+func Valid(s string) bool {
+	_, err := ulid.Parse(s)
+	return err == nil
+}

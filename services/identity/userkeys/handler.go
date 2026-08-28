@@ -37,8 +37,8 @@ type CreateResponse struct {
 }
 
 type ListResponse struct {
-	Keys    []KeyResponse `json:"keys"`
-	HasMore bool          `json:"has_more"`
+	Keys []KeyResponse `json:"keys"`
+	Next *string       `json:"next"`
 }
 
 type KeyResponse struct {
@@ -115,19 +115,19 @@ func (h *Handler) List(c fiber.Ctx) error {
 	}
 	userID := middleware.GetUserID(c)
 
-	limit, offset, err := httpx.ParseListParams(c)
+	limit, startingAfter, err := httpx.ParseListParams(c)
 	if err != nil {
 		return err
 	}
 
-	list, hasMore, err := h.store.List(ctx, userID, limit, offset)
+	list, next, err := h.store.List(ctx, userID, limit, startingAfter)
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to list user keys", httpx.DBErr{})
 	}
 
 	out := ListResponse{
-		Keys:    make([]KeyResponse, 0, len(list)),
-		HasMore: hasMore,
+		Keys: make([]KeyResponse, 0, len(list)),
+		Next: next,
 	}
 	for _, k := range list {
 		out.Keys = append(out.Keys, toKeyResponse(k))

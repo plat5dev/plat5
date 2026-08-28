@@ -17,7 +17,7 @@ import (
 type inviteStore interface {
 	GetActiveMemberForUser(ctx context.Context, organizationID, userID string) (*Member, error)
 	CreateInvite(ctx context.Context, inv *Invite) error
-	ListInvites(ctx context.Context, organizationID string, limit, offset int) ([]*Invite, bool, error)
+	ListInvites(ctx context.Context, organizationID string, limit int, startingAfter string) ([]*Invite, *string, error)
 	RevokeInvite(ctx context.Context, organizationID, inviteID string) (*Invite, error)
 	RedeemInvite(ctx context.Context, tokenHash, userID string) (*Member, error)
 }
@@ -52,7 +52,7 @@ type InviteResponse struct {
 
 type ListInvitesResponse struct {
 	Invites []InviteResponse `json:"invites"`
-	HasMore bool             `json:"has_more"`
+	Next    *string          `json:"next"`
 }
 
 type RedeemInviteRequest struct {
@@ -160,12 +160,12 @@ func (h *Handler) ListInvites(c fiber.Ctx) error {
 		return err
 	}
 
-	limit, offset, err := httpx.ParseListParams(c)
+	limit, startingAfter, err := httpx.ParseListParams(c)
 	if err != nil {
 		return err
 	}
 
-	list, hasMore, err := h.inviteStore().ListInvites(ctx, orgID, limit, offset)
+	list, next, err := h.inviteStore().ListInvites(ctx, orgID, limit, startingAfter)
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to list invites", httpx.DBErr{})
 	}
@@ -173,7 +173,7 @@ func (h *Handler) ListInvites(c fiber.Ctx) error {
 	includeToken := actor.Role == RoleAdmin || actor.Role == RoleOwner
 	out := ListInvitesResponse{
 		Invites: make([]InviteResponse, 0, len(list)),
-		HasMore: hasMore,
+		Next:    next,
 	}
 	for _, inv := range list {
 		out.Invites = append(out.Invites, toInviteResponse(inv, includeToken))
