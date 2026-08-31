@@ -60,7 +60,7 @@ Optional `OTEL_EXPORTER_OTLP_ENDPOINT` (empty = no OTLP). When set, traces and m
 Image mode (default) — pull `ghcr.io/plat5dev/*:${PLAT5_VERSION}`:
 
 ```bash
-cp .env.template .env   # set secrets + PLAT5_VERSION=v0.2.0
+cp .env.template .env   # set secrets + PLAT5_VERSION=v0.2.1
 docker compose -f docker-compose.prod.yml --env-file .env up -d
 ```
 
