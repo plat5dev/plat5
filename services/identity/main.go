@@ -117,6 +117,7 @@ func newPublicApp(
 		otel.WithTracerProvider(telem.TracerProvider()),
 		otel.WithPropagators(telem.Propagator()),
 		otel.WithoutMetrics(true),
+		otel.WithSpanNameFormatter(middleware.HTTPSpanName),
 	))
 	app.Use(middleware.RequestLogger(telem))
 
@@ -145,6 +146,7 @@ func newInternalApp(
 		otel.WithTracerProvider(telem.TracerProvider()),
 		otel.WithPropagators(telem.Propagator()),
 		otel.WithoutMetrics(true),
+		otel.WithSpanNameFormatter(middleware.HTTPSpanName),
 	))
 	app.Use(middleware.RequestLogger(telem))
 

@@ -167,15 +167,35 @@ Do not include `error_kind` for 4xx.
 - Propagate **W3C Trace Context** only (no Baggage).
 - Resource attributes on every export: `service.name`, `service.namespace`, `service.instance.id`, `service.version`, `deployment.environment`.
 
-### Span attributes
+### HTTP server spans
 
-Follow [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/). Also:
+Stable [HTTP span conventions](https://opentelemetry.io/docs/specs/semconv/http/http-spans/). Do **not** emit deprecated names. Do **not** dual-write old and new.
+
+| | |
+|---|---|
+| Kind | `SERVER` |
+| Name | `{method} {http.route}` when a framework route template exists; otherwise `{method}` only. Never the raw URI. |
+| Required | `http.request.method`, `url.path`, `url.scheme` |
+| When known | `http.response.status_code`, `http.route` (template only), `url.query` if present, `error.type` on 5xx (status code as a string, e.g. `"500"`) |
+| Status | Unset on 4xx. `Error` on 5xx with **no** description (infer from `http.response.status_code`). Unset on 1xx/2xx/3xx unless a non-HTTP error occurred. |
+
+**Forbidden on spans:** `http.method`, `http.status_code`, `http.target`, `http.url`, `http.scheme`.
+
+`http.route` is the matched template (`/api/organizations/:organization_id/subscribers`). Do not put the raw path there. `url.path` is the actual path (IDs allowed).
+
+Gateway creates the root span **before** route match: name starts as `{method}`, then becomes `{method} {template}` after match. Unmatched stays `{method}`. Internal child spans (`gateway.request_filter`) are not HTTP server spans.
+
+### Plat5 span attributes (not HTTP semconv)
 
 - `request_id` on HTTP request spans (if present)
 - `user.id` on HTTP request spans when authenticated — set at the **edge/gateway** for ops. Org-scoped services do not receive `X-User-Id`; they should not invent `user.id`. Gateway may also set `organization.id` / `member.id`.
 - `error.kind` on **error spans** (5xx only): `auth`, `network`, `db`, `io`, `internal`, `validation`
 - 4xx responses are normal business outcomes — do not set `error.kind` and do not mark the span as failed
 - Record exceptions via `span.recordException(err)` / `span.record_exception(err)`
+
+`error.kind` is our taxonomy. `error.type` is HTTP semconv. Both on 5xx. Do not merge them. Do not rename `request_id` to `request.id`.
+
+Logs and Prometheus metrics are **not** HTTP spans: log fields stay `snake_case` (`request_id`, `method`, `status`); metric names stay `http_requests_total` / `http_request_duration_seconds`.
 
 ## Metrics
 
@@ -241,10 +261,12 @@ When OTLP metrics are enabled, the same series should appear there too. Extra pr
 - App push to Loki, Tempo, or Mimir **native** APIs
 - Public exposure of `/metrics`
 - Custom non-`OTEL_*` env vars as the primary telemetry API
+- HTTP **metric** semconv (`http.server.request.duration`) — scrape/OTLP series stay `http_requests_total` / `http_request_duration_seconds`
 
 ## References
 
 - [OTel SDK environment variables](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/)
 - [OTLP exporter configuration](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/)
+- [HTTP span semantic conventions](https://opentelemetry.io/docs/specs/semconv/http/http-spans/)
 - [Semantic conventions](https://opentelemetry.io/docs/specs/semconv/)
 - [grafana/otel-lgtm](https://github.com/grafana/docker-otel-lgtm)

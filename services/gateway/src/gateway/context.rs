@@ -42,23 +42,38 @@ impl GatewayContext {
         self.method.as_deref().unwrap_or("UNKNOWN")
     }
 
-    pub fn ensure_root_span(&mut self, path: &str, method: &str) -> Span {
+    pub fn ensure_root_span(
+        &mut self,
+        path: &str,
+        method: &str,
+        scheme: &str,
+        query: Option<&str>,
+    ) -> Span {
         if let Some(ref span) = self.root_span {
             return span.clone();
         }
 
         let span = tracing::info_span!(
-            "gateway.request",
-            http.route = %path,
-            http.method = %method,
+            "http",
+            otel.kind = "server",
+            otel.name = %method,
+            http.request.method = %method,
+            url.path = %path,
+            url.scheme = %scheme,
+            http.route = tracing::field::Empty,
+            url.query = tracing::field::Empty,
             user.id = tracing::field::Empty,
             organization.id = tracing::field::Empty,
             member.id = tracing::field::Empty,
             request_id = tracing::field::Empty,
-            http.status_code = tracing::field::Empty,
+            http.response.status_code = tracing::field::Empty,
             jwt.kid = tracing::field::Empty,
             error.kind = tracing::field::Empty,
+            error.type = tracing::field::Empty,
         );
+        if let Some(q) = query {
+            span.record("url.query", q);
+        }
         self.root_span = Some(span.clone());
         span
     }

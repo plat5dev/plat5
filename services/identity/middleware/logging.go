@@ -1,16 +1,27 @@
 package middleware
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/metrics"
 	"github.com/plat5dev/plat5/identity/telemetry"
 )
+
+// HTTPSpanName is `{method} {route}` when a template exists, else `{method}`.
+func HTTPSpanName(c fiber.Ctx) string {
+	method := c.Method()
+	if r := c.Route(); r != nil && r.Path != "" {
+		return method + " " + r.Path
+	}
+	return method
+}
 
 func RequestLogger(telem *telemetry.Telemetry) fiber.Handler {
 	return func(c fiber.Ctx) error {
@@ -41,6 +52,19 @@ func RequestLogger(telem *telemetry.Telemetry) fiber.Handler {
 		}
 
 		metrics.ObserveRequest(routePattern, c.Method(), status, duration)
+
+		if status >= 500 {
+			span := trace.SpanFromContext(c.Context())
+			kind := errors.KindInternal.String()
+			if apiErr, ok := err.(*errors.ApiError); ok && apiErr.Kind.String() != "" {
+				kind = apiErr.Kind.String()
+			}
+			span.SetAttributes(
+				attribute.String("error.kind", kind),
+				attribute.String("error.type", strconv.Itoa(status)),
+			)
+			span.SetStatus(codes.Error, "")
+		}
 
 		logger := reqLogger.With().
 			Str("route", routePattern).

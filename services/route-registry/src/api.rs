@@ -10,7 +10,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Serialize;
 use serde_json::json;
+use opentelemetry::trace::Status;
 use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -40,7 +42,7 @@ pub fn public_router(state: AppState) -> Router {
 
     Router::new()
         .merge(authed)
-        .layer(middleware::from_fn(http_observability))
+        .route_layer(middleware::from_fn(http_observability))
         .with_state(state)
 }
 
@@ -52,40 +54,74 @@ pub fn internal_router(state: AppState) -> Router {
         .with_state(state)
 }
 
+fn request_scheme(request: &Request) -> String {
+    request
+        .headers()
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .or_else(|| request.uri().scheme_str().map(str::to_string))
+        .unwrap_or_else(|| "http".to_string())
+}
+
 async fn http_observability(request: Request, next: Next) -> Response {
     let start = Instant::now();
     let method = request.method().as_str().to_string();
+    let path = request.uri().path().to_string();
+    let query = request.uri().query().map(str::to_string);
+    let scheme = request_scheme(&request);
     let route = request
         .extensions()
         .get::<MatchedPath>()
-        .map(|m| m.as_str().to_string())
-        .unwrap_or_else(|| request.uri().path().to_string());
+        .map(|m| m.as_str().to_string());
+    let span_name = match route.as_deref() {
+        Some(r) => format!("{method} {r}"),
+        None => method.clone(),
+    };
     let request_id = request_id_from_headers(request.headers());
 
     let span = tracing::info_span!(
-        "route_registry.request",
-        http.method = %method,
-        http.route = %route,
+        "http",
+        otel.kind = "server",
+        otel.name = %span_name,
+        http.request.method = %method,
+        url.path = %path,
+        url.scheme = %scheme,
+        http.route = tracing::field::Empty,
+        url.query = tracing::field::Empty,
         request_id = %request_id,
-        http.status_code = tracing::field::Empty,
+        http.response.status_code = tracing::field::Empty,
         error.kind = tracing::field::Empty,
+        error.type = tracing::field::Empty,
     );
+    if let Some(ref r) = route {
+        span.record("http.route", r.as_str());
+    }
+    if let Some(ref q) = query {
+        span.record("url.query", q.as_str());
+    }
 
     async move {
         let response = next.run(request).await;
         let status = response.status().as_u16();
         let duration_secs = start.elapsed().as_secs_f64();
         let duration_ms = duration_secs * 1000.0;
+        let route_label = route.as_deref().unwrap_or("unmatched");
 
-        metrics::record_request(&route, &method, status, duration_secs);
+        metrics::record_request(route_label, &method, status, duration_secs);
 
-        tracing::Span::current().record("http.status_code", status);
+        tracing::Span::current().record("http.response.status_code", status);
 
         if status >= 500 {
             let error_kind = if status == 503 { "network" } else { "internal" };
             tracing::Span::current().record("error.kind", error_kind);
+            tracing::Span::current().record("error.type", tracing::field::display(status));
+            tracing::Span::current().set_status(Status::error(""));
             tracing::error!(
-                route = %route,
+                route = %route_label,
                 method = %method,
                 status = status,
                 duration_ms = duration_ms,
@@ -96,7 +132,7 @@ async fn http_observability(request: Request, next: Next) -> Response {
             );
         } else {
             tracing::info!(
-                route = %route,
+                route = %route_label,
                 method = %method,
                 status = status,
                 duration_ms = duration_ms,

@@ -13,19 +13,24 @@ use crate::metrics;
 use super::context::GatewayContext;
 use super::cors::CorsPolicy;
 
-/// Client errors → span Ok; infrastructure failures → span Error.
+/// 5xx → span Error (no description). 4xx stay unset.
 pub fn apply_error_span_status(span: &Span, status: u16) {
+    span.record("http.response.status_code", status);
     match status {
         500 => {
             span.record("error.kind", "internal");
-            span.set_status(Status::error("internal server error"));
+            span.record("error.type", "500");
+            span.set_status(Status::error(""));
         }
         503 => {
             span.record("error.kind", "network");
-            span.set_status(Status::error("service unavailable"));
+            span.record("error.type", "503");
+            span.set_status(Status::error(""));
         }
-        400 | 401 | 403 | 404 | 413 | 429 => {
-            span.set_status(Status::Ok);
+        500..=599 => {
+            span.record("error.kind", "internal");
+            span.record("error.type", tracing::field::display(status));
+            span.set_status(Status::error(""));
         }
         _ => {}
     }
