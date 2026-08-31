@@ -17,19 +17,12 @@ use super::cors::CorsPolicy;
 pub fn apply_error_span_status(span: &Span, status: u16) {
     span.record("http.response.status_code", status);
     match status {
-        500 => {
-            span.record("error.kind", "internal");
-            span.record("error.type", "500");
-            span.set_status(Status::error(""));
-        }
         503 => {
             span.record("error.kind", "network");
-            span.record("error.type", "503");
             span.set_status(Status::error(""));
         }
         500..=599 => {
             span.record("error.kind", "internal");
-            span.record("error.type", tracing::field::display(status));
             span.set_status(Status::error(""));
         }
         _ => {}

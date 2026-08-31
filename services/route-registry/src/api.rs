@@ -54,25 +54,10 @@ pub fn internal_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-fn request_scheme(request: &Request) -> String {
-    request
-        .headers()
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(str::to_string)
-        .or_else(|| request.uri().scheme_str().map(str::to_string))
-        .unwrap_or_else(|| "http".to_string())
-}
-
 async fn http_observability(request: Request, next: Next) -> Response {
     let start = Instant::now();
     let method = request.method().as_str().to_string();
     let path = request.uri().path().to_string();
-    let query = request.uri().query().map(str::to_string);
-    let scheme = request_scheme(&request);
     let route = request
         .extensions()
         .get::<MatchedPath>()
@@ -89,19 +74,13 @@ async fn http_observability(request: Request, next: Next) -> Response {
         otel.name = %span_name,
         http.request.method = %method,
         url.path = %path,
-        url.scheme = %scheme,
         http.route = tracing::field::Empty,
-        url.query = tracing::field::Empty,
         request_id = %request_id,
         http.response.status_code = tracing::field::Empty,
         error.kind = tracing::field::Empty,
-        error.type = tracing::field::Empty,
     );
     if let Some(ref r) = route {
         span.record("http.route", r.as_str());
-    }
-    if let Some(ref q) = query {
-        span.record("url.query", q.as_str());
     }
 
     async move {
@@ -118,7 +97,6 @@ async fn http_observability(request: Request, next: Next) -> Response {
         if status >= 500 {
             let error_kind = if status == 503 { "network" } else { "internal" };
             tracing::Span::current().record("error.kind", error_kind);
-            tracing::Span::current().record("error.type", tracing::field::display(status));
             tracing::Span::current().set_status(Status::error(""));
             tracing::error!(
                 route = %route_label,

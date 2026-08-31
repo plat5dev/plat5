@@ -299,19 +299,6 @@ fn limit_subject(scope: RouteScope, admission: &crate::admission::Admission, ip:
     }
 }
 
-fn request_scheme(header: &pingora::http::RequestHeader) -> String {
-    header
-        .headers
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(str::to_string)
-        .or_else(|| header.uri.scheme().map(|s| s.as_str().to_string()))
-        .unwrap_or_else(|| "http".to_string())
-}
-
 fn otel_trace_ids(span: Option<&tracing::Span>) -> (Option<String>, Option<String>) {
     let Some(span) = span else {
         return (None, None);
@@ -409,8 +396,6 @@ impl ProxyHttp for UserGateway {
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
         let path = session.req_header().uri.path().to_string();
         let method = session.req_header().method.as_str().to_string();
-        let scheme = request_scheme(session.req_header());
-        let query = session.req_header().uri.query().map(str::to_string);
         ctx.method = Some(method.clone());
         ctx.request_origin = session
             .req_header()
@@ -418,7 +403,7 @@ impl ProxyHttp for UserGateway {
             .get("origin")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let root_span = ctx.ensure_root_span(&path, &method, &scheme, query.as_deref());
+        let root_span = ctx.ensure_root_span(&path, &method);
         let _root_guard = root_span.enter();
 
         let span = tracing::info_span!("gateway.request_filter");
@@ -583,11 +568,10 @@ impl ProxyHttp for UserGateway {
             span.record("http.response.status_code", status);
             if e.is_some() {
                 span.record("error.kind", "network");
-                span.record("error.type", "network");
                 span.set_status(Status::error(""));
             } else if matches!(status, 500..=599) {
-                span.record("error.kind", "internal");
-                span.record("error.type", tracing::field::display(status));
+                let kind = if status == 503 { "network" } else { "internal" };
+                span.record("error.kind", kind);
                 span.set_status(Status::error(""));
             }
         }

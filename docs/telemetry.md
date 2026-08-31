@@ -169,31 +169,28 @@ Do not include `error_kind` for 4xx.
 
 ### HTTP server spans
 
-Stable [HTTP span conventions](https://opentelemetry.io/docs/specs/semconv/http/http-spans/). Do **not** emit deprecated names. Do **not** dual-write old and new.
+[HTTP span conventions](https://opentelemetry.io/docs/specs/semconv/http/http-spans/) for the names we emit. Do **not** emit deprecated names (`http.method`, `http.status_code`, `http.target`, `http.url`, `http.scheme`). Do **not** dual-write old and new.
 
 | | |
 |---|---|
 | Kind | `SERVER` |
-| Name | `{method} {http.route}` when a framework route template exists; otherwise `{method}` only. Never the raw URI. |
-| Required | `http.request.method`, `url.path`, `url.scheme` |
-| When known | `http.response.status_code`, `http.route` (template only), `url.query` if present, `error.type` on 5xx (status code as a string, e.g. `"500"`) |
-| Status | Unset on 4xx. `Error` on 5xx with **no** description (infer from `http.response.status_code`). Unset on 1xx/2xx/3xx unless a non-HTTP error occurred. |
-
-**Forbidden on spans:** `http.method`, `http.status_code`, `http.target`, `http.url`, `http.scheme`.
+| Name | `{method} {http.route}` when a route template exists; otherwise `{method}` only. Never the raw URI. |
+| Attributes | `http.request.method`, `url.path`, `http.route` (template only, when matched), `http.response.status_code` (when known) |
+| Status | Unset on 4xx. `Error` on 5xx with **no** description. Unset on 1xx/2xx/3xx unless a non-HTTP error occurred. |
 
 `http.route` is the matched template (`/api/organizations/:organization_id/subscribers`). Do not put the raw path there. `url.path` is the actual path (IDs allowed).
+
+Do not set `url.query`, `url.scheme`, or `error.type`. Frameworks may add extra stable HTTP attributes; do not copy those onto other services.
 
 Gateway creates the root span **before** route match: name starts as `{method}`, then becomes `{method} {template}` after match. Unmatched stays `{method}`. Internal child spans (`gateway.request_filter`) are not HTTP server spans.
 
 ### Plat5 span attributes (not HTTP semconv)
 
-- `request_id` on HTTP request spans (if present)
-- `user.id` on HTTP request spans when authenticated — set at the **edge/gateway** for ops. Org-scoped services do not receive `X-User-Id`; they should not invent `user.id`. Gateway may also set `organization.id` / `member.id`.
+- `request_id` on HTTP request spans (if present). Do not rename it to `request.id`.
+- `user.id` on HTTP request spans when authenticated — set at the **edge/gateway** for ops. Org-scoped services do not receive `X-User-Id`; they should not invent `user.id`. Gateway may also set `organization.id` / `member.id` / `jwt.kid`.
 - `error.kind` on **error spans** (5xx only): `auth`, `network`, `db`, `io`, `internal`, `validation`
 - 4xx responses are normal business outcomes — do not set `error.kind` and do not mark the span as failed
 - Record exceptions via `span.recordException(err)` / `span.record_exception(err)`
-
-`error.kind` is our taxonomy. `error.type` is HTTP semconv. Both on 5xx. Do not merge them. Do not rename `request_id` to `request.id`.
 
 Logs and Prometheus metrics are **not** HTTP spans: log fields stay `snake_case` (`request_id`, `method`, `status`); metric names stay `http_requests_total` / `http_request_duration_seconds`.
 
