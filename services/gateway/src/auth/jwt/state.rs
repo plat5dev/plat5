@@ -7,6 +7,7 @@ use jsonwebtoken::jwk::JwkSet;
 use tracing::{info, warn};
 
 const FETCH_TIMEOUT_SECS: u64 = 10;
+const RETRY_INTERVAL_SECS: u64 = 2;
 const REFRESH_INTERVAL_SECS: u64 = 15 * 60;
 
 #[derive(Clone)]
@@ -69,7 +70,8 @@ impl JwtValidatorState {
     }
 
     /// Attempt to fetch JWKS immediately. On failure the cache stays empty
-    /// but the background refresh task is still started so we recover later.
+    /// and the background task retries every 2s until the first success,
+    /// then every 15 minutes.
     pub async fn initialize(&self) -> Result<(), reqwest::Error> {
         match fetch_jwks(&self.client, &self.jwks_uri).await {
             Ok(new_jwks) => {
@@ -100,18 +102,29 @@ impl JwtValidatorState {
         {
             let state = self.clone();
             tokio::spawn(async move {
-                let mut interval =
-                    tokio::time::interval(Duration::from_secs(REFRESH_INTERVAL_SECS));
-                interval.tick().await; // skip immediate tick
                 loop {
-                    interval.tick().await;
+                    let delay = if state.is_ready() {
+                        Duration::from_secs(REFRESH_INTERVAL_SECS)
+                    } else {
+                        Duration::from_secs(RETRY_INTERVAL_SECS)
+                    };
+                    tokio::time::sleep(delay).await;
                     if let Err(err) = state.refresh_jwks().await {
-                        warn!(
-                            jwks_uri = %state.jwks_uri,
-                            error_kind = crate::error::ErrorKind::Network.as_str(),
-                            error_message = %err,
-                            "jwks background refresh failed"
-                        );
+                        if state.is_ready() {
+                            warn!(
+                                jwks_uri = %state.jwks_uri,
+                                error_kind = crate::error::ErrorKind::Network.as_str(),
+                                error_message = %err,
+                                "jwks background refresh failed"
+                            );
+                        } else {
+                            warn!(
+                                jwks_uri = %state.jwks_uri,
+                                error_kind = crate::error::ErrorKind::Network.as_str(),
+                                error_message = %err,
+                                "jwks retry fetch failed"
+                            );
+                        }
                     }
                 }
             });
@@ -120,8 +133,13 @@ impl JwtValidatorState {
 
     async fn refresh_jwks(&self) -> Result<(), reqwest::Error> {
         let new_jwks = fetch_jwks(&self.client, &self.jwks_uri).await?;
+        let was_empty = self.jwks.load_full().is_none();
         self.jwks.store(Some(Arc::new(new_jwks)));
-        info!(jwks_uri = %self.jwks_uri, "jwks refreshed successfully");
+        if was_empty {
+            info!(jwks_uri = %self.jwks_uri, "jwks loaded successfully");
+        } else {
+            info!(jwks_uri = %self.jwks_uri, "jwks refreshed successfully");
+        }
         Ok(())
     }
 }

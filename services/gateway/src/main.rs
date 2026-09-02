@@ -43,8 +43,8 @@ fn main() {
         cfg.auth_allowed_audiences.clone(),
     );
 
-    // Eagerly fetch JWKS on startup. If it fails we start degraded and the
-    // background refresh task will keep retrying.
+    // Eagerly fetch JWKS on startup. If it fails we start degraded; the
+    // background task retries every 2s until loaded, then every 15 minutes.
     if let Err(err) = rt.block_on(jwt_validator.initialize()) {
         tracing::warn!(error = %err, "failed to fetch JWKS on startup; will retry in background");
     }
