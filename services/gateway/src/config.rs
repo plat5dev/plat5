@@ -24,8 +24,8 @@ pub struct GatewayConfig {
     pub port: String,
     pub internal_port: String,
     pub etcd_url: String,
-    /// Redis for rate-limit counters. Required.
-    pub redis_url: String,
+    /// Valkey for rate-limit counters. Required.
+    pub valkey_url: String,
 
     pub auth_issuer: String,
     pub auth_jwks_uri: String,
@@ -85,7 +85,7 @@ impl GatewayConfig {
         let user_apikey_validate_url = require_env("USER_APIKEY_VALIDATE_URL")?;
         let member_apikey_validate_url = require_env("MEMBER_APIKEY_VALIDATE_URL")?;
         let member_resolve_url = require_env("MEMBER_RESOLVE_URL")?;
-        let redis_url = require_env("REDIS_URL")?;
+        let valkey_url = require_env("VALKEY_URL")?;
         let apikey_brand = apikey_brand_from_env()?;
         let rate_limit_requests =
             parse_u64_env("RATE_LIMIT_REQUESTS", DEFAULT_RATE_LIMIT_REQUESTS)?;
@@ -119,7 +119,7 @@ impl GatewayConfig {
             internal_port: env::var("INTERNAL_PORT")
                 .unwrap_or_else(|_| DEFAULT_INTERNAL_PORT.to_string()),
             etcd_url: env::var("ETCD_URL").unwrap_or_else(|_| DEFAULT_ETCD_URL.to_string()),
-            redis_url,
+            valkey_url,
 
             auth_issuer,
             auth_jwks_uri,

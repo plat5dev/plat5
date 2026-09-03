@@ -67,7 +67,7 @@ When `organization` scope is live: non-member / inactive / unknown org → **`NO
 
 Returned by the **gateway**. HTTP **429**. `Retry-After` (seconds) is set to the same value as `details.retry_after_seconds`.
 
-Two independent Redis limiters (replicas share one budget). `REDIS_URL` is required to boot. Redis error → **503** `SERVICE_UNAVAILABLE`. Named policies and buckets: [`routes.md`](routes.md). Admitted limited routes set `X-RateLimit-Limit` / `Remaining` / `Reset` on 2xx and 429. Failed-auth limiter sets `Retry-After` only.
+Two independent Valkey limiters (replicas share one budget). `VALKEY_URL` is required to boot. Valkey error → **503** `SERVICE_UNAVAILABLE`. Named policies and buckets: [`routes.md`](routes.md). Admitted limited routes set `X-RateLimit-Limit` / `Remaining` / `Reset` on 2xx and 429. Failed-auth limiter sets `Retry-After` only.
 
 | Limiter | When | Key |
 |---------|------|-----|

@@ -24,7 +24,7 @@ if ttl < 0 then ttl = window end
 return {1, n, ttl}
 "#;
 
-/// Cluster-wide fixed-window limiter. Redis is required; no in-process fallback.
+/// Cluster-wide fixed-window limiter. Valkey is required; no in-process fallback.
 #[derive(Clone)]
 pub struct RateLimiter {
     conn: ConnectionManager,
@@ -109,7 +109,7 @@ impl RateLimiter {
                 Err(RateLimitError::Unavailable)
             }
             Err(err) => {
-                warn!(error = %err, "rate limit redis error");
+                warn!(error = %err, "rate limit valkey error");
                 Err(RateLimitError::Unavailable)
             }
         }

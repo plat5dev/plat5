@@ -55,16 +55,16 @@ services:
       retries: 3
       start_period: 5s
 
-  redis:
-    image: redis:7-alpine
+  valkey:
+    image: valkey/valkey:8-alpine
     labels:
-      service.name: redis
+      service.name: valkey
       service.namespace: infra
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
     networks:
       - plat5
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -145,7 +145,7 @@ services:
       RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
       RATE_LIMIT_AUTH_FAILURE_REQUESTS: ${RATE_LIMIT_AUTH_FAILURE_REQUESTS:-60}
       RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS: ${RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS:-60}
-      REDIS_URL: redis://redis:6379
+      VALKEY_URL: redis://valkey:6379
       ETCD_URL: http://etcd:2379
       OTEL_SERVICE_NAME: gateway
       OTEL_SERVICE_NAMESPACE: edge
@@ -158,7 +158,7 @@ services:
     depends_on:
       etcd:
         condition: service_healthy
-      redis:
+      valkey:
         condition: service_healthy
       route-registry:
         condition: service_healthy

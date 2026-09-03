@@ -158,9 +158,9 @@ After match + admission: if the route has `required_scopes` **and** the credenti
 
 ### `rate_limit`
 
-Applies to **all admitted** routes (JWT and API key). Counters live in **Redis** — replicas share one budget. `REDIS_URL` is required to boot. Redis error on a limited request → **503** `SERVICE_UNAVAILABLE` (not unlimited, not a local fallback).
+Applies to **all admitted** routes (JWT and API key). Counters live in **Valkey** — replicas share one budget. `VALKEY_URL` is required to boot. Valkey error on a limited request → **503** `SERVICE_UNAVAILABLE` (not unlimited, not a local fallback).
 
-Fixed window: the first increment opens the window; key TTL is `window_seconds`. Restarting Redis resets open windows.
+Fixed window: the first increment opens the window; key TTL is `window_seconds`. Restarting Valkey resets open windows.
 
 Route field (`rate_limit` on a route or nested method):
 

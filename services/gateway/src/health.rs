@@ -74,9 +74,9 @@ impl HealthHttpApp {
     async fn ready_response(&self) -> Response<Vec<u8>> {
         let uptime_ms = self.state.start_time.elapsed().as_millis() as u64;
         let jwks_ready = self.state.jwt_validator.is_ready();
-        let redis_ready = self.state.limiter.ping().await.is_ok();
+        let valkey_ready = self.state.limiter.ping().await.is_ok();
 
-        let (status, http_status) = if jwks_ready && redis_ready {
+        let (status, http_status) = if jwks_ready && valkey_ready {
             ("ready", 200)
         } else {
             ("not_ready", 503)
@@ -87,7 +87,7 @@ impl HealthHttpApp {
             "uptime_ms": uptime_ms,
             "checks": {
                 "jwks_ready": jwks_ready,
-                "redis_ready": redis_ready
+                "valkey_ready": valkey_ready
             }
         });
         let body_str = body.to_string();

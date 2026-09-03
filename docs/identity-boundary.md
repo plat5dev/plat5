@@ -83,7 +83,7 @@ identity: load member for (user_id, organization_id); enforce admin rules; respo
 | Restricted API key missing route `required_scopes` | **403** `FORBIDDEN` |
 | Non-member, unknown org, or member not `active` (org-context) | **404** `NOT_FOUND` |
 | Admitted route or failed-auth IP over limit | **429** `RATE_LIMITED` |
-| Member resolve / key validate down or timeout; Redis down on a limited request; JWKS unavailable | **503** `SERVICE_UNAVAILABLE` |
+| Member resolve / key validate down or timeout; Valkey down on a limited request; JWKS unavailable | **503** `SERVICE_UNAVAILABLE` |
 | Missing expected identity headers on a protected route (downstream) | **500** `INTERNAL_ERROR` (platform bug) |
 
 Existence policy: non-member and unknown org look the same (**404**), including on identity service org resources.

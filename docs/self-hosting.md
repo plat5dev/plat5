@@ -14,7 +14,7 @@ Internet
   https://auth.example.com  → TLS edge → issuer  :5000   (or any OIDC IdP)
 
 Docker (two stacks, two networks):
-  plat5   postgres, etcd, redis, gateway, identity, route-registry
+  plat5   postgres, etcd, valkey, gateway, identity, route-registry
   auth    postgres, issuer     (skip if you already have an IdP)
 
 Your app:
@@ -189,7 +189,7 @@ curl -sS https://api.example.com/api/organizations
 
 Empty route map → 404. After apply, missing JWT → 401.
 
-Gateway ready requires JWKS loaded and Redis reachable (`/health/ready` on internal `:8000`). Redis restart resets open rate-limit windows.
+Gateway ready requires JWKS loaded and Valkey reachable (`/health/ready` on internal `:8000`). Valkey restart resets open rate-limit windows.
 
 ## Footguns
 

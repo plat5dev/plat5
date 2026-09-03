@@ -1,6 +1,6 @@
 # Plat5 compose
 
-Self-contained Plat5 runtime: gateway, route-registry, identity, postgres, etcd, redis. Own Docker network.
+Self-contained Plat5 runtime: gateway, route-registry, identity, postgres, etcd, valkey. Own Docker network.
 
 ## Quick start
 
@@ -47,7 +47,7 @@ Gateway uses `host.docker.internal` so a host-published IdP does not need a shar
 
 `APIKEY_BRAND` (default `plat5`) is the same value on gateway and identity. Wire prefixes are `{brand}-sk-1-` / `{brand}-mk-1-`. See [`../docs/identity.md`](../docs/identity.md).
 
-Gateway rate limits (Redis; replicas share one budget): `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` (default 60/60; `0` requests = unlimited fallback). Named policies on the service; `shared: true` is opt-in cross-service. Subject follows route scope (`public`→ip, `user`→user, `organization`→org). Failed-auth IP limiter: `RATE_LIMIT_AUTH_FAILURE_*` (default 60/60). `REDIS_URL` is required. See [`../docs/routes.md`](../docs/routes.md) and [`../docs/gateway-contract.md`](../docs/gateway-contract.md).
+Gateway rate limits (Valkey; replicas share one budget): `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` (default 60/60; `0` requests = unlimited fallback). Named policies on the service; `shared: true` is opt-in cross-service. Subject follows route scope (`public`→ip, `user`→user, `organization`→org). Failed-auth IP limiter: `RATE_LIMIT_AUTH_FAILURE_*` (default 60/60). `VALKEY_URL` is required. See [`../docs/routes.md`](../docs/routes.md) and [`../docs/gateway-contract.md`](../docs/gateway-contract.md).
 
 See [`../docs/idp-contract.md`](../docs/idp-contract.md).
 

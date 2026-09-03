@@ -79,7 +79,7 @@ After match + admission: if the route has `required_scopes` **and** the API key 
 
 ### Rate limits
 
-Counters live in **Redis**. Replicas share one budget. `REDIS_URL` is required to boot (`/health/ready` 503 until Redis answers PING). Redis error on a limited request → **503** `SERVICE_UNAVAILABLE` — not unlimited, not an in-process fallback. Schema and buckets: [`routes.md`](routes.md).
+Counters live in **Valkey**. Replicas share one budget. `VALKEY_URL` is required to boot (`/health/ready` 503 until Valkey answers PING). Valkey error on a limited request → **503** `SERVICE_UNAVAILABLE` — not unlimited, not an in-process fallback. Schema and buckets: [`routes.md`](routes.md).
 
 | | |
 |--|--|
@@ -201,7 +201,7 @@ The gateway does **not** set `Strict-Transport-Security`. TLS terminates at the 
 
 ## Admission cache
 
-In-process per replica (not Redis). Redis is the rate-limit store only.
+In-process per replica (not Valkey). Valkey is the rate-limit store only.
 
 | Cache | Positive | Negative | TTL |
 |-------|----------|----------|-----|
@@ -216,7 +216,7 @@ Revoke, suspend, and remove are visible at the edge when the TTL expires. There 
 
 ## Boot / ready
 
-`/health/ready` is **200** when JWKS is loaded **and** Redis answers PING. Otherwise **503**. etcd empty (no routes) is still ready — unmatched paths are **404**.
+`/health/ready` is **200** when JWKS is loaded **and** Valkey answers PING. Otherwise **503**. etcd empty (no routes) is still ready — unmatched paths are **404**.
 
 ## Errors
 
@@ -227,7 +227,7 @@ Revoke, suspend, and remove are visible at the edge when the TTL expires. There 
 | Route not registered | `NOT_FOUND` (404) |
 | Request body too large | `PAYLOAD_TOO_LARGE` (413) |
 | Rate limit (admitted route or failed-auth IP) | `RATE_LIMITED` (429); `Retry-After`; admitted limited routes also `X-RateLimit-*` |
-| Upstream or auth infra down (JWKS, Redis, key validate, member resolve) | `SERVICE_UNAVAILABLE` (503); proxy upstream failure may surface as **502** with the same `SERVICE_UNAVAILABLE` code |
+| Upstream or auth infra down (JWKS, Valkey, key validate, member resolve) | `SERVICE_UNAVAILABLE` (503); proxy upstream failure may surface as **502** with the same `SERVICE_UNAVAILABLE` code |
 | Gateway internal failure mid-proxy | `INTERNAL_ERROR` (500) |
 | Missing expected identity headers in a service | `INTERNAL_ERROR` (500) |
 

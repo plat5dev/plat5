@@ -50,8 +50,8 @@ fn main() {
     }
 
     let limiter = rt
-        .block_on(gateway::rate_limit::RateLimiter::connect(&cfg.redis_url))
-        .unwrap_or_else(|e| panic!("failed to connect to redis: {e}"));
+        .block_on(gateway::rate_limit::RateLimiter::connect(&cfg.valkey_url))
+        .unwrap_or_else(|e| panic!("failed to connect to valkey: {e}"));
 
     let mut my_proxy = pingora::proxy::http_proxy_service(
         &my_server.configuration,

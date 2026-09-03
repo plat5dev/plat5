@@ -1,6 +1,6 @@
 # Gateway
 
-Rust reverse proxy built on Pingora. Handles request routing, JWT/API key authentication, identity header injection, stripping of `Authorization` / `X-API-Key` before upstream, rate limits (Redis), trace propagation, CORS, and security headers. TLS is terminated at the edge (not in this process).
+Rust reverse proxy built on Pingora. Handles request routing, JWT/API key authentication, identity header injection, stripping of `Authorization` / `X-API-Key` before upstream, rate limits (Valkey), trace propagation, CORS, and security headers. TLS is terminated at the edge (not in this process).
 
 ## Local Development
 
@@ -21,7 +21,7 @@ cargo test --all-targets
 | `PORT` | `5001` | Public HTTP proxy port |
 | `INTERNAL_PORT` | `8000` | Internal port for `/health` and `/metrics` |
 | `ETCD_URL` | `http://localhost:2379` | etcd endpoint for route registry |
-| `REDIS_URL` | (required) | Redis for rate-limit counters. Replicas share one budget |
+| `VALKEY_URL` | (required) | Valkey for rate-limit counters. Replicas share one budget |
 | `AUTH_ISSUER` | (required) | JWT `iss` |
 | `AUTH_JWKS_URI` | (required) | JWKS URL |
 | `AUTH_ALLOWED_AUDIENCES` | (empty) | Comma-separated allowed `aud` values |
@@ -54,7 +54,7 @@ cargo test --all-targets
 | `OTEL_SDK_DISABLED` | unset | `true` → no OTLP; stdout + `/metrics` remain |
 | `ALLOWED_ORIGINS` | (empty → `*`) | Comma-separated CORS origin allowlist. Empty allows `*`; non-empty reflects matching `Origin` and sets `Vary: Origin` |
 
-Limiter subject follows route scope: `public`→ip, `user`→user, `organization`→org (JWT, user keys, SA/member keys). Redis error on a limited request → **503**. Admitted limited routes set `X-RateLimit-Limit` / `Remaining` / `Reset`.
+Limiter subject follows route scope: `public`→ip, `user`→user, `organization`→org (JWT, user keys, SA/member keys). Valkey error on a limited request → **503**. Admitted limited routes set `X-RateLimit-Limit` / `Remaining` / `Reset`.
 
 ## Telemetry
 
@@ -84,7 +84,7 @@ The gateway loads route configuration from etcd (watch). Writes go through **rou
 ## Health
 
 - `/health/live` — process up (always 200 when serving).
-- `/health/ready` — 200 when JWKS is loaded and Redis answers PING; **503** otherwise (do not send traffic until ready).
+- `/health/ready` — 200 when JWKS is loaded and Valkey answers PING; **503** otherwise (do not send traffic until ready).
 
 ## Span Status
 
