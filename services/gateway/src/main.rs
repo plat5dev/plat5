@@ -49,14 +49,18 @@ fn main() {
         tracing::warn!(error = %err, "failed to fetch JWKS on startup; will retry in background");
     }
 
+    let limiter = rt
+        .block_on(gateway::rate_limit::RateLimiter::connect(&cfg.redis_url))
+        .unwrap_or_else(|e| panic!("failed to connect to redis: {e}"));
+
     let mut my_proxy = pingora::proxy::http_proxy_service(
         &my_server.configuration,
-        UserGateway::new(&cfg, jwt_validator.clone(), route_map),
+        UserGateway::new(&cfg, jwt_validator.clone(), route_map, limiter.clone()),
     );
     my_proxy.add_tcp(&format!("0.0.0.0:{}", cfg.port));
     my_server.add_service(my_proxy);
 
-    let health_state = Arc::new(health::HealthState::new(jwt_validator));
+    let health_state = Arc::new(health::HealthState::new(jwt_validator, limiter));
     let health_server = health::new_health_server(health_state);
     let mut health_service =
         pingora::services::listening::Service::new("Health and Metrics".to_string(), health_server);

@@ -16,6 +16,7 @@ mod tests {
     fn user_service(routes: Vec<RouteConfig>) -> ServiceConfig {
         ServiceConfig {
             url: "w:3000".into(),
+            rate_limits: None,
             public: None,
             user: Some(ScopeConfig {
                 route_prefix: None,
@@ -50,6 +51,7 @@ mod tests {
     fn prepare_expands_prefix() {
         let svc = ServiceConfig {
             url: "orgs:3000".into(),
+            rate_limits: None,
             public: None,
             user: Some(ScopeConfig {
                 route_prefix: Some("/api/organizations".into()),
@@ -108,7 +110,7 @@ mod tests {
                 assert_eq!(cfg.requests, 10);
                 assert_eq!(cfg.window_seconds, 60);
             }
-            RouteRateLimit::Unlimited => panic!("expected object"),
+            RouteRateLimit::Unlimited | RouteRateLimit::Named(_) => panic!("expected object"),
         }
         assert!(serde_json::from_str::<RouteRateLimit>("true").is_err());
     }
@@ -280,5 +282,106 @@ mod tests {
             assert_eq!(rt.methods.len(), 1);
             assert!(matches!(rt.methods_form, MethodsForm::List));
         }
+    }
+
+    #[test]
+    fn rate_limit_named_policy() {
+        let named: RouteRateLimit = serde_json::from_str(r#""writes""#).unwrap();
+        assert_eq!(named, RouteRateLimit::Named("writes".into()));
+
+        let mut r = route("/api/widgets", &["POST"]);
+        r.rate_limit = Some(RouteRateLimit::Named("writes".into()));
+        let mut svc = user_service(vec![r]);
+        svc.rate_limits = Some(HashMap::from([(
+            "writes".into(),
+            RateLimitPolicy {
+                requests: 30,
+                window_seconds: 60,
+                shared: false,
+            },
+        )]));
+        let mut services = HashMap::new();
+        services.insert("w".into(), svc);
+        Config { services }.validate().unwrap();
+    }
+
+    #[test]
+    fn rate_limit_unknown_name_fails() {
+        let mut r = route("/api/widgets", &["POST"]);
+        r.rate_limit = Some(RouteRateLimit::Named("writes".into()));
+        let mut services = HashMap::new();
+        services.insert("w".into(), user_service(vec![r]));
+        assert!(Config { services }.validate().is_err());
+    }
+
+    #[test]
+    fn shared_policy_mismatch_fails() {
+        let policy = |shared, requests| RateLimitPolicy {
+            requests,
+            window_seconds: 60,
+            shared,
+        };
+        let mut a = user_service(vec![]);
+        a.rate_limits = Some(HashMap::from([("writes".into(), policy(true, 30))]));
+        let mut b = user_service(vec![]);
+        b.rate_limits = Some(HashMap::from([("writes".into(), policy(true, 10))]));
+        let mut services = HashMap::new();
+        services.insert("a".into(), a);
+        services.insert("b".into(), b);
+        let err = Config { services }.validate().unwrap_err();
+        assert!(err.to_string().contains("shared rate_limits"));
+    }
+
+    #[test]
+    fn shared_vs_local_same_name_fails() {
+        let mut a = user_service(vec![]);
+        a.rate_limits = Some(HashMap::from([(
+            "writes".into(),
+            RateLimitPolicy {
+                requests: 30,
+                window_seconds: 60,
+                shared: true,
+            },
+        )]));
+        let mut b = user_service(vec![]);
+        b.rate_limits = Some(HashMap::from([(
+            "writes".into(),
+            RateLimitPolicy {
+                requests: 30,
+                window_seconds: 60,
+                shared: false,
+            },
+        )]));
+        let mut services = HashMap::new();
+        services.insert("a".into(), a);
+        services.insert("b".into(), b);
+        let err = Config { services }.validate().unwrap_err();
+        assert!(err.to_string().contains("shared on some"));
+    }
+
+    #[test]
+    fn local_same_name_independent() {
+        let mut a = user_service(vec![]);
+        a.rate_limits = Some(HashMap::from([(
+            "writes".into(),
+            RateLimitPolicy {
+                requests: 30,
+                window_seconds: 60,
+                shared: false,
+            },
+        )]));
+        let mut b = user_service(vec![]);
+        b.rate_limits = Some(HashMap::from([(
+            "writes".into(),
+            RateLimitPolicy {
+                requests: 10,
+                window_seconds: 60,
+                shared: false,
+            },
+        )]));
+        let mut services = HashMap::new();
+        services.insert("a".into(), a);
+        services.insert("b".into(), b);
+        Config { services }.validate().unwrap();
     }
 }

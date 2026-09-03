@@ -10,11 +10,13 @@ impl Config {
                 });
             }
 
+            validate_rate_limit_policies(name, service.rate_limits.as_ref())?;
+
             if let Some(ref public) = service.public {
-                validate_scope_routes(name, "public", public, None)?;
+                validate_scope_routes(name, "public", public, None, service.rate_limits.as_ref())?;
             }
             if let Some(ref user) = service.user {
-                validate_scope_routes(name, "user", user, None)?;
+                validate_scope_routes(name, "user", user, None, service.rate_limits.as_ref())?;
             }
             if let Some(ref org) = service.organization {
                 let param =
@@ -30,9 +32,16 @@ impl Config {
                         reason: "organization_param must not be empty".to_string(),
                     });
                 }
-                validate_scope_routes(name, "organization", org, Some(param))?;
+                validate_scope_routes(
+                    name,
+                    "organization",
+                    org,
+                    Some(param),
+                    service.rate_limits.as_ref(),
+                )?;
             }
         }
+        validate_shared_rate_limits(&self.services)?;
         Ok(())
     }
 }

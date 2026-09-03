@@ -9,6 +9,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use crate::admission::{AdmitError, AuthError, AuthType};
 use crate::error::{ApiError, ErrorKind};
 use crate::metrics;
+use crate::rate_limit::RateLimitInfo;
 
 use super::context::GatewayContext;
 use super::cors::CorsPolicy;
@@ -56,6 +57,7 @@ pub async fn send_json_error_headers(
     let mut header = ResponseHeader::build(status, None)?;
     header.insert_header("Content-Type", "application/json")?;
     header.insert_header("Content-Length", body.len().to_string())?;
+    apply_security_headers(&mut header)?;
     cors.apply(&mut header, ctx.request_origin.as_deref())?;
     if let Some(ref request_id) = ctx.request_id {
         header.insert_header("X-Request-ID", request_id)?;
@@ -88,17 +90,38 @@ pub async fn write_rate_limited(
     session: &mut Session,
     ctx: &GatewayContext,
     retry_after_seconds: u64,
+    admitted: Option<&RateLimitInfo>,
 ) -> Result<bool> {
+    let mut extras = vec![("Retry-After", retry_after_seconds.to_string())];
+    if let Some(info) = admitted {
+        extras.push(("X-RateLimit-Limit", info.limit.to_string()));
+        extras.push(("X-RateLimit-Remaining", info.remaining.to_string()));
+        extras.push(("X-RateLimit-Reset", info.reset_epoch.to_string()));
+    }
     send_json_error_headers(
         cors,
         session,
         ctx,
         429,
         ApiError::rate_limited(retry_after_seconds),
-        &[("Retry-After", retry_after_seconds.to_string())],
+        &extras,
     )
     .await?;
     Ok(true)
+}
+
+pub fn apply_security_headers(header: &mut ResponseHeader) -> Result<()> {
+    header.insert_header("X-Content-Type-Options", "nosniff")?;
+    header.insert_header("X-Frame-Options", "DENY")?;
+    header.insert_header("Referrer-Policy", "strict-origin-when-cross-origin")?;
+    Ok(())
+}
+
+pub fn apply_rate_limit_headers(header: &mut ResponseHeader, info: &RateLimitInfo) -> Result<()> {
+    header.insert_header("X-RateLimit-Limit", info.limit.to_string())?;
+    header.insert_header("X-RateLimit-Remaining", info.remaining.to_string())?;
+    header.insert_header("X-RateLimit-Reset", info.reset_epoch.to_string())?;
+    Ok(())
 }
 
 pub async fn write_admit_error(

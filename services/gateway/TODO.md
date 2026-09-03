@@ -2,21 +2,14 @@
 
 Deferred gateway work.
 
-## Security Headers
+## Redis drop hangs
 
-Gateway does not add standard security headers. Desired on all API responses:
+`REDIS_URL` is required to boot. A Redis **command error** maps to **503**. A **dropped** Redis (container stop, dead TCP) does not: `allow()` / ready PING wait on `ConnectionManager` with no response or connect timeout. Requests hang. After Redis returns, the manager can stay wedged until the gateway process restarts.
 
-- `X-Content-Type-Options: nosniff`
-- `X-Frame-Options: DENY`
-- `Referrer-Policy: strict-origin-when-cross-origin`
-- `Strict-Transport-Security` (when TLS is active)
+Ready looks like: connect + command timeout (hundreds of ms) → **503** `SERVICE_UNAVAILABLE`; traffic recovers when Redis is back without a gateway restart. No in-process limiter fallback.
 
-## Rate Limiting
+## JWKS HTTP cache validators
 
-Open: `X-RateLimit-Limit` / `Remaining` / `Reset` headers; multi-instance aggregation.
+JWKS refresh is interval-based (empty: 2s; loaded: 15 minutes). Fetch runs outside the JWKS lock.
 
-## JWKS Conditional Refresh
-
-JWKS is fetched on startup. Empty cache retries every 2s until loaded; loaded cache refreshes every 15 minutes. Startup fetch failure → degraded (`/health/ready` 503 until JWKS loads). Cold-path fetch holds the JWKS mutex across the network call.
-
-Desired: respect `Cache-Control`, `ETag`, or `Last-Modified`; fetch outside the lock on the cold path.
+Desired: respect `Cache-Control`, `ETag`, or `Last-Modified`.

@@ -67,11 +67,11 @@ When `organization` scope is live: non-member / inactive / unknown org → **`NO
 
 Returned by the **gateway**. HTTP **429**. `Retry-After` (seconds) is set to the same value as `details.retry_after_seconds`.
 
-Two independent in-process limiters (per gateway instance; no Redis):
+Two independent Redis limiters (replicas share one budget). `REDIS_URL` is required to boot. Redis error → **503** `SERVICE_UNAVAILABLE`. Named policies and buckets: [`routes.md`](routes.md). Admitted limited routes set `X-RateLimit-Limit` / `Remaining` / `Reset` on 2xx and 429. Failed-auth limiter sets `Retry-After` only.
 
 | Limiter | When | Key |
 |---------|------|-----|
-| Per-route (admitted) | After match + admission (JWT and API key). Omitted `rate_limit` inherits `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` (never silent unlimited). `rate_limit: false` opts out. | Derived from route scope (`public`→ip, `user`→user, `organization`→org). |
+| Admitted route | After match + admission (JWT and API key). Omitted `rate_limit` inherits `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` (never silent unlimited). `false` opts out. Inline object = this route+method. Policy name = service `rate_limits` entry (`shared: true` is opt-in cross-service). | Subject from route scope (`public`→ip, `user`→user, `organization`→org), plus method+path or policy name. |
 | Failed-auth IP | Unadmitted **401**s and unmatched **404**s. Not per-route. | Client IP. `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). `0` requests = off |
 
 ## Principles

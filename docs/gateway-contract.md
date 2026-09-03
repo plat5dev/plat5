@@ -8,7 +8,7 @@ Boundary: [`identity-boundary.md`](identity-boundary.md). Routes: [`routes.md`](
 
 | Layer | Responsibility |
 |-------|---------------|
-| **Gateway** | Routing, authentication (JWT/API key), member admission on `organization` scope, API-key `required_scopes`, rate limits, identity header injection, CORS, trace propagation |
+| **Gateway** | Routing, authentication (JWT/API key), member admission on `organization` scope, API-key `required_scopes`, rate limits, identity header injection, CORS, security headers, trace propagation |
 | **Edge / Load Balancer** | TLS termination (e.g. Cloudflare Zero Trust tunnels) |
 | **Downstream services** | Business logic, data access, resource authorization |
 
@@ -79,16 +79,18 @@ After match + admission: if the route has `required_scopes` **and** the API key 
 
 ### Rate limits
 
-In-process per gateway instance. No Redis.
+Counters live in **Redis**. Replicas share one budget. `REDIS_URL` is required to boot (`/health/ready` 503 until Redis answers PING). Redis error on a limited request → **503** `SERVICE_UNAVAILABLE` — not unlimited, not an in-process fallback. Schema and buckets: [`routes.md`](routes.md).
 
 | | |
 |--|--|
 | Fallback | `RATE_LIMIT_REQUESTS` (default 60; `0` = unlimited), `RATE_LIMIT_WINDOW_SECONDS` (default 60) |
-| Per-route | omitted inherits fallback (never silent unlimited); `{requests, window_seconds}` overrides; `false` opts out |
+| Per-route | omitted inherits fallback (never silent unlimited); `{requests, window_seconds}` = this route+method only; policy **name** = service `rate_limits` entry; `false` opts out |
+| Named | `rate_limits` on the service. Name without `shared` → `{service}:{name}:{subject}`. `shared: true` → `{name}:{subject}` (opt-in cross-service; both services declare the same entry) |
 | Who | All admitted routes (JWT and API key) |
-| Subject | Derived from route scope: `public`→ip, `user`→user, `organization`→org (including SA/member keys) |
+| Subject | Derived from route scope: `public`→ip, `user`→user, `organization`→org (including SA/member keys). Not configurable. |
 | Exceed | **429** `RATE_LIMITED`, type `api_error`, message `Too many requests. Try again in a moment.`, `details.retry_after_seconds`, `Retry-After` |
-| Failed-auth IP | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). Unadmitted 401s and unmatched 404s. Not per-route. |
+| Admitted headers | On limited admitted routes (2xx and 429): `X-RateLimit-Limit` (policy `requests`), `X-RateLimit-Remaining` (after this request; `0` on 429), `X-RateLimit-Reset` (unix epoch seconds when the window ends). Omitted on unlimited routes (`false` or fallback `0`). |
+| Failed-auth IP | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). Unadmitted 401s and unmatched 404s. Not per-route. **429** still sets `Retry-After`; no `X-RateLimit-*` (do not advertise this budget). |
 
 ## Rules for Services Behind the Gateway
 
@@ -181,6 +183,41 @@ TLS terminates at the **edge / load balancer**, not the gateway process. Edge de
 
 Gateway handles `OPTIONS` preflight and adds `Access-Control-Allow-*` on responses. Services behind the gateway have no CORS config. Direct-exposed services handle CORS as needed.
 
+## Security headers
+
+On public proxy responses (including errors; not internal `/health` / `/metrics`):
+
+| Header | Value |
+|--------|--------|
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+
+The gateway does **not** set `Strict-Transport-Security`. TLS terminates at the edge; HSTS belongs there.
+
+## JWKS
+
+`AUTH_JWKS_URI` is required to boot. Empty cache retries every 2s until loaded; loaded cache refreshes every 15 minutes. Cold-path fetch does not hold the JWKS lock across the network call.
+
+## Admission cache
+
+In-process per replica (not Redis). Redis is the rate-limit store only.
+
+| Cache | Positive | Negative | TTL |
+|-------|----------|----------|-----|
+| JWT claims | Validated token (TTL from `exp`) | — | token `exp` |
+| User API key | Valid key → `user_id` + `scopes` | Invalid key | `APIKEY_CACHE_TTL_SECS` (default 300) |
+| Member API key | Valid key → `member_id` + `organization_id` + `scopes` | Invalid key | same |
+| Member resolve | Active → `member_id` | 404 / inactive | `MEMBER_CACHE_TTL_SECS` (default 300) |
+
+Do not cache identity **503** / transport failures. Concurrent misses for the same cache key share **one** identity call (singleflight). Raw API keys and JWTs are hashed before use as cache keys.
+
+Revoke, suspend, and remove are visible at the edge when the TTL expires. There is no identity → gateway invalidate path.
+
+## Boot / ready
+
+`/health/ready` is **200** when JWKS is loaded **and** Redis answers PING. Otherwise **503**. etcd empty (no routes) is still ready — unmatched paths are **404**.
+
 ## Errors
 
 | Case | Code |
@@ -189,8 +226,8 @@ Gateway handles `OPTIONS` preflight and adds `Access-Control-Allow-*` on respons
 | Restricted API key missing route `required_scopes` | `FORBIDDEN` (403) |
 | Route not registered | `NOT_FOUND` (404) |
 | Request body too large | `PAYLOAD_TOO_LARGE` (413) |
-| Rate limit (admitted route or failed-auth IP) | `RATE_LIMITED` (429); `Retry-After` |
-| Upstream or auth infra down (JWKS, key validate, member resolve) | `SERVICE_UNAVAILABLE` (503); proxy upstream failure may surface as **502** with the same `SERVICE_UNAVAILABLE` code |
+| Rate limit (admitted route or failed-auth IP) | `RATE_LIMITED` (429); `Retry-After`; admitted limited routes also `X-RateLimit-*` |
+| Upstream or auth infra down (JWKS, Redis, key validate, member resolve) | `SERVICE_UNAVAILABLE` (503); proxy upstream failure may surface as **502** with the same `SERVICE_UNAVAILABLE` code |
 | Gateway internal failure mid-proxy | `INTERNAL_ERROR` (500) |
 | Missing expected identity headers in a service | `INTERNAL_ERROR` (500) |
 

@@ -15,9 +15,23 @@ pub struct Config {
     pub services: HashMap<String, ServiceConfig>,
 }
 
+fn skip_if_false(v: &bool) -> bool {
+    !*v
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct RateLimitPolicy {
+    pub requests: u64,
+    pub window_seconds: u64,
+    #[serde(default, skip_serializing_if = "skip_if_false")]
+    pub shared: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ServiceConfig {
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limits: Option<HashMap<String, RateLimitPolicy>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public: Option<ScopeConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -166,10 +180,12 @@ pub struct TransformConfig {
 }
 
 /// Per-route rate limit. `false` opts out (unlimited). Object overrides the gateway fallback.
+/// String names a policy on this service.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RouteRateLimit {
     Unlimited,
     Limit(RateLimitConfig),
+    Named(String),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -183,6 +199,7 @@ impl Serialize for RouteRateLimit {
         match self {
             RouteRateLimit::Unlimited => serializer.serialize_bool(false),
             RouteRateLimit::Limit(cfg) => cfg.serialize(serializer),
+            RouteRateLimit::Named(name) => serializer.serialize_str(name),
         }
     }
 }
@@ -194,13 +211,15 @@ impl<'de> Deserialize<'de> for RouteRateLimit {
         enum Raw {
             Flag(bool),
             Limit(RateLimitConfig),
+            Name(String),
         }
         match Raw::deserialize(deserializer)? {
             Raw::Flag(false) => Ok(RouteRateLimit::Unlimited),
             Raw::Flag(true) => Err(de::Error::custom(
-                "rate_limit: true is invalid; use false or {requests, window_seconds}",
+                "rate_limit: true is invalid; use false, {requests, window_seconds}, or a policy name",
             )),
             Raw::Limit(cfg) => Ok(RouteRateLimit::Limit(cfg)),
+            Raw::Name(name) => Ok(RouteRateLimit::Named(name)),
         }
     }
 }

@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use crate::route_config::{Config, ServiceConfig};
+use crate::route_config::{validate_shared_rate_limits, Config, ServiceConfig};
 use axum::extract::{MatchedPath, Path, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use opentelemetry::trace::Status;
 use serde::Serialize;
 use serde_json::json;
-use opentelemetry::trace::Status;
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
@@ -243,6 +243,12 @@ async fn put_service(
 ) -> Result<impl IntoResponse, AppError> {
     let request_id = request_id_from_headers(&headers);
     let prepared = prepare_named(&name, body, &request_id)?;
+    ensure_shared_policies(
+        &state,
+        &[(name.clone(), Some(prepared.clone()))],
+        &request_id,
+    )
+    .await?;
     let commits = commit(&state, vec![(name.clone(), Some(prepared))], &request_id).await?;
     let commit = commits.into_iter().next().expect("one commit");
     let config = commit.config.expect("put is not a delete");
@@ -335,6 +341,8 @@ async fn apply_routes(
         let cfg = prepare_named(&name, service, &request_id)?;
         prepared.push((name, Some(cfg)));
     }
+
+    ensure_shared_policies(&state, &prepared, &request_id).await?;
 
     let commits = commit(&state, prepared, &request_id).await?;
     let results = commits
@@ -432,7 +440,9 @@ async fn restore_revision(
         ));
     };
 
-    let commits = commit(&state, vec![(name, Some(config))], &request_id).await?;
+    let overlay = vec![(name.clone(), Some(config))];
+    ensure_shared_policies(&state, &overlay, &request_id).await?;
+    let commits = commit(&state, overlay, &request_id).await?;
     let commit = commits.into_iter().next().expect("one commit");
     let config = commit.config.expect("restore is not a delete");
     Ok((
@@ -454,6 +464,29 @@ fn to_revision_response(r: Revision) -> RevisionResponse {
         request_id: r.request_id,
         created_at: r.created_at.to_rfc3339(),
     }
+}
+
+async fn ensure_shared_policies(
+    state: &AppState,
+    overlay: &[(String, Option<ServiceConfig>)],
+    request_id: &str,
+) -> Result<(), AppError> {
+    let mut all = state.pg.list_current().await.map_err(|e| {
+        tracing::error!(error = %e, "list current for shared rate_limits failed");
+        AppError::service_unavailable(request_id.to_string())
+    })?;
+    for (name, cfg) in overlay {
+        match cfg {
+            Some(c) => {
+                all.insert(name.clone(), c.clone());
+            }
+            None => {
+                all.remove(name);
+            }
+        }
+    }
+    validate_shared_rate_limits(&all)
+        .map_err(|e| AppError::validation(request_id.to_string(), e.to_string()))
 }
 
 fn prepare_named(

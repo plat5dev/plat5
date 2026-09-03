@@ -1,86 +1,124 @@
-use std::collections::HashMap;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-/// In-process fixed-window counter. No Redis — per gateway instance.
+use redis::aio::ConnectionManager;
+use redis::{Client, RedisError, Script};
+use tracing::warn;
+
+const KEY_PREFIX: &str = "gw:rl:";
+
+const ALLOW_SCRIPT: &str = r#"
+local n = tonumber(redis.call('GET', KEYS[1]) or '0')
+local limit = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+if n >= limit then
+  local ttl = redis.call('TTL', KEYS[1])
+  if ttl < 0 then ttl = window end
+  return {0, n, ttl}
+end
+n = redis.call('INCR', KEYS[1])
+if n == 1 then
+  redis.call('EXPIRE', KEYS[1], window)
+end
+local ttl = redis.call('TTL', KEYS[1])
+if ttl < 0 then ttl = window end
+return {1, n, ttl}
+"#;
+
+/// Cluster-wide fixed-window limiter. Redis is required; no in-process fallback.
+#[derive(Clone)]
 pub struct RateLimiter {
-    inner: Mutex<HashMap<String, Window>>,
+    conn: ConnectionManager,
 }
 
-struct Window {
-    start: Instant,
-    count: u64,
+#[derive(Clone, Debug)]
+pub struct RateLimitInfo {
+    pub limit: u64,
+    pub remaining: u64,
+    pub reset_epoch: u64,
+}
+
+#[derive(Debug)]
+pub enum RateLimitError {
+    Exceeded {
+        retry_after: u64,
+        info: RateLimitInfo,
+    },
+    Unavailable,
 }
 
 impl RateLimiter {
-    pub fn new() -> Self {
-        Self {
-            inner: Mutex::new(HashMap::new()),
-        }
+    pub async fn connect(url: &str) -> Result<Self, RedisError> {
+        let client = Client::open(url)?;
+        let conn = ConnectionManager::new(client).await?;
+        Ok(Self { conn })
     }
 
-    /// `limit == 0` is unlimited. On exceed, returns retry-after seconds (>= 1).
-    pub fn allow(&self, key: &str, limit: u64, window_secs: u64) -> Result<(), u64> {
-        if limit == 0 || window_secs == 0 {
-            return Ok(());
-        }
-        let window = Duration::from_secs(window_secs);
-        let now = Instant::now();
-        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if map.len() > 50_000 {
-            map.retain(|_, w| now.duration_since(w.start) < window);
-        }
-        let entry = map.entry(key.to_string()).or_insert(Window {
-            start: now,
-            count: 0,
-        });
-        if now.duration_since(entry.start) >= window {
-            entry.start = now;
-            entry.count = 0;
-        }
-        if entry.count >= limit {
-            let elapsed = now.duration_since(entry.start);
-            let retry = window.saturating_sub(elapsed).as_secs().max(1);
-            return Err(retry);
-        }
-        entry.count += 1;
+    pub async fn ping(&self) -> Result<(), RedisError> {
+        let mut conn = self.conn.clone();
+        let _: String = redis::cmd("PING").query_async(&mut conn).await?;
         Ok(())
     }
-}
 
-impl Default for RateLimiter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unlimited_when_zero() {
-        let lim = RateLimiter::new();
-        for _ in 0..100 {
-            lim.allow("k", 0, 60).unwrap();
+    pub async fn allow(
+        &self,
+        bucket: &str,
+        limit: u64,
+        window_secs: u64,
+    ) -> Result<RateLimitInfo, RateLimitError> {
+        if limit == 0 || window_secs == 0 {
+            return Ok(RateLimitInfo {
+                limit: 0,
+                remaining: 0,
+                reset_epoch: now_epoch().saturating_add(1),
+            });
+        }
+        let key = format!("{KEY_PREFIX}{bucket}");
+        let mut conn = self.conn.clone();
+        let result: Result<Vec<i64>, RedisError> = Script::new(ALLOW_SCRIPT)
+            .key(&key)
+            .arg(limit)
+            .arg(window_secs)
+            .invoke_async(&mut conn)
+            .await;
+        match result {
+            Ok(vals) if vals.len() >= 3 => {
+                let allowed = vals[0] == 1;
+                let count = vals[1].max(0) as u64;
+                let ttl = vals[2].max(1) as u64;
+                let remaining = if allowed {
+                    limit.saturating_sub(count)
+                } else {
+                    0
+                };
+                let info = RateLimitInfo {
+                    limit,
+                    remaining,
+                    reset_epoch: now_epoch().saturating_add(ttl),
+                };
+                if allowed {
+                    Ok(info)
+                } else {
+                    Err(RateLimitError::Exceeded {
+                        retry_after: ttl,
+                        info,
+                    })
+                }
+            }
+            Ok(_) => {
+                warn!("rate limit script returned unexpected value");
+                Err(RateLimitError::Unavailable)
+            }
+            Err(err) => {
+                warn!(error = %err, "rate limit redis error");
+                Err(RateLimitError::Unavailable)
+            }
         }
     }
+}
 
-    #[test]
-    fn exceeds_returns_retry_after() {
-        let lim = RateLimiter::new();
-        lim.allow("k", 2, 60).unwrap();
-        lim.allow("k", 2, 60).unwrap();
-        let err = lim.allow("k", 2, 60).unwrap_err();
-        assert!(err >= 1);
-    }
-
-    #[test]
-    fn keys_are_independent() {
-        let lim = RateLimiter::new();
-        lim.allow("a", 1, 60).unwrap();
-        lim.allow("b", 1, 60).unwrap();
-        assert!(lim.allow("a", 1, 60).is_err());
-        assert!(lim.allow("b", 1, 60).is_err());
-    }
+fn now_epoch() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }

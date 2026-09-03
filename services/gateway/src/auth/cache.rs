@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use moka::future::Cache;
@@ -40,6 +41,28 @@ impl<V: Clone + Send + Sync + 'static> TtlCache<V> {
 
     pub async fn put_secret(&self, secret: &str, value: V) {
         self.put(hash_secret(secret), value).await;
+    }
+
+    /// Coalesce concurrent loads. `Err` is not cached.
+    pub async fn try_get_with<E, Fut>(&self, cache_key: String, init: Fut) -> Result<V, Arc<E>>
+    where
+        Fut: std::future::Future<Output = Result<V, E>>,
+        E: Send + Sync + 'static,
+    {
+        if let Some(v) = self.inner.get(&cache_key).await {
+            metrics::record_auth_cache_hit(self.metric);
+            return Ok(v);
+        }
+        metrics::record_auth_cache_miss(self.metric);
+        self.inner.try_get_with(cache_key, init).await
+    }
+
+    pub async fn try_get_with_secret<E, Fut>(&self, secret: &str, init: Fut) -> Result<V, Arc<E>>
+    where
+        Fut: std::future::Future<Output = Result<V, E>>,
+        E: Send + Sync + 'static,
+    {
+        self.try_get_with(hash_secret(secret), init).await
     }
 }
 

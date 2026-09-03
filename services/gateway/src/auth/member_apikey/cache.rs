@@ -1,15 +1,19 @@
+use std::sync::Arc;
+
 use crate::auth::cache::TtlCache;
 use crate::auth::AuthType;
 
-#[derive(Clone)]
-pub struct CachedMemberApiKey {
-    pub member_id: String,
-    pub organization_id: String,
-    /// None = unrestricted.
-    pub scopes: Option<Vec<String>>,
+#[derive(Clone, Debug)]
+pub enum CachedMemberApiKey {
+    Valid {
+        member_id: String,
+        organization_id: String,
+        scopes: Option<Vec<String>>,
+    },
+    Invalid,
 }
 
-/// Cache for validated member API keys.
+/// Cache for member API keys (hits and invalid keys).
 #[derive(Clone)]
 pub struct MemberApiKeyCache {
     inner: TtlCache<CachedMemberApiKey>,
@@ -22,26 +26,15 @@ impl MemberApiKeyCache {
         }
     }
 
-    pub async fn get(&self, key: &str) -> Option<CachedMemberApiKey> {
-        self.inner.get_secret(key).await
-    }
-
-    pub async fn put(
+    pub async fn get_or_load<E, Fut>(
         &self,
         key: &str,
-        member_id: String,
-        organization_id: String,
-        scopes: Option<Vec<String>>,
-    ) {
-        self.inner
-            .put_secret(
-                key,
-                CachedMemberApiKey {
-                    member_id,
-                    organization_id,
-                    scopes,
-                },
-            )
-            .await;
+        init: Fut,
+    ) -> Result<CachedMemberApiKey, Arc<E>>
+    where
+        Fut: std::future::Future<Output = Result<CachedMemberApiKey, E>>,
+        E: Send + Sync + 'static,
+    {
+        self.inner.try_get_with_secret(key, init).await
     }
 }

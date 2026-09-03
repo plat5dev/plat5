@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use regex::Regex;
 use tracing::warn;
 
-use crate::route_config::{Config, RouteRateLimit};
+use crate::route_config::{Config, RateLimitPolicy, RouteRateLimit};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RouteScope {
@@ -25,7 +25,31 @@ pub struct Route {
     /// Path param name for organization id (`organization` scope only)
     pub organization_param: Option<String>,
     pub required_scopes: Option<Vec<String>>,
-    pub rate_limit: Option<RouteRateLimit>,
+    pub limiter: RouteLimiter,
+}
+
+/// Resolved at load from `rate_limit` + service `rate_limits`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RouteLimiter {
+    /// Inherit gateway fallback (`RATE_LIMIT_*`).
+    Inherit,
+    Unlimited,
+    Limited(ResolvedLimiter),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedLimiter {
+    pub requests: u64,
+    pub window_seconds: u64,
+    pub bucket: LimitBucket,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LimitBucket {
+    /// `{METHOD} {path} {subject}`
+    MethodPath,
+    /// `{prefix}:{subject}` (`service:name` or shared `name`)
+    Named(String),
 }
 
 impl Route {
@@ -113,6 +137,23 @@ impl RouteMap {
                     let transform_path =
                         route_config.transform.as_ref().and_then(|t| t.path.clone());
 
+                    let limiter = match bind_limiter(
+                        service_name,
+                        service_config.rate_limits.as_ref(),
+                        route_config.rate_limit.as_ref(),
+                    ) {
+                        Ok(l) => l,
+                        Err(e) => {
+                            warn!(
+                                service = %service_name,
+                                path = %route_config.path,
+                                error = %e,
+                                "skipping invalid route"
+                            );
+                            continue;
+                        }
+                    };
+
                     if let Err(e) = route_map.add_route(
                         base_url,
                         &route_config.path,
@@ -121,7 +162,7 @@ impl RouteMap {
                         scope,
                         org_param.clone(),
                         route_config.required_scopes.clone(),
-                        route_config.rate_limit.clone(),
+                        limiter,
                     ) {
                         warn!(
                             service = %service_name,
@@ -148,7 +189,7 @@ impl RouteMap {
         scope: RouteScope,
         organization_param: Option<String>,
         required_scopes: Option<Vec<String>>,
-        rate_limit: Option<RouteRateLimit>,
+        limiter: RouteLimiter,
     ) -> Result<(), String> {
         if scope == RouteScope::Organization {
             let param = organization_param
@@ -174,7 +215,7 @@ impl RouteMap {
             scope,
             organization_param,
             required_scopes,
-            rate_limit,
+            limiter,
         };
 
         self.routes.push(CompiledRoute {
@@ -257,6 +298,37 @@ impl RouteMap {
     }
 }
 
+fn bind_limiter(
+    service_name: &str,
+    policies: Option<&HashMap<String, RateLimitPolicy>>,
+    rate_limit: Option<&RouteRateLimit>,
+) -> Result<RouteLimiter, String> {
+    match rate_limit {
+        None => Ok(RouteLimiter::Inherit),
+        Some(RouteRateLimit::Unlimited) => Ok(RouteLimiter::Unlimited),
+        Some(RouteRateLimit::Limit(cfg)) => Ok(RouteLimiter::Limited(ResolvedLimiter {
+            requests: cfg.requests,
+            window_seconds: cfg.window_seconds,
+            bucket: LimitBucket::MethodPath,
+        })),
+        Some(RouteRateLimit::Named(name)) => {
+            let policy = policies
+                .and_then(|p| p.get(name))
+                .ok_or_else(|| format!("rate_limit '{name}' is not defined on this service"))?;
+            let prefix = if policy.shared {
+                name.clone()
+            } else {
+                format!("{service_name}:{name}")
+            };
+            Ok(RouteLimiter::Limited(ResolvedLimiter {
+                requests: policy.requests,
+                window_seconds: policy.window_seconds,
+                bucket: LimitBucket::Named(prefix),
+            }))
+        }
+    }
+}
+
 /// Static segment count and path-param count for specificity ranking.
 fn path_specificity(path: &str) -> (usize, usize) {
     let mut static_segments = 0usize;
@@ -302,7 +374,9 @@ fn path_to_regex(path: &str) -> Result<Regex, regex::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::route_config::{Config, RouteConfig, ScopeConfig, ServiceConfig};
+    use crate::route_config::{
+        Config, RateLimitPolicy, RouteConfig, RouteRateLimit, ScopeConfig, ServiceConfig,
+    };
 
     fn route(path: &str, methods: &[&str]) -> RouteConfig {
         RouteConfig {
@@ -322,6 +396,7 @@ mod tests {
             "b".to_string(),
             ServiceConfig {
                 url: "http://b".into(),
+                rate_limits: None,
                 public: Some(ScopeConfig {
                     route_prefix: None,
                     organization_param: None,
@@ -335,6 +410,7 @@ mod tests {
             "a".to_string(),
             ServiceConfig {
                 url: "http://a".into(),
+                rate_limits: None,
                 public: Some(ScopeConfig {
                     route_prefix: None,
                     organization_param: None,
@@ -359,6 +435,7 @@ mod tests {
                 name.to_string(),
                 ServiceConfig {
                     url: url.into(),
+                    rate_limits: None,
                     public: Some(ScopeConfig {
                         route_prefix: None,
                         organization_param: None,
@@ -386,6 +463,62 @@ mod tests {
     }
 
     #[test]
+    fn named_policy_binds_service_and_shared_buckets() {
+        let mut local = route("/api/w", &["POST"]);
+        local.rate_limit = Some(RouteRateLimit::Named("writes".into()));
+        let mut shared = route("/api/s", &["DELETE"]);
+        shared.rate_limit = Some(RouteRateLimit::Named("org-writes".into()));
+        let mut services = HashMap::new();
+        services.insert(
+            "projects".into(),
+            ServiceConfig {
+                url: "http://p".into(),
+                rate_limits: Some(HashMap::from([
+                    (
+                        "writes".into(),
+                        RateLimitPolicy {
+                            requests: 30,
+                            window_seconds: 60,
+                            shared: false,
+                        },
+                    ),
+                    (
+                        "org-writes".into(),
+                        RateLimitPolicy {
+                            requests: 10,
+                            window_seconds: 60,
+                            shared: true,
+                        },
+                    ),
+                ])),
+                public: None,
+                user: Some(ScopeConfig {
+                    route_prefix: None,
+                    organization_param: None,
+                    routes: vec![local, shared],
+                }),
+                organization: None,
+            },
+        );
+        let map = RouteMap::from_config(&Config { services });
+        let (w, _) = map.find_route("/api/w", "POST").unwrap();
+        match &w.limiter {
+            RouteLimiter::Limited(b) => {
+                assert_eq!(b.requests, 30);
+                assert_eq!(b.bucket, LimitBucket::Named("projects:writes".into()));
+            }
+            other => panic!("{other:?}"),
+        }
+        let (s, _) = map.find_route("/api/s", "DELETE").unwrap();
+        match &s.limiter {
+            RouteLimiter::Limited(b) => {
+                assert_eq!(b.bucket, LimitBucket::Named("org-writes".into()));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
     fn org_route_requires_param_in_path() {
         let mut map = RouteMap::new();
         assert!(map
@@ -397,7 +530,7 @@ mod tests {
                 RouteScope::Organization,
                 Some("organization_id".into()),
                 None,
-                None,
+                RouteLimiter::Inherit,
             )
             .is_err());
         assert!(map
@@ -409,7 +542,7 @@ mod tests {
                 RouteScope::Organization,
                 Some("organization_id".into()),
                 None,
-                None,
+                RouteLimiter::Inherit,
             )
             .is_ok());
         assert!(map
@@ -421,7 +554,7 @@ mod tests {
                 RouteScope::Organization,
                 None,
                 None,
-                None,
+                RouteLimiter::Inherit,
             )
             .is_err());
     }

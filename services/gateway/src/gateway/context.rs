@@ -12,6 +12,7 @@ pub struct GatewayContext {
     pub root_span: Option<Span>,
     pub upstream_peer: Option<Box<HttpPeer>>,
     pub body_bytes: u64,
+    pub rate_limit: Option<crate::rate_limit::RateLimitInfo>,
 }
 
 impl Default for GatewayContext {
@@ -31,6 +32,7 @@ impl GatewayContext {
             root_span: None,
             upstream_peer: None,
             body_bytes: 0,
+            rate_limit: None,
         }
     }
 

@@ -25,9 +25,9 @@ use crate::auth::AuthStack;
 use crate::config::GatewayConfig;
 use crate::error::{ApiError, ErrorKind};
 use crate::metrics;
-use crate::rate_limit::RateLimiter;
-use crate::route_config::{scopes_intersect, RouteRateLimit};
-use crate::route_map::{Route, RouteMap, RouteScope};
+use crate::rate_limit::{RateLimitError, RateLimiter};
+use crate::route_config::scopes_intersect;
+use crate::route_map::{LimitBucket, Route, RouteLimiter, RouteMap, RouteScope};
 
 pub use crate::admission::parse_user_id_claim;
 pub use context::GatewayContext;
@@ -46,8 +46,7 @@ pub struct UserGateway {
     connect_timeout: Duration,
     read_timeout: Duration,
     cors: CorsPolicy,
-    route_limiter: RateLimiter,
-    auth_failure_limiter: RateLimiter,
+    limiter: RateLimiter,
     rate_limit_fallback: RateLimitFallback,
     auth_failure_requests: u64,
     auth_failure_window_seconds: u64,
@@ -58,6 +57,7 @@ impl UserGateway {
         cfg: &GatewayConfig,
         jwt_validator: JwtValidatorState,
         route_map: Arc<ArcSwap<RouteMap>>,
+        limiter: RateLimiter,
     ) -> Self {
         Self {
             admissor: Admissor::new(AuthStack::from_config(cfg, jwt_validator)),
@@ -65,8 +65,7 @@ impl UserGateway {
             connect_timeout: cfg.upstream_connect_timeout,
             read_timeout: cfg.upstream_read_timeout,
             cors: CorsPolicy::new(cfg.allowed_origins.clone()),
-            route_limiter: RateLimiter::new(),
-            auth_failure_limiter: RateLimiter::new(),
+            limiter,
             rate_limit_fallback: RateLimitFallback {
                 requests: cfg.rate_limit_requests,
                 window_seconds: cfg.rate_limit_window_seconds,
@@ -78,6 +77,7 @@ impl UserGateway {
 
     async fn handle_preflight(&self, session: &mut Session, ctx: &GatewayContext) -> Result<bool> {
         let mut header = ResponseHeader::build(200, None)?;
+        response::apply_security_headers(&mut header)?;
         self.cors
             .apply(&mut header, ctx.request_origin.as_deref())?;
         header.insert_header("Access-Control-Max-Age", "86400")?;
@@ -133,14 +133,28 @@ impl UserGateway {
         session: &mut Session,
         ctx: &GatewayContext,
     ) -> Result<Option<bool>> {
-        match self.auth_failure_limiter.allow(
-            &format!("ip:{}", client_ip(session)),
-            self.auth_failure_requests,
-            self.auth_failure_window_seconds,
-        ) {
-            Ok(()) => Ok(None),
-            Err(retry) => Ok(Some(
-                response::write_rate_limited(&self.cors, session, ctx, retry).await?,
+        match self
+            .limiter
+            .allow(
+                &format!("ip:{}", client_ip(session)),
+                self.auth_failure_requests,
+                self.auth_failure_window_seconds,
+            )
+            .await
+        {
+            Ok(_) => Ok(None),
+            Err(RateLimitError::Exceeded { retry_after, .. }) => Ok(Some(
+                response::write_rate_limited(&self.cors, session, ctx, retry_after, None).await?,
+            )),
+            Err(RateLimitError::Unavailable) => Ok(Some(
+                response::write_json_error(
+                    &self.cors,
+                    session,
+                    ctx,
+                    503,
+                    ApiError::service_unavailable(),
+                )
+                .await?,
             )),
         }
     }
@@ -210,11 +224,37 @@ impl UserGateway {
             }
         }
 
-        if let Some((limit, window)) = effective_rate_limit(route, &self.rate_limit_fallback) {
-            let subject = limit_subject(route.scope, &admission, &client_ip(session));
-            let key = format!("{} {} {}", ctx.method_label(), route.path, subject);
-            if let Err(retry) = self.route_limiter.allow(&key, limit, window) {
-                return response::write_rate_limited(&self.cors, session, ctx, retry).await;
+        if let Some((limit, window, bucket)) = limit_plan(
+            route,
+            &self.rate_limit_fallback,
+            ctx.method_label(),
+            &admission,
+            &client_ip(session),
+        ) {
+            match self.limiter.allow(&bucket, limit, window).await {
+                Ok(info) => {
+                    ctx.rate_limit = Some(info);
+                }
+                Err(RateLimitError::Exceeded { retry_after, info }) => {
+                    return response::write_rate_limited(
+                        &self.cors,
+                        session,
+                        ctx,
+                        retry_after,
+                        Some(&info),
+                    )
+                    .await;
+                }
+                Err(RateLimitError::Unavailable) => {
+                    return response::write_json_error(
+                        &self.cors,
+                        session,
+                        ctx,
+                        503,
+                        ApiError::service_unavailable(),
+                    )
+                    .await;
+                }
             }
         }
 
@@ -268,15 +308,34 @@ fn client_ip(session: &Session) -> String {
     }
 }
 
-fn effective_rate_limit(route: &Route, fallback: &RateLimitFallback) -> Option<(u64, u64)> {
-    match &route.rate_limit {
-        Some(RouteRateLimit::Unlimited) => None,
-        Some(RouteRateLimit::Limit(cfg)) => Some((cfg.requests, cfg.window_seconds)),
-        None => {
+fn limit_plan(
+    route: &Route,
+    fallback: &RateLimitFallback,
+    method: &str,
+    admission: &crate::admission::Admission,
+    ip: &str,
+) -> Option<(u64, u64, String)> {
+    let subject = limit_subject(route.scope, admission, ip);
+    match &route.limiter {
+        RouteLimiter::Unlimited => None,
+        RouteLimiter::Limited(bound) => {
+            let bucket = match &bound.bucket {
+                LimitBucket::MethodPath => {
+                    format!("{} {} {}", method, route.path, subject)
+                }
+                LimitBucket::Named(prefix) => format!("{prefix}:{subject}"),
+            };
+            Some((bound.requests, bound.window_seconds, bucket))
+        }
+        RouteLimiter::Inherit => {
             if fallback.requests == 0 {
                 None
             } else {
-                Some((fallback.requests, fallback.window_seconds))
+                Some((
+                    fallback.requests,
+                    fallback.window_seconds,
+                    format!("{} {} {}", method, route.path, subject),
+                ))
             }
         }
     }
@@ -441,8 +500,7 @@ impl ProxyHttp for UserGateway {
         ctx.route = Some(route.path.clone());
         if let Some(ref span) = ctx.root_span {
             span.record("http.route", route.path.as_str());
-            span
-                .context()
+            span.context()
                 .span()
                 .update_name(format!("{} {}", method, route.path));
         }
@@ -538,6 +596,11 @@ impl ProxyHttp for UserGateway {
 
         if let Some(ref request_id) = ctx.request_id {
             upstream_response.insert_header("X-Request-ID", request_id)?;
+        }
+
+        response::apply_security_headers(upstream_response)?;
+        if let Some(ref info) = ctx.rate_limit {
+            response::apply_rate_limit_headers(upstream_response, info)?;
         }
 
         upstream_response.remove_header("alt-svc");

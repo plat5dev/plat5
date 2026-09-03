@@ -49,6 +49,8 @@ Local default: `dev-admin-token` (`ADMIN_TOKEN` env). Required and non-empty in 
 
 Apply is **upsert** of the services in the file. Services not in the file are left alone. There is no prune.
 
+Named `rate_limits` live on each `ServiceConfig`. Apply and `PUT /services/{name}` validate `shared: true` policy names against **all** current services, not only the payload. Schema: [`routes.md`](routes.md).
+
 Identity public routes are not special. Apply the catalog ([`services/identity/routes.yml`](../services/identity/routes.yml)) or a subset. Omitting a path does not disable the identity process — it only hides those routes from the gateway.
 
 ### Apply example

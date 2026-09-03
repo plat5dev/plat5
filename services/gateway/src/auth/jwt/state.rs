@@ -4,11 +4,14 @@ use std::time::Duration;
 
 use arc_swap::ArcSwapOption;
 use jsonwebtoken::jwk::JwkSet;
+use tokio::sync::{broadcast, Mutex};
 use tracing::{info, warn};
 
 const FETCH_TIMEOUT_SECS: u64 = 10;
 const RETRY_INTERVAL_SECS: u64 = 2;
 const REFRESH_INTERVAL_SECS: u64 = 15 * 60;
+
+type JwksFetchTx = broadcast::Sender<Result<Arc<JwkSet>, String>>;
 
 #[derive(Clone)]
 pub struct JwtValidatorState {
@@ -17,8 +20,8 @@ pub struct JwtValidatorState {
     allowed_audiences: Arc<[String]>,
     jwks: Arc<ArcSwapOption<JwkSet>>,
     client: reqwest::Client,
-    /// Serializes cold-path fetch so only one request runs at a time.
-    fetch_lock: Arc<tokio::sync::Mutex<()>>,
+    /// In-flight cold-path fetch. Waiters subscribe; the network call runs without this lock.
+    in_flight: Arc<Mutex<Option<JwksFetchTx>>>,
     refresh_started: Arc<AtomicBool>,
 }
 
@@ -35,7 +38,7 @@ impl JwtValidatorState {
             allowed_audiences: allowed_audiences.into(),
             jwks: Arc::new(ArcSwapOption::empty()),
             client,
-            fetch_lock: Arc::new(tokio::sync::Mutex::new(())),
+            in_flight: Arc::new(Mutex::new(None)),
             refresh_started: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -45,14 +48,56 @@ impl JwtValidatorState {
             return Ok((*jwks).clone());
         }
 
-        let _guard = self.fetch_lock.lock().await;
-        if let Some(jwks) = self.jwks.load_full() {
-            return Ok((*jwks).clone());
+        let waiter = {
+            let mut slot = self.in_flight.lock().await;
+            if let Some(jwks) = self.jwks.load_full() {
+                return Ok((*jwks).clone());
+            }
+            if let Some(tx) = slot.as_ref() {
+                Some(tx.subscribe())
+            } else {
+                let (tx, _) = broadcast::channel(1);
+                *slot = Some(tx);
+                None
+            }
+        };
+
+        if let Some(mut rx) = waiter {
+            match rx.recv().await {
+                Ok(Ok(jwks)) => return Ok((*jwks).clone()),
+                Ok(Err(_)) | Err(_) => {
+                    // Fetcher failed or lagged; try again below if cache still empty.
+                }
+            }
+            if let Some(jwks) = self.jwks.load_full() {
+                return Ok((*jwks).clone());
+            }
+            return self.fetch_and_store().await;
         }
 
+        let result = self.fetch_and_store().await;
+        {
+            let mut slot = self.in_flight.lock().await;
+            if let Some(tx) = slot.take() {
+                match &result {
+                    Ok(j) => {
+                        let _ = tx.send(Ok(Arc::new(j.clone())));
+                    }
+                    Err(err) => {
+                        let _ = tx.send(Err(err.to_string()));
+                    }
+                }
+            }
+        }
+        if result.is_ok() {
+            self.try_start_refresh_task();
+        }
+        result
+    }
+
+    async fn fetch_and_store(&self) -> Result<JwkSet, reqwest::Error> {
         let new_jwks = fetch_jwks(&self.client, &self.jwks_uri).await?;
         self.jwks.store(Some(Arc::new(new_jwks.clone())));
-        self.try_start_refresh_task();
         Ok(new_jwks)
     }
 

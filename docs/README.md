@@ -26,7 +26,7 @@ Per-service details live in each service's `README.md`.
 |----------|---------|
 | [`gateway-contract.md`](gateway-contract.md) | Auth delegation, scope headers, TLS, service rules |
 | [`idp-contract.md`](idp-contract.md) | BYO IdP, JWKS, user-id claim mapping |
-| [`routes.md`](routes.md) | Route publishing, scopes, `route_prefix` |
+| [`routes.md`](routes.md) | Route publishing, scopes, `route_prefix`, rate-limit policies |
 | [`route-registry.md`](route-registry.md) | Desired state (Postgres) + etcd projection |
 | [`identity-boundary.md`](identity-boundary.md) | Authn vs organization context vs resource authz |
 | [`identity.md`](identity.md) | Identity service: orgs, members, service accounts, API keys, internal validate/resolve |

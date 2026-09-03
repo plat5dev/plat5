@@ -102,6 +102,7 @@ Same path, different per-verb `required_scopes` / `rate_limit` — nested `metho
 |-------|------|-------------|
 | `services` | `map<string, ServiceConfig>` | Top-level wrapper. Keys are service names. |
 | `url` | `string` | Upstream URL (hostname:port or absolute URL the gateway can dial). |
+| `rate_limits` | `map<string, RateLimitPolicy>?` | Optional on the **service**. Named policies this service’s routes may reference. |
 | `public` | `ScopeConfig?` | No authentication. |
 | `user` | `ScopeConfig?` | JWT or **user** API key. |
 | `organization` | `ScopeConfig?` | JWT / user API key + member resolve, or **member** API key. |
@@ -112,7 +113,7 @@ Same path, different per-verb `required_scopes` / `rate_limit` — nested `metho
 | `methods` | `array<string>` \| `map<string, MethodConfig>` | List form: allowed HTTP methods. Map form: per-verb config (see below). Do not mix list and map on the same route (`422`). |
 | `transform` | `object?` | Optional path rewrite (see below). Route-level only — not per-method. |
 | `required_scopes` | `string[]?` | Optional. Omitted = any admitted principal (including restricted keys). If set, a **restricted** API key (`scopes` non-null, including `[]`) must share at least one label. JWTs and unrestricted keys (`scopes: null`) skip. Validated at apply. Route-level value applies only to the flat methods list. |
-| `rate_limit` | `false` \| `{requests, window_seconds}` \| omitted | Omitted **inherits** gateway fallback (never silent unlimited). `false` opts out (unlimited). Object overrides. Limiter subject follows route scope (`public`→ip, `user`→user, `organization`→org). Route-level value applies only to the flat methods list. |
+| `rate_limit` | `false` \| `{requests, window_seconds}` \| `string` \| omitted | Omitted **inherits** gateway fallback (never silent unlimited). `false` opts out (unlimited). Object = this route+method only. String = named policy on **this** service. Limiter subject follows route scope (`public`→ip, `user`→user, `organization`→org). Route-level value applies only to the flat methods list. |
 
 A service must define at least one scope. Multiple scopes may be present.
 
@@ -157,19 +158,79 @@ After match + admission: if the route has `required_scopes` **and** the credenti
 
 ### `rate_limit`
 
-Applies to **all admitted** routes (JWT and API key), in-process per gateway instance (no Redis).
+Applies to **all admitted** routes (JWT and API key). Counters live in **Redis** — replicas share one budget. `REDIS_URL` is required to boot. Redis error on a limited request → **503** `SERVICE_UNAVAILABLE` (not unlimited, not a local fallback).
+
+Fixed window: the first increment opens the window; key TTL is `window_seconds`. Restarting Redis resets open windows.
+
+Route field (`rate_limit` on a route or nested method):
 
 | YAML | Effect |
 |------|--------|
 | omitted | Inherit `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS`. `0` requests = unlimited fallback. |
-| `false` | Unlimited for this route |
-| `{requests, window_seconds}` | Override. `requests` and `window_seconds` must be > 0. |
+| `false` | Unlimited for this route / verb |
+| `{requests, window_seconds}` | Unique bucket for **this route+method only**. Both must be > 0. |
+| policy name (string) | Named policy defined on **this** service. `true` is invalid. |
 
-Limiter subject follows route scope: `public`→`ip`, `user`→`user`, `organization`→`org` (`Admission::Organization.organization_id`, including SA/member keys).
+A name on a flat methods list puts every verb in that list on the named bucket. An inline object on a flat list still uses **per-method** buckets (`GET /features` ≠ `POST /features`) with the same numbers.
 
-Exceed → **429** `RATE_LIMITED`, `Retry-After`, `details.retry_after_seconds`. See [`api-errors.md`](api-errors.md).
+Named policies stay **names** in etcd (`rate_limit: writes` plus the service `rate_limits` map). Apply does not substitute `{requests, window_seconds}`. The gateway resolves the bucket at request time.
+
+#### Named policies (`rate_limits`)
+
+Optional map on the service. Routes may only reference a name defined **on that service**. Unknown name → **422**.
+
+```yaml
+services:
+  projects:
+    url: projects:3000
+    rate_limits:
+      writes:
+        requests: 30
+        window_seconds: 60
+      org-writes:
+        requests: 30
+        window_seconds: 60
+        shared: true
+    organization:
+      organization_param: organization_id
+      routes:
+        - path: /api/organizations/{organization_id}/projects
+          methods: [POST]
+          rate_limit: writes
+        - path: /api/organizations/{organization_id}/projects/{project_id}
+          methods: [DELETE]
+          rate_limit: org-writes
+```
+
+| Field | Rule |
+|-------|------|
+| map key | Policy name. `[a-z0-9:._-]+`, max 64. Unique in the service. |
+| `requests` / `window_seconds` | Required. Both > 0. |
+| `shared` | Optional bool. Omit / `false`: this service only. `true`: same bucket across services that declare the name. |
+
+**Buckets** (subject appended):
+
+| Policy | Bucket |
+|--------|--------|
+| omitted inherit / inline object | `{METHOD} {path} {subject}` |
+| name, not shared | `{service}:{name}:{subject}` |
+| name, `shared: true` | `{name}:{subject}` |
+
+Limiter subject follows route scope: `public`→`ip`, `user`→`user`, `organization`→`org` (`Admission::Organization.organization_id`, including SA/member keys). Not configurable.
+
+**`shared: true`** — opt-in cross-service join. Every service that uses the name declares the same table entry (`requests`, `window_seconds`, `shared: true`). Apply and `PUT /services/{name}` validate against **all** current services in Postgres, not only the payload.
+
+- Same shared name, different numbers → **422**
+- Same name, one `shared: true` and one local → **422**
+- Local `writes` on two services → independent buckets; numbers may differ
+- Inline object: never shared; no `shared` field
+- One service claiming a shared name with no other consumer is fine
+
+Exceed → **429** `RATE_LIMITED`, `Retry-After`, `details.retry_after_seconds`. Admitted limited routes also set `X-RateLimit-Limit` / `Remaining` / `Reset` (success and 429). See [`api-errors.md`](api-errors.md) and [`gateway-contract.md`](gateway-contract.md).
 
 A separate failed-auth IP limiter (`RATE_LIMIT_AUTH_FAILURE_*`) covers unadmitted 401s and unmatched 404s. It is not per-route.
+
+There is no cluster-wide policy catalog, no extra etcd prefix for policies, and no limiter subject override.
 
 ### Path Transforms
 
@@ -311,6 +372,9 @@ Registry validates **before etcd**. Gateway validates again at load (expanded li
 - `route_prefix` join rules at registry; etcd stores full paths only
 - `required_scopes` if present: non-empty, `[a-z0-9:._-]+`, max 64 chars, max 32, unique
 - `rate_limit` if object: `requests` > 0, `window_seconds` > 0. `true` is invalid
+- `rate_limit` if string: names a policy on this service; policy name `[a-z0-9:._-]+`, max 64
+- `rate_limits` keys: same hygiene, unique; values `requests` > 0, `window_seconds` > 0
+- Shared policy names: same name across services must agree on `requests`, `window_seconds`, and `shared` (full desired state, apply and PUT)
 - Duplicate service names in merged registry: first wins, warning
 - Malformed JSON values skipped with warning; other routes continue
 

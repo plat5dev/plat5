@@ -290,7 +290,7 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
 `scopes` is `string[] | null`. `null` = unrestricted (skip `required_scopes`). `[]` = restricted, no labels (**403** on routes with `required_scopes`; unlabeled still admit).
 
-Gateway: prefix `{brand}-sk-1-` → this URL. Subject = `user_id` (same as JWT for scope checks). Cache: `APIKEY_CACHE_TTL_SECS` (default 300s).
+Gateway: prefix `{brand}-sk-1-` → this URL. Subject = `user_id` (same as JWT for scope checks). Gateway caches valid hits and invalid keys (`APIKEY_CACHE_TTL_SECS`, default 300s). Revoke is visible at the edge when the TTL expires. Transport / 503 are not cached. Contract: [`gateway-contract.md`](gateway-contract.md).
 
 ### Member API key validate
 
@@ -307,7 +307,7 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 | Valid active member key | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "scopes": null }` (`scopes` same as user keys) |
 | Wrong prefix / missing / revoked / inactive member / unknown | **200** `{ "valid": false }` |
 
-Gateway: prefix `{brand}-mk-1-` → this URL. **organization** scope only (see gateway contract). Does not use member resolve.
+Gateway: prefix `{brand}-mk-1-` → this URL. **organization** scope only (see gateway contract). Does not use member resolve. Same API-key cache as user keys (hits and invalid keys).
 
 | Validate outcome (either endpoint) | Client |
 |------------------------------------|--------|
@@ -341,7 +341,7 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
 Response includes `status` but **not** `role`. Gateway admits only when `status === "active"`; any other status → gateway **404**.
 
-Gateway may cache active resolves (`MEMBER_CACHE_TTL_SECS`, default 300s). Remove/suspend is not edge-instant until TTL expires.
+Gateway caches active hits and 404 / inactive misses (`MEMBER_CACHE_TTL_SECS`, default 300s). Concurrent misses share one resolve call. Transport / 503 are not cached. Remove/suspend is visible at the edge when the TTL expires. Contract: [`gateway-contract.md`](gateway-contract.md).
 
 Member API keys do **not** use this endpoint for admission: validate already returns `member_id` + `organization_id`.
 

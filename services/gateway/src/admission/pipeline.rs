@@ -4,9 +4,9 @@ use pingora::http::RequestHeader;
 use tracing::{debug, warn};
 
 use crate::auth::jwt::validate_token;
-use crate::auth::member::MemberError;
-use crate::auth::member_apikey::MemberApiKeyError;
-use crate::auth::user_apikey::UserApiKeyError;
+use crate::auth::member::{CachedMember, MemberError};
+use crate::auth::member_apikey::{CachedMemberApiKey, MemberApiKeyError};
+use crate::auth::user_apikey::{CachedUserApiKey, UserApiKeyError};
 use crate::auth::AuthStack;
 use crate::error::ErrorKind;
 use crate::route_map::{Route, RouteScope};
@@ -138,85 +138,85 @@ impl Admissor {
         path_organization_id: &str,
         key: &str,
     ) -> Result<Admission, AdmitError> {
-        if let Some(cached) = self.stack.member_apikey_cache.get(key).await {
-            if cached.organization_id != path_organization_id {
-                debug!(
-                    key_org = %cached.organization_id,
-                    path_org = %path_organization_id,
-                    "member key org mismatch"
-                );
-                return Err(AdmitError::NotFound);
-            }
-            debug!(
-                auth_type = AuthType::MemberApiKey.as_str(),
-                organization_id = %path_organization_id,
-                member_id = %cached.member_id,
-                "organization admission successful"
-            );
-            return Ok(Admission::Organization {
-                organization_id: path_organization_id.to_string(),
-                member_id: cached.member_id,
-                via: OrgVia::MemberKey,
-                key_scopes: cached.scopes,
-            });
-        }
-
-        let validation = match self.stack.member_apikey_validator.validate(key).await {
-            Ok(v) => v,
-            Err(MemberApiKeyError::InvalidKey) => return Err(AdmitError::MemberApiKeyInvalid),
-            Err(MemberApiKeyError::ServiceError(msg)) => {
-                warn!(
-                    error_kind = ErrorKind::Network.as_str(),
-                    error_message = %msg,
-                    "member key validate error"
-                );
-                return Err(AdmitError::Unavailable);
-            }
-        };
-
-        let member_id = match validation.member_id.clone() {
-            Some(id) if !id.is_empty() => id,
-            _ => {
-                warn!("member key validate returned valid without member_id");
-                return Err(AdmitError::Unavailable);
-            }
-        };
-        let key_org = match validation.organization_id.clone() {
-            Some(id) if !id.is_empty() => id,
-            _ => {
-                warn!("member key validate returned valid without organization_id");
-                return Err(AdmitError::Unavailable);
-            }
-        };
-
-        if key_org != path_organization_id {
-            debug!(
-                key_org = %key_org,
-                path_org = %path_organization_id,
-                "member key org mismatch"
-            );
-            return Err(AdmitError::NotFound);
-        }
-
-        let key_scopes = validation.scopes.clone();
-        self.stack
+        let cached = match self
+            .stack
             .member_apikey_cache
-            .put(key, member_id.clone(), key_org, key_scopes.clone())
-            .await;
+            .get_or_load(key, async {
+                match self.stack.member_apikey_validator.validate(key).await {
+                    Ok(v) => {
+                        let member_id = match v.member_id.clone() {
+                            Some(id) if !id.is_empty() => id,
+                            _ => {
+                                warn!("member key validate returned valid without member_id");
+                                return Err(MemberApiKeyError::ServiceError(
+                                    "missing member_id".into(),
+                                ));
+                            }
+                        };
+                        let organization_id = match v.organization_id.clone() {
+                            Some(id) if !id.is_empty() => id,
+                            _ => {
+                                warn!("member key validate returned valid without organization_id");
+                                return Err(MemberApiKeyError::ServiceError(
+                                    "missing organization_id".into(),
+                                ));
+                            }
+                        };
+                        Ok(CachedMemberApiKey::Valid {
+                            member_id,
+                            organization_id,
+                            scopes: v.scopes.clone(),
+                        })
+                    }
+                    Err(MemberApiKeyError::InvalidKey) => Ok(CachedMemberApiKey::Invalid),
+                    Err(e) => Err(e),
+                }
+            })
+            .await
+        {
+            Ok(v) => v,
+            Err(err) => match err.as_ref() {
+                MemberApiKeyError::InvalidKey => return Err(AdmitError::MemberApiKeyInvalid),
+                MemberApiKeyError::ServiceError(msg) => {
+                    warn!(
+                        error_kind = ErrorKind::Network.as_str(),
+                        error_message = %msg,
+                        "member key validate error"
+                    );
+                    return Err(AdmitError::Unavailable);
+                }
+            },
+        };
 
-        debug!(
-            auth_type = AuthType::MemberApiKey.as_str(),
-            organization_id = %path_organization_id,
-            member_id = %member_id,
-            "organization admission successful"
-        );
-
-        Ok(Admission::Organization {
-            organization_id: path_organization_id.to_string(),
-            member_id,
-            via: OrgVia::MemberKey,
-            key_scopes,
-        })
+        match cached {
+            CachedMemberApiKey::Invalid => Err(AdmitError::MemberApiKeyInvalid),
+            CachedMemberApiKey::Valid {
+                member_id,
+                organization_id: key_org,
+                scopes,
+            } => {
+                if key_org != path_organization_id {
+                    debug!(
+                        key_org = %key_org,
+                        path_org = %path_organization_id,
+                        "member key org mismatch"
+                    );
+                    return Err(AdmitError::NotFound);
+                }
+                debug!(
+                    auth_type = AuthType::MemberApiKey.as_str(),
+                    organization_id = %path_organization_id,
+                    member_id = %member_id,
+                    "organization admission successful"
+                );
+                Ok(Admission::Organization {
+                    organization_id: path_organization_id.to_string(),
+                    member_id,
+                    via: OrgVia::MemberKey,
+                    key_scopes: scopes,
+                })
+            }
+        }
     }
 
     async fn authenticate(&self, req: &RequestHeader) -> Result<AuthContext, AuthError> {
@@ -296,49 +296,57 @@ impl Admissor {
             return Err(AuthError::InvalidUserApiKey);
         }
 
-        if let Some(cached) = self.stack.user_apikey_cache.get(key).await {
-            return Ok(AuthContext {
-                user_id: cached.user_id,
+        let cached = match self
+            .stack
+            .user_apikey_cache
+            .get_or_load(key, async {
+                match self.stack.user_apikey_validator.validate(key).await {
+                    Ok(v) => {
+                        let user_id = match v.user_id.clone() {
+                            Some(id) if !id.is_empty() => id,
+                            _ => {
+                                warn!("user key validate returned valid without user_id");
+                                return Err(UserApiKeyError::ServiceError(
+                                    "missing user_id".into(),
+                                ));
+                            }
+                        };
+                        Ok(CachedUserApiKey::Valid {
+                            user_id,
+                            scopes: v.scopes.clone(),
+                        })
+                    }
+                    Err(UserApiKeyError::InvalidKey) => Ok(CachedUserApiKey::Invalid),
+                    Err(e) => Err(e),
+                }
+            })
+            .await
+        {
+            Ok(v) => v,
+            Err(err) => {
+                return Err(match err.as_ref() {
+                    UserApiKeyError::InvalidKey => AuthError::InvalidUserApiKey,
+                    UserApiKeyError::ServiceError(msg) => {
+                        warn!(
+                            error_kind = ErrorKind::Network.as_str(),
+                            error_message = %msg,
+                            "user key validate error"
+                        );
+                        AuthError::UserApiKeyValidationUnavailable
+                    }
+                });
+            }
+        };
+
+        match cached {
+            CachedUserApiKey::Invalid => Err(AuthError::InvalidUserApiKey),
+            CachedUserApiKey::Valid { user_id, scopes } => Ok(AuthContext {
+                user_id,
                 auth_type: AuthType::UserApiKey,
                 kid: None,
-                key_scopes: cached.scopes,
-            });
+                key_scopes: scopes,
+            }),
         }
-
-        let validation = self
-            .stack
-            .user_apikey_validator
-            .validate(key)
-            .await
-            .map_err(|e| match e {
-                UserApiKeyError::InvalidKey => AuthError::InvalidUserApiKey,
-                UserApiKeyError::ServiceError(msg) => {
-                    warn!(
-                        error_kind = ErrorKind::Network.as_str(),
-                        error_message = %msg,
-                        "user key validate error"
-                    );
-                    AuthError::UserApiKeyValidationUnavailable
-                }
-            })?;
-
-        let user_id = validation.user_id.clone().ok_or_else(|| {
-            warn!("user key validate returned valid without user_id");
-            AuthError::UserApiKeyValidationUnavailable
-        })?;
-
-        let key_scopes = validation.scopes.clone();
-        self.stack
-            .user_apikey_cache
-            .put(key, user_id.clone(), key_scopes.clone())
-            .await;
-
-        Ok(AuthContext {
-            user_id,
-            auth_type: AuthType::UserApiKey,
-            kid: None,
-            key_scopes,
-        })
     }
 
     async fn resolve_active_member(
@@ -346,29 +354,32 @@ impl Admissor {
         user_id: &str,
         organization_id: &str,
     ) -> Result<String, ResolveDeny> {
-        if let Some(member_id) = self.stack.member_cache.get(user_id, organization_id).await {
-            return Ok(member_id);
-        }
-
-        match self
+        let cached = match self
             .stack
-            .member_resolver
-            .resolve(user_id, organization_id)
+            .member_cache
+            .get_or_load(user_id, organization_id, async {
+                match self
+                    .stack
+                    .member_resolver
+                    .resolve(user_id, organization_id)
+                    .await
+                {
+                    Ok(resolved) if resolved.status == "active" => {
+                        Ok(CachedMember::Active(resolved.member_id))
+                    }
+                    Ok(_) | Err(MemberError::NotFound) => Ok(CachedMember::Miss),
+                    Err(MemberError::ServiceError(_)) => Err(ResolveDeny::Unavailable),
+                }
+            })
             .await
         {
-            Ok(resolved) => {
-                if resolved.status != "active" {
-                    return Err(ResolveDeny::NotFound);
-                }
-                let member_id = resolved.member_id;
-                self.stack
-                    .member_cache
-                    .put(user_id, organization_id, member_id.clone())
-                    .await;
-                Ok(member_id)
-            }
-            Err(MemberError::NotFound) => Err(ResolveDeny::NotFound),
-            Err(MemberError::ServiceError(_)) => Err(ResolveDeny::Unavailable),
+            Ok(v) => v,
+            Err(_) => return Err(ResolveDeny::Unavailable),
+        };
+
+        match cached {
+            CachedMember::Active(member_id) => Ok(member_id),
+            CachedMember::Miss => Err(ResolveDeny::NotFound),
         }
     }
 }

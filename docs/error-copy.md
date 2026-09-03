@@ -46,7 +46,7 @@ Use these only when a more specific sentence does not apply.
 
 `UNAUTHORIZED` / `NOT_FOUND` / `INTERNAL_ERROR` / `SERVICE_UNAVAILABLE` stay generic on purpose.
 
-`RATE_LIMITED` stays this sentence. Do not interpolate remaining seconds into `message` (`details.retry_after_seconds` / `Retry-After` carry that).
+`RATE_LIMITED` stays this sentence. Do not interpolate remaining seconds into `message` (`details.retry_after_seconds` / `Retry-After` / `X-RateLimit-*` carry that).
 
 ## Identity — specific `message`
 

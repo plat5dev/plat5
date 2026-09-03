@@ -1,14 +1,18 @@
+use std::sync::Arc;
+
 use crate::auth::cache::TtlCache;
 use crate::auth::AuthType;
 
-#[derive(Clone)]
-pub struct CachedUserApiKey {
-    pub user_id: String,
-    /// None = unrestricted.
-    pub scopes: Option<Vec<String>>,
+#[derive(Clone, Debug)]
+pub enum CachedUserApiKey {
+    Valid {
+        user_id: String,
+        scopes: Option<Vec<String>>,
+    },
+    Invalid,
 }
 
-/// In-memory cache for validated user API keys.
+/// In-memory cache for user API keys (hits and invalid keys).
 #[derive(Clone)]
 pub struct UserApiKeyCache {
     inner: TtlCache<CachedUserApiKey>,
@@ -21,13 +25,15 @@ impl UserApiKeyCache {
         }
     }
 
-    pub async fn get(&self, key: &str) -> Option<CachedUserApiKey> {
-        self.inner.get_secret(key).await
-    }
-
-    pub async fn put(&self, key: &str, user_id: String, scopes: Option<Vec<String>>) {
-        self.inner
-            .put_secret(key, CachedUserApiKey { user_id, scopes })
-            .await;
+    pub async fn get_or_load<E, Fut>(
+        &self,
+        key: &str,
+        init: Fut,
+    ) -> Result<CachedUserApiKey, Arc<E>>
+    where
+        Fut: std::future::Future<Output = Result<CachedUserApiKey, E>>,
+        E: Send + Sync + 'static,
+    {
+        self.inner.try_get_with_secret(key, init).await
     }
 }

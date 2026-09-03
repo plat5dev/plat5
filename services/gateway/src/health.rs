@@ -8,18 +8,21 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::auth::jwt::JwtValidatorState;
+use crate::rate_limit::RateLimiter;
 
 /// Shared state for health checks
 pub struct HealthState {
     start_time: Instant,
     jwt_validator: JwtValidatorState,
+    limiter: RateLimiter,
 }
 
 impl HealthState {
-    pub fn new(jwt_validator: JwtValidatorState) -> Self {
+    pub fn new(jwt_validator: JwtValidatorState, limiter: RateLimiter) -> Self {
         Self {
             start_time: Instant::now(),
             jwt_validator,
+            limiter,
         }
     }
 }
@@ -71,8 +74,9 @@ impl HealthHttpApp {
     async fn ready_response(&self) -> Response<Vec<u8>> {
         let uptime_ms = self.state.start_time.elapsed().as_millis() as u64;
         let jwks_ready = self.state.jwt_validator.is_ready();
+        let redis_ready = self.state.limiter.ping().await.is_ok();
 
-        let (status, http_status) = if jwks_ready {
+        let (status, http_status) = if jwks_ready && redis_ready {
             ("ready", 200)
         } else {
             ("not_ready", 503)
@@ -82,7 +86,8 @@ impl HealthHttpApp {
             "status": status,
             "uptime_ms": uptime_ms,
             "checks": {
-                "jwks_ready": jwks_ready
+                "jwks_ready": jwks_ready,
+                "redis_ready": redis_ready
             }
         });
         let body_str = body.to_string();

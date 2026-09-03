@@ -32,6 +32,9 @@ Read the doc, don’t re-derive:
 | Route-registry: Postgres desired state + revisions; etcd is the gateway projection | [`docs/route-registry.md`](docs/route-registry.md) |
 | Apply is **upsert** of services in the file. Not prune | route-registry.md |
 | etcd prefix: `edge/gateway/routes/` | routes.md |
+| Named rate-limit policies on the service; `shared: true` is opt-in cross-service; limiter subject follows route scope | [`docs/routes.md`](docs/routes.md), [`docs/gateway-contract.md`](docs/gateway-contract.md) |
+| Rate-limit counters in Redis; replicas share one budget; Redis required to boot; fail-closed 503 | [`docs/gateway-contract.md`](docs/gateway-contract.md), [`docs/routes.md`](docs/routes.md) |
+| Admission cache in-process (positive + negative); singleflight; TTL is revoke/suspend latency | [`docs/gateway-contract.md`](docs/gateway-contract.md), [`docs/identity.md`](docs/identity.md) |
 | Gateway stop: no resource-type registry / relation graph / permission matrix | identity-boundary |
 
 ## Stop conditions
@@ -49,14 +52,23 @@ Do not add these because they would be convenient:
 - Treating omitted identity routes as “feature off” (the process still serves them on the network)
 - Auto-merge of new identity paths into existing operator YAML
 - Shared `route-config` crate until a third consumer exists (two copies are deliberate)
+- Rate-limit policy catalog (separate apply / etcd resource)
+- Limiter subject override (ip / user / org comes from route scope)
+- Billing, usage, or meter fields on `rate_limit` / `rate_limits`
+- Cost weights, multi-window, burst, or calendar quotas on the gateway limiter
+- JWT / JWKS / admission caches in Redis (Redis is the rate-limit store)
+- In-process rate-limit fallback when Redis is down
+- `Strict-Transport-Security` on the gateway (TLS is the edge)
 
 ## Deferred (not review findings)
 
 | Item | Ready looks like |
 |------|------------------|
-| Admission cache invalidation / negative cache | Named invariant for revoke/suspend latency; misses don’t stampede identity |
+| Admission cache invalidation | Identity notifies the gateway (or Redis) so revoke/suspend is faster than TTL; TTL remains the default product |
 | Apply `--prune` | Explicit CLI flag; not the default until that is the documented contract |
 | Consumer libraries | Per-language helpers for headers + error envelope + missing-header → 500 |
+| JWKS HTTP cache validators | Refresh respects `Cache-Control` / `ETag` / `Last-Modified`; interval refresh remains until that exists |
+| Redis drop → 503 | Dead TCP / Redis stop times out in hundreds of ms as **503**; gateway recovers when Redis returns without a process restart. Command errors already 503. |
 
 Unfinished implementation of the above is not an architecture defect. A **doc that pretends they exist** is.
 
