@@ -58,7 +58,7 @@ No `/api/users` collection and no `/me`. Clients already know `user_id` from the
 
 Restricted = non-null list (`[]` or labels). JWT and `null` skip the check. Unlabeled = any admitted principal.
 
-Identity catalog routes have no `required_scopes`. A restricted **user** key still calls them (org admin included). Do not add `required_scopes` to this catalog. Member keys are `organization` scope only and never hit these routes. Gateway: [`gateway-contract.md`](gateway-contract.md), [`routes.md`](routes.md).
+Identity catalog ships without `required_scopes`. Operator may add them: the gateway enforces `required_scopes` on `user` scope for restricted user keys (JWTs and unrestricted keys skip; member keys 401 on `user` scope before scopes). Keep `POST /api/invites/redeem` unlabeled — the invitee is not a member yet. Member keys are `organization` scope only and never hit these routes. Gateway: [`gateway-contract.md`](gateway-contract.md), [`routes.md`](routes.md).
 
 Hygiene (422 `VALIDATION_ERROR` on `scopes`): each label `[a-z0-9:._-]+`, max 64 characters, max 32 labels, unique. Create and list echo `scopes` as `string[] | null` (`null` = unrestricted). Never echo the secret except on create (`key`).
 
@@ -397,7 +397,6 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - Pending member rows (membership is created only on invite redeem, status `active`)
 - Resource ACL, FGA, project permissions
 - Key `scopes` as deny-all, or default-deny on unlabeled routes
-- `required_scopes` on this service’s public catalog routes
 - Gateway `organization` scope on this service’s public routes
 - Auto-publishing these public routes — the operator applies the catalog (`routes.yml`)
 - Configurable `sk` / `mk` / `1`, independent full-prefix env vars, or dual-brand key accept
