@@ -142,13 +142,6 @@ func newInternalApp(
 		ErrorHandler: apierrors.FiberErrorHandler,
 	})
 	app.Use(recover.New())
-	app.Use(otel.Middleware(
-		otel.WithTracerProvider(telem.TracerProvider()),
-		otel.WithPropagators(telem.Propagator()),
-		otel.WithoutMetrics(true),
-		otel.WithSpanNameFormatter(middleware.HTTPSpanName),
-	))
-	app.Use(middleware.RequestLogger(telem))
 
 	app.Get("/health/live", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "healthy"})
@@ -163,7 +156,17 @@ func newInternalApp(
 	})
 	app.Get("/metrics", adaptor.HTTPHandler(metrics.Handler()))
 
-	internalAPI := app.Group("/internal", middleware.RequireInternalToken(internalToken))
+	// Health and /metrics stay off traces and HTTP RED (docs/health-checks.md).
+	internalAPI := app.Group("/internal",
+		otel.Middleware(
+			otel.WithTracerProvider(telem.TracerProvider()),
+			otel.WithPropagators(telem.Propagator()),
+			otel.WithoutMetrics(true),
+			otel.WithSpanNameFormatter(middleware.HTTPSpanName),
+		),
+		middleware.RequestLogger(telem),
+		middleware.RequireInternalToken(internalToken),
+	)
 	orgHandler.MountInternal(internalAPI)
 	userKeyHandler.MountInternal(internalAPI)
 	memberKeyHandler.MountInternal(internalAPI)
