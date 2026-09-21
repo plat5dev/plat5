@@ -96,6 +96,8 @@ Counters live in **Valkey**. Replicas share one budget. `VALKEY_URL` is required
 
 Direct-exposed services are exempt (see below).
 
+Injected identity headers are authentic **only if nothing except the gateway can reach the service.** Plat5 does not terminate TLS, does not do mTLS, and does not bind your app port. If the upstream is on the public network, this contract is false. Put the service on a private network the gateway can reach; do not expose it.
+
 1. **Trust identity headers for your scope** — Do not validate tokens.
    - `user`: trust `X-User-Id`
    - `organization`: trust `X-Organization-Id` and `X-Member-Id` only

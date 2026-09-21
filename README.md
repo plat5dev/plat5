@@ -1,8 +1,10 @@
 # Plat5
 
-Open-source **platform runtime**. Authenticate at the gateway, delegate identity via headers, register routes, manage organizations, members, service accounts, and API keys.
+Open-source **platform runtime**. Every route declares which subject exists — none, the person, or the member-in-org. Those do not mix. The gateway authenticates and admits; services get exactly that subject and own resource permissions.
 
-Login UI / user directory is **not included** — point the gateway at any OIDC IdP ([`docs/idp-contract.md`](docs/idp-contract.md)), including Plat5 Auth if you run it separately.
+Login UI / user directory is **not included** — point the gateway at any OIDC IdP ([`docs/idp-contract.md`](docs/idp-contract.md)), including Plat5 Auth if you run it separately. User-scope APIs (list my orgs, user keys, identity itself) are first-class, not an identity special case.
+
+The model: [`docs/identity-boundary.md`](docs/identity-boundary.md).
 
 ## Try it
 
@@ -36,14 +38,14 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defau
 
 | Doc | Contents |
 |-----|----------|
+| [`docs/identity-boundary.md`](docs/identity-boundary.md) | **Start here.** Subjects, layers, what not to mix |
 | [`AGENTS.md`](AGENTS.md) | Locked invariants and stop conditions (for agents) |
 | [`docs/README.md`](docs/README.md) | Contract index |
 | [`docs/self-hosting.md`](docs/self-hosting.md) | Production: images, TLS, attach an app |
 | [`docs/idp-contract.md`](docs/idp-contract.md) | BYO IdP / JWT user-id claim |
-| [`docs/gateway-contract.md`](docs/gateway-contract.md) | Auth delegation, identity headers |
+| [`docs/gateway-contract.md`](docs/gateway-contract.md) | Auth delegation, identity headers, perimeter |
 | [`docs/routes.md`](docs/routes.md) | Route config format |
 | [`docs/route-registry.md`](docs/route-registry.md) | Apply routes via admin API |
-| [`docs/identity-boundary.md`](docs/identity-boundary.md) | Authn vs org context vs resource authz |
 | [`docs/identity.md`](docs/identity.md) | Identity service API |
 | [`docs/api-errors.md`](docs/api-errors.md) | Error envelope |
 | [`docs/telemetry.md`](docs/telemetry.md) | Logs, traces, metrics |
@@ -61,7 +63,7 @@ curl -sS -X POST http://localhost:5002/apply \
   --data-binary @routes.yml
 ```
 
-4. Trust gateway identity headers; do not validate JWTs in the service.
+4. Trust gateway identity headers; do not validate JWTs in the service. Headers are authentic only if nothing else can reach the app — [`docs/gateway-contract.md`](docs/gateway-contract.md).
 
 ## Telemetry
 

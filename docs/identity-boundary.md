@@ -2,7 +2,25 @@
 
 Authn, organization context, and resource authz are separate layers. Mixing them breaks the platform model.
 
+Every route declares which subject exists: none, the person, or the member-in-org. Those do not mix. Resource permissions are the service’s problem over that subject — not a missing platform feature.
+
 Headers and service rules: [`gateway-contract.md`](gateway-contract.md). Routes: [`routes.md`](routes.md). Errors: [`api-errors.md`](api-errors.md). Identity APIs: [`identity.md`](identity.md).
+
+## Why this cut
+
+The route is a type. A handler does not get extra identity “just in case.” Plat5 authenticates and admits; it will not forward user, role, or IdP claims onto a route that did not declare them.
+
+**Mixed ticket.** A handler that sees `X-User-Id` + org + role invents a different “who is this?” per feature. Billing keys off the user. ACL keys off the org. Admin checks key off role. A member API key shows up and none of it fits. Suspend-member and delete-user diverge. One subject per scope is what stops that.
+
+**User-keyed authz on an org route.** Org-scoped APIs do not receive `X-User-Id`. If your graph is `user:U` on `doc:D`, an org route cannot feed it without a lookup you own — and a user-keyed graph on org-scoped resources crosses orgs unless you add org as a second check everywhere. Key org-scoped policy on `member_id` inside `organization_id`. Person-centric policy belongs on `user` routes.
+
+**Platform role as product ACL.** Identity `owner` / `admin` / `member` is for membership administration (add member, rotate SA keys, transfer owner). It is not a permission input for `/projects`. Product RBAC / ABAC / FGA is yours, over the subject the scope defined. Do not call identity for role from an org-scoped app; there is no such path.
+
+**Identity on `organization` scope.** If `GET /organizations/{id}/members` required gateway member-resolve, identity could not be the authority that defines membership. List-my-orgs and invite redeem would be special cases. Identity public APIs are `user` scope and enforce admin rules from `X-User-Id` + path.
+
+Frontend session (cookie, current-org, subdomain) is your client. The request the gateway sees must still name the subject — org in the path for `organization` scope.
+
+Trusting injected headers is a perimeter protocol: [`gateway-contract.md`](gateway-contract.md).
 
 ## Layers
 
@@ -38,9 +56,9 @@ Business services on `organization` scope get `organization_id` + `member_id` on
 
 | Routes | Scope | Why |
 |--------|-------|-----|
+| User-centric APIs (user API keys, list my orgs, invite redeem) | **`user`** | Subject is the person. First-class — not an identity special case. |
 | **identity** public APIs | **`user` only** | Membership **authority**. Must not sit behind gateway member resolve into itself. Enforces member and admin rules in-process from `X-User-Id` + path. |
 | Business APIs under an org path | **`organization`** | Gateway admits active member; service trusts org headers and enforces resource authz. |
-| User-centric APIs (user API keys, list my orgs) | **`user`** | Subject is the person. |
 
 **Default on `organization` scope:** trust gateway admission — do not re-check “is this member in the org?” Enforce **resource** authz in the service. Re-checking admission is optional defense-in-depth, not required.
 
@@ -52,7 +70,7 @@ Business services on `organization` scope get `organization_id` + `member_id` on
 | User API key | Validate → `user_id` (+ `scopes`) → same resolve → inject → `required_scopes` if the key is restricted |
 | Member API key | Validate → `member_id` + `organization_id` + `scopes` → path org must match + member active → inject (no resolve call) → `required_scopes` if restricted |
 
-### Default multi-org UX (business route)
+### Org-scoped API
 
 ```
 GET /api/organizations/{organization_id}/projects
@@ -65,7 +83,17 @@ Service: trust those headers; enforce resource authz as needed
 
 No organization-scoped token exchange required for the default path.
 
-### Identity service (authority)
+### User-scoped API
+
+```
+GET /api/organizations
+Authorization: user JWT or user API key
+
+Gateway: authn → inject X-User-Id → proxy
+Service: subject is the person; list orgs where this user has an active membership
+```
+
+Identity public APIs are this shape (membership authority — must not sit behind member-resolve):
 
 ```
 GET /api/organizations/{organization_id}/members
