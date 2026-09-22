@@ -1,6 +1,6 @@
 # IdP contract
 
-Plat5’s gateway validates JWTs from **any** OIDC-compatible issuer. Plat5 does not ship a login UI or user directory.
+Plat5’s gateway validates JWTs from **any** OIDC-compatible issuer.
 
 ## Gateway requirements
 
@@ -27,7 +27,7 @@ Local compose defaults use `properties.user_id` and a host-published JWKS URL on
 
 Missing or empty claim → **401** (same as invalid token).
 
-Downstream services never validate JWTs; they trust gateway headers. There is **no FK** from identity data to an IdP user table — stable ids are an operator concern when switching IdPs.
+Downstream services trust gateway headers. Identity stores the opaque user id string. Switching IdPs is an operator concern.
 
 ## Bring your own IdP
 

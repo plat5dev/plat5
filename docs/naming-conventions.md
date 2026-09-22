@@ -13,7 +13,7 @@ Formats and terminology for labels, routes, metrics, and error codes across Plat
 
 ### Scope of Plat5
 
-Plat5 owns **opaque user ids** (as strings from the gateway), API keys, organizations, members, service accounts, route registry, and the user-facing gateway. It does **not** own a user directory, login UI, or credential store — that is the IdP. It does not own admin/employee planes, operator RBAC, hosted multi-tenant control planes, or application resource authorization (projects, docs, etc.). See [`identity-boundary.md`](identity-boundary.md).
+Plat5 owns **opaque user ids** (as strings from the gateway), API keys, organizations, members, service accounts, route registry, and the user-facing gateway. Login and the user directory are the IdP. Resource permissions are the service behind the gateway. See [`identity-boundary.md`](identity-boundary.md).
 
 ### Identity domain nouns
 
@@ -56,7 +56,6 @@ When changing labels: update compose labels and `OTEL_SERVICE_NAMESPACE` togethe
   - Authenticated API: `/api/...`
   - Public API: `/public/...`
   - Internal (private network, not on the gateway): `/internal/...`
-- Do **not** use `/api/v1` or `/public/v1`. Version resources or media types later if needed.
 - Resource names are plural nouns: `/widgets`, `/users`, `/organizations`, `/members`
 - Identity list query/body: [`lists.md`](lists.md). Business services may copy it; they are not required to.
 - Actions use HTTP methods, not verbs in paths:
@@ -85,7 +84,7 @@ Headers are **scope-specific**. Gateway strips client-supplied identity headers,
 | `user` | `X-User-Id` only |
 | `organization` | `X-Organization-Id`, `X-Member-Id` only — **not** `X-User-Id` |
 
-Member **role** is not a gateway header. Always (all scopes): `X-Request-ID`, `traceparent`.
+Member **role** stays in identity. Always (all scopes): `X-Request-ID`, `traceparent`.
 
 ## Log Fields
 

@@ -2,7 +2,7 @@
 
 Admin HTTP API: desired route state in Postgres, live projection in etcd. Plat5’s only supported write path for the route registry.
 
-Gateway still **loads and watches** etcd; it does not talk to Postgres.
+The gateway loads and watches etcd.
 
 ## Pipeline
 
@@ -47,11 +47,11 @@ Local default: `dev-admin-token` (`ADMIN_TOKEN` env). Required and non-empty in 
 | `GET` | `/services/{name}/revisions/{rev}` | — | One revision (`config` is `null` if delete) |
 | `POST` | `/services/{name}/revisions/{rev}/restore` | — | New revision copying that config |
 
-Apply is **upsert** of the services in the file. Services not in the file are left alone. There is no prune.
+Apply is **upsert** of the services in the file. Services not in the file are left alone.
 
 Named `rate_limits` live on each `ServiceConfig`. Apply and `PUT /services/{name}` validate `shared: true` policy names against **all** current services, not only the payload. Schema: [`routes.md`](routes.md).
 
-Identity public routes are not special. Apply the catalog ([`services/identity/routes.yml`](../services/identity/routes.yml)) or a subset. Omitting a path does not disable the identity process — it only hides those routes from the gateway.
+Apply the identity catalog ([`services/identity/routes.yml`](../services/identity/routes.yml)) or a subset. Omitting a path hides it from the gateway. The identity process still serves that path on the network.
 
 ### Apply example
 
@@ -98,7 +98,7 @@ Validation / auth / empty body failures use the Plat5 envelope (`api-errors.md`)
 
 ## Revisions
 
-Each write (apply/put/delete/restore) appends a revision. Rollback is a new revision that copies an old config, not a rewind.
+Each write (apply/put/delete/restore) appends a revision. Restore appends a new revision that copies an old config.
 
 Delete stores `config: null` and clears the etcd key. History remains. Restore of a delete revision is `422`.
 

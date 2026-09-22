@@ -19,23 +19,23 @@ Read the doc, don’t re-derive:
 | Authn / org context / resource authz / org admin are separate layers | [`docs/identity-boundary.md`](docs/identity-boundary.md) |
 | One subject per scope; org routes get org + member headers only | same + [`docs/gateway-contract.md`](docs/gateway-contract.md) |
 | Identity public API is **`user` scope** — never behind its own org admission | [`docs/identity.md`](docs/identity.md) |
-| Role stays in identity. Not a header. Not an internal “load role” path | identity-boundary |
-| Service accounts are members with keys, not a parallel auth system | identity.md |
+| Role stays in identity. Org-scope routes do not receive it | identity-boundary |
+| Service accounts are members with keys | identity.md |
 | A service account lives in exactly one org | identity.md |
 | User keys and member keys are two products (prefix + table + validate URL) | identity.md |
-| Add member by known `user_id` (immediate `active`) or invite redeem. No pending members | identity.md |
+| Add member by known `user_id` (immediate `active`) or invite redeem | identity.md |
 | Existence: unknown org / non-member / inactive → **404** | identity-boundary |
 | Missing expected identity headers → **500** (gateway bug), not 401 | identity-boundary |
-| JWT / IdP required to boot. API keys are an alternative credential, not an IdP-free mode | [`docs/idp-contract.md`](docs/idp-contract.md) |
-| Identity **public** routes are operator-owned. Apply the catalog (or a subset). Not a seeded special case | [`docs/routes.md`](docs/routes.md), [`services/identity/routes.yml`](services/identity/routes.yml) |
-| Internal validate/resolve stay on `INTERNAL_PORT`. Not optional via YAML | identity.md |
+| JWT / IdP required to boot. API keys are an alternative credential | [`docs/idp-contract.md`](docs/idp-contract.md) |
+| Identity **public** routes are operator-owned. Apply the catalog (or a subset) | [`docs/routes.md`](docs/routes.md), [`services/identity/routes.yml`](services/identity/routes.yml) |
+| Internal validate/resolve stay on `INTERNAL_PORT` | identity.md |
 | Route-registry: Postgres desired state + revisions; etcd is the gateway projection | [`docs/route-registry.md`](docs/route-registry.md) |
-| Apply is **upsert** of services in the file. Not prune | route-registry.md |
+| Apply is **upsert** of services in the file. Services not in the file are left alone | route-registry.md |
 | etcd prefix: `edge/gateway/routes/` | routes.md |
 | Named rate-limit policies on the service; `shared: true` is opt-in cross-service; limiter subject follows route scope | [`docs/routes.md`](docs/routes.md), [`docs/gateway-contract.md`](docs/gateway-contract.md) |
 | Rate-limit counters in Valkey; replicas share one budget; Valkey required to boot; fail-closed 503 | [`docs/gateway-contract.md`](docs/gateway-contract.md), [`docs/routes.md`](docs/routes.md) |
 | Admission cache in-process (positive + negative); singleflight; TTL is revoke/suspend latency | [`docs/gateway-contract.md`](docs/gateway-contract.md), [`docs/identity.md`](docs/identity.md) |
-| Gateway stop: no resource-type registry / relation graph / permission matrix | identity-boundary |
+| Gateway admits and injects the route subject. Resource authz stays in the service | identity-boundary |
 
 ## Stop conditions
 
@@ -59,18 +59,6 @@ Do not add these because they would be convenient:
 - JWT / JWKS / admission caches in Valkey (Valkey is the rate-limit store)
 - In-process rate-limit fallback when Valkey is down
 - `Strict-Transport-Security` on the gateway (TLS is the edge)
-
-## Deferred (not review findings)
-
-| Item | Ready looks like |
-|------|------------------|
-| Admission cache invalidation | Identity notifies the gateway (or Valkey) so revoke/suspend is faster than TTL; TTL remains the default product |
-| Apply `--prune` | Explicit CLI flag; not the default until that is the documented contract |
-| Consumer libraries | Per-language helpers for headers + error envelope + missing-header → 500 |
-| JWKS HTTP cache validators | Refresh respects `Cache-Control` / `ETag` / `Last-Modified`; interval refresh remains until that exists |
-| Valkey drop → 503 | Dead TCP / Valkey stop times out in hundreds of ms as **503**; gateway recovers when Valkey returns without a process restart. Command errors already 503. |
-
-Unfinished implementation of the above is not an architecture defect. A **doc that pretends they exist** is.
 
 ## Siblings
 

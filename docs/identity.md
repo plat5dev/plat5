@@ -15,26 +15,26 @@ Boundary: [`identity-boundary.md`](identity-boundary.md). Errors: [`api-errors.m
 
 This service is the **membership authority**. It must not sit behind gateway org admission into itself. It enforces member and role rules in-process from `X-User-Id` + path.
 
-Member **role** is domain data here only. Never a gateway-injected header. Org-scope business services do not receive role and have no API to load it.
+Member **role** is domain data here. Org-scope routes do not receive it.
 
-Public routes below are **not** auto-published. Apply `services/identity/routes.yml` (or a subset) via the route-registry. Internal validate/resolve stay on `INTERNAL_PORT` regardless.
+Apply `services/identity/routes.yml` (or a subset) via the route-registry. Internal validate/resolve stay on `INTERNAL_PORT`.
 
 ## Glossary
 
 | Term | Meaning |
 |------|---------|
-| **user** | Platform person. Opaque `user_id` string from the gateway (`X-User-Id` / IdP claim). No user directory or profile store in this service. |
+| **user** | Platform person. Opaque `user_id` string from the gateway (`X-User-Id` / IdP claim). |
 | **organization** | Isolation boundary users and service accounts join. |
 | **member** | Org principal. Exactly one of: a **user** or a **service account**. Wire id: `member_id`. |
 | **service account** | Non-human identity created **under an organization**. Always has a member row in that org. |
 | **api key** | Bearer secret. Either **user-scoped** or **member-scoped**. Optional `scopes` labels: a restricted key (non-null list) must intersect route `required_scopes`; unlabeled routes still admit. |
-| **invite** | Org join token (`active` / `redeemed` / `revoked` / `expired`). No pending member row; redeem inserts an **active** member. Identity does not send email. |
+| **invite** | Org join token (`active` / `redeemed` / `revoked` / `expired`). Redeem inserts an **active** member. The host sends any email. |
 
 ## Public API
 
 ### User API keys
 
-No `/api/users` collection and no `/me`. Clients already know `user_id` from the IdP token. Path `user_id` must equal `X-User-Id` or → **404** `NOT_FOUND`.
+Clients already know `user_id` from the IdP token. Path `user_id` must equal `X-User-Id` or → **404** `NOT_FOUND`.
 
 | Method | Path | Notes |
 |--------|------|--------|
@@ -106,7 +106,7 @@ Prefix: `/api/organizations`
 | `PATCH` | `/api/organizations/{organization_id}/members/{member_id}` | Role/status; admin/owner (self-leave allowed for humans) |
 | `DELETE` | `/api/organizations/{organization_id}/members/{member_id}` | Soft-remove; self or admin/owner |
 
-`POST` adds a **user** member only (immediately `active`). Service accounts are created via the service-accounts API (member row included). Invites are a **separate** resource (below); they do not create pending member rows.
+`POST` adds a **user** member (immediately `active`). Service accounts are created via the service-accounts API (member row included). Invites are a separate resource, below.
 
 #### Member response
 
@@ -129,16 +129,16 @@ Prefix: `/api/organizations`
 
 ### Invites
 
-Token invites. **No pending member rows.** Membership is created only on redeem, as `active`. Identity does **not** send email and has **no SMTP env**. Whoever hosts the console may send mail, or not.
+Token invites. Membership is created only on redeem, as `active`. The host sends any email.
 
-An invite is `active` while it can still be redeemed. Terminal statuses: `redeemed`, `revoked`, `expired`. Plaintext `token` is stored and returned only while `active`. `token_hash` is always stored (redeem lookup) and kept after the row is terminal. Identity does **not** return a URL. Auth does **not** carry `invite=`.
+An invite is `active` while it can still be redeemed. Terminal statuses: `redeemed`, `revoked`, `expired`. Plaintext `token` is stored and returned only while `active`. `token_hash` is always stored (redeem lookup) and kept after the row is terminal.
 
 List, redeem, and revoke expire lazily: if `expires_at` is in the past and status is still `active`, persist `expired` and null `token`.
 
 | Method | Path | Notes |
 |--------|------|--------|
 | `POST` | `/api/organizations/{organization_id}/invites` | Admin or owner (same as add member). Body `{ "role?", "email?", "expires_in_seconds?", "max_uses?" }`. Returns `token`. |
-| `GET` | `/api/organizations/{organization_id}/invites` | Active member. `token` only for **admin/owner** while `active`. Everyone else gets prefix, status, role, expiry — not a blank list. |
+| `GET` | `/api/organizations/{organization_id}/invites` | Active member. `token` only for **admin/owner** while `active`. Everyone else gets prefix, status, role, expiry. |
 | `DELETE` | `/api/organizations/{organization_id}/invites/{invite_id}` | Admin or owner; revoke (idempotent). Sets status `revoked`, `token` null. Hash stays. |
 | `POST` | `/api/invites/redeem` | Invitee; body `{ "token" }` + `X-User-Id`. Inserts **active** member. Already a member on a still-`active` token → **200** idempotent (counts as a use). Unknown token → **404** `NOT_FOUND` (no org leak). Redeemed / revoked / expired → **409** `CONFLICT` (`field` is `status`, `value` is the terminal status). |
 
@@ -171,7 +171,7 @@ Token prefix `inv_`. `token_hash` is SHA-256 hex. `use_count` increments on succ
 }
 ```
 
-`token` is omitted on list for non-admin/non-owner, and omitted for every caller once the row is terminal. Identity does not return an invite `url`.
+`token` is omitted on list for non-admin/non-owner, and omitted for every caller once the row is terminal.
 
 ### Service accounts
 
@@ -221,7 +221,7 @@ Keys that authenticate **as a member** (org context). Used for automation / S2S 
 | `user` (human) | That user (self) or org admin/owner |
 | `service_account` | Org admin/owner only |
 
-Member keys are a **separate product surface** from user keys: different table (`member_api_keys`), different plaintext prefix (`{brand}-mk-1-` vs `{brand}-sk-1-`), different validate endpoint. Same header name (`X-API-Key`) only. Hashing at rest is SHA-256 hex in both cases by coincidence, not a shared module requirement. List may include revoked keys (`revoked_at` set).
+Member keys are a **separate product surface** from user keys: different table (`member_api_keys`), different plaintext prefix (`{brand}-mk-1-` vs `{brand}-sk-1-`), different validate endpoint. Both use the `X-API-Key` header. Hashing at rest is SHA-256 hex. List may include revoked keys (`revoked_at` set).
 
 ### API key brand
 
@@ -233,9 +233,9 @@ Member keys are a **separate product surface** from user keys: different table (
 | User wire prefix | `{brand}-sk-1-` |
 | Member wire prefix | `{brand}-mk-1-` |
 
-`sk` / `mk` / `1` are not configurable. Not two independent full-prefix env vars. Not per-org. Not live-reloaded.
+`sk`, `mk`, and `1` are fixed. One brand for the process, read at boot.
 
-Changing brand does not rewrite stored keys. Old plaintext no longer matches; those rows cannot authenticate. No dual-brand / accept-old-prefix path.
+Changing brand does not rewrite stored keys. Old plaintext no longer matches; those rows cannot authenticate.
 
 ## Roles and status
 

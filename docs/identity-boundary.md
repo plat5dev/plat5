@@ -2,7 +2,7 @@
 
 Authn, organization context, and resource authz are separate layers. Mixing them breaks the platform model.
 
-Every route declares which subject exists: none, the person, or the member-in-org. Those do not mix. Resource permissions are the service’s problem over that subject — not a missing platform feature.
+Every route declares which subject exists: none, the person, or the member-in-org. Those do not mix. Resource permissions are the service’s problem over that subject.
 
 Headers and service rules: [`gateway-contract.md`](gateway-contract.md). Routes: [`routes.md`](routes.md). Errors: [`api-errors.md`](api-errors.md). Identity APIs: [`identity.md`](identity.md).
 
@@ -14,7 +14,7 @@ The route is a type. A handler does not get extra identity “just in case.” P
 
 **User-keyed authz on an org route.** Org-scoped APIs do not receive `X-User-Id`. If your graph is `user:U` on `doc:D`, an org route cannot feed it without a lookup you own — and a user-keyed graph on org-scoped resources crosses orgs unless you add org as a second check everywhere. Key org-scoped policy on `member_id` inside `organization_id`. Person-centric policy belongs on `user` routes.
 
-**Platform role as product ACL.** Identity `owner` / `admin` / `member` is for membership administration (add member, rotate SA keys, transfer owner). It is not a permission input for `/projects`. Product RBAC / ABAC / FGA is yours, over the subject the scope defined. Do not call identity for role from an org-scoped app; there is no such path.
+**Platform role as product ACL.** Identity `owner` / `admin` / `member` is for membership administration (add member, rotate SA keys, transfer owner). Product permissions are the service’s, over the subject the scope defined.
 
 **Identity on `organization` scope.** If `GET /organizations/{id}/members` required gateway member-resolve, identity could not be the authority that defines membership. List-my-orgs and invite redeem would be special cases. Identity public APIs are `user` scope and enforce admin rules from `X-User-Id` + path.
 
@@ -28,11 +28,11 @@ Trusting injected headers is a perimeter protocol: [`gateway-contract.md`](gatew
 |-------|----------|--------|
 | **Authentication** | Who is this? | Gateway + **IdP (JWT)** / identity API keys (credentials stripped before upstream) |
 | **Organization context** | Is this credential an **active** member of this organization? | Gateway + **identity** (member resolve or member-scoped key) |
-| **API key route scopes** | Does this restricted key share a label with `required_scopes`? | Gateway after admission. Restricted = non-null `scopes` (`[]` or labels). JWTs and `null` skip. Omitted `required_scopes` → any admitted principal. Not resource ACL. |
+| **API key route scopes** | Does this restricted key share a label with `required_scopes`? | Gateway after admission. Restricted = non-null `scopes` (`[]` or labels). JWTs and `null` skip. Omitted `required_scopes` → any admitted principal. |
 | **Resource authorization** | Can this member do X to project/doc/…? | **Business services** — not gateway headers |
 | **Org administration** | Who may add or change members, manage service accounts, transfer ownership? | **identity** only (member role lives here) |
 
-**Stop condition for the gateway:** If a check needs a resource-type registry, relation graph, or permission matrix on the wire, it does not belong in the gateway. Route `required_scopes` is a credential intersection, not that.
+Route `required_scopes` is a credential intersection: the restricted key’s labels and the route’s labels must overlap.
 
 ## Route scopes → subject
 
@@ -56,7 +56,7 @@ Business services on `organization` scope get `organization_id` + `member_id` on
 
 | Routes | Scope | Why |
 |--------|-------|-----|
-| User-centric APIs (user API keys, list my orgs, invite redeem) | **`user`** | Subject is the person. First-class — not an identity special case. |
+| User-centric APIs (user API keys, list my orgs, invite redeem) | **`user`** | Subject is the person. |
 | **identity** public APIs | **`user` only** | Membership **authority**. Must not sit behind gateway member resolve into itself. Enforces member and admin rules in-process from `X-User-Id` + path. |
 | Business APIs under an org path | **`organization`** | Gateway admits active member; service trusts org headers and enforces resource authz. |
 
@@ -128,7 +128,7 @@ Do not return `UNAUTHORIZED` for missing identity headers — the gateway alread
 
 ## Invites
 
-Org invites live in **identity** (`organization_invites`). Create/revoke are user-scope org-admin APIs. List is any active member; plaintext `token` only for admin/owner while the row is `active`. Redeem is user-scope `POST /api/invites/redeem` (authenticated invitee, `X-User-Id`). Identity does not return a URL and does not send email. Auth does not carry `invite=`. Unknown token → 404. Redeemed / revoked / expired → 409 `CONFLICT` (`{ field: "status", value }`).
+Org invites live in **identity** (`organization_invites`). Create/revoke are user-scope org-admin APIs. List is any active member; plaintext `token` only for admin/owner while the row is `active`. Redeem is user-scope `POST /api/invites/redeem` (authenticated invitee, `X-User-Id`). The host sends any email. Unknown token → 404. Redeemed / revoked / expired → 409 `CONFLICT` (`{ field: "status", value }`).
 
 ## What is not Plat5 identity (here)
 

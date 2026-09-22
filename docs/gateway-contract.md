@@ -42,7 +42,7 @@ Clients still send these headers **to the gateway**. Services behind the gateway
 | `X-Request-ID` | Correlation ID (gateway-generated; also on response) |
 | `traceparent` | W3C trace context (OTel propagation) |
 
-Org-scope identity is `X-Organization-Id` + `X-Member-Id` only. Member **role** is identity-service domain data — not a gateway header and not a lookup for org-scope apps.
+Org-scope identity is `X-Organization-Id` + `X-Member-Id`. Member **role** stays in the identity service.
 
 ## Route Configuration
 
@@ -75,16 +75,16 @@ Services publish via the **route-registry** admin API (`POST /apply`). Gateway l
 
 ### API key `required_scopes`
 
-After match + admission: if the route has `required_scopes` **and** the API key has a non-null scopes list, the lists must have a nonempty intersection or **403** `FORBIDDEN`. JWTs and unrestricted keys (`scopes: null`) skip. A key with `scopes: []` is restricted (empty list) — it cannot satisfy any `required_scopes` and gets **403** there; unlabeled routes still admit it. This is a credential constraint, not resource ACL / FGA. There is no `allowed_services`.
+After match + admission: if the route has `required_scopes` **and** the API key has a non-null scopes list, the lists must have a nonempty intersection or **403** `FORBIDDEN`. JWTs and unrestricted keys (`scopes: null`) skip. A key with `scopes: []` is restricted (empty list) — it cannot satisfy any `required_scopes` and gets **403** there; unlabeled routes still admit it.
 
 ### Rate limits
 
-Counters live in **Valkey**. Replicas share one budget. `VALKEY_URL` is required to boot (`/health/ready` 503 until Valkey answers PING). Valkey error on a limited request → **503** `SERVICE_UNAVAILABLE` — not unlimited, not an in-process fallback. Schema and buckets: [`routes.md`](routes.md).
+Counters live in **Valkey**. Replicas share one budget. `VALKEY_URL` is required to boot (`/health/ready` 503 until Valkey answers PING). A command or connect that does not finish within 500ms is a Valkey error: limited requests get **503** `SERVICE_UNAVAILABLE`. The gateway opens a new connection when Valkey answers again. Schema and buckets: [`routes.md`](routes.md).
 
 | | |
 |--|--|
 | Fallback | `RATE_LIMIT_REQUESTS` (default 60; `0` = unlimited), `RATE_LIMIT_WINDOW_SECONDS` (default 60) |
-| Per-route | omitted inherits fallback (never silent unlimited); `{requests, window_seconds}` = this route+method only; policy **name** = service `rate_limits` entry; `false` opts out |
+| Per-route | omitted inherits fallback; `{requests, window_seconds}` = this route+method only; policy **name** = service `rate_limits` entry; `false` opts out |
 | Named | `rate_limits` on the service. Name without `shared` → `{service}:{name}:{subject}`. `shared: true` → `{name}:{subject}` (opt-in cross-service; both services declare the same entry) |
 | Who | All admitted routes (JWT and API key) |
 | Subject | Derived from route scope: `public`→ip, `user`→user, `organization`→org (including SA/member keys). Not configurable. |
@@ -96,7 +96,7 @@ Counters live in **Valkey**. Replicas share one budget. `VALKEY_URL` is required
 
 Direct-exposed services are exempt (see below).
 
-Injected identity headers are authentic **only if nothing except the gateway can reach the service.** Plat5 does not terminate TLS, does not do mTLS, and does not bind your app port. If the upstream is on the public network, this contract is false. Put the service on a private network the gateway can reach; do not expose it.
+Injected identity headers are authentic only if the upstream is on a private network the gateway can reach.
 
 1. **Trust identity headers for your scope** — Do not validate tokens.
    - `user`: trust `X-User-Id`
@@ -195,15 +195,13 @@ On public proxy responses (including errors; not internal `/health` / `/metrics`
 | `X-Frame-Options` | `DENY` |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` |
 
-The gateway does **not** set `Strict-Transport-Security`. TLS terminates at the edge; HSTS belongs there.
-
 ## JWKS
 
-`AUTH_JWKS_URI` is required to boot. Empty cache retries every 2s until loaded; loaded cache refreshes every 15 minutes. Cold-path fetch does not hold the JWKS lock across the network call.
+`AUTH_JWKS_URI` is required to boot. Empty cache retries every 2s until loaded; loaded cache refreshes every 15 minutes.
 
 ## Admission cache
 
-In-process per replica (not Valkey). Valkey is the rate-limit store only.
+In-process per replica.
 
 | Cache | Positive | Negative | TTL |
 |-------|----------|----------|-----|
@@ -214,11 +212,11 @@ In-process per replica (not Valkey). Valkey is the rate-limit store only.
 
 Do not cache identity **503** / transport failures. Concurrent misses for the same cache key share **one** identity call (singleflight). Raw API keys and JWTs are hashed before use as cache keys.
 
-Revoke, suspend, and remove are visible at the edge when the TTL expires. There is no identity → gateway invalidate path.
+Revoke, suspend, and remove are visible at the edge when the TTL expires.
 
 ## Boot / ready
 
-`/health/ready` is **200** when JWKS is loaded **and** Valkey answers PING. Otherwise **503**. etcd empty (no routes) is still ready — unmatched paths are **404**.
+`/health/ready` is **200** when JWKS is loaded **and** Valkey answers PING within 500ms. Otherwise **503**. etcd empty (no routes) is still ready — unmatched paths are **404**.
 
 ## Errors
 

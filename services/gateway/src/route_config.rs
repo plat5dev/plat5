@@ -43,7 +43,7 @@ pub struct ServiceConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ScopeConfig {
     /// Optional path prefix. Expanded into each route `path` at write time.
-    /// Etcd stores full paths; gateway never requires this field.
+    /// Etcd stores full paths.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route_prefix: Option<String>,
     /// Required on `organization` scope — path param name for org id.

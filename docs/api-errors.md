@@ -67,11 +67,11 @@ When `organization` scope is live: non-member / inactive / unknown org → **`NO
 
 Returned by the **gateway**. HTTP **429**. `Retry-After` (seconds) is set to the same value as `details.retry_after_seconds`.
 
-Two independent Valkey limiters (replicas share one budget). `VALKEY_URL` is required to boot. Valkey error → **503** `SERVICE_UNAVAILABLE`. Named policies and buckets: [`routes.md`](routes.md). Admitted limited routes set `X-RateLimit-Limit` / `Remaining` / `Reset` on 2xx and 429. Failed-auth limiter sets `Retry-After` only.
+Two independent Valkey limiters (replicas share one budget). `VALKEY_URL` is required to boot. Valkey error or timeout → **503** `SERVICE_UNAVAILABLE`. The gateway opens a new connection when Valkey answers again. Named policies and buckets: [`routes.md`](routes.md). Admitted limited routes set `X-RateLimit-Limit` / `Remaining` / `Reset` on 2xx and 429. Failed-auth limiter sets `Retry-After` only.
 
 | Limiter | When | Key |
 |---------|------|-----|
-| Admitted route | After match + admission (JWT and API key). Omitted `rate_limit` inherits `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` (never silent unlimited). `false` opts out. Inline object = this route+method. Policy name = service `rate_limits` entry (`shared: true` is opt-in cross-service). | Subject from route scope (`public`→ip, `user`→user, `organization`→org), plus method+path or policy name. |
+| Admitted route | After match + admission (JWT and API key). Omitted `rate_limit` inherits `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS`. `false` opts out. Inline object = this route+method. Policy name = service `rate_limits` entry (`shared: true` is opt-in cross-service). | Subject from route scope (`public`→ip, `user`→user, `organization`→org), plus method+path or policy name. |
 | Failed-auth IP | Unadmitted **401**s and unmatched **404**s. Not per-route. | Client IP. `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). `0` requests = off |
 
 ## Principles

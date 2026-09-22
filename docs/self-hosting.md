@@ -33,7 +33,7 @@ Do **not** join the Auth Docker network from Plat5. The gateway fetches JWKS ove
 
 ## 1. Auth (or BYO IdP)
 
-Plat5 requires `AUTH_ISSUER` + `AUTH_JWKS_URI` to become ready. API keys are an alternative credential, not an IdP-free mode.
+Plat5 requires `AUTH_ISSUER` + `AUTH_JWKS_URI` to become ready. API keys are an alternative credential.
 
 ### Plat5 Auth
 
@@ -189,7 +189,7 @@ curl -sS https://api.example.com/api/organizations
 
 Empty route map → 404. After apply, missing JWT → 401.
 
-Gateway ready requires JWKS loaded and Valkey reachable (`/health/ready` on internal `:8000`). Valkey restart resets open rate-limit windows.
+Gateway ready requires JWKS loaded and Valkey reachable (`/health/ready` on internal `:8000`). While Valkey is unreachable, limited requests are 503; they resume when it answers again. Valkey restart resets open rate-limit windows.
 
 ## Footguns
 

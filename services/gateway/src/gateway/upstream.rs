@@ -33,7 +33,7 @@ pub fn strip_client_credentials(req: &mut RequestHeader) {
     }
 }
 
-/// Inject identity headers from a successful admission. Org scope never sets X-User-Id.
+/// Inject identity headers from a successful admission.
 pub fn apply_admission_headers(req: &mut RequestHeader, admission: &Admission) -> Result<()> {
     match admission {
         Admission::Public => Ok(()),

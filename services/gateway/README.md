@@ -54,7 +54,7 @@ cargo test --all-targets
 | `OTEL_SDK_DISABLED` | unset | `true` → no OTLP; stdout + `/metrics` remain |
 | `ALLOWED_ORIGINS` | (empty → `*`) | Comma-separated CORS origin allowlist. Empty allows `*`; non-empty reflects matching `Origin` and sets `Vary: Origin` |
 
-Limiter subject follows route scope: `public`→ip, `user`→user, `organization`→org (JWT, user keys, SA/member keys). Valkey error on a limited request → **503**. Admitted limited routes set `X-RateLimit-Limit` / `Remaining` / `Reset`.
+Limiter subject follows route scope: `public`→ip, `user`→user, `organization`→org (JWT, user keys, SA/member keys). Valkey error or timeout on a limited request → **503**. The gateway reconnects when Valkey answers again. Admitted limited routes set `X-RateLimit-Limit` / `Remaining` / `Reset`.
 
 ## Telemetry
 
@@ -84,7 +84,7 @@ The gateway loads route configuration from etcd (watch). Writes go through **rou
 ## Health
 
 - `/health/live` — process up (always 200 when serving).
-- `/health/ready` — 200 when JWKS is loaded and Valkey answers PING; **503** otherwise (do not send traffic until ready).
+- `/health/ready` — 200 when JWKS is loaded and Valkey answers PING within 500ms; **503** otherwise (do not send traffic until ready).
 
 ## Span Status
 

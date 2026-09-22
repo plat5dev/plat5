@@ -14,18 +14,16 @@ Stripe’s split, in our envelope:
 | `request_id` | support | Correlation. Not shown in product UI. |
 | `details` | machine | Extra context. Optional. Never the only place the human sentence lives. |
 
-Clients show `error.message`. They do not parse `details.fields` to invent copy.
+Clients show `error.message`.
 
-Envelope shape does not change. Codes do not multiply into Stripe’s long `parameter_*` list. `details.fields` stays for multi-field 422s; `message` is still a complete sentence (first / most specific field).
+`details.fields` is for multi-field 422s. `message` is still a complete sentence (first / most specific field).
 
-## Stop
+## Writing `message`
 
-- Do not add Stripe `param` (we have `details.fields`).
-- Do not add a catalog of Stripe-like codes (`parameter_missing`, …).
-- Do not invent sentences from `details` or field paths. Show `error.message`.
-- Do not put `request_id`, HTTP status, or `code` in product UI.
-- Do not leak internals in `message` (SQL, stack, bind-error junk). Bind failures stay a fallback sentence.
-- Existence policy stays 404 + generic `Resource not found.` Do not say “you are not a member.”
+- Show `error.message`. Do not build a sentence from `details` or field paths.
+- Product UI shows the sentence, not `request_id`, HTTP status, or `code`.
+- `message` does not include SQL, stack traces, or bind-error text. Bind failures use a fallback sentence.
+- Unknown org, non-member, and inactive member are **404** `Resource not found.`
 
 ## Fallback `message` per `code`
 
