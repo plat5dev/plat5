@@ -134,7 +134,7 @@ Org invites live in **identity** (`organization_invites`). Create/revoke are use
 
 - Project / document / generic resource ACL in the gateway
 - FGA / ReBAC engines
-- **Tenant** (hosted Plat5 customer account) — different word, different product; not Plat5
+- Tenant as a name for an organization
 - Operator / employee admin planes
 - Member role as platform wire identity (role stays in identity)
 - Service accounts as a parallel auth system (they are members with keys)

@@ -6,7 +6,6 @@ Formats and terminology for labels, routes, metrics, and error codes across Plat
 
 - **Plat5** — Brand and main product: gateway, identity, route registry, contracts (platform runtime).
 - **Plat5 Auth** — Optional reference OIDC IdP (separate product).
-- **Plat5 Cloud** — Hosted multi-tenant control plane (separate product, deferred).
 - **Service** — Any unit of code that runs with Plat5 (e.g. `gateway`, `identity`, `widgets`).
 - **Platform service** — Plat5 runtime units: `gateway`, `route-registry`, `identity`.
 - **Business service** — Use-case service behind Plat5: domain APIs.
@@ -21,7 +20,7 @@ Plat5 owns **opaque user ids** (as strings from the gateway), API keys, organiza
 | Concept | Formal name | Notes |
 |---------|-------------|--------|
 | Global person | **User** | `user_id` (opaque string from IdP via gateway) |
-| Isolation boundary | **Organization** | Not “tenant” — **tenant** means a Plat5 Cloud customer account (out of scope for Plat5 runtime) |
+| Isolation boundary | **Organization** | Do not call it tenant. |
 | Org principal | **Member** | User *or* service account in an org; wire id `member_id` |
 | Non-human org identity | **Service account** | Created under an organization; always has a member row |
 | Member role | Identity service domain | Org admin APIs only — not gateway identity or org-scope headers |
