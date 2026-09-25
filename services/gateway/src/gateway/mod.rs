@@ -188,8 +188,6 @@ impl UserGateway {
             .await;
         }
 
-        upstream::strip_identity_headers(session.req_header_mut());
-
         let admission = match self
             .admissor
             .admit(session.req_header(), route, ctx.root_span().as_ref())

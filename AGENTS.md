@@ -41,7 +41,6 @@ Read the doc, don’t re-derive:
 
 Do not add these because they would be convenient:
 
-- A subject header (`X-User-Id`, `X-Organization-Id`, `X-Member-Id`). Subject is `{subject.*}` in `upstream`
 - `user_id` on `organization` or `member` scope. `member_id` on `organization` scope
 - Gateway RBAC / FGA / project ACL
 - User-subject identity routes on `organization` or `member` scope

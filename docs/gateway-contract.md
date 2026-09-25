@@ -27,13 +27,12 @@ The route scope names the subject. `upstream` fills it. The client path does not
 
 ### Stripped before upstream (all scopes)
 
-The gateway removes these request headers before the upstream call. It does not set them.
+The gateway removes these request headers before the upstream call.
 
 | Header | Why |
 |--------|-----|
 | `Authorization` | Consumed for JWT authn; must not leak bearer tokens to apps |
 | `X-API-Key` | Consumed for API-key authn; must not leak raw keys to apps |
-| `X-User-Id`, `X-Organization-Id`, `X-Member-Id` | Not a subject channel. A client must not supply one |
 
 Clients still send credential headers **to the gateway**. Services behind the gateway will not receive them. CORS may still allow browsers to send them.
 
@@ -100,14 +99,13 @@ Direct-exposed services are exempt (see below).
 
 The rewritten path is authentic only if the upstream is on a private network the gateway can reach.
 
-1. **Trust the path the gateway wrote** — Do not validate tokens. Read `{subject.*}` from `upstream`. Do not read a subject header.
+1. **Trust the path the gateway wrote** — Do not validate tokens. Read `{subject.*}` from `upstream`.
    - `user`: `user_id`
    - `organization`: `organization_id`
    - `member`: `organization_id` and `member_id`
 2. **Propagate `traceparent`** on downstream calls
 3. **Log with `request_id`** from `X-Request-ID`
 4. **Do not set `X-Request-ID` on responses** — gateway owns it
-5. **Do not read `X-User-Id`, `X-Organization-Id`, or `X-Member-Id`** — the gateway removes them and does not set them
 
 ### Platform integrity (hard limits)
 
