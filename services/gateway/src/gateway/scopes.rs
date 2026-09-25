@@ -1,7 +1,7 @@
 /// Whether an API key's scope list satisfies a route's `required_scopes`.
 ///
 /// - No `required_scopes` on the route → allow.
-/// - `key_scopes == None` (JWT or unrestricted key) → skip / allow.
+/// - `key_scopes == None` (JWT, unrestricted key, or session) → skip / allow.
 /// - Otherwise require a nonempty intersection.
 pub fn key_satisfies_required_scopes(
     required: Option<&[String]>,

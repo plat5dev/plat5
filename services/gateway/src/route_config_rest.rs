@@ -2,7 +2,6 @@ fn validate_scope_routes(
     service: &str,
     scope_name: &str,
     scope: &ScopeConfig,
-    organization_param: Option<&str>,
     policies: Option<&HashMap<String, RateLimitPolicy>>,
 ) -> Result<(), ConfigError> {
     for route in &scope.routes {
@@ -22,30 +21,15 @@ fn validate_scope_routes(
             });
         }
 
-        if let Some(ref prefix) = scope.route_prefix {
+        let expanded = if let Some(ref prefix) = scope.route_prefix {
             join_route_prefix(prefix, &route.path).map_err(|reason| ConfigError::InvalidRoute {
                 service: service.to_string(),
                 reason: format!("{}: {}", scope_name, reason),
-            })?;
-        }
-
-        if let Some(param) = organization_param {
-            let needle = format!("{{{}}}", param);
-            let expanded = if let Some(ref prefix) = scope.route_prefix {
-                join_route_prefix(prefix, &route.path).unwrap_or_else(|_| route.path.clone())
-            } else {
-                route.path.clone()
-            };
-            if !expanded.contains(&needle) {
-                return Err(ConfigError::InvalidRoute {
-                    service: service.to_string(),
-                    reason: format!(
-                        "organization route '{}' must include path param {{{}}}",
-                        expanded, param
-                    ),
-                });
-            }
-        }
+            })?
+        } else {
+            route.path.clone()
+        };
+        validate_path_and_upstream(service, scope_name, &expanded, route.upstream.as_deref())?;
 
         match &route.methods_form {
             MethodsForm::Nested(entries) => {
@@ -112,6 +96,139 @@ fn validate_scope_routes(
 
 fn valid_http_method(m: &str) -> bool {
     HTTP_METHODS.contains(&m)
+}
+
+fn scope_subject_fields(scope_name: &str) -> &'static [&'static str] {
+    match scope_name {
+        "user" => &["user_id"],
+        "organization" => &["organization_id"],
+        "member" => &["organization_id", "member_id"],
+        _ => &[],
+    }
+}
+
+fn validate_path_and_upstream(
+    service: &str,
+    scope_name: &str,
+    expanded_path: &str,
+    upstream: Option<&str>,
+) -> Result<(), ConfigError> {
+    let params = path_param_names(expanded_path).map_err(|reason| ConfigError::InvalidRoute {
+        service: service.to_string(),
+        reason: format!("{scope_name} route '{expanded_path}': {reason}"),
+    })?;
+    let forbidden = scope_subject_fields(scope_name);
+    for name in &params {
+        if forbidden.contains(&name.as_str()) {
+            return Err(ConfigError::InvalidRoute {
+                service: service.to_string(),
+                reason: format!(
+                    "{scope_name} route '{expanded_path}' must not contain subject param {{{name}}}"
+                ),
+            });
+        }
+    }
+    let Some(template) = upstream else {
+        return Ok(());
+    };
+    if template.is_empty() || !template.starts_with('/') || template.contains('?') || template.contains('#')
+    {
+        return Err(ConfigError::InvalidRoute {
+            service: service.to_string(),
+            reason: format!(
+                "{scope_name} route '{expanded_path}' upstream must be an absolute path"
+            ),
+        });
+    }
+    let placeholders = upstream_placeholders(template).map_err(|reason| ConfigError::InvalidRoute {
+        service: service.to_string(),
+        reason: format!("{scope_name} route '{expanded_path}' upstream: {reason}"),
+    })?;
+    for (namespace, name) in placeholders {
+        match namespace.as_str() {
+            "subject" => {
+                if !matches!(name.as_str(), "user_id" | "organization_id" | "member_id")
+                    || !forbidden.contains(&name.as_str())
+                {
+                    return Err(ConfigError::InvalidRoute {
+                        service: service.to_string(),
+                        reason: format!(
+                            "{scope_name} route '{expanded_path}' upstream cannot use subject.{name}"
+                        ),
+                    });
+                }
+            }
+            "path" => {
+                if !params.iter().any(|p| p == &name) {
+                    return Err(ConfigError::InvalidRoute {
+                        service: service.to_string(),
+                        reason: format!(
+                            "{scope_name} route '{expanded_path}' upstream path.{name} is not a parameter of path"
+                        ),
+                    });
+                }
+            }
+            other => {
+                return Err(ConfigError::InvalidRoute {
+                    service: service.to_string(),
+                    reason: format!(
+                        "{scope_name} route '{expanded_path}' upstream has unknown namespace '{other}'"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn path_param_names(path: &str) -> Result<Vec<String>, String> {
+    let mut names = Vec::new();
+    let mut rest = path;
+    while let Some(start) = rest.find('{') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('}') else {
+            return Err("unclosed '{'".to_string());
+        };
+        let name = &after[..end];
+        if name.is_empty() {
+            return Err("empty path parameter".to_string());
+        }
+        names.push(name.to_string());
+        rest = &after[end + 1..];
+    }
+    Ok(names)
+}
+
+fn upstream_placeholders(template: &str) -> Result<Vec<(String, String)>, String> {
+    let mut out = Vec::new();
+    let mut rest = template;
+    while let Some(start) = rest.find('{') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('}') else {
+            return Err("unclosed '{'".to_string());
+        };
+        let body = &after[..end];
+        if body.is_empty() {
+            return Err("empty placeholder".to_string());
+        }
+        if body.contains('{') {
+            return Err(format!("invalid placeholder '{{{body}}}'"));
+        }
+        let Some((namespace, name)) = body.split_once('.') else {
+            return Err(format!(
+                "bare '{{{body}}}' is rejected; use subject.* or path.*"
+            ));
+        };
+        if namespace.is_empty() || name.is_empty() || name.contains('.') {
+            return Err(format!("invalid placeholder '{{{body}}}'"));
+        }
+        if namespace != "subject" && namespace != "path" {
+            return Err(format!("unknown namespace '{namespace}'"));
+        }
+        out.push((namespace.to_string(), name.to_string()));
+        rest = &after[end + 1..];
+    }
+    Ok(out)
 }
 
 fn validate_required_scopes(

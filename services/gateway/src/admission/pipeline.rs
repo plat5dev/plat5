@@ -1,20 +1,24 @@
-use std::collections::HashMap;
-
 use pingora::http::RequestHeader;
 use tracing::{debug, warn};
 
 use crate::auth::jwt::validate_token;
-use crate::auth::member::{CachedMember, MemberError};
 use crate::auth::member_apikey::{CachedMemberApiKey, MemberApiKeyError};
+use crate::auth::member_session::{CachedMemberSession, MemberSessionError};
 use crate::auth::user_apikey::{CachedUserApiKey, UserApiKeyError};
 use crate::auth::AuthStack;
 use crate::error::ErrorKind;
 use crate::route_map::{Route, RouteScope};
 
 use super::types::{
-    extract_claim_path, jwt_error_reason, organization_id_from_params, Admission, AdmitError,
-    AuthContext, AuthError, AuthType, OrgParamError, OrgVia, ResolveDeny,
+    extract_claim_path, jwt_error_reason, Admission, AdmitError, AuthContext, AuthError, AuthType,
 };
+
+/// Member key or member session, before the scope drops fields.
+struct MemberProof {
+    member_id: String,
+    organization_id: String,
+    key_scopes: Option<Vec<String>>,
+}
 
 /// Composes auth domains into route-scope admission decisions.
 pub struct Admissor {
@@ -30,7 +34,7 @@ impl Admissor {
         &self,
         req: &RequestHeader,
         route: &Route,
-        params: &HashMap<String, String>,
+        span: Option<&tracing::Span>,
     ) -> Result<Admission, AdmitError> {
         match route.scope {
             RouteScope::Public => {
@@ -38,12 +42,32 @@ impl Admissor {
                 Ok(Admission::Public)
             }
             RouteScope::User => self.admit_user(req).await,
-            RouteScope::Organization => self.admit_organization(req, route, params).await,
+            RouteScope::Organization | RouteScope::Member => {
+                self.admit_member_credential(req, route.scope, span).await
+            }
         }
     }
 
     async fn admit_user(&self, req: &RequestHeader) -> Result<Admission, AdmitError> {
-        let auth = self.authenticate(req).await.map_err(AdmitError::Auth)?;
+        if let Some(key) = api_key(req)? {
+            if !key.starts_with(self.stack.user_key_prefix.as_str()) {
+                return Err(AdmitError::WrongCredential);
+            }
+            let auth = self.check_user_api_key(&key).await?;
+            debug!(
+                auth_type = auth.auth_type.as_str(),
+                user_id = %auth.user_id,
+                "authentication successful"
+            );
+            return Ok(Admission::User {
+                user_id: auth.user_id,
+                auth_type: auth.auth_type,
+                kid: auth.kid,
+                key_scopes: auth.key_scopes,
+            });
+        }
+
+        let auth = self.check_jwt(req).await.map_err(AdmitError::Auth)?;
         debug!(
             auth_type = auth.auth_type.as_str(),
             user_id = %auth.user_id,
@@ -57,87 +81,52 @@ impl Admissor {
         })
     }
 
-    async fn admit_organization(
+    async fn admit_member_credential(
         &self,
         req: &RequestHeader,
-        route: &Route,
-        params: &HashMap<String, String>,
+        scope: RouteScope,
+        span: Option<&tracing::Span>,
     ) -> Result<Admission, AdmitError> {
-        let organization_id =
-            match organization_id_from_params(route.organization_param.as_deref(), params) {
-                Ok(id) => id,
-                Err(OrgParamError::MissingParamName) => {
-                    return Err(AdmitError::Internal(
-                        "organization route missing organization_param",
-                    ));
-                }
-                Err(OrgParamError::MissingParamValue { .. }) => {
-                    return Err(AdmitError::Internal(
-                        "organization id missing from path params",
-                    ));
-                }
-            };
+        let Some(key) = api_key(req)? else {
+            return Err(AdmitError::WrongCredential);
+        };
 
-        let member_key = req
-            .headers
-            .get("X-API-Key")
-            .and_then(|v| v.to_str().ok())
-            .filter(|k| k.starts_with(self.stack.member_key_prefix.as_str()))
-            .map(|s| s.to_string());
+        let proof = if key.starts_with(self.stack.member_key_prefix.as_str()) {
+            self.load_member_key(&key).await?
+        } else if key.starts_with(self.stack.session_prefix.as_str()) {
+            self.load_member_session(&key).await?
+        } else {
+            return Err(AdmitError::WrongCredential);
+        };
 
-        if let Some(key_str) = member_key {
-            return self.admit_member_api_key(&organization_id, &key_str).await;
+        if let Some(span) = span {
+            span.record("organization.id", proof.organization_id.as_str());
+            span.record("member.id", proof.member_id.as_str());
         }
 
-        let auth = self.authenticate(req).await.map_err(AdmitError::Auth)?;
-
-        let member_id = self
-            .resolve_active_member(&auth.user_id, &organization_id)
-            .await
-            .map_err(|d| match d {
-                ResolveDeny::NotFound => {
-                    debug!(
-                        user_id = %auth.user_id,
-                        organization_id = %organization_id,
-                        "member resolve miss or inactive"
-                    );
-                    AdmitError::NotFound
-                }
-                ResolveDeny::Unavailable => {
-                    warn!(
-                        user_id = %auth.user_id,
-                        organization_id = %organization_id,
-                        "member resolve unavailable"
-                    );
-                    AdmitError::Unavailable
-                }
-            })?;
-
         debug!(
-            auth_type = auth.auth_type.as_str(),
-            user_id = %auth.user_id,
-            organization_id = %organization_id,
-            member_id = %member_id,
-            "organization admission successful"
+            organization_id = %proof.organization_id,
+            member_id = %proof.member_id,
+            "member credential admitted"
         );
 
-        Ok(Admission::Organization {
-            organization_id,
-            member_id,
-            via: OrgVia::User {
-                user_id: auth.user_id,
-                auth_type: auth.auth_type,
-                kid: auth.kid,
-            },
-            key_scopes: auth.key_scopes,
-        })
+        match scope {
+            RouteScope::Organization => Ok(Admission::Organization {
+                organization_id: proof.organization_id,
+                key_scopes: proof.key_scopes,
+            }),
+            RouteScope::Member => Ok(Admission::Member {
+                organization_id: proof.organization_id,
+                member_id: proof.member_id,
+                key_scopes: proof.key_scopes,
+            }),
+            RouteScope::Public | RouteScope::User => Err(AdmitError::Internal(
+                "member credential on a user subject route",
+            )),
+        }
     }
 
-    async fn admit_member_api_key(
-        &self,
-        path_organization_id: &str,
-        key: &str,
-    ) -> Result<Admission, AdmitError> {
+    async fn load_member_key(&self, key: &str) -> Result<MemberProof, AdmitError> {
         let cached = match self
             .stack
             .member_apikey_cache
@@ -192,38 +181,81 @@ impl Admissor {
             CachedMemberApiKey::Invalid => Err(AdmitError::MemberApiKeyInvalid),
             CachedMemberApiKey::Valid {
                 member_id,
-                organization_id: key_org,
+                organization_id,
                 scopes,
-            } => {
-                if key_org != path_organization_id {
-                    debug!(
-                        key_org = %key_org,
-                        path_org = %path_organization_id,
-                        "member key org mismatch"
-                    );
-                    return Err(AdmitError::NotFound);
-                }
-                debug!(
-                    auth_type = AuthType::MemberApiKey.as_str(),
-                    organization_id = %path_organization_id,
-                    member_id = %member_id,
-                    "organization admission successful"
-                );
-                Ok(Admission::Organization {
-                    organization_id: path_organization_id.to_string(),
-                    member_id,
-                    via: OrgVia::MemberKey,
-                    key_scopes: scopes,
-                })
-            }
+            } => Ok(MemberProof {
+                member_id,
+                organization_id,
+                key_scopes: scopes,
+            }),
         }
     }
 
-    async fn authenticate(&self, req: &RequestHeader) -> Result<AuthContext, AuthError> {
-        if req.headers.contains_key("X-API-Key") {
-            return self.check_user_api_key(req).await;
+    async fn load_member_session(&self, token: &str) -> Result<MemberProof, AdmitError> {
+        let cached = match self
+            .stack
+            .member_session_cache
+            .get_or_load(token, async {
+                match self.stack.member_session_validator.validate(token).await {
+                    Ok(v) => {
+                        let member_id = match v.member_id.clone() {
+                            Some(id) if !id.is_empty() => id,
+                            _ => {
+                                warn!("member session validate returned valid without member_id");
+                                return Err(MemberSessionError::ServiceError(
+                                    "missing member_id".into(),
+                                ));
+                            }
+                        };
+                        let organization_id = match v.organization_id.clone() {
+                            Some(id) if !id.is_empty() => id,
+                            _ => {
+                                warn!(
+                                    "member session validate returned valid without organization_id"
+                                );
+                                return Err(MemberSessionError::ServiceError(
+                                    "missing organization_id".into(),
+                                ));
+                            }
+                        };
+                        Ok(CachedMemberSession::Valid {
+                            member_id,
+                            organization_id,
+                            scopes: v.scopes.clone(),
+                        })
+                    }
+                    Err(MemberSessionError::InvalidToken) => Ok(CachedMemberSession::Invalid),
+                    Err(e) => Err(e),
+                }
+            })
+            .await
+        {
+            Ok(v) => v,
+            Err(err) => match err.as_ref() {
+                MemberSessionError::InvalidToken => return Err(AdmitError::MemberSessionInvalid),
+                MemberSessionError::ServiceError(msg) => {
+                    warn!(
+                        error_kind = ErrorKind::Network.as_str(),
+                        error_message = %msg,
+                        "member session validate error"
+                    );
+                    return Err(AdmitError::Unavailable);
+                }
+            },
+        };
+
+        match cached {
+            CachedMemberSession::Invalid => Err(AdmitError::MemberSessionInvalid),
+            CachedMemberSession::Valid {
+                member_id,
+                organization_id,
+                scopes,
+            } => Ok(MemberProof {
+                member_id,
+                organization_id,
+                key_scopes: scopes,
+            }),
         }
-        self.check_jwt(req).await
     }
 
     async fn check_jwt(&self, req: &RequestHeader) -> Result<AuthContext, AuthError> {
@@ -282,20 +314,7 @@ impl Admissor {
         }
     }
 
-    async fn check_user_api_key(&self, req: &RequestHeader) -> Result<AuthContext, AuthError> {
-        let api_key = req
-            .headers
-            .get("X-API-Key")
-            .ok_or(AuthError::MissingUserApiKey)?;
-
-        let key = api_key
-            .to_str()
-            .map_err(|_| AuthError::InvalidUserApiKeyHeader)?;
-
-        if !key.starts_with(self.stack.user_key_prefix.as_str()) {
-            return Err(AuthError::InvalidUserApiKey);
-        }
-
+    async fn check_user_api_key(&self, key: &str) -> Result<AuthContext, AdmitError> {
         let cached = match self
             .stack
             .user_apikey_cache
@@ -325,21 +344,21 @@ impl Admissor {
             Ok(v) => v,
             Err(err) => {
                 return Err(match err.as_ref() {
-                    UserApiKeyError::InvalidKey => AuthError::InvalidUserApiKey,
+                    UserApiKeyError::InvalidKey => AdmitError::Auth(AuthError::InvalidUserApiKey),
                     UserApiKeyError::ServiceError(msg) => {
                         warn!(
                             error_kind = ErrorKind::Network.as_str(),
                             error_message = %msg,
                             "user key validate error"
                         );
-                        AuthError::UserApiKeyValidationUnavailable
+                        AdmitError::Auth(AuthError::UserApiKeyValidationUnavailable)
                     }
                 });
             }
         };
 
         match cached {
-            CachedUserApiKey::Invalid => Err(AuthError::InvalidUserApiKey),
+            CachedUserApiKey::Invalid => Err(AdmitError::Auth(AuthError::InvalidUserApiKey)),
             CachedUserApiKey::Valid { user_id, scopes } => Ok(AuthContext {
                 user_id,
                 auth_type: AuthType::UserApiKey,
@@ -348,38 +367,16 @@ impl Admissor {
             }),
         }
     }
+}
 
-    async fn resolve_active_member(
-        &self,
-        user_id: &str,
-        organization_id: &str,
-    ) -> Result<String, ResolveDeny> {
-        let cached = match self
-            .stack
-            .member_cache
-            .get_or_load(user_id, organization_id, async {
-                match self
-                    .stack
-                    .member_resolver
-                    .resolve(user_id, organization_id)
-                    .await
-                {
-                    Ok(resolved) if resolved.status == "active" => {
-                        Ok(CachedMember::Active(resolved.member_id))
-                    }
-                    Ok(_) | Err(MemberError::NotFound) => Ok(CachedMember::Miss),
-                    Err(MemberError::ServiceError(_)) => Err(ResolveDeny::Unavailable),
-                }
-            })
-            .await
-        {
-            Ok(v) => v,
-            Err(_) => return Err(ResolveDeny::Unavailable),
-        };
-
-        match cached {
-            CachedMember::Active(member_id) => Ok(member_id),
-            CachedMember::Miss => Err(ResolveDeny::NotFound),
+/// `X-API-Key` present means it is the credential, including an empty value.
+/// Do not fall through to `Authorization`.
+fn api_key(req: &RequestHeader) -> Result<Option<String>, AdmitError> {
+    match req.headers.get("X-API-Key") {
+        None => Ok(None),
+        Some(value) => {
+            let key = value.to_str().map_err(|_| AdmitError::WrongCredential)?;
+            Ok(Some(key.to_string()))
         }
     }
 }

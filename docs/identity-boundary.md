@@ -2,7 +2,7 @@
 
 Authn, organization context, and resource authz are separate layers. Mixing them breaks the platform model.
 
-Every route declares which subject exists: none, the person, or the member-in-org. Those do not mix. Resource permissions are the service’s problem over that subject.
+Every route declares which subject exists: none, the person, the org, or the member in that org. Those do not mix. Resource permissions are the service’s problem over that subject.
 
 Headers and service rules: [`gateway-contract.md`](gateway-contract.md). Routes: [`routes.md`](routes.md). Errors: [`api-errors.md`](api-errors.md). Identity APIs: [`identity.md`](identity.md).
 
@@ -12,13 +12,13 @@ The route is a type. A handler does not get extra identity “just in case.” P
 
 **Mixed ticket.** A handler that sees `X-User-Id` + org + role invents a different “who is this?” per feature. Billing keys off the user. ACL keys off the org. Admin checks key off role. A member API key shows up and none of it fits. Suspend-member and delete-user diverge. One subject per scope is what stops that.
 
-**User-keyed authz on an org route.** Org-scoped APIs do not receive `X-User-Id`. If your graph is `user:U` on `doc:D`, an org route cannot feed it without a lookup you own — and a user-keyed graph on org-scoped resources crosses orgs unless you add org as a second check everywhere. Key org-scoped policy on `member_id` inside `organization_id`. Person-centric policy belongs on `user` routes.
+**User-keyed authz on an org route.** `organization` and `member` routes do not receive `X-User-Id`. If your graph is `user:U` on `doc:D`, those routes cannot feed it without a lookup you own. Person-centric policy belongs on `user` routes. Policy that needs the member belongs on `member` scope. `organization` scope does not receive `member_id`.
 
 **Platform role as product ACL.** Identity has no roles. Product permissions are the service’s, over the subject the scope defined. Do not add an owner / admin / member column to fill that gap.
 
-**Identity on `organization` scope.** Identity is the membership store member-resolve calls. Its routes are not member-admission routes. Putting them on `organization` scope would 404 a caller who is not a member and cycle on the store. The path names the subject. The handler does not read a caller header and does not enforce who may call.
+**User-subject routes are not org admission.** A route whose subject is `user_id` stays on `user` scope. Identity's organization and member routes are published on those scopes because the template fills the subject from the credential. The handler does not read a caller header and does not enforce who may call. Putting a user-subject route on `organization` or `member` would drop `user_id`.
 
-Frontend session (cookie, current-org, subdomain) is your client. The request the gateway sees must still name the subject — org in the path for `organization` scope.
+Frontend session (cookie, current-org, subdomain) is your client. The client does not supply a subject id. The credential does.
 
 Trusting injected headers is a perimeter protocol: [`gateway-contract.md`](gateway-contract.md).
 
@@ -26,8 +26,8 @@ Trusting injected headers is a perimeter protocol: [`gateway-contract.md`](gatew
 
 | Layer | Question | Owner |
 |-------|----------|--------|
-| **Authentication** | Who is this? | Gateway + **IdP (JWT)** / identity API keys (credentials stripped before upstream) |
-| **Organization context** | Is this credential an **active** member of this organization? | Gateway + **identity** (member resolve or member-scoped key) |
+| **Authentication** | Who is this? | Gateway + **IdP (JWT)** / identity keys and sessions (credentials stripped before upstream) |
+| **Scope projection** | Which fields is this route allowed to see? | Gateway. The credential is the proof. The scope drops fields. |
 | **API key route scopes** | Does this restricted key share a label with `required_scopes`? | Gateway after admission. Restricted = non-null `scopes` (`[]` or labels). JWTs and `null` skip. Omitted `required_scopes` → any admitted principal. |
 | **Resource authorization** | Can this member do X to project/doc/…? | **Business services** — not gateway headers |
 | **Who may call identity** | Who may add members, mint keys, delete an org? | The proxy in front of identity. The service refuses illegal states only. |
@@ -40,48 +40,49 @@ Route `required_scopes` is a credential intersection: the restricted key’s lab
 |-------|----------------------|------------------|
 | `public` | None | none |
 | `user` | Person (`user_id`) | `X-User-Id` |
-| `organization` | Member-in-org | `X-Organization-Id` + `X-Member-Id` only |
+| `organization` | The org | `X-Organization-Id` only |
+| `member` | The member in that org | `X-Organization-Id` + `X-Member-Id` |
 
-One subject per scope. Do not put `X-User-Id` on `organization` routes.
+One subject per scope. Do not put `X-User-Id` on `organization` or `member` routes. Do not put `X-Member-Id` on `organization` routes.
 
-Always: `X-Request-ID`, `traceparent`. The edge may record `user.id` / `organization.id` / `member.id` on spans for ops — that is not the app contract. Org-scoped services do not receive `X-User-Id`.
+Always: `X-Request-ID`, `traceparent`. The edge may record dropped ids on spans for ops — that is not the app contract.
 
 ## No roles
 
 Identity has no `member` / `admin` / `owner` column, response field, or hook. Who may call is not a role. Do not add the column back.
 
-Business services on `organization` scope get `organization_id` + `member_id` only. Resource permissions are the service’s problem.
+Business services on `organization` scope get `organization_id` only. `member` scope gets `organization_id` and `member_id`. Resource permissions are the service’s problem.
 
 ## Who uses which scope
 
 | Routes | Scope | Why |
 |--------|-------|-----|
-| User-centric business APIs | **`user`** | Subject is the person (`X-User-Id`). |
-| **identity** | not `organization` | Path names the subject (`/users/{user_id}`, `/organizations/{organization_id}`, `/members/{member_id}`). Must not sit behind member-resolve. The handler does not read a caller header. |
-| Business APIs under an org path | **`organization`** | Gateway admits active member; service trusts org headers and enforces resource authz. |
+| User-centric business APIs, and identity routes whose subject is the person | **`user`** | Subject is the person (`X-User-Id`). |
+| Org-scoped business APIs, and identity routes whose subject is the org | **`organization`** | Credential is a member of that org. Handler sees `X-Organization-Id` only. |
+| Routes whose subject is the member | **`member`** | Same credential. Handler sees `X-Organization-Id` and `X-Member-Id`. |
 
-**Default on `organization` scope:** trust gateway admission — do not re-check “is this member in the org?” Enforce **resource** authz in the service. Re-checking admission is optional defense-in-depth, not required.
+**Default:** trust gateway admission. Do not re-check “is this member in the org?” Enforce **resource** authz in the service.
 
-### Credentials on `organization` scope
+### Credentials
 
-| Credential | Admission |
-|------------|-----------|
-| User JWT | Authn → `user_id` → **member resolve** `(user_id, organization_id)` → inject org headers |
-| User API key | Validate → `user_id` (+ `scopes`) → same resolve → inject → `required_scopes` if the key is restricted |
-| Member API key | Validate → `member_id` + `organization_id` + `scopes` → path org must match + member active → inject (no resolve call) → `required_scopes` if restricted |
+| Scope | Credential |
+|-------|------------|
+| `user` | User JWT or user API key |
+| `organization`, `member` | Member API key or member session |
+
+Wrong credential for the scope is **401**. A user JWT does not become an org subject.
 
 ### Org-scoped API
 
 ```
-GET /api/organizations/{organization_id}/projects
-Authorization: user JWT or user API key
-  (or X-API-Key: member-scoped key for automation)
+GET /api/projects
+X-API-Key: member key or member session
 
-Gateway: authn → admit active member → inject X-Organization-Id + X-Member-Id → proxy
-Service: trust those headers; enforce resource authz as needed
+Gateway: admit → inject X-Organization-Id → proxy
+Service: trust that header; enforce resource authz as needed
 ```
 
-No organization-scoped token exchange required for the default path.
+If the handler needs `member_id`, the route is `member` scope.
 
 ### User-scoped API
 
@@ -107,21 +108,24 @@ The path names every id the handler reads. There is no caller header. Who may ca
 
 | Case | HTTP / code |
 |------|-------------|
-| Bad or missing credential | **401** `UNAUTHORIZED` |
+| Bad, missing, or wrong credential for the scope | **401** `UNAUTHORIZED` |
 | Restricted API key missing route `required_scopes` | **403** `FORBIDDEN` |
-| Non-member, unknown org, or member not `active` (org-context) | **404** `NOT_FOUND` |
+| Unknown id (identity handlers) | **404** `NOT_FOUND` |
 | Admitted route or failed-auth IP over limit | **429** `RATE_LIMITED` |
-| Member resolve / key validate down or timeout; Valkey down on a limited request; JWKS unavailable | **503** `SERVICE_UNAVAILABLE` |
+| Key or session validate down or timeout; Valkey down on a limited request; JWKS unavailable | **503** `SERVICE_UNAVAILABLE` |
 | Missing expected identity headers on a protected route (downstream) | **500** `INTERNAL_ERROR` (platform bug) |
+| Path param is not one segment | **400** `INVALID_REQUEST` |
+| Subject id is not one segment | **500** `INTERNAL_ERROR` |
 
-Identity **404**s an unknown id, a removed member, and a key or service account addressed under the wrong parent. It does not **404** "not a member." Gateway org-context still **404**s non-member, unknown org, or inactive member.
+Identity **404**s an unknown id, a removed member, and a key or service account addressed under the wrong parent. It does not **404** "not a member." The gateway does not **404** a wrong credential. Inactive, expired, and unknown credentials are **401**.
 
 ## Missing headers
 
 | Scope | Expected headers | If missing |
 |-------|------------------|------------|
 | `user` | `X-User-Id` | `INTERNAL_ERROR` |
-| `organization` | `X-Organization-Id`, `X-Member-Id` | `INTERNAL_ERROR` |
+| `organization` | `X-Organization-Id` | `INTERNAL_ERROR` |
+| `member` | `X-Organization-Id`, `X-Member-Id` | `INTERNAL_ERROR` |
 | `public` | none | — |
 
 Do not return `UNAUTHORIZED` for missing identity headers — the gateway already authenticated (or should have rejected) the client.

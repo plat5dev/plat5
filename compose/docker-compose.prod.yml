@@ -124,11 +124,10 @@ services:
       AUTH_USER_ID_CLAIM: ${AUTH_USER_ID_CLAIM:-properties.user_id}
       USER_APIKEY_VALIDATE_URL: http://identity:3001/internal/user-keys/validate
       MEMBER_APIKEY_VALIDATE_URL: http://identity:3001/internal/member-keys/validate
-      MEMBER_RESOLVE_URL: http://identity:3001/internal/members/resolve
+      MEMBER_SESSION_VALIDATE_URL: http://identity:3001/internal/member-sessions/validate
       APIKEY_BRAND: ${APIKEY_BRAND:-plat5}
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
       RUST_LOG: info
-      MEMBER_CACHE_TTL_SECS: "300"
       RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-60}
       RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
       RATE_LIMIT_AUTH_FAILURE_REQUESTS: ${RATE_LIMIT_AUTH_FAILURE_REQUESTS:-60}

@@ -97,7 +97,7 @@ AUTH_ISSUER=https://auth.example.com
 AUTH_JWKS_URI=https://auth.example.com/.well-known/jwks.json
 AUTH_ALLOWED_AUDIENCES=<same as AUTH_ALLOWED_CLIENTS>
 AUTH_USER_ID_CLAIM=properties.user_id   # Plat5 Auth; use sub for many OIDC IdPs
-# APIKEY_BRAND=plat5                    # optional; keys {brand}-sk-1- / {brand}-mk-1-
+# APIKEY_BRAND=plat5                    # optional; {brand}-sk-1- / {brand}-mk-1- / {brand}-ms-1-
 ```
 
 `POSTGRES_PASSWORD` is interpolated into `DATABASE_URL`. Use a **URL-safe** value (hex). `+` / `/` from raw base64 break the URL (`invalid port`).
@@ -133,8 +133,7 @@ services:
   api:
     url: api:3000
     organization:
-      organization_param: organization_id
-      route_prefix: /api/organizations/{organization_id}
+      route_prefix: /api
       routes:
         - path: /widgets
           methods: [GET, POST]
@@ -183,8 +182,8 @@ Static hosting (Cloudflare Pages, object storage, nginx) is fine. The console is
 curl -sS -o /dev/null -w '%{http_code}\n' https://auth.example.com/.well-known/jwks.json
 # 200
 
-curl -sS https://api.example.com/api/organizations
-# 401 UNAUTHORIZED — route exists, no token
+curl -sS https://api.example.com/org
+# 401 UNAUTHORIZED — route exists, no member credential
 ```
 
 Empty route map → 404. After apply, missing JWT → 401.

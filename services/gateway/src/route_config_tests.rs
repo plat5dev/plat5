@@ -6,7 +6,7 @@ mod tests {
         RouteConfig {
             path: path.to_string(),
             methods: methods.iter().map(|m| m.to_string()).collect(),
-            transform: None,
+            upstream: None,
             required_scopes: None,
             rate_limit: None,
             methods_form: MethodsForm::List,
@@ -20,10 +20,10 @@ mod tests {
             public: None,
             user: Some(ScopeConfig {
                 route_prefix: None,
-                organization_param: None,
                 routes,
             }),
             organization: None,
+            member: None,
         }
     }
 
@@ -55,10 +55,10 @@ mod tests {
             public: None,
             user: Some(ScopeConfig {
                 route_prefix: Some("/api/organizations".into()),
-                organization_param: None,
                 routes: vec![route("/", &["GET"])],
             }),
             organization: None,
+            member: None,
         };
         let prepared = svc.prepare_for_registry("organizations").unwrap();
         assert!(prepared.user.as_ref().unwrap().route_prefix.is_none());
@@ -358,5 +358,104 @@ mod tests {
         services.insert("a".into(), a);
         services.insert("b".into(), b);
         Config { services }.validate().unwrap();
+    }
+
+    fn org_service(routes: Vec<RouteConfig>) -> ServiceConfig {
+        ServiceConfig {
+            url: "w:3000".into(),
+            rate_limits: None,
+            public: None,
+            user: None,
+            organization: Some(ScopeConfig {
+                route_prefix: None,
+                routes,
+            }),
+            member: None,
+        }
+    }
+
+    #[test]
+    fn upstream_subject_and_path_ok() {
+        let mut r = route("/org/projects/{project_id}", &["GET"]);
+        r.upstream =
+            Some("/organizations/{subject.organization_id}/projects/{path.project_id}".into());
+        let mut services = HashMap::new();
+        services.insert("w".into(), org_service(vec![r]));
+        Config { services }.validate().unwrap();
+    }
+
+    #[test]
+    fn upstream_rejects_bare_wrong_subject_and_relative() {
+        for upstream in [
+            "/organizations/{organization_id}",
+            "/organizations/{subject.member_id}",
+            "/organizations/{subject.user_id}",
+            "organizations/{subject.organization_id}",
+            "/organizations/{subject.organization_id}?x=1",
+        ] {
+            let mut r = route("/org", &["GET"]);
+            r.upstream = Some(upstream.into());
+            let mut services = HashMap::new();
+            services.insert("w".into(), org_service(vec![r]));
+            assert!(
+                Config { services }.validate().is_err(),
+                "expected error for {upstream}"
+            );
+        }
+    }
+
+    #[test]
+    fn path_must_not_name_subject() {
+        let r = route("/orgs/{organization_id}", &["GET"]);
+        let mut services = HashMap::new();
+        services.insert("w".into(), org_service(vec![r]));
+        let err = Config { services }.validate().unwrap_err();
+        assert!(err.to_string().contains("subject param"));
+    }
+
+    #[test]
+    fn user_route_may_name_organization_id() {
+        let mut r = route("/user/organizations/{organization_id}/session", &["POST"]);
+        r.upstream =
+            Some("/users/{subject.user_id}/organizations/{path.organization_id}/session".into());
+        let mut services = HashMap::new();
+        services.insert("w".into(), user_service(vec![r]));
+        Config { services }.validate().unwrap();
+    }
+
+    #[test]
+    fn prefix_expands_path_not_upstream() {
+        let mut r = route("/{project_id}", &["GET"]);
+        r.upstream = Some("/projects/{path.project_id}".into());
+        let svc = ServiceConfig {
+            url: "p:3000".into(),
+            rate_limits: None,
+            public: None,
+            user: None,
+            organization: Some(ScopeConfig {
+                route_prefix: Some("/org/projects".into()),
+                routes: vec![r],
+            }),
+            member: None,
+        };
+        let prepared = svc.prepare_for_registry("p").unwrap();
+        let route = &prepared.organization.as_ref().unwrap().routes[0];
+        assert_eq!(route.path, "/org/projects/{project_id}");
+        assert_eq!(
+            route.upstream.as_deref(),
+            Some("/projects/{path.project_id}")
+        );
+    }
+
+    #[test]
+    fn unknown_fields_do_not_deserialize() {
+        assert!(serde_json::from_str::<RouteConfig>(
+            r#"{"path":"/x","methods":["GET"],"transform":{"path":"/y"}}"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<ScopeConfig>(
+            r#"{"routes":[],"organization_param":"organization_id"}"#
+        )
+        .is_err());
     }
 }

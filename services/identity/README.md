@@ -1,10 +1,10 @@
 # identity
 
-Plat5 **identity** service: organizations, members, invites, service accounts, user API keys, member API keys, and internal validate/resolve for the gateway.
+Plat5 **identity** service: organizations, members, invites, service accounts, user API keys, member API keys, member sessions, and internal validate for the gateway.
 
 Contract: [`docs/identity.md`](../../docs/identity.md)
 
-`routes.yml` still lists the previous paths. Do not apply it until the gateway pass.
+`routes.yml` is the gateway catalog. Apply it (or a subset). The process still serves unpublished paths on the public port.
 
 ## Layout
 
@@ -13,7 +13,7 @@ Contract: [`docs/identity.md`](../../docs/identity.md)
 | `orgs/` | Organizations, members, invites, service accounts |
 | `userkeys/` | User API keys (`{brand}-sk-1-`) |
 | `memberkeys/` | Member API keys (`{brand}-mk-1-`) |
-| `sessions/` | Member sessions (`{brand}-ms-1-`). Not in `routes.yml`. |
+| `sessions/` | Member sessions (`{brand}-ms-1-`). Mint is in `routes.yml`. Validate stays internal. |
 
 `APIKEY_BRAND` (default `plat5`) must match the gateway.
 

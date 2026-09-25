@@ -4,6 +4,7 @@ pub enum AuthType {
     Jwt,
     UserApiKey,
     MemberApiKey,
+    MemberSession,
 }
 
 impl AuthType {
@@ -12,6 +13,7 @@ impl AuthType {
             AuthType::Jwt => "jwt",
             AuthType::UserApiKey => "user_apikey",
             AuthType::MemberApiKey => "member_apikey",
+            AuthType::MemberSession => "member_session",
         }
     }
 }

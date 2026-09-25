@@ -176,7 +176,6 @@ func newInternalApp(
 		middleware.RequestLogger(telem),
 		middleware.RequireInternalToken(internalToken),
 	)
-	orgHandler.MountInternal(internalAPI)
 	userKeyHandler.MountInternal(internalAPI)
 	memberKeyHandler.MountInternal(internalAPI)
 	sessionHandler.MountInternal(internalAPI)

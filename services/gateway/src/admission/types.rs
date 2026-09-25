@@ -11,19 +11,8 @@ pub struct AuthContext {
     pub key_scopes: Option<Vec<String>>,
 }
 
-/// How an organization-scoped request was admitted.
-pub enum OrgVia {
-    /// User credential + active member resolve.
-    User {
-        user_id: String,
-        auth_type: AuthType,
-        kid: Option<String>,
-    },
-    /// Member API key for the path org.
-    MemberKey,
-}
-
-/// Successful route admission — what identity headers to inject (if any).
+/// Successful route admission. This is the projection, not the proof.
+/// Organization does not carry `member_id`. Member does not carry `user_id`.
 pub enum Admission {
     Public,
     User {
@@ -34,15 +23,18 @@ pub enum Admission {
     },
     Organization {
         organization_id: String,
+        key_scopes: Option<Vec<String>>,
+    },
+    Member {
+        organization_id: String,
         member_id: String,
-        via: OrgVia,
         key_scopes: Option<Vec<String>>,
     },
 }
 
 impl Admission {
     /// Granted API-key scopes when the credential is a restricted key.
-    /// None = JWT, unrestricted key, or public — skip required_scopes.
+    /// None = JWT, unrestricted key, session (`scopes: null`), or public — skip required_scopes.
     pub fn key_scopes(&self) -> Option<&[String]> {
         match self {
             Admission::User {
@@ -52,33 +44,14 @@ impl Admission {
             | Admission::Organization {
                 key_scopes: Some(s),
                 ..
+            }
+            | Admission::Member {
+                key_scopes: Some(s),
+                ..
             } => Some(s.as_slice()),
             _ => None,
         }
     }
-
-    pub fn user_id(&self) -> Option<&str> {
-        match self {
-            Admission::User { user_id, .. } => Some(user_id.as_str()),
-            Admission::Organization {
-                via: OrgVia::User { user_id, .. },
-                ..
-            } => Some(user_id.as_str()),
-            _ => None,
-        }
-    }
-
-    pub fn member_id(&self) -> Option<&str> {
-        match self {
-            Admission::Organization { member_id, .. } => Some(member_id.as_str()),
-            _ => None,
-        }
-    }
-}
-
-pub enum ResolveDeny {
-    NotFound,
-    Unavailable,
 }
 
 /// Denial from the admission pipeline (mapped to HTTP by the proxy layer).
@@ -86,16 +59,20 @@ pub enum ResolveDeny {
 pub enum AdmitError {
     Auth(AuthError),
     MemberApiKeyInvalid,
-    NotFound,
+    MemberSessionInvalid,
+    /// Credential is present but is not accepted by this scope. Not a compare, so not 404.
+    WrongCredential,
     Unavailable,
-    /// Route/config invariant broken (missing org param, etc.).
+    /// Route/config invariant broken.
     Internal(&'static str),
 }
 
 impl AdmitError {
     pub fn is_unadmitted_401(&self) -> bool {
         match self {
-            AdmitError::MemberApiKeyInvalid => true,
+            AdmitError::MemberApiKeyInvalid
+            | AdmitError::MemberSessionInvalid
+            | AdmitError::WrongCredential => true,
             AdmitError::Auth(err) => err.is_client_error(),
             _ => false,
         }
@@ -205,34 +182,10 @@ pub fn parse_user_id_claim(raw: &str) -> Vec<String> {
     }
 }
 
-/// Organization id from path params for an org-scoped route.
-pub fn organization_id_from_params(
-    organization_param: Option<&str>,
-    params: &std::collections::HashMap<String, String>,
-) -> Result<String, OrgParamError> {
-    let param_name = match organization_param {
-        Some(p) if !p.is_empty() => p,
-        _ => return Err(OrgParamError::MissingParamName),
-    };
-    match params.get(param_name) {
-        Some(id) if !id.is_empty() => Ok(id.clone()),
-        _ => Err(OrgParamError::MissingParamValue {
-            param: param_name.to_string(),
-        }),
-    }
-}
-
-#[derive(Debug)]
-pub enum OrgParamError {
-    MissingParamName,
-    MissingParamValue { param: String },
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn parse_default_and_sub() {
@@ -256,19 +209,5 @@ mod tests {
             Some("auth0|1")
         );
         assert!(extract_claim_path(&claims, &parse_user_id_claim("missing")).is_none());
-    }
-
-    #[test]
-    fn org_id_from_params() {
-        let mut params = HashMap::new();
-        params.insert("organization_id".into(), "org_1".into());
-        assert_eq!(
-            organization_id_from_params(Some("organization_id"), &params).unwrap(),
-            "org_1"
-        );
-        assert!(matches!(
-            organization_id_from_params(None, &params),
-            Err(OrgParamError::MissingParamName)
-        ));
     }
 }

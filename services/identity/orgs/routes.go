@@ -36,8 +36,3 @@ func (h *Handler) MountMembers(router fiber.Router) {
 	router.Patch("/:member_id", h.UpdateMember)
 	router.Delete("/:member_id", h.DeleteMember)
 }
-
-// MountInternal registers member resolve on a router scoped under /internal.
-func (h *Handler) MountInternal(router fiber.Router) {
-	router.Post("/members/resolve", h.Resolve)
-}

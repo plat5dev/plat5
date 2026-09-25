@@ -1,6 +1,6 @@
 # Gateway
 
-Rust reverse proxy built on Pingora. Handles request routing, JWT/API key authentication, identity header injection, stripping of `Authorization` / `X-API-Key` before upstream, rate limits (Valkey), trace propagation, CORS, and security headers. TLS is terminated at the edge (not in this process).
+Rust reverse proxy built on Pingora. Handles request routing, JWT / API key / member session authentication, identity header injection, stripping of `Authorization` / `X-API-Key` before upstream, rate limits (Valkey), trace propagation, CORS, and security headers. TLS is terminated at the edge (not in this process).
 
 ## Local Development
 
@@ -29,10 +29,9 @@ cargo test --all-targets
 | `USER_APIKEY_VALIDATE_URL` | (required) | User key validate (`…/internal/user-keys/validate`); keys `{brand}-sk-1-…` |
 | `MEMBER_APIKEY_VALIDATE_URL` | (required) | Member key validate (`…/internal/member-keys/validate`); keys `{brand}-mk-1-…` |
 | `APIKEY_BRAND` | `plat5` | Same value as identity. `[a-z][a-z0-9]*`, max 32. Unset → `plat5`; empty → refuse boot |
-| `APIKEY_CACHE_TTL_SECS` | `300` | User + member API key cache TTL (hits and invalid keys) |
-| `MEMBER_RESOLVE_URL` | (required) | Member resolve (`…/internal/members/resolve`) |
-| `MEMBER_CACHE_TTL_SECS` | `300` | Member resolve cache TTL (active hits and 404 / inactive) |
-| `INTERNAL_AUTH_TOKEN` | unset | Sent as `X-Plat5-Internal-Token` to validate/resolve when set |
+| `MEMBER_SESSION_VALIDATE_URL` | (required) | Member session validate (`…/internal/member-sessions/validate`); tokens `{brand}-ms-1-…` |
+| `APIKEY_CACHE_TTL_SECS` | `300` | User key, member key, and member session cache TTL (hits and invalid credentials) |
+| `INTERNAL_AUTH_TOKEN` | unset | Sent as `X-Plat5-Internal-Token` to validate when set |
 | `RATE_LIMIT_REQUESTS` | `60` | Fallback per-route limit. `0` = unlimited fallback |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Fallback window |
 | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` | `60` | Failed-auth IP limiter. `0` = off |
@@ -54,7 +53,7 @@ cargo test --all-targets
 | `OTEL_SDK_DISABLED` | unset | `true` → no OTLP; stdout + `/metrics` remain |
 | `ALLOWED_ORIGINS` | (empty → `*`) | Comma-separated CORS origin allowlist. Empty allows `*`; non-empty reflects matching `Origin` and sets `Vary: Origin` |
 
-Limiter subject follows route scope: `public`→ip, `user`→user, `organization`→org (JWT, user keys, SA/member keys). Valkey error or timeout on a limited request → **503**. The gateway reconnects when Valkey answers again. Admitted limited routes set `X-RateLimit-Limit` / `Remaining` / `Reset`.
+Limiter subject follows route scope: `public`→ip, `user`→user, `organization`→org, `member`→member. Valkey error or timeout on a limited request → **503**. The gateway reconnects when Valkey answers again. Admitted limited routes set `X-RateLimit-Limit` / `Remaining` / `Reset`.
 
 ## Telemetry
 

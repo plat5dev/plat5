@@ -104,16 +104,16 @@ Same path, different per-verb `required_scopes` / `rate_limit` — nested `metho
 | `url` | `string` | Upstream URL (hostname:port or absolute URL the gateway can dial). |
 | `rate_limits` | `map<string, RateLimitPolicy>?` | Optional on the **service**. Named policies this service’s routes may reference. |
 | `public` | `ScopeConfig?` | No authentication. |
-| `user` | `ScopeConfig?` | JWT or **user** API key. |
-| `organization` | `ScopeConfig?` | JWT / user API key + member resolve, or **member** API key. |
-| `route_prefix` | `string?` | Optional on any scope. Registry expands into each `path` before etcd. |
-| `organization_param` | `string` | **Required** on `organization` scope — path param name for org id. |
+| `user` | `ScopeConfig?` | User JWT or **user** API key. |
+| `organization` | `ScopeConfig?` | **Member** API key or **member** session. Injects `X-Organization-Id` only. |
+| `member` | `ScopeConfig?` | Same credential as `organization`. Injects `X-Organization-Id` and `X-Member-Id`. |
+| `route_prefix` | `string?` | Optional on any scope. Registry expands into each `path` before etcd. Not applied to `upstream`. |
 | `routes` | `array<RouteConfig>` | HTTP routes for this scope. |
-| `path` | `string` | HTTP path (`/` or starts with `/`). Supports `{param}`. |
+| `path` | `string` | Match path (`/` or starts with `/`). Params are resource ids, not the subject. |
+| `upstream` | `string?` | Absolute path template. Omitted means proxy `path` unchanged. Placeholders stay in etcd; the gateway substitutes at request time. Route-level only — not per-method. |
 | `methods` | `array<string>` \| `map<string, MethodConfig>` | List form: allowed HTTP methods. Map form: per-verb config (see below). Do not mix list and map on the same route (`422`). |
-| `transform` | `object?` | Optional path rewrite (see below). Route-level only — not per-method. |
-| `required_scopes` | `string[]?` | Optional. Omitted = any admitted principal (including restricted keys). If set, a **restricted** API key (`scopes` non-null, including `[]`) must share at least one label. JWTs and unrestricted keys (`scopes: null`) skip. Validated at apply. Route-level value applies only to the flat methods list. |
-| `rate_limit` | `false` \| `{requests, window_seconds}` \| `string` \| omitted | Omitted **inherits** the gateway fallback. `false` opts out (unlimited). Object = this route+method only. String = named policy on **this** service. Limiter subject follows route scope (`public`→ip, `user`→user, `organization`→org). Route-level value applies only to the flat methods list. |
+| `required_scopes` | `string[]?` | Optional. Omitted = any admitted principal (including restricted keys). If set, a **restricted** API key (`scopes` non-null, including `[]`) must share at least one label. JWTs, unrestricted keys, and member sessions (`scopes: null`) skip. Validated at apply. Route-level value applies only to the flat methods list. |
+| `rate_limit` | `false` \| `{requests, window_seconds}` \| `string` \| omitted | Omitted **inherits** the gateway fallback. `false` opts out (unlimited). Object = this route+method only. String = named policy on **this** service. Limiter subject follows route scope (`public`→ip, `user`→`user_id`, `organization`→`organization_id`, `member`→`member_id`). Route-level value applies only to the flat methods list. |
 
 A service must define at least one scope. Multiple scopes may be present.
 
@@ -144,7 +144,7 @@ Two forms. Do not mix them on the same route (`422`).
         window_seconds: 1
 ```
 
-Nested maps are an **apply-time YAML convenience**. Registry `prepare_for_registry` / prefix expand turns each verb into its own `RouteConfig` row (same `path`, `methods: [THAT_VERB]`, `required_scopes` / `rate_limit` taken from that method entry). `transform` stays on the path. After expand, etcd `methods` is always a string array. Duplicate `path`+method after expand → `422`.
+Nested maps are an **apply-time YAML convenience**. Registry `prepare_for_registry` / prefix expand turns each verb into its own `RouteConfig` row (same `path`, `methods: [THAT_VERB]`, `required_scopes` / `rate_limit` taken from that method entry). `upstream` stays on the path. After expand, etcd `methods` is always a string array. Duplicate `path`+method after expand → `422`.
 
 Labels are opaque. `org:write` does not imply `org:read`.
 
@@ -152,11 +152,11 @@ Labels are opaque. `org:write` does not imply `org:read`.
 
 Labels follow the same hygiene as key mint: `[a-z0-9:._-]+`, max 64 chars, max 32, unique, non-empty list if present.
 
-After match + admission: if the route has `required_scopes` **and** the credential is an API key with a non-null scopes list, the two lists must have a nonempty intersection or the gateway returns **403** `FORBIDDEN`. JWT and unrestricted keys (`scopes: null`) skip. `scopes: []` is restricted and cannot intersect — **403** on these routes, still admitted on unlabeled routes.
+After match + admission: if the route has `required_scopes` **and** the credential is an API key with a non-null scopes list, the two lists must have a nonempty intersection or the gateway returns **403** `FORBIDDEN`. JWT, unrestricted keys, and member sessions (`scopes: null`) skip. `scopes: []` is restricted and cannot intersect — **403** on these routes, still admitted on unlabeled routes.
 
 ### `rate_limit`
 
-Applies to **all admitted** routes (JWT and API key). Counters live in **Valkey** — replicas share one budget. `VALKEY_URL` is required to boot. Valkey error or timeout on a limited request → **503** `SERVICE_UNAVAILABLE`. The gateway opens a new connection when Valkey answers again.
+Applies to **all admitted** routes (JWT, API key, and member session). Counters live in **Valkey** — replicas share one budget. `VALKEY_URL` is required to boot. Valkey error or timeout on a limited request → **503** `SERVICE_UNAVAILABLE`. The gateway opens a new connection when Valkey answers again.
 
 Fixed window: the first increment opens the window; key TTL is `window_seconds`. Restarting Valkey resets open windows.
 
@@ -190,12 +190,11 @@ services:
         window_seconds: 60
         shared: true
     organization:
-      organization_param: organization_id
       routes:
-        - path: /api/organizations/{organization_id}/projects
+        - path: /api/projects
           methods: [POST]
           rate_limit: writes
-        - path: /api/organizations/{organization_id}/projects/{project_id}
+        - path: /api/projects/{project_id}
           methods: [DELETE]
           rate_limit: org-writes
 ```
@@ -214,7 +213,7 @@ services:
 | name, not shared | `{service}:{name}:{subject}` |
 | name, `shared: true` | `{name}:{subject}` |
 
-Limiter subject follows route scope: `public`→`ip`, `user`→`user`, `organization`→`org` (`Admission::Organization.organization_id`, including SA/member keys).
+Limiter subject follows route scope and is not configurable: `public`→ip, `user`→`user_id`, `organization`→`organization_id`, `member`→`member_id`.
 
 **`shared: true`** — opt-in cross-service join. Every service that uses the name declares the same table entry (`requests`, `window_seconds`, `shared: true`). Apply and `PUT /services/{name}` validate against **all** current services in Postgres, not only the payload.
 
@@ -228,26 +227,54 @@ Exceed → **429** `RATE_LIMITED`, `Retry-After`, `details.retry_after_seconds`.
 
 A separate failed-auth IP limiter (`RATE_LIMIT_AUTH_FAILURE_*`) covers unadmitted 401s and unmatched 404s. It is not per-route.
 
-### Path Transforms
+### `upstream`
+
+`path` is the match. Its params are resource ids. `upstream` is an absolute template. Omitted means proxy `path` unchanged. Business routes that only read headers omit it. Identity routes that are a function of the URL set it.
 
 ```yaml
 user:
   routes:
-    - path: /api/widgets
+    - path: /user/foos/{foo_id}
+      upstream: /users/{subject.user_id}/foos/{path.foo_id}
       methods: [GET]
-      transform:
-        path: /widgets
+
+organization:
+  routes:
+    - path: /org/projects/{project_id}
+      upstream: /organizations/{subject.organization_id}/projects/{path.project_id}
+      methods: [GET, POST]
+
+member:
+  routes:
+    - path: /member/api-keys
+      upstream: /members/{subject.member_id}/api-keys
+      methods: [GET, POST]
 ```
 
-When `transform.path` is present, the gateway rewrites the request path before proxying. **`transform.path` is always an absolute upstream path** (not relative to any `route_prefix`). `transform` is per path, not per method.
+`route_prefix` expands `path` only, at apply, before etcd. `upstream` is not prefixed. etcd stores the full `path` and the `upstream` template with placeholders still in it. The gateway substitutes at request time. The registry does not.
+
+Apply-time **422**:
+
+- `subject.*` is only `user_id`, `organization_id`, `member_id`, and only a field that scope has.
+- `path.*` names a param of the expanded `path`.
+- A bare `{foo_id}` in `upstream` is rejected. The namespace is the point.
+- `path` must not contain a param whose name is a subject field of that scope. `user` forbids `{user_id}`. `organization` forbids `{organization_id}`. `member` forbids `{organization_id}` and `{member_id}`.
+- `upstream` must be omitted or an absolute path (starts with `/`, no `?` or `#`).
+
+`{organization_id}` on a `user` route is a resource id. It is not admission input.
+
+Substituted values are one path segment. Reject `/`, `?`, `#`. A bad path param is **400**. A bad subject id is **500**. Query string is preserved.
+
+Unknown fields on the route schema are **422**.
 
 ## Scopes
 
 | Scope | Auth | Identity headers |
 |-------|------|------------------|
 | `public` | No | none |
-| `user` | JWT or user API key | `X-User-Id` only |
-| `organization` | JWT / user API key + active member, or member API key | `X-Organization-Id`, `X-Member-Id` only |
+| `user` | User JWT or user API key | `X-User-Id` only |
+| `organization` | Member API key or member session | `X-Organization-Id` only |
+| `member` | Same credential as `organization` | `X-Organization-Id`, `X-Member-Id` |
 
 Full header and service rules: [`gateway-contract.md`](gateway-contract.md). Layer boundary and admission errors: [`identity-boundary.md`](identity-boundary.md).
 
@@ -270,21 +297,13 @@ Full header and service rules: [`gateway-contract.md`](gateway-contract.md). Lay
 
 Decoupled. Service down → gateway still knows the route → **503**. Missing route (nothing registered that path) → **404**.
 
-## `organization` scope
+## `organization` and `member`
 
-Business / product APIs that should not own membership storage. Gateway authenticates, admits an **active** member for the org id in the path, injects org-context headers only.
+Business APIs that should not own membership storage. The credential is a member of the org. The client does not name the subject.
 
-**Who uses it:** Business APIs only. **identity** stays on **`user` scope** (membership authority). Admission steps and errors: [`identity-boundary.md`](identity-boundary.md).
+`organization` injects `X-Organization-Id` only. `member` injects that and `X-Member-Id`. Admission steps and errors: [`identity-boundary.md`](identity-boundary.md).
 
-### `organization_param`
-
-Required on **`organization` scope**. Names the path parameter for the organization id (usually `organization_id`).
-
-Registry validation:
-
-- `organization_param` required for `organization` scope
-- Every expanded route path must include `{<organization_param>}`
-- Member admission mandatory for every match (no public/unauthenticated org routes)
+User-subject identity routes stay on `user` scope. Identity routes whose subject is the org or the member are published on those scopes. The catalog is [`services/identity/routes.yml`](../services/identity/routes.yml).
 
 ### `route_prefix` (optional, any scope)
 
@@ -294,67 +313,34 @@ Joined with each route `path` so configs stay short.
 
 **Expand site (locked):** Registry expands `route_prefix` + `path` **and nested `methods` maps** **before** writing etcd. Registry stores **full paths only** and **list-form `methods` only** — one expand site, no gateway/registry drift.
 
-`transform.path` remains an absolute upstream path (not relative to `route_prefix`).
+`upstream` remains an absolute path template (not relative to `route_prefix`).
 
 ### Examples
 
-#### identity service — `user` scope only
+#### identity catalog
 
-```yaml
-services:
-  identity:
-    url: identity:3000
-    user:
-      routes:
-        - path: /api/user/memberships
-          methods: [GET]
-        - path: /api/user/api-keys
-          methods: [GET, POST]
-        - path: /api/user/api-keys/{key_id}
-          methods: [DELETE]
-        - path: /api/organizations
-          methods: [POST]
-        - path: /api/organizations/{organization_id}
-          methods: [GET, PATCH, DELETE]
-        - path: /api/organizations/{organization_id}/members
-          methods: [GET, POST]
-        - path: /api/organizations/{organization_id}/members/{member_id}
-          methods: [GET, PATCH, DELETE]
-        - path: /api/organizations/{organization_id}/members/{member_id}/api-keys
-          methods: [GET, POST]
-        - path: /api/organizations/{organization_id}/members/{member_id}/api-keys/{key_id}
-          methods: [DELETE]
-        - path: /api/organizations/{organization_id}/invites
-          methods: [GET, POST]
-        - path: /api/organizations/{organization_id}/invites/{invite_id}
-          methods: [DELETE]
-        - path: /api/invites/redeem
-          methods: [POST]
-        - path: /api/organizations/{organization_id}/service-accounts
-          methods: [GET, POST]
-        - path: /api/organizations/{organization_id}/service-accounts/{service_account_id}
-          methods: [GET, PATCH, DELETE]
-```
+Apply [`services/identity/routes.yml`](../services/identity/routes.yml) or a subset. Edge paths are `/user`, `/org`, and `/member`. `upstream` fills the identity URL. `GET /organizations` is not in the catalog.
 
-#### Business service — `organization` scope
+#### Business service — headers only
 
 ```yaml
 services:
   projects:
     url: projects:3000
     organization:
-      route_prefix: /api/organizations/{organization_id}/projects
-      organization_param: organization_id
+      route_prefix: /api
       routes:
-        - path: /
+        - path: /projects
           methods: [GET, POST]
-        - path: /{project_id}
+        - path: /projects/{project_id}
           methods: [GET, PATCH, DELETE]
           required_scopes: [projects:write]
           rate_limit:
             requests: 20
             window_seconds: 60
 ```
+
+The handler reads `X-Organization-Id`. No subject id in the path.
 
 ## Validation Rules
 
@@ -365,9 +351,11 @@ Registry validates **before etcd**. Gateway validates again at load (expanded li
 - Nested `methods` map keys: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`
 - Do not mix methods list and map on the same route (`422`)
 - Nested maps expand at apply; duplicate `path`+method after expand → `422`
-- At least one scope (`public`, `user`, and/or `organization`)
-- `organization` scope requires `organization_param`; every expanded org path includes `{param}`
-- `route_prefix` join rules at registry; etcd stores full paths only
+- At least one scope (`public`, `user`, `organization`, and/or `member`)
+- Unknown fields **422**
+- `upstream` if present: absolute path; `subject.*` only a field that scope has; `path.*` names a param of the expanded path; bare `{foo}` rejected
+- Expanded `path` must not contain a subject-field param of that scope
+- `route_prefix` join rules at registry; etcd stores full paths only; `upstream` is not prefixed
 - `required_scopes` if present: non-empty, `[a-z0-9:._-]+`, max 64 chars, max 32, unique
 - `rate_limit` if object: `requests` > 0, `window_seconds` > 0. `true` is invalid
 - `rate_limit` if string: names a policy on this service; policy name `[a-z0-9:._-]+`, max 64

@@ -8,6 +8,7 @@ pub const MAX_SCOPE_LEN: usize = 64;
 const HTTP_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub services: HashMap<String, ServiceConfig>,
 }
@@ -17,6 +18,7 @@ fn skip_if_false(v: &bool) -> bool {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct RateLimitPolicy {
     pub requests: u64,
     pub window_seconds: u64,
@@ -25,6 +27,7 @@ pub struct RateLimitPolicy {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ServiceConfig {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -35,18 +38,20 @@ pub struct ServiceConfig {
     pub user: Option<ScopeConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub organization: Option<ScopeConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<ScopeConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ScopeConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route_prefix: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub organization_param: Option<String>,
     pub routes: Vec<RouteConfig>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct MethodConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_scopes: Option<Vec<String>>,
@@ -66,8 +71,10 @@ pub(crate) enum MethodsForm {
 pub struct RouteConfig {
     pub path: String,
     pub methods: Vec<String>,
+    /// Absolute upstream path template. Omitted means proxy `path` unchanged.
+    /// Placeholders stay in etcd; the gateway substitutes at request time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transform: Option<TransformConfig>,
+    pub upstream: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_scopes: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -86,11 +93,12 @@ enum RawMethods {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawRouteConfig {
     path: String,
     methods: RawMethods,
     #[serde(default)]
-    transform: Option<TransformConfig>,
+    upstream: Option<String>,
     #[serde(default)]
     required_scopes: Option<Vec<String>>,
     #[serde(default)]
@@ -104,7 +112,7 @@ impl<'de> Deserialize<'de> for RouteConfig {
             RawMethods::List(methods) => Ok(RouteConfig {
                 path: raw.path,
                 methods,
-                transform: raw.transform,
+                upstream: raw.upstream,
                 required_scopes: raw.required_scopes,
                 rate_limit: raw.rate_limit,
                 methods_form: MethodsForm::List,
@@ -118,7 +126,7 @@ impl<'de> Deserialize<'de> for RouteConfig {
                 Ok(RouteConfig {
                     path: raw.path,
                     methods,
-                    transform: raw.transform,
+                    upstream: raw.upstream,
                     required_scopes: raw.required_scopes,
                     rate_limit: raw.rate_limit,
                     methods_form: MethodsForm::Nested(entries),
@@ -127,7 +135,7 @@ impl<'de> Deserialize<'de> for RouteConfig {
             RawMethods::MixedSeq(_) => Ok(RouteConfig {
                 path: raw.path,
                 methods: Vec::new(),
-                transform: raw.transform,
+                upstream: raw.upstream,
                 required_scopes: raw.required_scopes,
                 rate_limit: raw.rate_limit,
                 methods_form: MethodsForm::Mixed,
@@ -141,18 +149,12 @@ impl Default for RouteConfig {
         Self {
             path: String::new(),
             methods: Vec::new(),
-            transform: None,
+            upstream: None,
             required_scopes: None,
             rate_limit: None,
             methods_form: MethodsForm::List,
         }
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct TransformConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -163,6 +165,7 @@ pub enum RouteRateLimit {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct RateLimitConfig {
     pub requests: u64,
     pub window_seconds: u64,

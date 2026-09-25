@@ -31,4 +31,4 @@ Per-service details live in each service's `README.md`.
 | [`idp-contract.md`](idp-contract.md) | BYO IdP, JWKS, user-id claim mapping |
 | [`routes.md`](routes.md) | Route publishing, scopes, `route_prefix`, rate-limit policies |
 | [`route-registry.md`](route-registry.md) | Desired state (Postgres) + etcd projection |
-| [`identity.md`](identity.md) | Identity service: orgs, members, service accounts, API keys, internal validate/resolve |
+| [`identity.md`](identity.md) | Identity service: orgs, members, service accounts, API keys, sessions, internal validate |

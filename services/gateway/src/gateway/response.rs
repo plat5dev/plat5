@@ -124,6 +124,23 @@ pub fn apply_rate_limit_headers(header: &mut ResponseHeader, info: &RateLimitInf
     Ok(())
 }
 
+async fn write_credential_failure(
+    cors: &CorsPolicy,
+    session: &mut Session,
+    ctx: &GatewayContext,
+    auth_type: &str,
+    reason: &'static str,
+) -> Result<bool> {
+    metrics::record_auth_failure(auth_type, reason);
+    info!(
+        error_kind = ErrorKind::Auth.as_str(),
+        auth_type,
+        error_message = reason,
+        "authentication failed"
+    );
+    write_json_error(cors, session, ctx, 401, ApiError::unauthorized(None)).await
+}
+
 pub async fn write_admit_error(
     cors: &CorsPolicy,
     session: &mut Session,
@@ -133,18 +150,27 @@ pub async fn write_admit_error(
     match err {
         AdmitError::Auth(auth_err) => write_auth_error(cors, session, ctx, auth_err).await,
         AdmitError::MemberApiKeyInvalid => {
-            let auth_type = AuthType::MemberApiKey.as_str();
-            metrics::record_auth_failure(auth_type, "invalid_member_apikey");
-            info!(
-                error_kind = ErrorKind::Auth.as_str(),
-                auth_type,
-                error_message = "invalid_member_apikey",
-                "authentication failed"
-            );
-            write_json_error(cors, session, ctx, 401, ApiError::unauthorized(None)).await
+            write_credential_failure(
+                cors,
+                session,
+                ctx,
+                AuthType::MemberApiKey.as_str(),
+                "invalid_member_apikey",
+            )
+            .await
         }
-        AdmitError::NotFound => {
-            write_json_error(cors, session, ctx, 404, ApiError::not_found()).await
+        AdmitError::MemberSessionInvalid => {
+            write_credential_failure(
+                cors,
+                session,
+                ctx,
+                AuthType::MemberSession.as_str(),
+                "invalid_member_session",
+            )
+            .await
+        }
+        AdmitError::WrongCredential => {
+            write_credential_failure(cors, session, ctx, "credential", "wrong_credential").await
         }
         AdmitError::Unavailable => {
             write_json_error(cors, session, ctx, 503, ApiError::service_unavailable()).await

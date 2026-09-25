@@ -51,6 +51,15 @@ pub struct ApiError {
 }
 
 impl ApiError {
+    pub fn invalid_request() -> Self {
+        Self {
+            error_type: "invalid_request_error".to_string(),
+            code: "INVALID_REQUEST".to_string(),
+            message: "Malformed request.".to_string(),
+            details: None,
+        }
+    }
+
     pub fn unauthorized(details: Option<serde_json::Value>) -> Self {
         Self {
             error_type: "invalid_request_error".to_string(),
@@ -141,6 +150,15 @@ impl fmt::Display for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_invalid_request_serialization() {
+        let err = ApiError::invalid_request();
+        let json = String::from_utf8(err.to_json_bytes(None)).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["error"]["code"], "INVALID_REQUEST");
+        assert_eq!(parsed["error"]["message"], "Malformed request.");
+    }
 
     #[test]
     fn test_unauthorized_serialization() {

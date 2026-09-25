@@ -104,7 +104,7 @@ Unknown tokens use the generic **404** `Resource not found.` (existence policy; 
 | More than 32 scopes | Too many scopes. |
 | Duplicate scope labels | Scope labels must be unique. |
 
-Internal validate/resolve (`key` / `key_id` / `user_id`+`organization_id` required) are not product UI. Fallback 422 is enough.
+Internal validate (`key` / `token` / `key_id` required) is not product UI. Fallback 422 is enough.
 
 ### Pagination (`limit` / `starting_after`)
 

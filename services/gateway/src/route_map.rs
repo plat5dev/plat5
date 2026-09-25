@@ -11,6 +11,7 @@ pub enum RouteScope {
     Public,
     User,
     Organization,
+    Member,
 }
 
 #[derive(Clone)]
@@ -18,12 +19,10 @@ pub struct Route {
     pub base_url: String,
     pub path: String,
     pub methods: HashSet<String>,
-    /// Optional path transform - if set, rewrite the upstream path
-    pub transform_path: Option<String>,
+    /// Absolute upstream template. None means proxy `path` unchanged.
+    pub upstream: Option<String>,
     /// The auth scope for this route
     pub scope: RouteScope,
-    /// Path param name for organization id (`organization` scope only)
-    pub organization_param: Option<String>,
     pub required_scopes: Option<Vec<String>>,
     pub limiter: RouteLimiter,
 }
@@ -50,19 +49,6 @@ pub enum LimitBucket {
     MethodPath,
     /// `{prefix}:{subject}` (`service:name` or shared `name`)
     Named(String),
-}
-
-impl Route {
-    /// Resolve the upstream path, applying transform if configured.
-    /// Substitutes path params like {id} with their captured values.
-    pub fn resolve_upstream_path(&self, path_params: &HashMap<String, String>) -> String {
-        let template = self.transform_path.as_ref().unwrap_or(&self.path);
-        let mut resolved = template.clone();
-        for (key, value) in path_params {
-            resolved = resolved.replace(&format!("{{{}}}", key), value);
-        }
-        resolved
-    }
 }
 
 struct CompiledRoute {
@@ -107,35 +93,22 @@ impl RouteMap {
             let base_url = &service_config.url;
 
             let scopes = [
-                (
-                    service_config.public.as_ref(),
-                    RouteScope::Public,
-                    None::<String>,
-                ),
-                (
-                    service_config.user.as_ref(),
-                    RouteScope::User,
-                    None::<String>,
-                ),
+                (service_config.public.as_ref(), RouteScope::Public),
+                (service_config.user.as_ref(), RouteScope::User),
                 (
                     service_config.organization.as_ref(),
                     RouteScope::Organization,
-                    service_config
-                        .organization
-                        .as_ref()
-                        .and_then(|o| o.organization_param.clone()),
                 ),
+                (service_config.member.as_ref(), RouteScope::Member),
             ];
 
-            for (scope_cfg, scope, org_param) in scopes {
+            for (scope_cfg, scope) in scopes {
                 let Some(scope_cfg) = scope_cfg else {
                     continue;
                 };
                 for route_config in &scope_cfg.routes {
                     let methods: Vec<&str> =
                         route_config.methods.iter().map(|s| s.as_str()).collect();
-                    let transform_path =
-                        route_config.transform.as_ref().and_then(|t| t.path.clone());
 
                     let limiter = match bind_limiter(
                         service_name,
@@ -158,9 +131,8 @@ impl RouteMap {
                         base_url,
                         &route_config.path,
                         &methods,
-                        transform_path,
+                        route_config.upstream.clone(),
                         scope,
-                        org_param.clone(),
                         route_config.required_scopes.clone(),
                         limiter,
                     ) {
@@ -185,25 +157,11 @@ impl RouteMap {
         base_url: &str,
         path: &str,
         methods: &[&str],
-        transform_path: Option<String>,
+        upstream: Option<String>,
         scope: RouteScope,
-        organization_param: Option<String>,
         required_scopes: Option<Vec<String>>,
         limiter: RouteLimiter,
     ) -> Result<(), String> {
-        if scope == RouteScope::Organization {
-            let param = organization_param
-                .as_deref()
-                .filter(|p| !p.is_empty())
-                .ok_or_else(|| "organization route missing organization_param".to_string())?;
-            let needle = format!("{{{param}}}");
-            if !path.contains(&needle) {
-                return Err(format!(
-                    "organization route path must include path param {needle}"
-                ));
-            }
-        }
-
         let re = path_to_regex(path).map_err(|e| e.to_string())?;
         let (static_segments, param_count) = path_specificity(path);
 
@@ -211,9 +169,8 @@ impl RouteMap {
             base_url: base_url.to_string(),
             path: path.to_string(),
             methods: methods.iter().map(|m| m.to_string()).collect(),
-            transform_path,
+            upstream,
             scope,
-            organization_param,
             required_scopes,
             limiter,
         };
@@ -382,7 +339,7 @@ mod tests {
         RouteConfig {
             path: path.to_string(),
             methods: methods.iter().map(|m| m.to_string()).collect(),
-            transform: None,
+            upstream: None,
             required_scopes: None,
             rate_limit: None,
             ..Default::default()
@@ -399,11 +356,11 @@ mod tests {
                 rate_limits: None,
                 public: Some(ScopeConfig {
                     route_prefix: None,
-                    organization_param: None,
                     routes: vec![route("/api/{id}", &["GET"])],
                 }),
                 user: None,
                 organization: None,
+                member: None,
             },
         );
         services.insert(
@@ -413,11 +370,11 @@ mod tests {
                 rate_limits: None,
                 public: Some(ScopeConfig {
                     route_prefix: None,
-                    organization_param: None,
                     routes: vec![route("/api/health", &["GET"])],
                 }),
                 user: None,
                 organization: None,
+                member: None,
             },
         );
         let map = RouteMap::from_config(&Config { services });
@@ -438,11 +395,11 @@ mod tests {
                     rate_limits: None,
                     public: Some(ScopeConfig {
                         route_prefix: None,
-                        organization_param: None,
                         routes: vec![route(path, &["GET"])],
                     }),
                     user: None,
                     organization: None,
+                    member: None,
                 },
             );
         }
@@ -494,10 +451,10 @@ mod tests {
                 public: None,
                 user: Some(ScopeConfig {
                     route_prefix: None,
-                    organization_param: None,
                     routes: vec![local, shared],
                 }),
                 organization: None,
+                member: None,
             },
         );
         let map = RouteMap::from_config(&Config { services });
@@ -519,43 +476,24 @@ mod tests {
     }
 
     #[test]
-    fn org_route_requires_param_in_path() {
+    fn member_scope_route_loads() {
         let mut map = RouteMap::new();
         assert!(map
             .add_route(
                 "http://x",
-                "/api/widgets",
+                "/member/api-keys",
                 &["GET"],
-                None,
-                RouteScope::Organization,
-                Some("organization_id".into()),
-                None,
-                RouteLimiter::Inherit,
-            )
-            .is_err());
-        assert!(map
-            .add_route(
-                "http://x",
-                "/api/orgs/{organization_id}/widgets",
-                &["GET"],
-                None,
-                RouteScope::Organization,
-                Some("organization_id".into()),
+                Some("/members/{subject.member_id}/api-keys".into()),
+                RouteScope::Member,
                 None,
                 RouteLimiter::Inherit,
             )
             .is_ok());
-        assert!(map
-            .add_route(
-                "http://x",
-                "/api/orgs/{organization_id}",
-                &["GET"],
-                None,
-                RouteScope::Organization,
-                None,
-                None,
-                RouteLimiter::Inherit,
-            )
-            .is_err());
+        let (route, _) = map.find_route("/member/api-keys", "GET").unwrap();
+        assert_eq!(route.scope, RouteScope::Member);
+        assert_eq!(
+            route.upstream.as_deref(),
+            Some("/members/{subject.member_id}/api-keys")
+        );
     }
 }

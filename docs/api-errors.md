@@ -61,7 +61,7 @@ Returned by the **gateway**, not downstream services. If a downstream service re
 
 Canonical policy: [`identity-boundary.md`](identity-boundary.md).
 
-When `organization` scope is live: non-member / inactive / unknown org → **`NOT_FOUND` (404)**. Member resolve or key validate unavailable → **`SERVICE_UNAVAILABLE` (503)**. Bad credential → **`UNAUTHORIZED` (401)**.
+Wrong credential for the scope, or an invalid key or session, is **`UNAUTHORIZED` (401)**. Key or session validate unavailable → **`SERVICE_UNAVAILABLE` (503)**. A path param that is not one segment is **`INVALID_REQUEST` (400)**. The gateway does not **404** a wrong credential.
 
 ### `RATE_LIMITED`
 
@@ -71,7 +71,7 @@ Two independent Valkey limiters (replicas share one budget). `VALKEY_URL` is req
 
 | Limiter | When | Key |
 |---------|------|-----|
-| Admitted route | After match + admission (JWT and API key). Omitted `rate_limit` inherits `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS`. `false` opts out. Inline object = this route+method. Policy name = service `rate_limits` entry (`shared: true` is opt-in cross-service). | Subject from route scope (`public`→ip, `user`→user, `organization`→org), plus method+path or policy name. |
+| Admitted route | After match + admission (JWT, API key, and member session). Omitted `rate_limit` inherits `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS`. `false` opts out. Inline object = this route+method. Policy name = service `rate_limits` entry (`shared: true` is opt-in cross-service). | Subject from route scope (`public`→ip, `user`→user, `organization`→org, `member`→member), plus method+path or policy name. |
 | Failed-auth IP | Unadmitted **401**s and unmatched **404**s. Not per-route. | Client IP. `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). `0` requests = off |
 
 ## Principles

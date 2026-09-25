@@ -2,7 +2,6 @@ package orgs
 
 import (
 	"context"
-	stderrors "errors"
 	"strings"
 	"time"
 
@@ -37,18 +36,6 @@ type MemberResponse struct {
 type ListMembersResponse struct {
 	Members []MemberResponse `json:"members"`
 	HasMore bool             `json:"has_more"`
-}
-
-type ResolveRequest struct {
-	UserID         string `json:"user_id"`
-	OrganizationID string `json:"organization_id"`
-}
-
-type ResolveResponse struct {
-	MemberID       string `json:"member_id"`
-	OrganizationID string `json:"organization_id"`
-	UserID         string `json:"user_id"`
-	Status         string `json:"status"`
 }
 
 func (h *Handler) ListMembers(c fiber.Ctx) error {
@@ -199,49 +186,6 @@ func (h *Handler) visibleMember(ctx context.Context, memberID string) (*Member, 
 		return nil, errors.NotFoundError("member", memberID)
 	}
 	return m, nil
-}
-
-// Resolve handles POST /internal/members/resolve (internal listener; not gateway-published).
-func (h *Handler) Resolve(c fiber.Ctx) error {
-	ctx := c.Context()
-
-	var req ResolveRequest
-	if err := c.Bind().Body(&req); err != nil {
-		return err
-	}
-
-	userID := strings.TrimSpace(req.UserID)
-	orgID := strings.TrimSpace(req.OrganizationID)
-	if userID == "" || orgID == "" {
-		return errors.ValidationFields(errors.FallbackValidation,
-			errors.Field{Path: "user_id", Message: errors.FallbackValidation},
-			errors.Field{Path: "organization_id", Message: errors.FallbackValidation},
-		)
-	}
-
-	m, err := h.store.ResolveMember(ctx, userID, orgID)
-	if err != nil {
-		if stderrors.Is(err, ErrNotFound) {
-			metrics.RecordResolve("miss")
-			return errors.NotFoundError("member", userID+":"+orgID)
-		}
-		metrics.RecordResolve("error")
-		return httpx.MapDB(ctx, err, "failed to resolve member", httpx.DBErr{})
-	}
-
-	metrics.RecordResolve("hit")
-
-	uid := ""
-	if m.UserID != nil {
-		uid = *m.UserID
-	}
-
-	return c.JSON(ResolveResponse{
-		MemberID:       m.ID,
-		OrganizationID: m.OrganizationID,
-		UserID:         uid,
-		Status:         string(m.Status),
-	})
 }
 
 func toMemberResponse(m *Member) MemberResponse {

@@ -1,36 +1,57 @@
 # Catalog of identity public routes. Apply via route-registry (or a subset).
-# Not auto-published in prod. Internal validate/resolve are not listed here.
-# GET /api/organizations is served by identity and omitted here.
+# Not auto-published. Internal validate stays on INTERNAL_PORT.
+# GET /organizations is served by identity and omitted here.
 services:
   identity:
     url: identity:3000
     user:
       routes:
-        - path: /api/user/memberships
+        - path: /user/memberships
+          upstream: /users/{subject.user_id}/memberships
           methods: [GET]
-        - path: /api/user/api-keys
+        - path: /user/api-keys
+          upstream: /users/{subject.user_id}/api-keys
           methods: [GET, POST]
-        - path: /api/user/api-keys/{key_id}
+        - path: /user/api-keys/{key_id}
+          upstream: /users/{subject.user_id}/api-keys/{path.key_id}
           methods: [DELETE]
-        - path: /api/organizations
+        - path: /user/organizations
+          upstream: /users/{subject.user_id}/organizations
           methods: [POST]
-        - path: /api/organizations/{organization_id}
-          methods: [GET, PATCH, DELETE]
-        - path: /api/organizations/{organization_id}/members
-          methods: [GET, POST]
-        - path: /api/organizations/{organization_id}/members/{member_id}
-          methods: [GET, PATCH, DELETE]
-        - path: /api/organizations/{organization_id}/members/{member_id}/api-keys
-          methods: [GET, POST]
-        - path: /api/organizations/{organization_id}/members/{member_id}/api-keys/{key_id}
-          methods: [DELETE]
-        - path: /api/organizations/{organization_id}/invites
-          methods: [GET, POST]
-        - path: /api/organizations/{organization_id}/invites/{invite_id}
-          methods: [DELETE]
-        - path: /api/invites/redeem
+        - path: /user/invites/redeem
+          upstream: /users/{subject.user_id}/invites/redeem
           methods: [POST]
-        - path: /api/organizations/{organization_id}/service-accounts
-          methods: [GET, POST]
-        - path: /api/organizations/{organization_id}/service-accounts/{service_account_id}
+        - path: /user/organizations/{organization_id}/session
+          upstream: /users/{subject.user_id}/organizations/{path.organization_id}/session
+          methods: [POST]
+    organization:
+      routes:
+        - path: /org
+          upstream: /organizations/{subject.organization_id}
           methods: [GET, PATCH, DELETE]
+        - path: /org/members
+          upstream: /organizations/{subject.organization_id}/members
+          methods: [GET, POST]
+        - path: /org/invites
+          upstream: /organizations/{subject.organization_id}/invites
+          methods: [GET, POST]
+        - path: /org/invites/{invite_id}
+          upstream: /organizations/{subject.organization_id}/invites/{path.invite_id}
+          methods: [DELETE]
+        - path: /org/service-accounts
+          upstream: /organizations/{subject.organization_id}/service-accounts
+          methods: [GET, POST]
+        - path: /org/service-accounts/{service_account_id}
+          upstream: /organizations/{subject.organization_id}/service-accounts/{path.service_account_id}
+          methods: [GET, PATCH, DELETE]
+    member:
+      routes:
+        - path: /member
+          upstream: /members/{subject.member_id}
+          methods: [GET, PATCH, DELETE]
+        - path: /member/api-keys
+          upstream: /members/{subject.member_id}/api-keys
+          methods: [GET, POST]
+        - path: /member/api-keys/{key_id}
+          upstream: /members/{subject.member_id}/api-keys/{path.key_id}
+          methods: [DELETE]

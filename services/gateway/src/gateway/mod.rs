@@ -1,6 +1,8 @@
 mod context;
 mod cors;
 mod response;
+mod rewrite;
+mod scopes;
 mod upstream;
 
 use std::collections::HashMap;
@@ -26,8 +28,8 @@ use crate::config::GatewayConfig;
 use crate::error::{ApiError, ErrorKind};
 use crate::metrics;
 use crate::rate_limit::{RateLimitError, RateLimiter};
-use crate::route_config::scopes_intersect;
 use crate::route_map::{LimitBucket, Route, RouteLimiter, RouteMap, RouteScope};
+use scopes::key_satisfies_required_scopes;
 
 pub use crate::admission::parse_user_id_claim;
 pub use context::GatewayContext;
@@ -163,7 +165,6 @@ impl UserGateway {
         &self,
         session: &mut Session,
         ctx: &mut GatewayContext,
-        path: &str,
         route: &Route,
         params: &HashMap<String, String>,
         request_id: &str,
@@ -191,7 +192,7 @@ impl UserGateway {
 
         let admission = match self
             .admissor
-            .admit(session.req_header(), route, params)
+            .admit(session.req_header(), route, ctx.root_span().as_ref())
             .await
         {
             Ok(a) => a,
@@ -205,23 +206,20 @@ impl UserGateway {
             }
         };
 
-        if let Some(required) = route.required_scopes.as_ref().filter(|s| !s.is_empty()) {
-            if let Some(granted) = admission.key_scopes() {
-                if !scopes_intersect(required, granted) {
-                    return response::write_json_error(
-                        &self.cors,
-                        session,
-                        ctx,
-                        403,
-                        ApiError::forbidden(Some(serde_json::json!({
-                            "permission": "required_scopes",
-                            "resource": "route",
-                            "resource_id": route.path,
-                        }))),
-                    )
-                    .await;
-                }
-            }
+        if !key_satisfies_required_scopes(route.required_scopes.as_deref(), admission.key_scopes())
+        {
+            return response::write_json_error(
+                &self.cors,
+                session,
+                ctx,
+                403,
+                ApiError::forbidden(Some(serde_json::json!({
+                    "permission": "required_scopes",
+                    "resource": "route",
+                    "resource_id": route.path,
+                }))),
+            )
+            .await;
         }
 
         if let Some((limit, window, bucket)) = limit_plan(
@@ -270,15 +268,23 @@ impl UserGateway {
             .await;
         }
 
-        upstream::build_and_store_upstream_peer(
+        if let Err(err) = upstream::build_and_store_upstream_peer(
             session,
             ctx,
-            path,
             route,
             params,
+            &admission,
             self.connect_timeout,
             self.read_timeout,
-        )?;
+        ) {
+            let (status, body) = match err {
+                rewrite::RewriteError::PathParam => (400, ApiError::invalid_request()),
+                rewrite::RewriteError::Subject | rewrite::RewriteError::Internal => {
+                    (500, ApiError::internal_error())
+                }
+            };
+            return response::write_json_error(&self.cors, session, ctx, status, body).await;
+        }
         Ok(false)
     }
 }
@@ -353,6 +359,10 @@ fn limit_subject(scope: RouteScope, admission: &crate::admission::Admission, ip:
             Admission::Organization {
                 organization_id, ..
             } => format!("org:{organization_id}"),
+            _ => format!("ip:{ip}"),
+        },
+        RouteScope::Member => match admission {
+            Admission::Member { member_id, .. } => format!("member:{member_id}"),
             _ => format!("ip:{ip}"),
         },
     }
@@ -504,7 +514,7 @@ impl ProxyHttp for UserGateway {
                 .span()
                 .update_name(format!("{} {}", method, route.path));
         }
-        self.prepare_upstream(session, ctx, &path, &route, &params, &request_id)
+        self.prepare_upstream(session, ctx, &route, &params, &request_id)
             .await
     }
 
@@ -663,22 +673,12 @@ impl ProxyHttp for UserGateway {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::admission::{Admission, OrgVia};
+    use crate::admission::Admission;
     use crate::auth::AuthType;
 
-    fn org_admission(org: &str, member: &str, member_key: bool) -> Admission {
+    fn org_admission(org: &str) -> Admission {
         Admission::Organization {
             organization_id: org.into(),
-            member_id: member.into(),
-            via: if member_key {
-                OrgVia::MemberKey
-            } else {
-                OrgVia::User {
-                    user_id: "user-1".into(),
-                    auth_type: AuthType::Jwt,
-                    kid: None,
-                }
-            },
             key_scopes: None,
         }
     }
@@ -707,15 +707,23 @@ mod tests {
 
     #[test]
     fn organization_scope_limits_by_org_id() {
-        let jwt = org_admission("org-1", "member-9", false);
+        let admission = org_admission("org-1");
         assert_eq!(
-            limit_subject(RouteScope::Organization, &jwt, "1.2.3.4"),
+            limit_subject(RouteScope::Organization, &admission, "1.2.3.4"),
             "org:org-1"
         );
-        let sa = org_admission("org-1", "sa-member", true);
+    }
+
+    #[test]
+    fn member_scope_limits_by_member_id() {
+        let admission = Admission::Member {
+            organization_id: "org-1".into(),
+            member_id: "mem-9".into(),
+            key_scopes: None,
+        };
         assert_eq!(
-            limit_subject(RouteScope::Organization, &sa, "9.9.9.9"),
-            "org:org-1"
+            limit_subject(RouteScope::Member, &admission, "1.2.3.4"),
+            "member:mem-9"
         );
     }
 }

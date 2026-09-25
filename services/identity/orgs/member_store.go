@@ -33,7 +33,7 @@ func (s *Store) GetMember(ctx context.Context, memberID string) (*Member, error)
 	return m, nil
 }
 
-// ResolveMember returns any non-removed user member for (user, org). Used by internal resolve.
+// ResolveMember returns any non-removed user member for (user, org). Used by session mint.
 func (s *Store) ResolveMember(ctx context.Context, userID, organizationID string) (*Member, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "resolve_member", dbx.DefaultTimeout,
 		attribute.String("organization.id", organizationID),

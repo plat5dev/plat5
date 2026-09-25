@@ -18,7 +18,7 @@ There is no `/api` prefix. The first path segment is the subject.
 
 A member lives in one org. `member_id` is enough. Do not also put `organization_id` on a member route. Do not put a user id on an org route.
 
-Public routes are not auto-published. The process still serves them on the public port. Internal validate/resolve stay on `INTERNAL_PORT`.
+Public routes are not auto-published. The process still serves them on the public port. Internal validate stays on `INTERNAL_PORT`.
 
 ## Glossary
 
@@ -331,7 +331,7 @@ Status is whether the member is admitted, not what they are allowed to do.
 
 Not published on the gateway. Served only on **`INTERNAL_PORT`**. Optional `INTERNAL_AUTH_TOKEN` → header `X-Plat5-Internal-Token` (constant-time compare). Unset = network-trust only (dev). These are lookups for a proxy, not checks on the resource handlers. Do not fold them into the resource URLs.
 
-Gateway env: `USER_APIKEY_VALIDATE_URL`, `MEMBER_APIKEY_VALIDATE_URL`, `MEMBER_RESOLVE_URL`, same `INTERNAL_AUTH_TOKEN`, same `APIKEY_BRAND`. All three URLs are required to boot.
+Gateway env: `USER_APIKEY_VALIDATE_URL`, `MEMBER_APIKEY_VALIDATE_URL`, `MEMBER_SESSION_VALIDATE_URL`, same `INTERNAL_AUTH_TOKEN`, same `APIKEY_BRAND`. All three URLs are required to boot. `APIKEY_CACHE_TTL_SECS` covers user keys, member keys, and sessions.
 
 There is **no** combined key validate and **no** `key_type`. Gateway picks the endpoint from the credential’s wire prefix before calling identity.
 
@@ -369,43 +369,12 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 | Valid active member key | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "scopes": null }` (`scopes` same as user keys) |
 | Wrong prefix / missing / revoked / inactive member / unknown | **200** `{ "valid": false }` |
 
-Gateway: prefix `{brand}-mk-1-` → this URL. **organization** scope only (see gateway contract). Does not use member resolve. Same API-key cache as user keys (hits and invalid keys).
+Gateway: prefix `{brand}-mk-1-` → this URL. **`organization` and `member` scopes** (see gateway contract). Same cache as user keys and sessions (`APIKEY_CACHE_TTL_SECS`).
 
-| Validate outcome (either endpoint) | Client |
+| Validate outcome (any endpoint) | Client |
 |------------------------------------|--------|
 | `valid: false` or unknown prefix | **401** `UNAUTHORIZED` |
 | transport / non-2xx / `valid: true` missing required fields | **503** `SERVICE_UNAVAILABLE` |
-
-### Member resolve
-
-Used when the credential is a **user** (JWT or user API key) on `organization` scope.
-
-```
-POST /internal/members/resolve
-Content-Type: application/json
-X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
-
-{ "user_id": "...", "organization_id": "..." }
-```
-
-**Hit (200):**
-
-```json
-{
-  "member_id": "...",
-  "organization_id": "...",
-  "user_id": "...",
-  "status": "active"
-}
-```
-
-**Miss:** **404** `NOT_FOUND` (no row, or `removed`).
-
-Response includes `status`. Gateway admits only when `status === "active"`; any other status → gateway **404**.
-
-Gateway caches active hits and 404 / inactive misses (`MEMBER_CACHE_TTL_SECS`, default 300s). Concurrent misses share one resolve call. Transport / 503 are not cached. Remove/suspend is visible at the edge when the TTL expires. Contract: [`gateway-contract.md`](gateway-contract.md).
-
-Member API keys do **not** use this endpoint for admission: validate already returns `member_id` + `organization_id`.
 
 ### Member session validate
 
@@ -422,7 +391,7 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 | Unexpired session, member `active` | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "scopes": null }` |
 | Wrong prefix / missing / expired / member not `active` / unknown | **200** `{ "valid": false }` |
 
-No `user_id`. `scopes` is null (unrestricted). Caller env name: `MEMBER_SESSION_VALIDATE_URL`. The gateway does not read it.
+No `user_id`. `scopes` is null (unrestricted, same skip as a JWT). Gateway: prefix `{brand}-ms-1-` → `MEMBER_SESSION_VALIDATE_URL`. **`organization` and `member` scopes.** Same cache TTL as API keys (`APIKEY_CACHE_TTL_SECS`).
 
 ## Data model (logical)
 
@@ -465,7 +434,7 @@ There is no role column.
 | `service.name` | `identity` |
 | `service.namespace` | `identity` |
 | Public port | `3000` |
-| Internal port | `3001` (`/health/*`, `/metrics`, validate, resolve) |
+| Internal port | `3001` (`/health/*`, `/metrics`, validate) |
 | Database | Plat5 Postgres via `DATABASE_URL` |
 | Schema | **`identity`** (service-owned; tables + `schema_migrations`) |
 | `APIKEY_BRAND` | default `plat5`; same value as gateway |

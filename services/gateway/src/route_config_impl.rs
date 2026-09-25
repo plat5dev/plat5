@@ -2,43 +2,31 @@ impl Config {
     /// Validate config is well-formed (source YAML or etcd JSON).
     pub fn validate(&self) -> Result<(), ConfigError> {
         for (name, service) in &self.services {
-            if service.public.is_none() && service.user.is_none() && service.organization.is_none()
+            if service.public.is_none()
+                && service.user.is_none()
+                && service.organization.is_none()
+                && service.member.is_none()
             {
                 return Err(ConfigError::InvalidRoute {
                     service: name.clone(),
-                    reason: "service has no routes (public, user, or organization)".to_string(),
+                    reason: "service has no routes (public, user, organization, or member)"
+                        .to_string(),
                 });
             }
 
             validate_rate_limit_policies(name, service.rate_limits.as_ref())?;
 
             if let Some(ref public) = service.public {
-                validate_scope_routes(name, "public", public, None, service.rate_limits.as_ref())?;
+                validate_scope_routes(name, "public", public, service.rate_limits.as_ref())?;
             }
             if let Some(ref user) = service.user {
-                validate_scope_routes(name, "user", user, None, service.rate_limits.as_ref())?;
+                validate_scope_routes(name, "user", user, service.rate_limits.as_ref())?;
             }
             if let Some(ref org) = service.organization {
-                let param =
-                    org.organization_param
-                        .as_deref()
-                        .ok_or_else(|| ConfigError::InvalidRoute {
-                            service: name.clone(),
-                            reason: "organization scope requires organization_param".to_string(),
-                        })?;
-                if param.is_empty() {
-                    return Err(ConfigError::InvalidRoute {
-                        service: name.clone(),
-                        reason: "organization_param must not be empty".to_string(),
-                    });
-                }
-                validate_scope_routes(
-                    name,
-                    "organization",
-                    org,
-                    Some(param),
-                    service.rate_limits.as_ref(),
-                )?;
+                validate_scope_routes(name, "organization", org, service.rate_limits.as_ref())?;
+            }
+            if let Some(ref member) = service.member {
+                validate_scope_routes(name, "member", member, service.rate_limits.as_ref())?;
             }
         }
         validate_shared_rate_limits(&self.services)?;
@@ -59,6 +47,9 @@ impl ServiceConfig {
         }
         if let Some(ref mut organization) = self.organization {
             expand_scope(organization)?;
+        }
+        if let Some(ref mut member) = self.member {
+            expand_scope(member)?;
         }
         reject_duplicate_path_methods("", self)?;
         Ok(())
@@ -109,7 +100,7 @@ fn expand_nested_methods(scope: &mut ScopeConfig) {
                     out.push(RouteConfig {
                         path: route.path.clone(),
                         methods: vec![method],
-                        transform: route.transform.clone(),
+                        upstream: route.upstream.clone(),
                         required_scopes: spec.required_scopes,
                         rate_limit: spec.rate_limit,
                         methods_form: MethodsForm::List,
@@ -128,6 +119,7 @@ fn reject_duplicate_path_methods(service: &str, svc: &ServiceConfig) -> Result<(
         svc.public.as_ref(),
         svc.user.as_ref(),
         svc.organization.as_ref(),
+        svc.member.as_ref(),
     ];
     for scope in scopes.into_iter().flatten() {
         for route in &scope.routes {

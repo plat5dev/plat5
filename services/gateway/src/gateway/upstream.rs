@@ -12,11 +12,12 @@ use pingora::{Error, ErrorType, Result};
 use tracing::{debug, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::admission::{Admission, OrgVia};
+use crate::admission::Admission;
 use crate::error::ErrorKind;
 use crate::route_map::Route;
 
 use super::context::GatewayContext;
+use super::rewrite::{self, RewriteError, SubjectRef};
 
 const IDENTITY_HEADERS: &[&str] = &["X-User-Id", "X-Organization-Id", "X-Member-Id"];
 const CLIENT_CREDENTIAL_HEADERS: &[&str] = &["Authorization", "X-API-Key"];
@@ -39,6 +40,9 @@ pub fn apply_admission_headers(req: &mut RequestHeader, admission: &Admission) -
         Admission::Public => Ok(()),
         Admission::User { user_id, .. } => insert_header(req, "X-User-Id", user_id),
         Admission::Organization {
+            organization_id, ..
+        } => insert_header(req, "X-Organization-Id", organization_id),
+        Admission::Member {
             organization_id,
             member_id,
             ..
@@ -62,19 +66,17 @@ pub fn record_admission_span(ctx: &GatewayContext, admission: &Admission) {
             }
         }
         Admission::Organization {
+            organization_id, ..
+        } => {
+            span.record("organization.id", organization_id.as_str());
+        }
+        Admission::Member {
             organization_id,
             member_id,
-            via,
             ..
         } => {
             span.record("organization.id", organization_id.as_str());
             span.record("member.id", member_id.as_str());
-            if let OrgVia::User { user_id, kid, .. } = via {
-                span.record("user.id", user_id.as_str());
-                if let Some(kid) = kid {
-                    span.record("jwt.kid", kid.as_str());
-                }
-            }
         }
     }
 }
@@ -95,37 +97,35 @@ fn insert_header(req: &mut RequestHeader, name: &'static str, value: &str) -> Re
 pub fn build_and_store_upstream_peer(
     session: &mut Session,
     ctx: &mut GatewayContext,
-    original_path: &str,
     route: &Route,
     params: &HashMap<String, String>,
+    admission: &Admission,
     connect_timeout: Duration,
     read_timeout: Duration,
-) -> Result<()> {
+) -> std::result::Result<(), RewriteError> {
     strip_client_credentials(session.req_header_mut());
 
-    let upstream_path = route.resolve_upstream_path(params);
-    if upstream_path != original_path {
-        match http::Uri::builder()
-            .path_and_query(upstream_path.as_str())
+    if let Some(template) = route.upstream.as_deref() {
+        let upstream_path = rewrite::substitute(template, params, subject_ref(admission))?;
+        let query = session.req_header().uri.query().map(str::to_string);
+        let path_and_query = rewrite::path_and_query(&upstream_path, query.as_deref());
+        let new_uri = http::Uri::builder()
+            .path_and_query(path_and_query.as_str())
             .build()
-        {
-            Ok(new_uri) => {
-                session.req_header_mut().set_uri(new_uri);
-                debug!(
-                    original = %original_path,
-                    transformed = %upstream_path,
-                    "path transformed"
-                );
-            }
-            Err(e) => {
+            .map_err(|err| {
                 warn!(
                     error_kind = ErrorKind::Internal.as_str(),
-                    error_message = %e,
-                    "failed to build transformed URI"
+                    error_message = %err,
+                    "failed to build upstream URI"
                 );
-                return Err(Error::new(ErrorType::HTTPStatus(500)));
-            }
-        }
+                RewriteError::Internal
+            })?;
+        session.req_header_mut().set_uri(new_uri);
+        debug!(
+            route = %route.path,
+            upstream = %upstream_path,
+            "path rewritten"
+        );
     }
 
     {
@@ -146,6 +146,37 @@ pub fn build_and_store_upstream_peer(
     peer.options.read_timeout = Some(read_timeout);
     ctx.upstream_peer = Some(Box::new(peer));
     Ok(())
+}
+
+fn subject_ref(admission: &Admission) -> SubjectRef<'_> {
+    match admission {
+        Admission::Public => SubjectRef {
+            user_id: None,
+            organization_id: None,
+            member_id: None,
+        },
+        Admission::User { user_id, .. } => SubjectRef {
+            user_id: Some(user_id.as_str()),
+            organization_id: None,
+            member_id: None,
+        },
+        Admission::Organization {
+            organization_id, ..
+        } => SubjectRef {
+            user_id: None,
+            organization_id: Some(organization_id.as_str()),
+            member_id: None,
+        },
+        Admission::Member {
+            organization_id,
+            member_id,
+            ..
+        } => SubjectRef {
+            user_id: None,
+            organization_id: Some(organization_id.as_str()),
+            member_id: Some(member_id.as_str()),
+        },
+    }
 }
 
 /// Gateway peers are host:port. Strip accidental scheme/path from route config.

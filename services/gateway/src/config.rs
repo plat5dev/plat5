@@ -10,7 +10,6 @@ const DEFAULT_USER_ID_CLAIM: &str = "properties.user_id";
 const DEFAULT_APIKEY_BRAND: &str = "plat5";
 const MAX_APIKEY_BRAND_LEN: usize = 32;
 const DEFAULT_APIKEY_CACHE_TTL_SECS: u64 = 300;
-const DEFAULT_MEMBER_CACHE_TTL_SECS: u64 = 300;
 const DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_UPSTREAM_READ_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_RATE_LIMIT_REQUESTS: u64 = 60;
@@ -35,7 +34,7 @@ pub struct GatewayConfig {
 
     pub user_apikey_validate_url: String,
     pub member_apikey_validate_url: String,
-    pub member_resolve_url: String,
+    pub member_session_validate_url: String,
     pub internal_auth_token: Option<String>,
 
     /// `APIKEY_BRAND`; same value as identity. Unset → `plat5`.
@@ -44,10 +43,11 @@ pub struct GatewayConfig {
     pub user_key_prefix: String,
     /// `{brand}-mk-1-`
     pub member_key_prefix: String,
+    /// `{brand}-ms-1-`
+    pub session_prefix: String,
 
-    /// TTL for user + member API key caches (`APIKEY_CACHE_TTL_SECS`).
+    /// TTL for user keys, member keys, and member sessions (`APIKEY_CACHE_TTL_SECS`).
     pub apikey_cache_ttl_secs: u64,
-    pub member_cache_ttl_secs: u64,
 
     pub upstream_connect_timeout: Duration,
     pub upstream_read_timeout: Duration,
@@ -84,7 +84,7 @@ impl GatewayConfig {
         let auth_jwks_uri = require_env("AUTH_JWKS_URI")?;
         let user_apikey_validate_url = require_env("USER_APIKEY_VALIDATE_URL")?;
         let member_apikey_validate_url = require_env("MEMBER_APIKEY_VALIDATE_URL")?;
-        let member_resolve_url = require_env("MEMBER_RESOLVE_URL")?;
+        let member_session_validate_url = require_env("MEMBER_SESSION_VALIDATE_URL")?;
         let valkey_url = require_env("VALKEY_URL")?;
         let apikey_brand = apikey_brand_from_env()?;
         let rate_limit_requests =
@@ -131,20 +131,17 @@ impl GatewayConfig {
 
             user_apikey_validate_url,
             member_apikey_validate_url,
-            member_resolve_url,
+            member_session_validate_url,
             internal_auth_token: optional_nonempty_env("INTERNAL_AUTH_TOKEN"),
 
             apikey_brand: apikey_brand.clone(),
             user_key_prefix: user_apikey_prefix(&apikey_brand),
             member_key_prefix: member_apikey_prefix(&apikey_brand),
+            session_prefix: member_session_prefix(&apikey_brand),
 
             apikey_cache_ttl_secs: parse_u64_env(
                 "APIKEY_CACHE_TTL_SECS",
                 DEFAULT_APIKEY_CACHE_TTL_SECS,
-            )?,
-            member_cache_ttl_secs: parse_u64_env(
-                "MEMBER_CACHE_TTL_SECS",
-                DEFAULT_MEMBER_CACHE_TTL_SECS,
             )?,
 
             upstream_connect_timeout: Duration::from_millis(parse_u64_env(
@@ -233,6 +230,10 @@ fn member_apikey_prefix(brand: &str) -> String {
     format!("{brand}-mk-1-")
 }
 
+fn member_session_prefix(brand: &str) -> String {
+    format!("{brand}-ms-1-")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,5 +264,6 @@ mod tests {
     fn wire_prefixes() {
         assert_eq!(user_apikey_prefix("plat5"), "plat5-sk-1-");
         assert_eq!(member_apikey_prefix("acme"), "acme-mk-1-");
+        assert_eq!(member_session_prefix("acme"), "acme-ms-1-");
     }
 }

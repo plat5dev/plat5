@@ -16,19 +16,19 @@ Read the doc, don’t re-derive:
 
 | Invariant | Where |
 |-----------|--------|
-| Authn / org context / resource authz are separate layers. Who may call identity is the proxy | [`docs/identity-boundary.md`](docs/identity-boundary.md) |
-| One subject per scope; org routes get org + member headers only | same + [`docs/gateway-contract.md`](docs/gateway-contract.md) |
-| Identity is a function of the URL. No caller header, no roles. Not behind its own org admission | [`docs/identity.md`](docs/identity.md) |
+| Authn / scope projection / resource authz are separate layers. Who may call identity is the proxy | [`docs/identity-boundary.md`](docs/identity-boundary.md) |
+| One subject per scope. `organization` gets `X-Organization-Id` only. `member` gets org + member. No `X-User-Id` on either | same + [`docs/gateway-contract.md`](docs/gateway-contract.md) |
+| Identity is a function of the URL. No caller header, no roles. User-subject routes stay on `user` scope | [`docs/identity.md`](docs/identity.md) |
 | Service accounts are members with keys | identity.md |
 | A service account lives in exactly one org | identity.md |
 | User keys and member keys are two products (prefix + table + validate URL) | identity.md |
 | Member sessions are not member keys (own prefix, table, validate URL). Validate does not return `user_id` | identity.md |
 | Add member by known `user_id` (immediate `active`) or invite redeem | identity.md |
-| Unknown id is **404**. Gateway org-context: non-member / inactive → **404** | identity-boundary |
+| Unknown id is **404**. Wrong credential for the scope is **401**, not 404 | identity-boundary |
 | Missing expected identity headers → **500** (gateway bug), not 401 | identity-boundary |
 | JWT / IdP required to boot. API keys are an alternative credential | [`docs/idp-contract.md`](docs/idp-contract.md) |
 | Identity **public** routes are operator-owned. Apply the catalog (or a subset) | [`docs/routes.md`](docs/routes.md), [`services/identity/routes.yml`](services/identity/routes.yml) |
-| Internal validate/resolve stay on `INTERNAL_PORT` | identity.md |
+| Internal validate stays on `INTERNAL_PORT`. Gateway boots with the three validate URLs | identity.md |
 | Route-registry: Postgres desired state + revisions; etcd is the gateway projection | [`docs/route-registry.md`](docs/route-registry.md) |
 | Apply is **upsert** of services in the file. Services not in the file are left alone | route-registry.md |
 | etcd prefix: `edge/gateway/routes/` | routes.md |
@@ -41,9 +41,9 @@ Read the doc, don’t re-derive:
 
 Do not add these because they would be convenient:
 
-- `X-User-Id` or role on `organization` scope
+- `X-User-Id` on `organization` or `member`. `X-Member-Id` on `organization`
 - Gateway RBAC / FGA / project ACL
-- Identity sitting on `organization` scope
+- User-subject identity routes on `organization` or `member` scope
 - Platform-wide user directory or SMTP in identity
 - Global / platform admin service accounts
 - Multi-org service accounts (`home_organization_id`, SA member in a second org)
@@ -54,7 +54,7 @@ Do not add these because they would be convenient:
 - Auto-merge of new identity paths into existing operator YAML
 - Shared `route-config` crate until a third consumer exists (two copies are deliberate)
 - Rate-limit policy catalog (separate apply / etcd resource)
-- Limiter subject override (ip / user / org comes from route scope)
+- Limiter subject override (ip / user / org / member comes from route scope)
 - Billing, usage, or meter fields on `rate_limit` / `rate_limits`
 - Cost weights, multi-window, burst, or calendar quotas on the gateway limiter
 - JWT / JWKS / admission caches in Valkey (Valkey is the rate-limit store)

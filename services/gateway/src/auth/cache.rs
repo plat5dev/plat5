@@ -69,7 +69,3 @@ impl<V: Clone + Send + Sync + 'static> TtlCache<V> {
 pub fn hash_secret(secret: &str) -> String {
     blake3::hash(secret.as_bytes()).to_hex().to_string()
 }
-
-pub fn member_resolve_cache_key(user_id: &str, organization_id: &str) -> String {
-    format!("{user_id}\0{organization_id}")
-}

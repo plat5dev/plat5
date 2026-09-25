@@ -19,7 +19,7 @@ docker compose up --build
 | `http://localhost:5002` | Route registry admin API |
 
 Admin token default: `dev-admin-token` (`ADMIN_TOKEN`).
-Internal control-plane token default: `dev-internal-token` (`INTERNAL_AUTH_TOKEN`) — gateway ↔ identity validate / resolve.
+Internal control-plane token default: `dev-internal-token` (`INTERNAL_AUTH_TOKEN`) — gateway ↔ identity validate.
 
 ## Apply routes
 

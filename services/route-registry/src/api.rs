@@ -310,16 +310,14 @@ async fn apply_routes(
         .unwrap_or("application/json");
 
     let config: Config = if content_type.contains("yaml") || content_type.contains("yml") {
-        serde_yaml::from_slice(&body).map_err(|e| {
-            AppError::invalid_request(request_id.clone(), format!("invalid YAML: {e}"))
-        })?
+        serde_yaml::from_slice(&body).map_err(|e| config_parse_error(request_id.clone(), &e))?
     } else {
         match serde_json::from_slice(&body) {
             Ok(c) => c,
-            Err(_) => serde_yaml::from_slice(&body).map_err(|e| {
-                AppError::invalid_request(
+            Err(json_err) => serde_yaml::from_slice(&body).map_err(|yaml_err| {
+                config_parse_error(
                     request_id.clone(),
-                    format!("invalid JSON or YAML body: {e}"),
+                    &format!("invalid JSON ({json_err}) or YAML ({yaml_err})"),
                 )
             })?,
         }
@@ -487,6 +485,15 @@ async fn ensure_shared_policies(
     }
     validate_shared_rate_limits(&all)
         .map_err(|e| AppError::validation(request_id.to_string(), e.to_string()))
+}
+
+fn config_parse_error(request_id: String, err: &impl std::fmt::Display) -> AppError {
+    let msg = err.to_string();
+    if msg.contains("unknown field") {
+        AppError::validation(request_id, format!("unknown field: {msg}"))
+    } else {
+        AppError::invalid_request(request_id, format!("invalid route config: {msg}"))
+    }
 }
 
 fn prepare_named(
