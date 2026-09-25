@@ -4,9 +4,9 @@ Plat5 **identity** service: organizations, members, invites, service accounts, A
 
 Boundary: [`identity-boundary.md`](identity-boundary.md). Errors: [`api-errors.md`](api-errors.md), [`error-copy.md`](error-copy.md). Lists: [`lists.md`](lists.md).
 
-The service is a function of the URL. The path names every id the operation uses. If the handler does not read an id, it is not in the path. If it does, it is not in a header.
+The service is a function of the URL. The path names every id the operation uses. If the handler does not read an id, it is not in the path.
 
-Who may call is upstream. This service does not know which proxy called, and it does not grow a second policy for a second caller. No `X-User-Id`. A missing caller header is not an error.
+Who may call is the proxy. This service does not know which proxy called, and it does not grow a second policy for a second caller.
 
 There is no `/api` prefix. The first path segment is the subject.
 
@@ -46,13 +46,13 @@ Illegal states. Not permissions.
 - A service account addressed under the wrong org, or whose member is `removed`, is **404**.
 - Unknown id is **404**. A removed member is **404**. Empty collection is an empty page.
 
-No **403** for role or for "not a member." No **500** for a missing caller header. Validation (**422**) and conflict (**409**) stay where the data is wrong.
+Validation (**422**) and conflict (**409**) stay where the data is wrong. Identity does not authorize the caller.
 
 ## Public API
 
 Pagination: [`lists.md`](lists.md). `limit`, `starting_after`, `has_more`, sort `id` ascending.
 
-`added_by`, `created_by`, and `created_by_user_id` are not inferred. There is no caller. A proxy that wants them stored sends them in the body. Omitted or blank means null.
+`added_by`, `created_by`, and `created_by_user_id` are not inferred. The proxy sends them in the body when it wants them stored. Omitted or blank means null.
 
 ### Memberships
 
@@ -450,12 +450,11 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - A user directory (`GET /users`). Person id is a path parameter, not a collection.
 - Platform-owned user rows / IdP account linking (opaque `user_id` only)
 - SMTP / sending invite email (identity returns a token; the console may send mail)
-- Pending member rows (membership is created only on invite redeem, status `active`)
+- Pending member rows. Add-by-`user_id` and invite redeem both insert an **active** member.
 - Resource ACL, FGA, project permissions
-- Roles (`member` / `admin` / `owner`). Not a column, not a response field, not a later hook.
+- Roles (`member` / `admin` / `owner`). Not a column, not a response field, not a hook.
 - Caller checks, or inferring `added_by` / `created_by` / `created_by_user_id`
 - Key `scopes` as deny-all, or default-deny on unlabeled routes
-- Gateway `organization` scope on this service’s public routes
 - Auto-publishing these public routes — the operator applies a catalog
 - Configurable `sk` / `mk` / `ms` / `1`, independent full-prefix env vars, or dual-brand key accept
 - Member session refresh, list, revoke, or a TTL env

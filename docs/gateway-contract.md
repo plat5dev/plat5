@@ -1,6 +1,6 @@
 # Gateway Contract
 
-Auth delegation, identity headers, and trace propagation from the Plat5 gateway (`services/gateway/`).
+Auth delegation, subject fill, and trace propagation from the Plat5 gateway (`services/gateway/`).
 
 Boundary: [`identity-boundary.md`](identity-boundary.md). Routes: [`routes.md`](routes.md). Errors: [`api-errors.md`](api-errors.md). Identity backends: [`identity.md`](identity.md).
 
@@ -8,33 +8,34 @@ Boundary: [`identity-boundary.md`](identity-boundary.md). Routes: [`routes.md`](
 
 | Layer | Responsibility |
 |-------|---------------|
-| **Gateway** | Routing, authentication (JWT, API key, member session), scope projection, API-key `required_scopes`, rate limits, identity header injection, CORS, security headers, trace propagation |
+| **Gateway** | Routing, authentication (JWT, API key, member session), scope projection, API-key `required_scopes`, rate limits, subject fill into `upstream`, CORS, security headers, trace propagation |
 | **Edge / Load Balancer** | TLS termination (e.g. Cloudflare Zero Trust tunnels) |
 | **Downstream services** | Business logic, data access, resource authorization |
 
 Services behind the gateway **must not** re-validate JWTs or parse `Authorization`. The gateway handles authentication entirely.
 
-## Injected Headers
+## Subject
 
-The gateway strips client-supplied identity headers, then injects only what the **route scope** allows.
+The route scope names the subject. `upstream` fills it. The client path does not. A route that needs the subject sets `upstream`. Omitted means proxy `path` unchanged: the upstream has no subject id.
 
-| Scope | Credential | Identity headers injected |
-|-------|------------|---------------------------|
+| Scope | Credential | Subject fields |
+|-------|------------|----------------|
 | `public` | none | none |
-| `user` | user JWT or **user** API key | `X-User-Id` only |
-| `organization` | **member** API key or **member** session | **`X-Organization-Id`** only — not `X-Member-Id`, not `X-User-Id` |
-| `member` | same credential as `organization` | **`X-Organization-Id`**, **`X-Member-Id`** — not `X-User-Id` |
+| `user` | user JWT or **user** API key | `user_id` |
+| `organization` | **member** API key or **member** session | `organization_id` |
+| `member` | same credential as `organization` | `organization_id`, `member_id` |
 
 ### Stripped before upstream (all scopes)
 
-After authentication (or immediately on `public`), the gateway **removes** client credential headers so upstreams never see them:
+The gateway removes these request headers before the upstream call. It does not set them.
 
 | Header | Why |
 |--------|-----|
 | `Authorization` | Consumed for JWT authn; must not leak bearer tokens to apps |
 | `X-API-Key` | Consumed for API-key authn; must not leak raw keys to apps |
+| `X-User-Id`, `X-Organization-Id`, `X-Member-Id` | Not a subject channel. A client must not supply one |
 
-Clients still send these headers **to the gateway**. Services behind the gateway will not receive them. CORS may still allow browsers to send them.
+Clients still send credential headers **to the gateway**. Services behind the gateway will not receive them. CORS may still allow browsers to send them.
 
 ### Always (all scopes)
 
@@ -43,7 +44,7 @@ Clients still send these headers **to the gateway**. Services behind the gateway
 | `X-Request-ID` | Correlation ID (gateway-generated; also on response) |
 | `traceparent` | W3C trace context (OTel propagation) |
 
-The scope chooses what the route is allowed to see. It is not a second proof. A user JWT and a user API key are the same proof. `organization` and `member` share one credential. That credential always carries `member_id` and `organization_id`. The scope drops fields on the way out. Spans may still record the dropped ids. The app contract does not.
+The scope chooses what the route is allowed to see. It is not a second proof. A user JWT and a user API key are the same proof. `organization` and `member` share one credential. That credential always carries `member_id` and `organization_id`. The scope drops fields before `upstream` substitution. Spans may still record the dropped ids. The app contract does not.
 
 ## Route Configuration
 
@@ -97,17 +98,16 @@ Counters live in **Valkey**. Replicas share one budget. `VALKEY_URL` is required
 
 Direct-exposed services are exempt (see below).
 
-Injected identity headers are authentic only if the upstream is on a private network the gateway can reach.
+The rewritten path is authentic only if the upstream is on a private network the gateway can reach.
 
-1. **Trust identity headers for your scope** — Do not validate tokens.
-   - `user`: trust `X-User-Id`
-   - `organization`: trust `X-Organization-Id` only
-   - `member`: trust `X-Organization-Id` and `X-Member-Id`
-2. **Missing expected headers → platform bug** — Return `INTERNAL_ERROR` (500), not `UNAUTHORIZED`
-3. **Propagate `traceparent`** on downstream calls
-4. **Log with `request_id`** from `X-Request-ID`
-5. **Do not set `X-Request-ID` on responses** — gateway owns it
-6. **Do not trust client-supplied identity headers** — gateway strips spoofed values before inject
+1. **Trust the path the gateway wrote** — Do not validate tokens. Read `{subject.*}` from `upstream`. Do not read a subject header.
+   - `user`: `user_id`
+   - `organization`: `organization_id`
+   - `member`: `organization_id` and `member_id`
+2. **Propagate `traceparent`** on downstream calls
+3. **Log with `request_id`** from `X-Request-ID`
+4. **Do not set `X-Request-ID` on responses** — gateway owns it
+5. **Do not read `X-User-Id`, `X-Organization-Id`, or `X-Member-Id`** — the gateway removes them and does not set them
 
 ### Platform integrity (hard limits)
 
@@ -130,11 +130,11 @@ Wrong credential for the scope is **401**. There is nothing to compare, so this 
 | `user` | `Authorization: Bearer` JWT, or `X-API-Key` `{brand}-sk-1-` | member key, session |
 | `organization`, `member` | `X-API-Key` `{brand}-mk-1-` or `{brand}-ms-1-` | user JWT, user API key |
 
-Prefix dispatch happens before the identity call. One member-credential result (`member_id`, `organization_id`, `scopes`) feeds both `organization` and `member`. The scope picks the headers.
+Prefix dispatch happens before the identity call. One member-credential result (`member_id`, `organization_id`, `scopes`) feeds both `organization` and `member`. The scope picks the fields `upstream` may fill.
 
 1. Bad, missing, or wrong credential → **401** `UNAUTHORIZED`
 2. Validate unavailable → **503** `SERVICE_UNAVAILABLE`
-3. Admitted → inject the scope's headers
+3. Admitted → substitute `{subject.*}` in `upstream`
 4. Then `required_scopes` (restricted keys only; session `scopes: null` skips) → **403** `FORBIDDEN` on miss
 5. Then per-route rate limit → **429** `RATE_LIMITED`
 
@@ -147,8 +147,6 @@ Gateway chooses validate URL by **wire prefix** before calling identity. Prefixe
 | `{brand}-ms-1-` | `MEMBER_SESSION_VALIDATE_URL` | `organization`, `member` |
 
 An active service account can call `organization` and `member` routes. It uses a member key. It does not mint a session.
-
-Missing expected identity headers on a protected route → **500** `INTERNAL_ERROR`.
 
 Identity's own HTTP paths name the subject. The catalog publishes only routes whose subject the template can fill. See [`identity.md`](identity.md) and [`routes.md`](routes.md).
 
@@ -166,14 +164,14 @@ All three live on identity’s **`INTERNAL_PORT`**. All three URLs are required 
 
 ## Public Routes
 
-`public` scope receives no identity headers. Do not expect `X-User-Id` or attempt auth checks.
+`public` scope has no subject. Do not attempt auth checks.
 
 ## Direct-Exposed Services
 
 Some services are intentionally exposed outside the gateway (e.g. an **IdP / issuer** at `auth.company.com` while the gateway serves `api.company.com`):
 
 - Handle their own CORS (browser OAuth flows require it)
-- Do not rely on gateway identity headers
+- Do not rely on a gateway subject in the path
 - Exempt from “Do not implement CORS”
 
 TLS still typically terminates at the edge.
@@ -234,6 +232,5 @@ Revoke, suspend, and remove are visible at the edge when the TTL expires.
 | Path param is not one segment | `INVALID_REQUEST` (400) |
 | Subject id is not one segment | `INTERNAL_ERROR` (500) |
 | Gateway internal failure mid-proxy | `INTERNAL_ERROR` (500) |
-| Missing expected identity headers in a service | `INTERNAL_ERROR` (500) |
 
 All of the above use the Plat5 JSON envelope (`api-errors.md`), including failures handled in `fail_to_proxy`. Client disconnect (no response needed) does not write a body.

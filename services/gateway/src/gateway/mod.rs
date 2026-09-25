@@ -257,16 +257,6 @@ impl UserGateway {
         }
 
         upstream::record_admission_span(ctx, &admission);
-        if upstream::apply_admission_headers(session.req_header_mut(), &admission).is_err() {
-            return response::write_json_error(
-                &self.cors,
-                session,
-                ctx,
-                500,
-                ApiError::internal_error(),
-            )
-            .await;
-        }
 
         if let Err(err) = upstream::build_and_store_upstream_peer(
             session,

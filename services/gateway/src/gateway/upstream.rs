@@ -8,7 +8,6 @@ use opentelemetry::propagation::Injector;
 use pingora::http::RequestHeader;
 use pingora::proxy::Session;
 use pingora::upstreams::peer::HttpPeer;
-use pingora::{Error, ErrorType, Result};
 use tracing::{debug, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -19,6 +18,7 @@ use crate::route_map::Route;
 use super::context::GatewayContext;
 use super::rewrite::{self, RewriteError, SubjectRef};
 
+/// Not a subject channel. Removed so a client cannot supply one.
 const IDENTITY_HEADERS: &[&str] = &["X-User-Id", "X-Organization-Id", "X-Member-Id"];
 const CLIENT_CREDENTIAL_HEADERS: &[&str] = &["Authorization", "X-API-Key"];
 
@@ -31,25 +31,6 @@ pub fn strip_identity_headers(req: &mut RequestHeader) {
 pub fn strip_client_credentials(req: &mut RequestHeader) {
     for name in CLIENT_CREDENTIAL_HEADERS {
         req.remove_header(*name);
-    }
-}
-
-/// Inject identity headers from a successful admission.
-pub fn apply_admission_headers(req: &mut RequestHeader, admission: &Admission) -> Result<()> {
-    match admission {
-        Admission::Public => Ok(()),
-        Admission::User { user_id, .. } => insert_header(req, "X-User-Id", user_id),
-        Admission::Organization {
-            organization_id, ..
-        } => insert_header(req, "X-Organization-Id", organization_id),
-        Admission::Member {
-            organization_id,
-            member_id,
-            ..
-        } => {
-            insert_header(req, "X-Organization-Id", organization_id)?;
-            insert_header(req, "X-Member-Id", member_id)
-        }
     }
 }
 
@@ -79,18 +60,6 @@ pub fn record_admission_span(ctx: &GatewayContext, admission: &Admission) {
             span.record("member.id", member_id.as_str());
         }
     }
-}
-
-fn insert_header(req: &mut RequestHeader, name: &'static str, value: &str) -> Result<()> {
-    req.insert_header(name, value).map_err(|err| {
-        warn!(
-            error_kind = ErrorKind::Internal.as_str(),
-            error_message = %err,
-            header = name,
-            "failed to inject identity header"
-        );
-        Error::new(ErrorType::HTTPStatus(500))
-    })
 }
 
 /// Build the upstream peer for a matched route and store it in context.
@@ -229,7 +198,6 @@ mod tests {
         req.insert_header("Authorization", "Bearer secret-jwt")
             .unwrap();
         req.insert_header("X-API-Key", "plat5-sk-1-test").unwrap();
-        req.insert_header("X-User-Id", "user-1").unwrap();
         req.insert_header("X-Request-ID", "req-1").unwrap();
 
         strip_client_credentials(&mut req);
@@ -237,9 +205,26 @@ mod tests {
         assert!(req.headers.get("Authorization").is_none());
         assert!(req.headers.get("X-API-Key").is_none());
         assert_eq!(
-            req.headers.get("X-User-Id").and_then(|v| v.to_str().ok()),
-            Some("user-1")
+            req.headers
+                .get("X-Request-ID")
+                .and_then(|v| v.to_str().ok()),
+            Some("req-1")
         );
+    }
+
+    #[test]
+    fn strip_identity_headers_removes_subject_names() {
+        let mut req = RequestHeader::build("GET", b"/api/x", None).unwrap();
+        req.insert_header("X-User-Id", "user-1").unwrap();
+        req.insert_header("X-Organization-Id", "org-1").unwrap();
+        req.insert_header("X-Member-Id", "mem-1").unwrap();
+        req.insert_header("X-Request-ID", "req-1").unwrap();
+
+        strip_identity_headers(&mut req);
+
+        assert!(req.headers.get("X-User-Id").is_none());
+        assert!(req.headers.get("X-Organization-Id").is_none());
+        assert!(req.headers.get("X-Member-Id").is_none());
         assert_eq!(
             req.headers
                 .get("X-Request-ID")

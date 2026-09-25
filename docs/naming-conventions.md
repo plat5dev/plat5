@@ -83,22 +83,22 @@ Those are identity's own URLs. The gateway edge does not put the subject in the 
 | `/org/...` | `organization` | `{subject.organization_id}` |
 | `/member/...` | `member` | `{subject.member_id}` (and `organization_id` if the template needs it) |
 
-Business APIs stay under `/api/...`. They read the scope's headers. They do not put `{user_id}`, `{organization_id}`, or `{member_id}` in a path whose scope owns that field.
+Business APIs stay under `/api/...`. A route that needs the subject sets `upstream`. The match path does not contain a param whose name is a subject field of that scope.
 
-Scopes and headers: [`gateway-contract.md`](gateway-contract.md). Full identity API: [`identity.md`](identity.md).
+Scopes and subject fill: [`gateway-contract.md`](gateway-contract.md). Full identity API: [`identity.md`](identity.md).
 
-## Gateway identity headers
+## Subject
 
-Headers are **scope-specific**. Gateway strips client-supplied identity headers, then injects only what the route scope allows. Full contract: [`gateway-contract.md`](gateway-contract.md).
+The route scope names the subject. `upstream` fills it. The client path does not. Full contract: [`gateway-contract.md`](gateway-contract.md).
 
-| Scope | Identity headers injected |
-|-------|---------------------------|
+| Scope | Subject fields |
+|-------|----------------|
 | `public` | none |
-| `user` | `X-User-Id` only |
-| `organization` | `X-Organization-Id` only — **not** `X-Member-Id`, **not** `X-User-Id` |
-| `member` | `X-Organization-Id`, `X-Member-Id` — **not** `X-User-Id` |
+| `user` | `user_id` |
+| `organization` | `organization_id` |
+| `member` | `organization_id`, `member_id` |
 
-Always (all scopes): `X-Request-ID`, `traceparent`. Identity has no role to inject.
+Always (all scopes): `X-Request-ID`, `traceparent`.
 
 ## Log Fields
 

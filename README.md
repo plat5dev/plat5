@@ -43,7 +43,7 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defau
 | [`docs/README.md`](docs/README.md) | Contract index |
 | [`docs/self-hosting.md`](docs/self-hosting.md) | Production: images, TLS, attach an app |
 | [`docs/idp-contract.md`](docs/idp-contract.md) | BYO IdP / JWT user-id claim |
-| [`docs/gateway-contract.md`](docs/gateway-contract.md) | Auth delegation, identity headers, perimeter |
+| [`docs/gateway-contract.md`](docs/gateway-contract.md) | Auth delegation, subject fill, perimeter |
 | [`docs/routes.md`](docs/routes.md) | Route config format |
 | [`docs/route-registry.md`](docs/route-registry.md) | Apply routes via admin API |
 | [`docs/identity.md`](docs/identity.md) | Identity service API |
@@ -63,7 +63,7 @@ curl -sS -X POST http://localhost:5002/apply \
   --data-binary @routes.yml
 ```
 
-4. Trust gateway identity headers; do not validate JWTs in the service. Headers are authentic only if nothing else can reach the app — [`docs/gateway-contract.md`](docs/gateway-contract.md).
+4. Trust the path the gateway wrote; do not validate JWTs in the service. That path is authentic only if nothing else can reach the app — [`docs/gateway-contract.md`](docs/gateway-contract.md).
 
 ## Telemetry
 

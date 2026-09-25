@@ -124,7 +124,7 @@ Do not put SMTP submission on a tunnel.
 ## 4. Attach your API
 
 1. Run the process on **`plat5_plat5`** (external network). Hostname = the service name in `routes.yml` (e.g. `api` → `url: api:3000`).
-2. Trust gateway headers. Do not validate JWTs. [`gateway-contract.md`](gateway-contract.md).
+2. Trust the path the gateway wrote. Do not validate JWTs. [`gateway-contract.md`](gateway-contract.md).
 3. Apply identity catalog + your routes (prod does **not** seed):
 
 ```yaml
@@ -136,6 +136,7 @@ services:
       route_prefix: /api
       routes:
         - path: /widgets
+          upstream: /organizations/{subject.organization_id}/widgets
           methods: [GET, POST]
 ```
 

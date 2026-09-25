@@ -105,8 +105,8 @@ Same path, different per-verb `required_scopes` / `rate_limit` — nested `metho
 | `rate_limits` | `map<string, RateLimitPolicy>?` | Optional on the **service**. Named policies this service’s routes may reference. |
 | `public` | `ScopeConfig?` | No authentication. |
 | `user` | `ScopeConfig?` | User JWT or **user** API key. |
-| `organization` | `ScopeConfig?` | **Member** API key or **member** session. Injects `X-Organization-Id` only. |
-| `member` | `ScopeConfig?` | Same credential as `organization`. Injects `X-Organization-Id` and `X-Member-Id`. |
+| `organization` | `ScopeConfig?` | **Member** API key or **member** session. Subject field: `organization_id`. |
+| `member` | `ScopeConfig?` | Same credential as `organization`. Subject fields: `organization_id`, `member_id`. |
 | `route_prefix` | `string?` | Optional on any scope. Registry expands into each `path` before etcd. Not applied to `upstream`. |
 | `routes` | `array<RouteConfig>` | HTTP routes for this scope. |
 | `path` | `string` | Match path (`/` or starts with `/`). Params are resource ids, not the subject. |
@@ -229,7 +229,7 @@ A separate failed-auth IP limiter (`RATE_LIMIT_AUTH_FAILURE_*`) covers unadmitte
 
 ### `upstream`
 
-`path` is the match. Its params are resource ids. `upstream` is an absolute template. Omitted means proxy `path` unchanged. Business routes that only read headers omit it. Identity routes that are a function of the URL set it.
+`path` is the match. Its params are resource ids. `upstream` is an absolute template. Omitted means proxy `path` unchanged: the upstream has no subject id. A route that needs the subject sets `upstream`.
 
 ```yaml
 user:
@@ -269,14 +269,14 @@ Unknown fields on the route schema are **422**.
 
 ## Scopes
 
-| Scope | Auth | Identity headers |
-|-------|------|------------------|
+| Scope | Auth | Subject fields |
+|-------|------|----------------|
 | `public` | No | none |
-| `user` | User JWT or user API key | `X-User-Id` only |
-| `organization` | Member API key or member session | `X-Organization-Id` only |
-| `member` | Same credential as `organization` | `X-Organization-Id`, `X-Member-Id` |
+| `user` | User JWT or user API key | `user_id` |
+| `organization` | Member API key or member session | `organization_id` |
+| `member` | Same credential as `organization` | `organization_id`, `member_id` |
 
-Full header and service rules: [`gateway-contract.md`](gateway-contract.md). Layer boundary and admission errors: [`identity-boundary.md`](identity-boundary.md).
+Subject fill and service rules: [`gateway-contract.md`](gateway-contract.md). Layer boundary and admission errors: [`identity-boundary.md`](identity-boundary.md).
 
 ## Gateway Behavior
 
@@ -301,7 +301,7 @@ Decoupled. Service down → gateway still knows the route → **503**. Missing r
 
 Business APIs that should not own membership storage. The credential is a member of the org. The client does not name the subject.
 
-`organization` injects `X-Organization-Id` only. `member` injects that and `X-Member-Id`. Admission steps and errors: [`identity-boundary.md`](identity-boundary.md).
+`organization` fills `organization_id`. `member` fills that and `member_id`. Admission steps and errors: [`identity-boundary.md`](identity-boundary.md).
 
 User-subject identity routes stay on `user` scope. Identity routes whose subject is the org or the member are published on those scopes. The catalog is [`services/identity/routes.yml`](../services/identity/routes.yml).
 
@@ -313,7 +313,7 @@ Joined with each route `path` so configs stay short.
 
 **Expand site (locked):** Registry expands `route_prefix` + `path` **and nested `methods` maps** **before** writing etcd. Registry stores **full paths only** and **list-form `methods` only** — one expand site, no gateway/registry drift.
 
-`upstream` remains an absolute path template (not relative to `route_prefix`).
+`upstream` is an absolute path template (not relative to `route_prefix`).
 
 ### Examples
 
@@ -321,7 +321,7 @@ Joined with each route `path` so configs stay short.
 
 Apply [`services/identity/routes.yml`](../services/identity/routes.yml) or a subset. Edge paths are `/user`, `/org`, and `/member`. `upstream` fills the identity URL. `GET /organizations` is not in the catalog.
 
-#### Business service — headers only
+#### Business service
 
 ```yaml
 services:
@@ -331,8 +331,10 @@ services:
       route_prefix: /api
       routes:
         - path: /projects
+          upstream: /organizations/{subject.organization_id}/projects
           methods: [GET, POST]
         - path: /projects/{project_id}
+          upstream: /organizations/{subject.organization_id}/projects/{path.project_id}
           methods: [GET, PATCH, DELETE]
           required_scopes: [projects:write]
           rate_limit:
@@ -340,7 +342,7 @@ services:
             window_seconds: 60
 ```
 
-The handler reads `X-Organization-Id`. No subject id in the path.
+The handler reads `organization_id` from the rewritten path. The client path has no subject id.
 
 ## Validation Rules
 

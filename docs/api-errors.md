@@ -55,7 +55,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 
 ### `UNAUTHORIZED`
 
-Returned by the **gateway**, not downstream services. If a downstream service receives a request without expected gateway-injected headers for its scope, that is a gateway bug → `INTERNAL_ERROR` (500). See [`gateway-contract.md`](gateway-contract.md) and [`identity-boundary.md`](identity-boundary.md).
+Returned by the **gateway**, not downstream services. See [`gateway-contract.md`](gateway-contract.md) and [`identity-boundary.md`](identity-boundary.md).
 
 ### Organization admission (gateway)
 

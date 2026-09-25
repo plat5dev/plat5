@@ -15,7 +15,7 @@ Also required on tokens: signature via JWKS, `exp`, and a `kid` in the JWT heade
 
 ## User id claim
 
-Plat5 identity (`X-User-Id`, identity service keys/members) uses an **opaque string** user id. The gateway reads it from the JWT via `AUTH_USER_ID_CLAIM`.
+Plat5 uses an **opaque string** user id. The gateway reads it from the JWT via `AUTH_USER_ID_CLAIM`. A `user` route fills it as `{subject.user_id}`.
 
 | `AUTH_USER_ID_CLAIM` | Typical IdP |
 |----------------------|-------------|
@@ -27,7 +27,7 @@ Local compose defaults use `properties.user_id` and a host-published JWKS URL on
 
 Missing or empty claim → **401** (same as invalid token).
 
-Downstream services trust gateway headers. Identity stores the opaque user id string. Switching IdPs is an operator concern.
+Downstream services trust the path the gateway wrote. Identity stores the opaque user id string. Switching IdPs is an operator concern.
 
 ## Bring your own IdP
 

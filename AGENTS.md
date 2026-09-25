@@ -17,15 +17,15 @@ Read the doc, don’t re-derive:
 | Invariant | Where |
 |-----------|--------|
 | Authn / scope projection / resource authz are separate layers. Who may call identity is the proxy | [`docs/identity-boundary.md`](docs/identity-boundary.md) |
-| One subject per scope. `organization` gets `X-Organization-Id` only. `member` gets org + member. No `X-User-Id` on either | same + [`docs/gateway-contract.md`](docs/gateway-contract.md) |
-| Identity is a function of the URL. No caller header, no roles. User-subject routes stay on `user` scope | [`docs/identity.md`](docs/identity.md) |
+| One subject per scope. `user` fills `user_id`. `organization` fills `organization_id`. `member` fills `organization_id` and `member_id`. Delivered by `{subject.*}` in `upstream` | same + [`docs/gateway-contract.md`](docs/gateway-contract.md) |
+| Identity is a function of the URL. Who may call is the proxy. User-subject routes stay on `user` scope | [`docs/identity.md`](docs/identity.md) |
 | Service accounts are members with keys | identity.md |
 | A service account lives in exactly one org | identity.md |
 | User keys and member keys are two products (prefix + table + validate URL) | identity.md |
 | Member sessions are not member keys (own prefix, table, validate URL). Validate does not return `user_id` | identity.md |
 | Add member by known `user_id` (immediate `active`) or invite redeem | identity.md |
 | Unknown id is **404**. Wrong credential for the scope is **401**, not 404 | identity-boundary |
-| Missing expected identity headers → **500** (gateway bug), not 401 | identity-boundary |
+| Subject id is not one segment → **500**. Path param is not one segment → **400** | identity-boundary |
 | JWT / IdP required to boot. API keys are an alternative credential | [`docs/idp-contract.md`](docs/idp-contract.md) |
 | Identity **public** routes are operator-owned. Apply the catalog (or a subset) | [`docs/routes.md`](docs/routes.md), [`services/identity/routes.yml`](services/identity/routes.yml) |
 | Internal validate stays on `INTERNAL_PORT`. Gateway boots with the three validate URLs | identity.md |
@@ -35,13 +35,14 @@ Read the doc, don’t re-derive:
 | Named rate-limit policies on the service; `shared: true` is opt-in cross-service; limiter subject follows route scope | [`docs/routes.md`](docs/routes.md), [`docs/gateway-contract.md`](docs/gateway-contract.md) |
 | Rate-limit counters in Valkey; replicas share one budget; Valkey required to boot; fail-closed 503 | [`docs/gateway-contract.md`](docs/gateway-contract.md), [`docs/routes.md`](docs/routes.md) |
 | Admission cache in-process (positive + negative); singleflight; TTL is revoke/suspend latency | [`docs/gateway-contract.md`](docs/gateway-contract.md), [`docs/identity.md`](docs/identity.md) |
-| Gateway admits and injects the route subject. Resource authz stays in the service | identity-boundary |
+| Gateway admits and fills the route subject into `upstream`. Resource authz stays in the service | identity-boundary |
 
 ## Stop conditions
 
 Do not add these because they would be convenient:
 
-- `X-User-Id` on `organization` or `member`. `X-Member-Id` on `organization`
+- A subject header (`X-User-Id`, `X-Organization-Id`, `X-Member-Id`). Subject is `{subject.*}` in `upstream`
+- `user_id` on `organization` or `member` scope. `member_id` on `organization` scope
 - Gateway RBAC / FGA / project ACL
 - User-subject identity routes on `organization` or `member` scope
 - Platform-wide user directory or SMTP in identity

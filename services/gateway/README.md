@@ -1,6 +1,6 @@
 # Gateway
 
-Rust reverse proxy built on Pingora. Handles request routing, JWT / API key / member session authentication, identity header injection, stripping of `Authorization` / `X-API-Key` before upstream, rate limits (Valkey), trace propagation, CORS, and security headers. TLS is terminated at the edge (not in this process).
+Rust reverse proxy built on Pingora. Handles request routing, JWT / API key / member session authentication, subject fill into `upstream`, stripping of `Authorization` / `X-API-Key` and client subject headers before upstream, rate limits (Valkey), trace propagation, CORS, and security headers. TLS is terminated at the edge (not in this process).
 
 ## Local Development
 

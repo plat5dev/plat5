@@ -103,11 +103,3 @@ func TestGenerateAndHashInviteToken(t *testing.T) {
 		t.Fatal("must not look like api key")
 	}
 }
-
-func TestCreateMemberKeepsAddByUserID(t *testing.T) {
-	t.Parallel()
-	req := CreateMemberRequest{UserID: "user_known"}
-	if req.UserID == "" {
-		t.Fatal("POST members add-by-user_id must remain")
-	}
-}

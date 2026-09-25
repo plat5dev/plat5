@@ -2,7 +2,7 @@
 
 **Start here:** [`identity-boundary.md`](identity-boundary.md) — which subject exists on a request, why the layers do not mix, what you own vs what Plat5 owns.
 
-The rest of this directory is the wire: headers, routes, errors, identity APIs. The boundary is the model; the other pages are how it shows up on the network. They should agree.
+The rest of this directory is the wire: subject, routes, errors, identity APIs. The boundary is the model; the other pages are how it shows up on the network. They should agree.
 
 Locked product invariants (what not to grow into): [`../AGENTS.md`](../AGENTS.md).
 
@@ -19,7 +19,7 @@ Per-service details live in each service's `README.md`.
 | [`error-copy.md`](error-copy.md) | Stripe-style `message` — product copy appendix |
 | [`container-labels.md`](container-labels.md) | Docker labels (optional collector scrape) |
 | [`health-checks.md`](health-checks.md) | Health check endpoints |
-| [`naming-conventions.md`](naming-conventions.md) | Service names, terminology, paths, headers |
+| [`naming-conventions.md`](naming-conventions.md) | Service names, terminology, paths, subject |
 | [`telemetry.md`](telemetry.md) | Logs, traces, metrics (stdout, scrape, OTLP) |
 
 ## Identity and edge
@@ -27,7 +27,7 @@ Per-service details live in each service's `README.md`.
 | Document | Purpose |
 |----------|---------|
 | [`identity-boundary.md`](identity-boundary.md) | **Start here.** Subjects, layers, what not to mix |
-| [`gateway-contract.md`](gateway-contract.md) | Auth delegation, scope headers, perimeter, TLS, service rules |
+| [`gateway-contract.md`](gateway-contract.md) | Auth delegation, subject fill, perimeter, TLS, service rules |
 | [`idp-contract.md`](idp-contract.md) | BYO IdP, JWKS, user-id claim mapping |
 | [`routes.md`](routes.md) | Route publishing, scopes, `route_prefix`, rate-limit policies |
 | [`route-registry.md`](route-registry.md) | Desired state (Postgres) + etcd projection |

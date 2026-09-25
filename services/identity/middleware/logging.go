@@ -33,9 +33,6 @@ func RequestLogger(telem *telemetry.Telemetry) fiber.Handler {
 			span := trace.SpanFromContext(c.Context())
 			span.SetAttributes(attribute.String("request_id", requestID))
 		}
-		if userID := c.Get("X-User-Id"); userID != "" {
-			reqLogger = reqLogger.With().Str("user_id", userID).Logger()
-		}
 		c.SetContext(reqLogger.WithContext(c.Context()))
 
 		err := c.Next()
