@@ -22,6 +22,7 @@ Read the doc, don’t re-derive:
 | Service accounts are members with keys | identity.md |
 | A service account lives in exactly one org | identity.md |
 | User keys and member keys are two products (prefix + table + validate URL) | identity.md |
+| Member sessions are not member keys (own prefix, table, validate URL). Validate does not return `user_id` | identity.md |
 | Add member by known `user_id` (immediate `active`) or invite redeem | identity.md |
 | Unknown id is **404**. Gateway org-context: non-member / inactive → **404** | identity-boundary |
 | Missing expected identity headers → **500** (gateway bug), not 401 | identity-boundary |
@@ -48,6 +49,7 @@ Do not add these because they would be convenient:
 - Multi-org service accounts (`home_organization_id`, SA member in a second org)
 - Org `settings` / platform config bag
 - A role column, or getting a user id from `member_id` for org-scope apps
+- Folding member sessions into `member_api_keys`, or returning `user_id` from session validate
 - Treating omitted identity routes as “feature off” (the process still serves them on the network)
 - Auto-merge of new identity paths into existing operator YAML
 - Shared `route-config` crate until a third consumer exists (two copies are deliberate)

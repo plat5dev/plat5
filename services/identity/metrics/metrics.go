@@ -20,19 +20,21 @@ const (
 )
 
 var (
-	initOnce        sync.Once
-	requestDuration *prometheus.HistogramVec
-	requestsTotal   *prometheus.CounterVec
-	orgsCreated     prometheus.Counter
-	memberOps       *prometheus.CounterVec
-	inviteOps       *prometheus.CounterVec
-	resolveTotal    *prometheus.CounterVec
-	keysCreated     *prometheus.CounterVec
-	keysRevoked     *prometheus.CounterVec
-	keysValidated   *prometheus.CounterVec
-	dbOpsTotal      *prometheus.CounterVec
-	dbOpsErrors     *prometheus.CounterVec
-	dbOpsDuration   *prometheus.HistogramVec
+	initOnce          sync.Once
+	requestDuration   *prometheus.HistogramVec
+	requestsTotal     *prometheus.CounterVec
+	orgsCreated       prometheus.Counter
+	memberOps         *prometheus.CounterVec
+	inviteOps         *prometheus.CounterVec
+	resolveTotal      *prometheus.CounterVec
+	keysCreated       *prometheus.CounterVec
+	keysRevoked       *prometheus.CounterVec
+	keysValidated     *prometheus.CounterVec
+	sessionsCreated   prometheus.Counter
+	sessionsValidated *prometheus.CounterVec
+	dbOpsTotal        *prometheus.CounterVec
+	dbOpsErrors       *prometheus.CounterVec
+	dbOpsDuration     *prometheus.HistogramVec
 )
 
 // Init registers service metrics on the default Prometheus registry.
@@ -85,6 +87,16 @@ func Init() {
 			Help: "API key validate outcomes",
 		}, []string{"key_scope", "valid"})
 
+		sessionsCreated = prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "member_sessions_created_total",
+			Help: "Total member sessions minted",
+		})
+
+		sessionsValidated = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "member_sessions_validated_total",
+			Help: "Member session validate outcomes",
+		}, []string{"valid"})
+
 		dbLabels := []string{"db_system_name", "db_operation_name", "db_namespace"}
 
 		dbOpsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -113,6 +125,8 @@ func Init() {
 			keysCreated,
 			keysRevoked,
 			keysValidated,
+			sessionsCreated,
+			sessionsValidated,
 			dbOpsTotal,
 			dbOpsErrors,
 			dbOpsDuration,
@@ -170,6 +184,16 @@ func RecordKeyRevoked(keyScope string) {
 func RecordKeyValidation(keyScope string, valid bool) {
 	Init()
 	keysValidated.WithLabelValues(keyScope, fmt.Sprintf("%t", valid)).Inc()
+}
+
+func RecordSessionCreated() {
+	Init()
+	sessionsCreated.Inc()
+}
+
+func RecordSessionValidation(valid bool) {
+	Init()
+	sessionsValidated.WithLabelValues(fmt.Sprintf("%t", valid)).Inc()
 }
 
 func RecordDBOperation(operation string, duration time.Duration, err error) {

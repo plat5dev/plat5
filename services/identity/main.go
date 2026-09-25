@@ -21,6 +21,7 @@ import (
 	"github.com/plat5dev/plat5/identity/metrics"
 	"github.com/plat5dev/plat5/identity/middleware"
 	"github.com/plat5dev/plat5/identity/orgs"
+	"github.com/plat5dev/plat5/identity/sessions"
 	"github.com/plat5dev/plat5/identity/telemetry"
 	"github.com/plat5dev/plat5/identity/userkeys"
 )
@@ -54,9 +55,10 @@ func main() {
 	orgHandler := orgs.NewHandler(orgStore)
 	userKeyHandler := userkeys.NewHandler(userkeys.NewStore(pool), cfg.UserKeyPrefix)
 	memberKeyHandler := memberkeys.NewHandler(memberkeys.NewStore(pool), orgStore, cfg.MemberKeyPrefix)
+	sessionHandler := sessions.NewHandler(sessions.NewStore(pool), orgStore, cfg.SessionPrefix)
 
-	app := newPublicApp(telem, orgHandler, userKeyHandler, memberKeyHandler)
-	internalApp := newInternalApp(telem, pool, cfg.InternalAuthToken, orgHandler, userKeyHandler, memberKeyHandler)
+	app := newPublicApp(telem, orgHandler, userKeyHandler, memberKeyHandler, sessionHandler)
+	internalApp := newInternalApp(telem, pool, cfg.InternalAuthToken, orgHandler, userKeyHandler, memberKeyHandler, sessionHandler)
 
 	baseLogger := telem.Logger()
 	baseLogger.Info().
@@ -107,6 +109,7 @@ func newPublicApp(
 	orgHandler *orgs.Handler,
 	userKeyHandler *userkeys.Handler,
 	memberKeyHandler *memberkeys.Handler,
+	sessionHandler *sessions.Handler,
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName:      "identity",
@@ -124,6 +127,7 @@ func newPublicApp(
 	users := app.Group("/users")
 	orgHandler.MountUser(users)
 	userKeyHandler.MountPublic(users)
+	sessionHandler.MountPublic(users)
 
 	orgHandler.MountOrganizations(app)
 
@@ -140,6 +144,7 @@ func newInternalApp(
 	orgHandler *orgs.Handler,
 	userKeyHandler *userkeys.Handler,
 	memberKeyHandler *memberkeys.Handler,
+	sessionHandler *sessions.Handler,
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName:      "identity-internal",
@@ -174,5 +179,6 @@ func newInternalApp(
 	orgHandler.MountInternal(internalAPI)
 	userKeyHandler.MountInternal(internalAPI)
 	memberKeyHandler.MountInternal(internalAPI)
+	sessionHandler.MountInternal(internalAPI)
 	return app
 }

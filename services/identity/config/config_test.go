@@ -53,6 +53,9 @@ func TestWirePrefixes(t *testing.T) {
 	if g := memberAPIKeyPrefix("acme"); g != "acme-mk-1-" {
 		t.Fatalf("member: %q", g)
 	}
+	if g := memberSessionPrefix("plat5"); g != "plat5-ms-1-" {
+		t.Fatalf("session: %q", g)
+	}
 }
 
 func TestLoadIgnoresSMTP(t *testing.T) {

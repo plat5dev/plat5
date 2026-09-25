@@ -13,7 +13,7 @@ Formats and terminology for labels, routes, metrics, and error codes across Plat
 
 ### Scope of Plat5
 
-Plat5 owns **opaque user ids** (as strings from the gateway), API keys, organizations, members, service accounts, route registry, and the user-facing gateway. Login and the user directory are the IdP. Resource permissions are the service behind the gateway. See [`identity-boundary.md`](identity-boundary.md).
+Plat5 owns **opaque user ids** (as strings from the gateway), API keys, member sessions, organizations, members, service accounts, route registry, and the user-facing gateway. Login and the user directory are the IdP. Resource permissions are the service behind the gateway. See [`identity-boundary.md`](identity-boundary.md).
 
 ### Identity domain nouns
 
@@ -24,6 +24,7 @@ Plat5 owns **opaque user ids** (as strings from the gateway), API keys, organiza
 | Org principal | **Member** | User *or* service account in an org; wire id `member_id` |
 | Non-human org identity | **Service account** | Created under an organization; always has a member row |
 | Credential | **API key** | User-scoped or member-scoped |
+| Short-lived org credential | **Member session** | One active user member, one org. Not an API key. |
 
 **Rejected service names:** `org-service`, `orgs`, `tenants`, `tenancy`, `memberships` (alone), `rbac`, `authz`, `accounts`, `api-keys` (as a standalone platform service).
 

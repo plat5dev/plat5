@@ -13,6 +13,7 @@ Contract: [`docs/identity.md`](../../docs/identity.md)
 | `orgs/` | Organizations, members, invites, service accounts |
 | `userkeys/` | User API keys (`{brand}-sk-1-`) |
 | `memberkeys/` | Member API keys (`{brand}-mk-1-`) |
+| `sessions/` | Member sessions (`{brand}-ms-1-`). Not in `routes.yml`. |
 
 `APIKEY_BRAND` (default `plat5`) must match the gateway.
 

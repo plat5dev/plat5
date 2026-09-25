@@ -1,6 +1,6 @@
 # Identity service
 
-Plat5 **identity** service: organizations, members, invites, service accounts, API keys, and internal auth helpers for the gateway.
+Plat5 **identity** service: organizations, members, invites, service accounts, API keys, member sessions, and internal auth helpers for the gateway.
 
 Boundary: [`identity-boundary.md`](identity-boundary.md). Errors: [`api-errors.md`](api-errors.md), [`error-copy.md`](error-copy.md). Lists: [`lists.md`](lists.md).
 
@@ -29,6 +29,7 @@ Public routes are not auto-published. The process still serves them on the publi
 | **member** | Org principal. Exactly one of: a **user** or a **service account**. Wire id: `member_id`. |
 | **service account** | Non-human identity created **under an organization**. Always has a member row in that org. |
 | **api key** | Bearer secret. Either **user-scoped** or **member-scoped**. Optional `scopes` labels: a restricted key (non-null list) must intersect route `required_scopes`; unlabeled routes still admit. |
+| **member session** | Short-lived credential for one active user member in one org. Opaque token. Not an API key. |
 | **membership** | A user's member row in an org, with that org. Not a table. Wire resource for which orgs this person belongs to. |
 | **invite** | Org join token (`active` / `redeemed` / `revoked` / `expired`). Redeem inserts an **active** member. The host sends any email. |
 
@@ -272,6 +273,33 @@ Missing or `removed` member → **404**. A `suspended` member is addressable. Va
 
 Member keys are a **separate product surface** from user keys: different table (`member_api_keys`), different plaintext prefix (`{brand}-mk-1-` vs `{brand}-sk-1-`), different validate endpoint. Both use the `X-API-Key` header. Hashing at rest is SHA-256 hex. List may include revoked keys (`revoked_at` set).
 
+### Member sessions
+
+Short-lived credential for one **active user member** in one org. Not a member API key: different table (`member_sessions`), different plaintext prefix (`{brand}-ms-1-`), different validate endpoint. No name, no list, no revoke. Minting another session does not invalidate older ones. They expire.
+
+TTL is **1 hour**. Not boot config.
+
+Who may call is the proxy. A user JWT and a user API key are the same proof. Identity does not see which one. The path `user_id` is the subject. A service account does not mint a session. It uses a member key.
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `POST` | `/users/{user_id}/organizations/{organization_id}/session` | No body. **201** returns the token once. Not an active member of that org (missing, `suspended`, `removed`, unknown org) → **404**. |
+
+Empty `user_id` or `organization_id` → **422**. `user_id` longer than 128 → **422**.
+
+#### Mint response
+
+```json
+{
+  "token": "{brand}-ms-1-…",
+  "expires_at": "...",
+  "member_id": "...",
+  "organization_id": "..."
+}
+```
+
+No `user_id`. No `scopes`. Hashing at rest is SHA-256 hex. Plaintext is returned once.
+
 ### API key brand
 
 `APIKEY_BRAND` is boot config on **identity and the gateway**. Same value on both. Unset → `plat5`. Empty-but-set → refuse boot.
@@ -281,10 +309,11 @@ Member keys are a **separate product surface** from user keys: different table (
 | Brand | `[a-z][a-z0-9]*`, max 32. Lowercase only — no folding. |
 | User wire prefix | `{brand}-sk-1-` |
 | Member wire prefix | `{brand}-mk-1-` |
+| Member session wire prefix | `{brand}-ms-1-` |
 
-`sk`, `mk`, and `1` are fixed. One brand for the process, read at boot.
+`sk`, `mk`, `ms`, and `1` are fixed. One brand for the process, read at boot.
 
-Changing brand does not rewrite stored keys. Old plaintext no longer matches; those rows cannot authenticate.
+Changing brand does not rewrite stored secrets. Old plaintext no longer matches; those rows cannot authenticate.
 
 ## Status
 
@@ -304,7 +333,7 @@ Not published on the gateway. Served only on **`INTERNAL_PORT`**. Optional `INTE
 
 Gateway env: `USER_APIKEY_VALIDATE_URL`, `MEMBER_APIKEY_VALIDATE_URL`, `MEMBER_RESOLVE_URL`, same `INTERNAL_AUTH_TOKEN`, same `APIKEY_BRAND`. All three URLs are required to boot.
 
-There is **no** combined key validate and **no** `key_type`. Gateway picks the endpoint from the key’s wire prefix before calling identity.
+There is **no** combined key validate and **no** `key_type`. Gateway picks the endpoint from the credential’s wire prefix before calling identity.
 
 ### User API key validate
 
@@ -378,6 +407,23 @@ Gateway caches active hits and 404 / inactive misses (`MEMBER_CACHE_TTL_SECS`, d
 
 Member API keys do **not** use this endpoint for admission: validate already returns `member_id` + `organization_id`.
 
+### Member session validate
+
+```
+POST /internal/member-sessions/validate
+Content-Type: application/json
+X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
+
+{ "token": "{brand}-ms-1-…" }
+```
+
+| Result | Response |
+|--------|----------|
+| Unexpired session, member `active` | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "scopes": null }` |
+| Wrong prefix / missing / expired / member not `active` / unknown | **200** `{ "valid": false }` |
+
+No `user_id`. `scopes` is null (unrestricted). Caller env name: `MEMBER_SESSION_VALIDATE_URL`. The gateway does not read it.
+
 ## Data model (logical)
 
 ```
@@ -397,11 +443,13 @@ user_api_keys          -- person credentials; wire {brand}-sk-1-
   user_id, name, key_prefix, key_hash, scopes, revoked_at, …
 member_api_keys        -- member credentials; wire {brand}-mk-1-
   member_id, name, key_prefix, key_hash, scopes, revoked_at, …
+member_sessions        -- short-lived user-member credential; wire {brand}-ms-1-
+  member_id, token_prefix, token_hash, expires_at, …
 ```
 
-`scopes` is `TEXT[]`. SQL `NULL` = unrestricted. Empty array = restricted, no labels (same rule as mint).
+`scopes` is `TEXT[]` on key tables. SQL `NULL` = unrestricted. Empty array = restricted, no labels (same rule as mint). `member_sessions` has no `scopes` column. Validate returns `scopes: null`.
 
-Independent tables, independent packages (`userkeys` / `memberkeys`), independent validate endpoints. Not one polymorphic key system.
+Independent tables, independent packages (`userkeys` / `memberkeys` / `sessions`), independent validate endpoints. Not one polymorphic credential system.
 
 No IdP user table and no FK to an external directory. `user_id` values are opaque strings.
 
@@ -440,4 +488,8 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - Key `scopes` as deny-all, or default-deny on unlabeled routes
 - Gateway `organization` scope on this service’s public routes
 - Auto-publishing these public routes — the operator applies a catalog
-- Configurable `sk` / `mk` / `1`, independent full-prefix env vars, or dual-brand key accept
+- Configurable `sk` / `mk` / `ms` / `1`, independent full-prefix env vars, or dual-brand key accept
+- Member session refresh, list, revoke, or a TTL env
+- Putting a member session in `member_api_keys`
+- `user_id` on session validate
+- A `scopes` field on session mint

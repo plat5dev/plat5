@@ -25,6 +25,7 @@ type Config struct {
 	APIKeyBrand       string
 	UserKeyPrefix     string
 	MemberKeyPrefix   string
+	SessionPrefix     string
 }
 
 func Load() (Config, error) {
@@ -40,6 +41,7 @@ func Load() (Config, error) {
 		APIKeyBrand:       brand,
 		UserKeyPrefix:     userAPIKeyPrefix(brand),
 		MemberKeyPrefix:   memberAPIKeyPrefix(brand),
+		SessionPrefix:     memberSessionPrefix(brand),
 	}, nil
 }
 
@@ -75,6 +77,10 @@ func userAPIKeyPrefix(brand string) string {
 
 func memberAPIKeyPrefix(brand string) string {
 	return brand + "-mk-1-"
+}
+
+func memberSessionPrefix(brand string) string {
+	return brand + "-ms-1-"
 }
 
 func envOr(key, fallback string) string {
