@@ -106,12 +106,8 @@ func TestGenerateAndHashInviteToken(t *testing.T) {
 
 func TestCreateMemberKeepsAddByUserID(t *testing.T) {
 	t.Parallel()
-	req := CreateMemberRequest{UserID: "user_known", Role: "member"}
+	req := CreateMemberRequest{UserID: "user_known"}
 	if req.UserID == "" {
 		t.Fatal("POST members add-by-user_id must remain")
-	}
-	owner := member("a", "u1", RoleOwner, StatusActive)
-	if err := CanCreateMember(owner, RoleMember, "org"); err != nil {
-		t.Fatal(err)
 	}
 }

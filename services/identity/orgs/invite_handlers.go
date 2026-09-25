@@ -11,11 +11,10 @@ import (
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/metrics"
-	"github.com/plat5dev/plat5/identity/middleware"
 )
 
 type inviteStore interface {
-	GetActiveMemberForUser(ctx context.Context, organizationID, userID string) (*Member, error)
+	OrganizationExists(ctx context.Context, organizationID string) (bool, error)
 	CreateInvite(ctx context.Context, inv *Invite) error
 	ListInvites(ctx context.Context, organizationID string, limit int, startingAfter string) ([]*Invite, bool, error)
 	RevokeInvite(ctx context.Context, organizationID, inviteID string) (*Invite, error)
@@ -30,15 +29,14 @@ func (h *Handler) inviteStore() inviteStore {
 }
 
 type CreateInviteRequest struct {
-	Role             string `json:"role"`
-	Email            string `json:"email"`
-	ExpiresInSeconds *int   `json:"expires_in_seconds"`
+	Email            string  `json:"email"`
+	ExpiresInSeconds *int    `json:"expires_in_seconds"`
+	CreatedBy        *string `json:"created_by"`
 }
 
 type InviteResponse struct {
 	ID             string  `json:"id"`
 	OrganizationID string  `json:"organization_id"`
-	Role           string  `json:"role"`
 	Email          *string `json:"email"`
 	TokenPrefix    string  `json:"token_prefix"`
 	Token          string  `json:"token,omitempty"`
@@ -46,7 +44,7 @@ type InviteResponse struct {
 	MaxUses        *int    `json:"max_uses"`
 	UseCount       int     `json:"use_count"`
 	ExpiresAt      string  `json:"expires_at"`
-	CreatedBy      string  `json:"created_by"`
+	CreatedBy      *string `json:"created_by"`
 	CreatedAt      string  `json:"created_at"`
 }
 
@@ -59,15 +57,15 @@ type RedeemInviteRequest struct {
 	Token string `json:"token"`
 }
 
-func (h *Handler) requireInviteActor(ctx context.Context, orgID, userID string) (*Member, error) {
-	m, err := h.inviteStore().GetActiveMemberForUser(ctx, orgID, userID)
+func (h *Handler) requireInviteOrg(ctx context.Context, orgID string) error {
+	ok, err := h.inviteStore().OrganizationExists(ctx, orgID)
 	if err != nil {
-		if stderrors.Is(err, ErrNotFound) {
-			return nil, errors.NotFoundError("organization", orgID)
-		}
-		return nil, httpx.MapDB(ctx, err, "failed to load member", httpx.DBErr{})
+		return httpx.MapDB(ctx, err, "failed to get organization", httpx.DBErr{})
 	}
-	return m, nil
+	if !ok {
+		return errors.NotFoundError("organization", orgID)
+	}
+	return nil
 }
 
 func inviteConflict(status InviteStatus) error {
@@ -83,11 +81,9 @@ func inviteConflict(status InviteStatus) error {
 
 func (h *Handler) CreateInvite(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
+	orgID := httpx.PathParam(c, "organization_id")
 
-	actor, err := h.requireInviteActor(ctx, orgID, userID)
-	if err != nil {
+	if err := h.requireInviteOrg(ctx, orgID); err != nil {
 		return err
 	}
 
@@ -98,11 +94,8 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 		}
 	}
 
-	role, err := ParseRole(req.Role, RoleMember)
+	createdBy, err := optionalUserID(req.CreatedBy, "created_by")
 	if err != nil {
-		return err
-	}
-	if err := CanCreateMember(actor, role, orgID); err != nil {
 		return err
 	}
 
@@ -129,7 +122,6 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 	inv := &Invite{
 		ID:             NewULID(),
 		OrganizationID: orgID,
-		Role:           role,
 		Email:          email,
 		Token:          &plaintext,
 		TokenHash:      HashInviteToken(plaintext),
@@ -137,7 +129,7 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 		Status:         InviteStatusActive,
 		MaxUses:        maxUses,
 		UseCount:       0,
-		CreatedBy:      userID,
+		CreatedBy:      createdBy,
 		ExpiresAt:      now.Add(ttl),
 		CreatedAt:      now,
 	}
@@ -152,11 +144,9 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 
 func (h *Handler) ListInvites(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
+	orgID := httpx.PathParam(c, "organization_id")
 
-	actor, err := h.requireInviteActor(ctx, orgID, userID)
-	if err != nil {
+	if err := h.requireInviteOrg(ctx, orgID); err != nil {
 		return err
 	}
 
@@ -170,35 +160,26 @@ func (h *Handler) ListInvites(c fiber.Ctx) error {
 		return httpx.MapDB(ctx, err, "failed to list invites", httpx.DBErr{})
 	}
 
-	includeToken := actor.Role == RoleAdmin || actor.Role == RoleOwner
 	out := ListInvitesResponse{
 		Invites: make([]InviteResponse, 0, len(list)),
 		HasMore: hasMore,
 	}
 	for _, inv := range list {
-		out.Invites = append(out.Invites, toInviteResponse(inv, includeToken))
+		out.Invites = append(out.Invites, toInviteResponse(inv, true))
 	}
 	return c.JSON(out)
 }
 
 func (h *Handler) RevokeInvite(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
+	orgID := httpx.PathParam(c, "organization_id")
 	inviteID := c.Params("invite_id")
 
-	actor, err := h.requireInviteActor(ctx, orgID, userID)
-	if err != nil {
-		return err
-	}
-	if err := RequireAdminOrOwner(actor, "invite.revoke", "invite", inviteID); err != nil {
-		return err
-	}
 	if inviteID == "" {
 		return errors.FieldError("invite_id", errors.FallbackValidation)
 	}
 
-	_, err = h.inviteStore().RevokeInvite(ctx, orgID, inviteID)
+	_, err := h.inviteStore().RevokeInvite(ctx, orgID, inviteID)
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to revoke invite", httpx.DBErr{
 			NotFound: ErrNotFound, Resource: "invite", ResourceID: inviteID,
@@ -210,7 +191,7 @@ func (h *Handler) RevokeInvite(c fiber.Ctx) error {
 }
 
 func (h *Handler) RedeemInvite(c fiber.Ctx) error {
-	userID := middleware.GetUserID(c)
+	userID := httpx.PathParam(c, "user_id")
 
 	var req RedeemInviteRequest
 	if err := c.Bind().Body(&req); err != nil {
@@ -245,7 +226,6 @@ func toInviteResponse(inv *Invite, includeToken bool) InviteResponse {
 	out := InviteResponse{
 		ID:             inv.ID,
 		OrganizationID: inv.OrganizationID,
-		Role:           string(inv.Role),
 		Email:          inv.Email,
 		TokenPrefix:    inv.TokenPrefix,
 		Status:         string(inv.Status),

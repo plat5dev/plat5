@@ -121,16 +121,15 @@ func newPublicApp(
 	))
 	app.Use(middleware.RequestLogger(telem))
 
-	user := app.Group("/api/user", middleware.RequireUserID())
-	orgHandler.MountMemberships(user)
-	userKeyHandler.MountPublic(user)
+	users := app.Group("/users")
+	orgHandler.MountUser(users)
+	userKeyHandler.MountPublic(users)
 
-	orgHandler.MountDirectory(app.Group("/api"))
+	orgHandler.MountOrganizations(app)
 
-	orgsGroup := app.Group("/api/organizations", middleware.RequireUserID())
-	orgHandler.MountPublic(orgsGroup)
-	memberKeyHandler.MountPublic(orgsGroup)
-	orgHandler.MountRedeem(app.Group("/api/invites", middleware.RequireUserID()))
+	members := app.Group("/members")
+	orgHandler.MountMembers(members)
+	memberKeyHandler.MountPublic(members)
 	return app
 }
 

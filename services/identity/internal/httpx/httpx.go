@@ -22,6 +22,12 @@ const (
 	MaxListLimit     = 100
 )
 
+// PathParam copies a route parameter. Fiber's param strings alias the request
+// buffer, which is reused on the next request.
+func PathParam(c fiber.Ctx, name string) string {
+	return strings.Clone(c.Params(name))
+}
+
 func ParseListParams(c fiber.Ctx) (limit int, startingAfter string, err error) {
 	limit = DefaultListLimit
 	if v := strings.TrimSpace(c.Query("limit")); v != "" {

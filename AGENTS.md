@@ -16,15 +16,14 @@ Read the doc, don’t re-derive:
 
 | Invariant | Where |
 |-----------|--------|
-| Authn / org context / resource authz / org admin are separate layers | [`docs/identity-boundary.md`](docs/identity-boundary.md) |
+| Authn / org context / resource authz are separate layers. Who may call identity is the proxy | [`docs/identity-boundary.md`](docs/identity-boundary.md) |
 | One subject per scope; org routes get org + member headers only | same + [`docs/gateway-contract.md`](docs/gateway-contract.md) |
-| Identity public API is **`user` scope** — never behind its own org admission | [`docs/identity.md`](docs/identity.md) |
-| Role stays in identity. Org-scope routes do not receive it | identity-boundary |
+| Identity is a function of the URL. No caller header, no roles. Not behind its own org admission | [`docs/identity.md`](docs/identity.md) |
 | Service accounts are members with keys | identity.md |
 | A service account lives in exactly one org | identity.md |
 | User keys and member keys are two products (prefix + table + validate URL) | identity.md |
 | Add member by known `user_id` (immediate `active`) or invite redeem | identity.md |
-| Existence: unknown org / non-member / inactive → **404** | identity-boundary |
+| Unknown id is **404**. Gateway org-context: non-member / inactive → **404** | identity-boundary |
 | Missing expected identity headers → **500** (gateway bug), not 401 | identity-boundary |
 | JWT / IdP required to boot. API keys are an alternative credential | [`docs/idp-contract.md`](docs/idp-contract.md) |
 | Identity **public** routes are operator-owned. Apply the catalog (or a subset) | [`docs/routes.md`](docs/routes.md), [`services/identity/routes.yml`](services/identity/routes.yml) |
@@ -48,7 +47,7 @@ Do not add these because they would be convenient:
 - Global / platform admin service accounts
 - Multi-org service accounts (`home_organization_id`, SA member in a second org)
 - Org `settings` / platform config bag
-- Get role or user by `member_id` for org-scope apps
+- A role column, or getting a user id from `member_id` for org-scope apps
 - Treating omitted identity routes as “feature off” (the process still serves them on the network)
 - Auto-merge of new identity paths into existing operator YAML
 - Shared `route-config` crate until a third consumer exists (two copies are deliberate)

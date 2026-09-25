@@ -17,23 +17,6 @@ const (
 	PrincipalServiceAccount = "service_account"
 )
 
-type Role string
-
-const (
-	RoleMember Role = "member"
-	RoleAdmin  Role = "admin"
-	RoleOwner  Role = "owner"
-)
-
-func (r Role) Valid() bool {
-	switch r {
-	case RoleMember, RoleAdmin, RoleOwner:
-		return true
-	default:
-		return false
-	}
-}
-
 type Status string
 
 const (
@@ -63,7 +46,6 @@ type Organization struct {
 // Not a table. Active user memberships only.
 type Membership struct {
 	ID               string
-	Role             Role
 	Status           Status
 	OrganizationID   string
 	OrganizationName string
@@ -76,7 +58,6 @@ type Member struct {
 	OrganizationID   string
 	UserID           *string
 	ServiceAccountID *string
-	Role             Role
 	Status           Status
 	AddedBy          *string
 	CreatedAt        time.Time
@@ -102,10 +83,6 @@ func (m *Member) Principal() string {
 		return PrincipalServiceAccount
 	}
 	return PrincipalUser
-}
-
-func (m *Member) IsUser(userID string) bool {
-	return m.UserID != nil && *m.UserID == userID
 }
 
 func NewULID() string {

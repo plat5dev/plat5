@@ -5,11 +5,11 @@ import (
 
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
-	"github.com/plat5dev/plat5/identity/middleware"
 )
 
 type CreateServiceAccountRequest struct {
-	Name string `json:"name"`
+	Name            string  `json:"name"`
+	CreatedByUserID *string `json:"created_by_user_id"`
 }
 
 type UpdateServiceAccountRequest struct {
@@ -34,16 +34,7 @@ type ListServiceAccountsResponse struct {
 
 func (h *Handler) CreateServiceAccount(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
-
-	actor, err := h.requireActiveMember(ctx, orgID, userID)
-	if err != nil {
-		return err
-	}
-	if err := RequireAdminOrOwner(actor, "service_account.create", "organization", orgID); err != nil {
-		return err
-	}
+	orgID := httpx.PathParam(c, "organization_id")
 
 	var req CreateServiceAccountRequest
 	if err := c.Bind().Body(&req); err != nil {
@@ -53,15 +44,17 @@ func (h *Handler) CreateServiceAccount(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	createdBy, err := optionalUserID(req.CreatedByUserID, "created_by_user_id")
+	if err != nil {
+		return err
+	}
 
 	sa := &ServiceAccount{
-		ID:              NewULID(),
-		OrganizationID:  orgID,
-		Name:            name,
-		CreatedByUserID: &userID,
+		ID:             NewULID(),
+		OrganizationID: orgID,
+		Name:           name,
 	}
-	addedBy := userID
-	if _, err := h.store.CreateServiceAccount(ctx, sa, RoleMember, &addedBy); err != nil {
+	if _, err := h.store.CreateServiceAccount(ctx, sa, createdBy); err != nil {
 		return httpx.MapDB(ctx, err, "failed to create service account", httpx.DBErr{
 			NotFound: ErrNotFound, Resource: "organization", ResourceID: orgID,
 		})
@@ -71,10 +64,9 @@ func (h *Handler) CreateServiceAccount(c fiber.Ctx) error {
 
 func (h *Handler) ListServiceAccounts(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
+	orgID := httpx.PathParam(c, "organization_id")
 
-	if _, err := h.requireActiveMember(ctx, orgID, userID); err != nil {
+	if err := h.requireOrganization(ctx, orgID); err != nil {
 		return err
 	}
 
@@ -100,13 +92,8 @@ func (h *Handler) ListServiceAccounts(c fiber.Ctx) error {
 
 func (h *Handler) GetServiceAccount(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
+	orgID := httpx.PathParam(c, "organization_id")
 	saID := c.Params("service_account_id")
-
-	if _, err := h.requireActiveMember(ctx, orgID, userID); err != nil {
-		return err
-	}
 
 	sa, err := h.store.GetServiceAccount(ctx, orgID, saID)
 	if err != nil {
@@ -119,17 +106,8 @@ func (h *Handler) GetServiceAccount(c fiber.Ctx) error {
 
 func (h *Handler) UpdateServiceAccount(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
+	orgID := httpx.PathParam(c, "organization_id")
 	saID := c.Params("service_account_id")
-
-	actor, err := h.requireActiveMember(ctx, orgID, userID)
-	if err != nil {
-		return err
-	}
-	if err := RequireAdminOrOwner(actor, "service_account.update", "service_account", saID); err != nil {
-		return err
-	}
 
 	var req UpdateServiceAccountRequest
 	if err := c.Bind().Body(&req); err != nil {
@@ -154,17 +132,8 @@ func (h *Handler) UpdateServiceAccount(c fiber.Ctx) error {
 
 func (h *Handler) DeleteServiceAccount(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
+	orgID := httpx.PathParam(c, "organization_id")
 	saID := c.Params("service_account_id")
-
-	actor, err := h.requireActiveMember(ctx, orgID, userID)
-	if err != nil {
-		return err
-	}
-	if err := RequireAdminOrOwner(actor, "service_account.delete", "service_account", saID); err != nil {
-		return err
-	}
 
 	if err := h.store.DeleteServiceAccount(ctx, orgID, saID); err != nil {
 		return httpx.MapDB(ctx, err, "failed to delete service account", httpx.DBErr{

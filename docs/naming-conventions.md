@@ -23,7 +23,6 @@ Plat5 owns **opaque user ids** (as strings from the gateway), API keys, organiza
 | Isolation boundary | **Organization** | Do not call it tenant. |
 | Org principal | **Member** | User *or* service account in an org; wire id `member_id` |
 | Non-human org identity | **Service account** | Created under an organization; always has a member row |
-| Member role | Identity service domain | Org admin APIs only — not gateway identity or org-scope headers |
 | Credential | **API key** | User-scoped or member-scoped |
 
 **Rejected service names:** `org-service`, `orgs`, `tenants`, `tenancy`, `memberships` (alone), `rbac`, `authz`, `accounts`, `api-keys` (as a standalone platform service).
@@ -53,7 +52,7 @@ When changing labels: update compose labels and `OTEL_SERVICE_NAMESPACE` togethe
 
 - `kebab-case` path segments: `/api/user-profiles`
 - Prefix by surface — **no path version segment**:
-  - Authenticated API: `/api/...`
+  - Authenticated API: `/api/...` (identity is the exception: no `/api`; the first segment is the subject)
   - Public API: `/public/...`
   - Internal (private network, not on the gateway): `/internal/...`
 - Resource names are plural nouns: `/widgets`, `/users`, `/organizations`, `/members`
@@ -66,13 +65,20 @@ When changing labels: update compose labels and `OTEL_SERVICE_NAMESPACE` togethe
 
 ### Path patterns (identity)
 
+Identity has no `/api` prefix. The first path segment is the subject.
+
+| Surface | Pattern |
+|---------|---------|
+| User | `/users/{user_id}/...` |
+| Organization | `/organizations/{organization_id}/...` |
+| Member | `/members/{member_id}/...` |
+| Internal (not on the gateway) | `/internal/user-keys/validate`, `/internal/member-keys/validate`, `/internal/members/resolve` |
+
+Business APIs stay under `/api/...`. Gateway `user` scope still injects `X-User-Id` and does not put `{user_id}` in the path. That is the edge, not identity.
+
 | Surface | Pattern | Route scope |
 |---------|---------|-------------|
-| Identity service (authority) | `/api/user/...`, `/api/organizations/...` | **`user`** for catalog routes |
-
-`user` is a scope prefix for the person in `X-User-Id`, not a collection. No `{user_id}`. Resources under it are plural (`memberships`, `api-keys`).
 | Business APIs under an org | e.g. `/api/organizations/{organization_id}/projects` | **`organization`** |
-| Internal control (not on gateway) | `/internal/user-keys/validate`, `/internal/member-keys/validate`, `/internal/members/resolve` | private / `INTERNAL_PORT` |
 
 Scopes and headers: [`gateway-contract.md`](gateway-contract.md). Full identity API: [`identity.md`](identity.md).
 
@@ -86,7 +92,7 @@ Headers are **scope-specific**. Gateway strips client-supplied identity headers,
 | `user` | `X-User-Id` only |
 | `organization` | `X-Organization-Id`, `X-Member-Id` only — **not** `X-User-Id` |
 
-Member **role** stays in identity. Always (all scopes): `X-Request-ID`, `traceparent`.
+Always (all scopes): `X-Request-ID`, `traceparent`. Identity has no role to inject.
 
 ## Log Fields
 

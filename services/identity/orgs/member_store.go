@@ -5,47 +5,24 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 )
 
-func (s *Store) GetMember(ctx context.Context, organizationID, memberID string) (*Member, error) {
+func (s *Store) GetMember(ctx context.Context, memberID string) (*Member, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "get_member", dbx.DefaultTimeout,
-		attribute.String("organization.id", organizationID),
 		attribute.String("member.id", memberID),
 	)
 	defer cancel()
 	defer op.End()
 
 	m, err := scanMember(s.pool.QueryRow(ctx, `
-		SELECT id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at
+		SELECT `+memberCols+`
 		FROM members
-		WHERE organization_id = $1 AND id = $2
-	`, organizationID, memberID))
-	if err != nil {
-		if dbx.IsNoRows(err) {
-			return nil, op.Expected("not found", ErrNotFound)
-		}
-		return nil, op.Fail(err)
-	}
-	op.OK("ok")
-	return m, nil
-}
-
-func (s *Store) GetActiveMemberForUser(ctx context.Context, organizationID, userID string) (*Member, error) {
-	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "get_active_member_for_user", dbx.DefaultTimeout,
-		attribute.String("organization.id", organizationID),
-		attribute.String("user.id", userID),
-	)
-	defer cancel()
-	defer op.End()
-
-	m, err := scanMember(s.pool.QueryRow(ctx, `
-		SELECT id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at
-		FROM members
-		WHERE organization_id = $1 AND user_id = $2 AND status = 'active'
-	`, organizationID, userID))
+		WHERE id = $1
+	`, memberID))
 	if err != nil {
 		if dbx.IsNoRows(err) {
 			return nil, op.Expected("not found", ErrNotFound)
@@ -66,7 +43,7 @@ func (s *Store) ResolveMember(ctx context.Context, userID, organizationID string
 	defer op.End()
 
 	m, err := scanMember(s.pool.QueryRow(ctx, `
-		SELECT id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at
+		SELECT `+memberCols+`
 		FROM members
 		WHERE organization_id = $1 AND user_id = $2 AND status <> 'removed'
 	`, organizationID, userID))
@@ -96,7 +73,7 @@ func (s *Store) ListMembers(ctx context.Context, organizationID string, limit in
 		after = startingAfter
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at
+		SELECT `+memberCols+`
 		FROM members
 		WHERE organization_id = $1 AND status <> 'removed'
 		AND ($2::text IS NULL OR id > $2)
@@ -141,7 +118,7 @@ func (s *Store) ListMemberships(ctx context.Context, userID string, limit int, s
 		after = startingAfter
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT m.id, m.role, m.status, o.id, o.name, o.slug
+		SELECT m.id, m.status, o.id, o.name, o.slug
 		FROM members m
 		INNER JOIN organizations o ON o.id = m.organization_id
 		WHERE m.user_id = $1 AND m.status = 'active'
@@ -196,7 +173,7 @@ func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 	defer tx.Rollback(ctx)
 
 	existing, err := scanMember(tx.QueryRow(ctx, `
-		SELECT id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at
+		SELECT `+memberCols+`
 		FROM members
 		WHERE organization_id = $1 AND user_id = $2
 		FOR UPDATE
@@ -212,9 +189,9 @@ func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 		now := time.Now().UTC()
 		_, err = tx.Exec(ctx, `
 			UPDATE members
-			SET role = $3, status = $4, added_by = $5, updated_at = $6
+			SET status = $3, added_by = $4, updated_at = $5
 			WHERE organization_id = $1 AND user_id = $2 AND status = 'removed'
-		`, m.OrganizationID, *m.UserID, m.Role, m.Status, m.AddedBy, now)
+		`, m.OrganizationID, *m.UserID, m.Status, m.AddedBy, now)
 		if err != nil {
 			return op.Fail(err)
 		}
@@ -231,9 +208,9 @@ func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO members
-			(id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at)
-		VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8)
-	`, m.ID, m.OrganizationID, *m.UserID, m.Role, m.Status, m.AddedBy, m.CreatedAt, m.UpdatedAt)
+			(id, organization_id, user_id, service_account_id, status, added_by, created_at, updated_at)
+		VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)
+	`, m.ID, m.OrganizationID, *m.UserID, m.Status, m.AddedBy, m.CreatedAt, m.UpdatedAt)
 	if err != nil {
 		if dbx.IsUniqueViolation(err) {
 			return op.SoftFail("conflict", ErrConflict, ErrConflict)
@@ -248,11 +225,10 @@ func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 	return nil
 }
 
-// MutateMember locks all members for the org, loads the target row,
-// invokes fn with the active-owner count, and persists role/status on success.
-func (s *Store) MutateMember(ctx context.Context, organizationID, memberID string, fn func(m *Member, activeOwners int) error) (*Member, error) {
+// MutateMember locks every member in the target's org, invokes fn with the
+// non-removed count, and persists status on success. Removed is not an address.
+func (s *Store) MutateMember(ctx context.Context, memberID string, fn func(m *Member, nonRemoved int) error) (*Member, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "mutate_member", dbx.DefaultTimeout,
-		attribute.String("organization.id", organizationID),
 		attribute.String("member.id", memberID),
 	)
 	defer cancel()
@@ -264,51 +240,42 @@ func (s *Store) MutateMember(ctx context.Context, organizationID, memberID strin
 	}
 	defer tx.Rollback(ctx)
 
-	rows, err := tx.Query(ctx, `
-		SELECT id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at
-		FROM members
-		WHERE organization_id = $1
-		FOR UPDATE
-	`, organizationID)
+	var organizationID string
+	err = tx.QueryRow(ctx, `SELECT organization_id FROM members WHERE id = $1`, memberID).Scan(&organizationID)
+	if err != nil {
+		if dbx.IsNoRows(err) {
+			return nil, op.Expected("not found", ErrNotFound)
+		}
+		return nil, op.Fail(err)
+	}
+	op.Attr(attribute.String("organization.id", organizationID))
+
+	members, err := lockOrgMembers(ctx, tx, organizationID)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
 
 	var target *Member
-	activeOwners := 0
-	for rows.Next() {
-		m, scanErr := scanMember(rows)
-		if scanErr != nil {
-			rows.Close()
-			return nil, op.Fail(scanErr)
-		}
+	for _, m := range members {
 		if m.ID == memberID {
 			target = m
-		}
-		if m.Role == RoleOwner && m.Status == StatusActive {
-			activeOwners++
+			break
 		}
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, op.Fail(err)
-	}
-	rows.Close()
-
 	if target == nil || target.Status == StatusRemoved {
 		return nil, op.Expected("not found", ErrNotFound)
 	}
 
-	if err := fn(target, activeOwners); err != nil {
+	if err := fn(target, countNonRemoved(members)); err != nil {
 		return nil, op.Expected("rejected", err)
 	}
 
 	target.UpdatedAt = time.Now().UTC()
 	tag, err := tx.Exec(ctx, `
 		UPDATE members
-		SET role = $3, status = $4, updated_at = $5
+		SET status = $3, updated_at = $4
 		WHERE organization_id = $1 AND id = $2
-	`, organizationID, memberID, target.Role, target.Status, target.UpdatedAt)
+	`, organizationID, memberID, target.Status, target.UpdatedAt)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
@@ -321,4 +288,41 @@ func (s *Store) MutateMember(ctx context.Context, organizationID, memberID strin
 	}
 	op.OK("ok")
 	return target, nil
+}
+
+func lockOrgMembers(ctx context.Context, tx pgx.Tx, organizationID string) ([]*Member, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT `+memberCols+`
+		FROM members
+		WHERE organization_id = $1
+		ORDER BY id
+		FOR UPDATE
+	`, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*Member
+	for rows.Next() {
+		m, err := scanMember(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func countNonRemoved(members []*Member) int {
+	n := 0
+	for _, m := range members {
+		if m.Status != StatusRemoved {
+			n++
+		}
+	}
+	return n
 }

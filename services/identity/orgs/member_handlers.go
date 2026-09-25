@@ -1,6 +1,7 @@
 package orgs
 
 import (
+	"context"
 	stderrors "errors"
 	"strings"
 	"time"
@@ -10,16 +11,14 @@ import (
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/metrics"
-	"github.com/plat5dev/plat5/identity/middleware"
 )
 
 type CreateMemberRequest struct {
-	UserID string `json:"user_id"`
-	Role   string `json:"role"`
+	UserID  string  `json:"user_id"`
+	AddedBy *string `json:"added_by"`
 }
 
 type UpdateMemberRequest struct {
-	Role   *string `json:"role"`
 	Status *string `json:"status"`
 }
 
@@ -29,7 +28,6 @@ type MemberResponse struct {
 	Principal        string  `json:"principal"`
 	UserID           *string `json:"user_id"`
 	ServiceAccountID *string `json:"service_account_id"`
-	Role             string  `json:"role"`
 	Status           string  `json:"status"`
 	AddedBy          *string `json:"added_by"`
 	CreatedAt        string  `json:"created_at"`
@@ -55,12 +53,10 @@ type ResolveResponse struct {
 
 func (h *Handler) ListMembers(c fiber.Ctx) error {
 	ctx := c.Context()
-	orgID := c.Params("organization_id")
+	orgID := httpx.PathParam(c, "organization_id")
 
-	if _, err := h.store.GetOrganization(ctx, orgID); err != nil {
-		return httpx.MapDB(ctx, err, "failed to get organization", httpx.DBErr{
-			NotFound: ErrNotFound, Resource: "organization", ResourceID: orgID,
-		})
+	if err := h.requireOrganization(ctx, orgID); err != nil {
+		return err
 	}
 
 	limit, startingAfter, err := httpx.ParseListParams(c)
@@ -85,11 +81,9 @@ func (h *Handler) ListMembers(c fiber.Ctx) error {
 
 func (h *Handler) CreateMember(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
+	orgID := httpx.PathParam(c, "organization_id")
 
-	actor, err := h.requireActiveMember(ctx, orgID, userID)
-	if err != nil {
+	if err := h.requireOrganization(ctx, orgID); err != nil {
 		return err
 	}
 
@@ -105,24 +99,18 @@ func (h *Handler) CreateMember(c fiber.Ctx) error {
 	if len(targetUser) > MaxUserIDLen {
 		return errors.FieldError("user_id", "That user ID is too long.")
 	}
-
-	role, err := ParseRole(req.Role, RoleMember)
+	addedBy, err := optionalUserID(req.AddedBy, "added_by")
 	if err != nil {
-		return err
-	}
-	if err := CanCreateMember(actor, role, orgID); err != nil {
 		return err
 	}
 
 	now := time.Now().UTC()
-	addedBy := userID
 	m := &Member{
 		ID:             NewULID(),
 		OrganizationID: orgID,
 		UserID:         &targetUser,
-		Role:           role,
 		Status:         StatusActive,
-		AddedBy:        &addedBy,
+		AddedBy:        addedBy,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
@@ -140,61 +128,34 @@ func (h *Handler) CreateMember(c fiber.Ctx) error {
 
 func (h *Handler) GetMember(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
-	memberID := c.Params("member_id")
+	memberID := httpx.PathParam(c, "member_id")
 
-	if _, err := h.requireActiveMember(ctx, orgID, userID); err != nil {
-		return err
-	}
-
-	m, err := h.store.GetMember(ctx, orgID, memberID)
+	m, err := h.visibleMember(ctx, memberID)
 	if err != nil {
-		return httpx.MapDB(ctx, err, "failed to get member", httpx.DBErr{
-			NotFound: ErrNotFound, Resource: "member", ResourceID: memberID,
-		})
-	}
-	if m.Status == StatusRemoved {
-		return errors.NotFoundError("member", memberID)
+		return err
 	}
 	return c.JSON(toMemberResponse(m))
 }
 
 func (h *Handler) UpdateMember(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
-	memberID := c.Params("member_id")
-
-	actor, err := h.requireActiveMember(ctx, orgID, userID)
-	if err != nil {
-		return err
-	}
+	memberID := httpx.PathParam(c, "member_id")
 
 	var req UpdateMemberRequest
 	if err := c.Bind().Body(&req); err != nil {
 		return err
 	}
-
-	var newRole *Role
-	if req.Role != nil {
-		role, err := ParseRole(*req.Role, "")
-		if err != nil {
-			return err
-		}
-		newRole = &role
+	if req.Status == nil {
+		return errors.FieldError("status", "Status is required.")
 	}
-	var newStatus *Status
-	if req.Status != nil {
-		status, err := ParseStatus(*req.Status)
-		if err != nil {
-			return err
-		}
-		newStatus = &status
+	status, err := ParsePatchStatus(*req.Status)
+	if err != nil {
+		return err
 	}
 
-	m, err := h.store.MutateMember(ctx, orgID, memberID, func(m *Member, activeOwners int) error {
-		return ApplyMemberUpdate(actor, m, userID, newRole, newStatus, activeOwners)
+	m, err := h.store.MutateMember(ctx, memberID, func(m *Member, _ int) error {
+		m.Status = status
+		return nil
 	})
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to update member", httpx.DBErr{
@@ -208,17 +169,14 @@ func (h *Handler) UpdateMember(c fiber.Ctx) error {
 
 func (h *Handler) DeleteMember(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
-	memberID := c.Params("member_id")
+	memberID := httpx.PathParam(c, "member_id")
 
-	actor, err := h.requireActiveMember(ctx, orgID, userID)
-	if err != nil {
-		return err
-	}
-
-	_, err = h.store.MutateMember(ctx, orgID, memberID, func(m *Member, activeOwners int) error {
-		return ApplyMemberRemove(actor, m, userID, activeOwners)
+	_, err := h.store.MutateMember(ctx, memberID, func(m *Member, nonRemoved int) error {
+		if err := rejectLastMember(nonRemoved, "member_id"); err != nil {
+			return err
+		}
+		m.Status = StatusRemoved
+		return nil
 	})
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to remove member", httpx.DBErr{
@@ -228,6 +186,19 @@ func (h *Handler) DeleteMember(c fiber.Ctx) error {
 
 	metrics.RecordMemberOp("remove")
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (h *Handler) visibleMember(ctx context.Context, memberID string) (*Member, error) {
+	m, err := h.store.GetMember(ctx, memberID)
+	if err != nil {
+		return nil, httpx.MapDB(ctx, err, "failed to get member", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "member", ResourceID: memberID,
+		})
+	}
+	if m.Status == StatusRemoved {
+		return nil, errors.NotFoundError("member", memberID)
+	}
+	return m, nil
 }
 
 // Resolve handles POST /internal/members/resolve (internal listener; not gateway-published).
@@ -280,7 +251,6 @@ func toMemberResponse(m *Member) MemberResponse {
 		Principal:        m.Principal(),
 		UserID:           m.UserID,
 		ServiceAccountID: m.ServiceAccountID,
-		Role:             string(m.Role),
 		Status:           string(m.Status),
 		AddedBy:          m.AddedBy,
 		CreatedAt:        httpx.FormatTime(m.CreatedAt),

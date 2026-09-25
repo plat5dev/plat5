@@ -13,9 +13,9 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 	f := newFakeInvites()
 	seedOwner(f, "org1", "owner1")
 	h := &Handler{invites: f}
-	app := testInviteApp(h, "owner1")
+	app := testInviteApp(h)
 
-	code, body := doJSON(t, app, http.MethodPost, "/api/organizations/org1/invites", `{"role":"member","email":"a@b.com"}`)
+	code, body := doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{"email":"a@b.com","created_by":"owner1"}`)
 	if code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", code, body)
 	}
@@ -35,10 +35,13 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 	if created.Email == nil || *created.Email != "a@b.com" {
 		t.Fatalf("email: %+v", created.Email)
 	}
+	if created.CreatedBy == nil || *created.CreatedBy != "owner1" {
+		t.Fatalf("created_by: %+v", created.CreatedBy)
+	}
 	token := created.Token
 	inviteID := created.ID
 
-	code, body = doJSON(t, app, http.MethodGet, "/api/organizations/org1/invites", "")
+	code, body = doJSON(t, app, http.MethodGet, "/organizations/org1/invites", "")
 	if code != http.StatusOK {
 		t.Fatalf("list status=%d body=%s", code, body)
 	}
@@ -47,11 +50,10 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(listed.Invites) != 1 || listed.Invites[0].Token != token {
-		t.Fatalf("owner list must include token: %+v", listed)
+		t.Fatalf("list must include token: %+v", listed)
 	}
 
-	inviteeApp := testInviteApp(h, "invitee1")
-	code, body = doJSON(t, inviteeApp, http.MethodPost, "/api/invites/redeem", `{"token":"`+token+`"}`)
+	code, body = doJSON(t, app, http.MethodPost, "/users/invitee1/invites/redeem", `{"token":"`+token+`"}`)
 	if code != http.StatusOK {
 		t.Fatalf("redeem status=%d body=%s", code, body)
 	}
@@ -62,8 +64,11 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 	if mem.Status != string(StatusActive) || mem.UserID == nil || *mem.UserID != "invitee1" {
 		t.Fatalf("member: %+v", mem)
 	}
+	if mem.AddedBy == nil || *mem.AddedBy != "owner1" {
+		t.Fatalf("added_by: %+v", mem.AddedBy)
+	}
 
-	code, body = doJSON(t, app, http.MethodGet, "/api/organizations/org1/invites", "")
+	code, body = doJSON(t, app, http.MethodGet, "/organizations/org1/invites", "")
 	if code != http.StatusOK {
 		t.Fatalf("list after redeem: %d %s", code, body)
 	}
@@ -75,67 +80,39 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 		t.Fatalf("spent row: %+v", listed.Invites[0])
 	}
 
-	code, body = doJSON(t, inviteeApp, http.MethodPost, "/api/invites/redeem", `{"token":"`+token+`"}`)
+	code, body = doJSON(t, app, http.MethodPost, "/users/invitee1/invites/redeem", `{"token":"`+token+`"}`)
 	if code != http.StatusConflict {
 		t.Fatalf("spent expected 409, got %d %s", code, body)
 	}
 	assertConflictStatus(t, body, "redeemed")
 
-	code, _ = doJSON(t, app, http.MethodDelete, "/api/organizations/org1/invites/"+inviteID, "")
+	code, body = doJSON(t, app, http.MethodDelete, "/organizations/org1/invites/"+inviteID, "")
 	if code != http.StatusNoContent {
-		t.Fatalf("revoke already-used: %d", code)
+		t.Fatalf("revoke already-used: %d %s id=%q", code, body, inviteID)
 	}
 }
 
-func TestInviteListOmitsTokenForMember(t *testing.T) {
+func TestInviteListIncludesTokenWhileActive(t *testing.T) {
 	f := newFakeInvites()
 	seedOwner(f, "org1", "owner1")
-	seedMember(f, "org1", "mem1")
 	h := &Handler{invites: f}
-	ownerApp := testInviteApp(h, "owner1")
-	_, body := doJSON(t, ownerApp, http.MethodPost, "/api/organizations/org1/invites", `{}`)
+	app := testInviteApp(h)
+	_, body := doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{}`)
 	var created InviteResponse
 	if err := json.Unmarshal(body, &created); err != nil {
 		t.Fatal(err)
 	}
 
-	memApp := testInviteApp(h, "mem1")
-	code, body := doJSON(t, memApp, http.MethodGet, "/api/organizations/org1/invites", "")
+	code, body := doJSON(t, app, http.MethodGet, "/organizations/org1/invites", "")
 	if code != http.StatusOK {
-		t.Fatalf("member list: %d %s", code, body)
+		t.Fatalf("list: %d %s", code, body)
 	}
 	var listed ListInvitesResponse
 	if err := json.Unmarshal(body, &listed); err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Invites) != 1 {
-		t.Fatalf("member should see the row: %+v", listed)
-	}
-	if listed.Invites[0].Token != "" {
-		t.Fatalf("member list must omit token: %+v", listed.Invites[0])
-	}
-	if listed.Invites[0].Status != string(InviteStatusActive) || listed.Invites[0].TokenPrefix == "" {
-		t.Fatalf("member still gets prefix/status: %+v", listed.Invites[0])
-	}
-
-	adminUID := "admin1"
-	f.members[memberKey("org1", "admin1")] = &Member{
-		ID:             "m-admin1",
-		OrganizationID: "org1",
-		UserID:         &adminUID,
-		Role:           RoleAdmin,
-		Status:         StatusActive,
-	}
-	adminApp := testInviteApp(h, "admin1")
-	code, body = doJSON(t, adminApp, http.MethodGet, "/api/organizations/org1/invites", "")
-	if code != http.StatusOK {
-		t.Fatalf("admin list: %d %s", code, body)
-	}
-	if err := json.Unmarshal(body, &listed); err != nil {
-		t.Fatal(err)
-	}
-	if len(listed.Invites) != 1 || listed.Invites[0].Token == "" {
-		t.Fatalf("admin list must include token: %+v", listed)
+	if len(listed.Invites) != 1 || listed.Invites[0].Token == "" || listed.Invites[0].Token != created.Token {
+		t.Fatalf("active list must include token: %+v", listed)
 	}
 }
 
@@ -143,9 +120,9 @@ func TestInviteMaxUsesUnlimitedStaysActive(t *testing.T) {
 	f := newFakeInvites()
 	seedOwner(f, "org1", "owner1")
 	h := &Handler{invites: f}
-	app := testInviteApp(h, "owner1")
+	app := testInviteApp(h)
 
-	code, body := doJSON(t, app, http.MethodPost, "/api/organizations/org1/invites", `{"max_uses":null}`)
+	code, body := doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{"max_uses":null}`)
 	if code != http.StatusCreated {
 		t.Fatalf("create: %d %s", code, body)
 	}
@@ -158,12 +135,11 @@ func TestInviteMaxUsesUnlimitedStaysActive(t *testing.T) {
 	}
 	token := created.Token
 
-	a := testInviteApp(h, "u1")
-	code, body = doJSON(t, a, http.MethodPost, "/api/invites/redeem", `{"token":"`+token+`"}`)
+	code, body = doJSON(t, app, http.MethodPost, "/users/u1/invites/redeem", `{"token":"`+token+`"}`)
 	if code != http.StatusOK {
 		t.Fatalf("first redeem: %d %s", code, body)
 	}
-	code, body = doJSON(t, app, http.MethodGet, "/api/organizations/org1/invites", "")
+	code, body = doJSON(t, app, http.MethodGet, "/organizations/org1/invites", "")
 	if code != http.StatusOK {
 		t.Fatal(code)
 	}
@@ -175,8 +151,7 @@ func TestInviteMaxUsesUnlimitedStaysActive(t *testing.T) {
 		t.Fatalf("still active with token: %+v", listed.Invites[0])
 	}
 
-	b := testInviteApp(h, "u2")
-	code, body = doJSON(t, b, http.MethodPost, "/api/invites/redeem", `{"token":"`+token+`"}`)
+	code, body = doJSON(t, app, http.MethodPost, "/users/u2/invites/redeem", `{"token":"`+token+`"}`)
 	if code != http.StatusOK {
 		t.Fatalf("second redeem: %d %s", code, body)
 	}
@@ -186,9 +161,9 @@ func TestInviteMaxUsesZeroRejected(t *testing.T) {
 	f := newFakeInvites()
 	seedOwner(f, "org1", "owner1")
 	h := &Handler{invites: f}
-	app := testInviteApp(h, "owner1")
+	app := testInviteApp(h)
 	for _, payload := range []string{`{"max_uses":0}`, `{"max_uses":-1}`} {
-		code, resp := doJSON(t, app, http.MethodPost, "/api/organizations/org1/invites", payload)
+		code, resp := doJSON(t, app, http.MethodPost, "/organizations/org1/invites", payload)
 		if code != http.StatusUnprocessableEntity {
 			t.Fatalf("%s: %d %s", payload, code, resp)
 		}
@@ -199,7 +174,7 @@ func TestInviteExpireRevokeAndUnknown(t *testing.T) {
 	f := newFakeInvites()
 	seedOwner(f, "org1", "owner1")
 	h := &Handler{invites: f}
-	app := testInviteApp(h, "owner1")
+	app := testInviteApp(h)
 
 	now := time.Now().UTC()
 	expiredTok, err := GenerateInviteToken()
@@ -209,12 +184,11 @@ func TestInviteExpireRevokeAndUnknown(t *testing.T) {
 	expired := &Invite{
 		ID:             "inv-expired",
 		OrganizationID: "org1",
-		Role:           RoleMember,
 		Token:          &expiredTok,
 		TokenHash:      HashInviteToken(expiredTok),
 		TokenPrefix:    InviteDisplayPrefix(expiredTok),
 		Status:         InviteStatusActive,
-		CreatedBy:      "owner1",
+		CreatedBy:      strPtr("owner1"),
 		ExpiresAt:      now.Add(-time.Minute),
 		CreatedAt:      now.Add(-time.Hour),
 	}
@@ -222,14 +196,13 @@ func TestInviteExpireRevokeAndUnknown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	inviteeApp := testInviteApp(h, "u2")
-	code, body := doJSON(t, inviteeApp, http.MethodPost, "/api/invites/redeem", `{"token":"`+expiredTok+`"}`)
+	code, body := doJSON(t, app, http.MethodPost, "/users/u2/invites/redeem", `{"token":"`+expiredTok+`"}`)
 	if code != http.StatusConflict {
 		t.Fatalf("expired: %d %s", code, body)
 	}
 	assertConflictStatus(t, body, "expired")
 
-	code, body = doJSON(t, app, http.MethodPost, "/api/organizations/org1/invites", `{}`)
+	code, body = doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{}`)
 	if code != http.StatusCreated {
 		t.Fatalf("create: %d %s", code, body)
 	}
@@ -239,17 +212,17 @@ func TestInviteExpireRevokeAndUnknown(t *testing.T) {
 	}
 	liveTok := created.Token
 
-	code, _ = doJSON(t, app, http.MethodDelete, "/api/organizations/org1/invites/"+created.ID, "")
+	code, _ = doJSON(t, app, http.MethodDelete, "/organizations/org1/invites/"+created.ID, "")
 	if code != http.StatusNoContent {
 		t.Fatalf("revoke: %d", code)
 	}
-	code, body = doJSON(t, inviteeApp, http.MethodPost, "/api/invites/redeem", `{"token":"`+liveTok+`"}`)
+	code, body = doJSON(t, app, http.MethodPost, "/users/u2/invites/redeem", `{"token":"`+liveTok+`"}`)
 	if code != http.StatusConflict {
 		t.Fatalf("revoked: %d %s", code, body)
 	}
 	assertConflictStatus(t, body, "revoked")
 
-	code, body = doJSON(t, inviteeApp, http.MethodPost, "/api/invites/redeem", `{"token":"inv_notarealtoken00000000000000000000000000"}`)
+	code, body = doJSON(t, app, http.MethodPost, "/users/u2/invites/redeem", `{"token":"inv_notarealtoken00000000000000000000000000"}`)
 	if code != http.StatusNotFound {
 		t.Fatalf("unknown: %d %s", code, body)
 	}
@@ -274,20 +247,18 @@ func TestInviteRedeemDuplicateMemberIdempotent(t *testing.T) {
 		ID:             "m-already",
 		OrganizationID: "org1",
 		UserID:         &uid,
-		Role:           RoleMember,
 		Status:         StatusActive,
 	}
 	h := &Handler{invites: f}
-	app := testInviteApp(h, "owner1")
+	app := testInviteApp(h)
 
-	_, body := doJSON(t, app, http.MethodPost, "/api/organizations/org1/invites", `{}`)
+	_, body := doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{}`)
 	var created InviteResponse
 	if err := json.Unmarshal(body, &created); err != nil {
 		t.Fatal(err)
 	}
 
-	inviteeApp := testInviteApp(h, "already")
-	code, body := doJSON(t, inviteeApp, http.MethodPost, "/api/invites/redeem", `{"token":"`+created.Token+`"}`)
+	code, body := doJSON(t, app, http.MethodPost, "/users/already/invites/redeem", `{"token":"`+created.Token+`"}`)
 	if code != http.StatusOK {
 		t.Fatalf("idempotent redeem: %d %s", code, body)
 	}
@@ -300,21 +271,20 @@ func TestInviteRedeemDuplicateMemberIdempotent(t *testing.T) {
 	}
 }
 
-func TestInviteCreateForbiddenForMember(t *testing.T) {
+func TestInviteCreateDoesNotCheckCaller(t *testing.T) {
 	f := newFakeInvites()
 	uid := "mem1"
 	f.members[memberKey("org1", "mem1")] = &Member{
 		ID:             "m1",
 		OrganizationID: "org1",
 		UserID:         &uid,
-		Role:           RoleMember,
 		Status:         StatusActive,
 	}
 	h := &Handler{invites: f}
-	app := testInviteApp(h, "mem1")
-	code, _ := doJSON(t, app, http.MethodPost, "/api/organizations/org1/invites", `{}`)
-	if code != http.StatusForbidden {
-		t.Fatalf("member create invite: %d", code)
+	app := testInviteApp(h)
+	code, body := doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{}`)
+	if code != http.StatusCreated {
+		t.Fatalf("create invite: %d %s", code, body)
 	}
 }
 
@@ -322,8 +292,8 @@ func TestInviteNoPendingMemberOnCreate(t *testing.T) {
 	f := newFakeInvites()
 	seedOwner(f, "org1", "owner1")
 	h := &Handler{invites: f}
-	app := testInviteApp(h, "owner1")
-	doJSON(t, app, http.MethodPost, "/api/organizations/org1/invites", `{}`)
+	app := testInviteApp(h)
+	doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{}`)
 	if len(f.members) != 1 {
 		t.Fatalf("create invite must not insert a member, got %d", len(f.members))
 	}

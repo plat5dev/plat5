@@ -64,15 +64,11 @@ Use these only when a more specific sentence does not apply.
 | When | `message` |
 |------|-----------|
 | `user_id` empty | Choose someone to add. |
-| `user_id` > 128 | That user ID is too long. |
-| Bad role | Role must be member, admin, or owner. |
-| Bad status | Status must be active, suspended, or removed. |
+| `user_id` / `added_by` > 128 | That user ID is too long. |
+| PATCH status missing | Status is required. |
+| PATCH status not `active` or `suspended` | Status must be active or suspended. |
 | Duplicate user in org | This person is already a member. |
-| SA → owner | Service accounts cannot be owners. |
-| Demote last owner | Cannot demote the sole owner. |
-| Leave as last owner | Transfer ownership before leaving. |
-| Suspend/remove last owner via status | Transfer ownership before changing the last owner's status. |
-| Remove last owner | Transfer ownership before removing the last owner. |
+| Remove last member | Delete the organization instead of its last member. |
 
 ### Service accounts
 
@@ -81,6 +77,8 @@ Use these only when a more specific sentence does not apply.
 | Name empty | Name is required. |
 | Name > 128 | Name is too long. |
 | PATCH with no name | Nothing to update. |
+| `created_by_user_id` > 128 | That user ID is too long. |
+| Delete last member via the service account | Delete the organization instead of its last member. |
 
 ### Invites
 
@@ -88,7 +86,7 @@ Use these only when a more specific sentence does not apply.
 |------|-----------|
 | `expires_in_seconds` out of range | Expiry must be between 60 seconds and 30 days. |
 | `email` > 320 | That email is too long. |
-| Bad role | Role must be member, admin, or owner. |
+| `created_by` > 128 | That user ID is too long. |
 | `max_uses` 0 or negative | Max uses must be at least 1. |
 | Redeem of a redeemed invite | This invite has already been used. |
 | Redeem of a revoked invite | This invite is no longer valid. |

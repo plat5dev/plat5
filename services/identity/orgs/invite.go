@@ -31,7 +31,6 @@ const (
 type Invite struct {
 	ID             string
 	OrganizationID string
-	Role           Role
 	Email          *string
 	Token          *string
 	TokenHash      string
@@ -39,7 +38,7 @@ type Invite struct {
 	Status         InviteStatus
 	MaxUses        *int
 	UseCount       int
-	CreatedBy      string
+	CreatedBy      *string
 	ExpiresAt      time.Time
 	CreatedAt      time.Time
 }

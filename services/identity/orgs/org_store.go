@@ -2,6 +2,7 @@ package orgs
 
 import (
 	"context"
+	stderrors "errors"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -9,7 +10,7 @@ import (
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 )
 
-func (s *Store) CreateOrganization(ctx context.Context, org *Organization, ownerUserID string) (*Member, error) {
+func (s *Store) CreateOrganization(ctx context.Context, org *Organization, userID string) (*Member, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_organization", dbx.DefaultTimeout,
 		attribute.String("organization.id", org.ID),
 	)
@@ -36,8 +37,7 @@ func (s *Store) CreateOrganization(ctx context.Context, org *Organization, owner
 	m := &Member{
 		ID:             NewULID(),
 		OrganizationID: org.ID,
-		UserID:         &ownerUserID,
-		Role:           RoleOwner,
+		UserID:         &userID,
 		Status:         StatusActive,
 		CreatedAt:      org.CreatedAt,
 		UpdatedAt:      org.UpdatedAt,
@@ -45,9 +45,9 @@ func (s *Store) CreateOrganization(ctx context.Context, org *Organization, owner
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO members
-			(id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at)
-		VALUES ($1, $2, $3, NULL, $4, $5, NULL, $6, $7)
-	`, m.ID, m.OrganizationID, ownerUserID, m.Role, m.Status, m.CreatedAt, m.UpdatedAt)
+			(id, organization_id, user_id, service_account_id, status, added_by, created_at, updated_at)
+		VALUES ($1, $2, $3, NULL, $4, NULL, $5, $6)
+	`, m.ID, m.OrganizationID, userID, m.Status, m.CreatedAt, m.UpdatedAt)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
@@ -79,6 +79,17 @@ func (s *Store) GetOrganization(ctx context.Context, organizationID string) (*Or
 	}
 	op.OK("ok")
 	return org, nil
+}
+
+func (s *Store) OrganizationExists(ctx context.Context, organizationID string) (bool, error) {
+	_, err := s.GetOrganization(ctx, organizationID)
+	if err == nil {
+		return true, nil
+	}
+	if stderrors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	return false, err
 }
 
 func (s *Store) ListOrganizations(ctx context.Context, limit int, startingAfter string) ([]*Organization, bool, error) {

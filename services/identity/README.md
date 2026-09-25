@@ -4,7 +4,7 @@ Plat5 **identity** service: organizations, members, invites, service accounts, u
 
 Contract: [`docs/identity.md`](../../docs/identity.md)
 
-Public route catalog: [`routes.yml`](routes.yml). Apply via route-registry.
+`routes.yml` still lists the previous paths. Do not apply it until the gateway pass.
 
 ## Layout
 
@@ -16,7 +16,7 @@ Public route catalog: [`routes.yml`](routes.yml). Apply via route-registry.
 
 `APIKEY_BRAND` (default `plat5`) must match the gateway.
 
-List returns `token` for admin/owner while the invite is active. The host sends any email.
+List includes `token` while the invite is active. The host sends any email.
 
 ## Local
 

@@ -2,31 +2,29 @@
 
 Plat5 **identity** service: organizations, members, invites, service accounts, API keys, and internal auth helpers for the gateway.
 
-Boundary: [`identity-boundary.md`](identity-boundary.md). Errors: [`api-errors.md`](api-errors.md), [`error-copy.md`](error-copy.md). Gateway: [`gateway-contract.md`](gateway-contract.md). Lists: [`lists.md`](lists.md).
+Boundary: [`identity-boundary.md`](identity-boundary.md). Errors: [`api-errors.md`](api-errors.md), [`error-copy.md`](error-copy.md). Lists: [`lists.md`](lists.md).
 
-## Scope and headers
+The service is a function of the URL. The path names every id the operation uses. If the handler does not read an id, it is not in the path. If it does, it is not in a header.
 
-Published identity routes are **`user`** scope. This service is the **membership authority**. It must not sit behind gateway org admission into itself. It does **not** use `organization` scope.
+Who may call is upstream. This service does not know which proxy called, and it does not grow a second policy for a second caller. No `X-User-Id`. A missing caller header is not an error.
 
-The path names the resource. `X-User-Id` names the actor, and only on routes that have one. The person is not a path parameter.
+There is no `/api` prefix. The first path segment is the subject.
 
-| Routes | Actor |
-|--------|--------|
-| `/api/user/...` | `X-User-Id`. Missing → **500** `INTERNAL_ERROR` |
-| `POST /api/organizations`, `POST /api/invites/redeem` | `X-User-Id`. Missing → **500** |
-| Org administration | `X-User-Id` + path. Missing header → **500**. Non-member or inactive → **404**. Wrong role → **403** |
-| `GET /api/organizations` | None. Header is not read |
-| `GET /api/organizations/{organization_id}/members` | None. Header is not read |
+| Scope | Path | The call is about |
+|-------|------|-------------------|
+| user | `/users/{user_id}/...` | that person |
+| org | `/organizations/{organization_id}/...` | that org |
+| member | `/members/{member_id}/...` | that member |
 
-Org administration is get, patch, and delete org; member create, get, update, and delete; invites; service accounts; member keys. Role is domain data here. Org-scope routes do not receive it.
+A member lives in one org. `member_id` is enough. Do not also put `organization_id` on a member route. Do not put a user id on an org route.
 
-Apply `services/identity/routes.yml` (or a subset) via the route-registry. That catalog omits `GET /api/organizations`. The service still serves it. Internal validate/resolve stay on `INTERNAL_PORT`.
+Public routes are not auto-published. The process still serves them on the public port. Internal validate/resolve stay on `INTERNAL_PORT`.
 
 ## Glossary
 
 | Term | Meaning |
 |------|---------|
-| **user** | Platform person. Opaque `user_id` string from the gateway (`X-User-Id` / IdP claim). |
+| **user** | Platform person. Opaque `user_id` string. Not a table. |
 | **organization** | Isolation boundary users and service accounts join. |
 | **member** | Org principal. Exactly one of: a **user** or a **service account**. Wire id: `member_id`. |
 | **service account** | Non-human identity created **under an organization**. Always has a member row in that org. |
@@ -34,15 +32,34 @@ Apply `services/identity/routes.yml` (or a subset) via the route-registry. That 
 | **membership** | A user's member row in an org, with that org. Not a table. Wire resource for which orgs this person belongs to. |
 | **invite** | Org join token (`active` / `redeemed` / `revoked` / `expired`). Redeem inserts an **active** member. The host sends any email. |
 
+## What the service refuses
+
+Illegal states. Not permissions.
+
+- Slug is globally unique.
+- A member is exactly one of user or service account.
+- One member row per `(organization_id, user_id)`, including `removed`. One member row per service account. A service account lives in exactly one org.
+- A remove must leave at least one non-removed member. `active` and `suspended` both count. Service accounts count.
+- Invite expiry, use limits, and the conflict on a dead token.
+- A key addressed under a user or member that does not own it is **404**. That is the address, not an access check.
+- A service account addressed under the wrong org, or whose member is `removed`, is **404**.
+- Unknown id is **404**. A removed member is **404**. Empty collection is an empty page.
+
+No **403** for role or for "not a member." No **500** for a missing caller header. Validation (**422**) and conflict (**409**) stay where the data is wrong.
+
 ## Public API
+
+Pagination: [`lists.md`](lists.md). `limit`, `starting_after`, `has_more`, sort `id` ascending.
+
+`added_by`, `created_by`, and `created_by_user_id` are not inferred. There is no caller. A proxy that wants them stored sends them in the body. Omitted or blank means null.
 
 ### Memberships
 
-Person resource. Subject is `X-User-Id`. Active **user** memberships only: not service accounts, not `suspended`, not `removed`.
+Active **user** memberships only: not service accounts, not `suspended`, not `removed`.
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `GET` | `/api/user/memberships` | Which orgs this person belongs to |
+| `GET` | `/users/{user_id}/memberships` | Which orgs this person belongs to |
 
 #### Row
 
@@ -50,24 +67,23 @@ Person resource. Subject is `X-User-Id`. Active **user** memberships only: not s
 {
   "id": "...",
   "organization": { "id": "...", "name": "Acme", "slug": "acme" },
-  "role": "owner",
   "status": "active"
 }
 ```
 
-List body key `memberships`. `id` is the member id. Pagination: [`lists.md`](lists.md). Cursor is that `id`.
+List body key `memberships`. `id` is the member id. Cursor is that `id`.
 
 Not a table. A read of `members` joined to `organizations` for this user.
 
 ### User API keys
 
-Person credential. Subject is `X-User-Id`. Not member keys — those live under the member: `/api/organizations/{organization_id}/members/{member_id}/api-keys`.
+Person credential. Not member keys — those live under the member: `/members/{member_id}/api-keys`.
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/api/user/api-keys` | Create; plaintext once — prefix **`{brand}-sk-1-`**. Optional `scopes`. |
-| `GET` | `/api/user/api-keys` | List (no hashes / no secret); echoes `scopes` |
-| `DELETE` | `/api/user/api-keys/{key_id}` | Soft-revoke; idempotent |
+| `POST` | `/users/{user_id}/api-keys` | Create; plaintext once — prefix **`{brand}-sk-1-`**. Optional `scopes`. |
+| `GET` | `/users/{user_id}/api-keys` | List (no hashes / no secret); echoes `scopes` |
+| `DELETE` | `/users/{user_id}/api-keys/{key_id}` | Soft-revoke; idempotent. Other user's key → **404** |
 
 #### Create body
 
@@ -85,7 +101,7 @@ Person credential. Subject is `X-User-Id`. Not member keys — those live under 
 
 Restricted = non-null list (`[]` or labels). JWT and `null` skip the check. Unlabeled = any admitted principal.
 
-Identity catalog ships without `required_scopes`. Operator may add them: the gateway enforces `required_scopes` on `user` scope for restricted user keys (JWTs and unrestricted keys skip; member keys 401 on `user` scope before scopes). Keep `POST /api/invites/redeem` unlabeled — the invitee is not a member yet. Member keys are `organization` scope only and never hit these routes. Gateway: [`gateway-contract.md`](gateway-contract.md), [`routes.md`](routes.md).
+Identity does not enforce `required_scopes`. That check is the gateway's, on routes the operator labeled. Keep redeem unlabeled when it is published — the invitee is not a member yet. Member keys never hit user routes. Gateway: [`gateway-contract.md`](gateway-contract.md), [`routes.md`](routes.md).
 
 Hygiene (422 `VALIDATION_ERROR` on `scopes`): each label `[a-z0-9:._-]+`, max 64 characters, max 32 labels, unique. Create and list echo `scopes` as `string[] | null` (`null` = unrestricted). Never echo the secret except on create (`key`).
 
@@ -93,15 +109,13 @@ Create **201** also includes `"key": "{brand}-sk-1-…"` once.
 
 ### Organizations
 
-Prefix: `/api/organizations`
-
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/api/organizations` | Create; caller (`X-User-Id`) becomes **owner** member (`active`) |
-| `GET` | `/api/organizations` | Every organization. Header is not read. Omitted from `routes.yml` |
-| `GET` | `/api/organizations/{organization_id}` | Active member |
-| `PATCH` | `/api/organizations/{organization_id}` | Admin or owner |
-| `DELETE` | `/api/organizations/{organization_id}` | Owner only |
+| `POST` | `/users/{user_id}/organizations` | Create. Body `{ "name", "slug?" }`. Inserts an **active** member for that user. `added_by` is null. |
+| `GET` | `/organizations` | Every organization. |
+| `GET` | `/organizations/{organization_id}` | **404** if missing |
+| `PATCH` | `/organizations/{organization_id}` | Name and slug. Slug uniqueness stays. |
+| `DELETE` | `/organizations/{organization_id}` | Hard delete. Cascades members, invites, service accounts, and keys. Missing → **404**. Not blocked by the last-member rule. |
 
 #### Create body
 
@@ -127,15 +141,24 @@ Prefix: `/api/organizations`
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `GET` | `/api/organizations/{organization_id}/members` | Non-removed members. Header is not read. Unknown org → **404** |
-| `POST` | `/api/organizations/{organization_id}/members` | Admin or owner; add **user** — body `{ "user_id", "role?" }`. Target `user_id` must already be known (IdP id). Immediate `active`. |
-| `GET` | `/api/organizations/{organization_id}/members/{member_id}` | Active member |
-| `PATCH` | `/api/organizations/{organization_id}/members/{member_id}` | Role/status; admin/owner (self-leave allowed for humans) |
-| `DELETE` | `/api/organizations/{organization_id}/members/{member_id}` | Soft-remove; self or admin/owner |
+| `GET` | `/organizations/{organization_id}/members` | Non-removed members. Unknown org → **404**. Empty org → empty page. |
+| `POST` | `/organizations/{organization_id}/members` | Body `{ "user_id", "added_by?" }`. Immediate `active`. |
 
-`GET` does not check the caller. Unknown organization → **404** `NOT_FOUND`. An existing org with no listed members is an empty page, not a 404.
+One address for a member. Do not also serve `/organizations/{organization_id}/members/{member_id}`.
 
-`POST` adds a **user** member (immediately `active`). Service accounts are created via the service-accounts API (member row included). Invites are a separate resource, below.
+| Method | Path | Notes |
+|--------|------|--------|
+| `GET` | `/members/{member_id}` | **404** if missing or `removed` |
+| `PATCH` | `/members/{member_id}` | Body `{ "status" }`. `active` or `suspended` only. `removed` → **422**. Already `removed` → **404**. |
+| `DELETE` | `/members/{member_id}` | Soft-remove. Already `removed` → **404**. Last non-removed member → **422**. |
+
+`POST` adds a **user** member (immediately `active`). A non-removed duplicate is **409** `CONFLICT` (`field` is `user_id`). A `removed` row for that user is revived: same member id, `active`, `added_by` from the body. Member keys are not revoked on remove, so a revive re-admits those keys.
+
+Service accounts are created via the service-accounts API (member row included). Invites are a separate resource, below.
+
+To replace the last person, add the new member first, then remove the old one. To destroy the org, `DELETE` the organization. That cascades, including the last member.
+
+Suspending the last active member is allowed. The org still has a member.
 
 #### Member response
 
@@ -146,15 +169,14 @@ Prefix: `/api/organizations`
   "principal": "user",
   "user_id": "...",
   "service_account_id": null,
-  "role": "member",
   "status": "active",
-  "added_by": "...",
+  "added_by": null,
   "created_at": "...",
   "updated_at": "..."
 }
 ```
 
-`principal` is `"user"` or `"service_account"`. Exactly one of `user_id` / `service_account_id` is non-null.
+`principal` is `"user"` or `"service_account"`. Exactly one of `user_id` / `service_account_id` is non-null. `added_by` is null unless sent.
 
 ### Invites
 
@@ -166,20 +188,22 @@ List, redeem, and revoke expire lazily: if `expires_at` is in the past and statu
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/api/organizations/{organization_id}/invites` | Admin or owner (same as add member). Body `{ "role?", "email?", "expires_in_seconds?", "max_uses?" }`. Returns `token`. |
-| `GET` | `/api/organizations/{organization_id}/invites` | Active member. `token` only for **admin/owner** while `active`. Everyone else gets prefix, status, role, expiry. |
-| `DELETE` | `/api/organizations/{organization_id}/invites/{invite_id}` | Admin or owner; revoke (idempotent). Sets status `revoked`, `token` null. Hash stays. |
-| `POST` | `/api/invites/redeem` | Invitee; body `{ "token" }` + `X-User-Id`. Inserts **active** member. Already a member on a still-`active` token → **200** idempotent (counts as a use). Unknown token → **404** `NOT_FOUND` (no org leak). Redeemed / revoked / expired → **409** `CONFLICT` (`field` is `status`, `value` is the terminal status). |
+| `POST` | `/organizations/{organization_id}/invites` | Body `{ "email?", "expires_in_seconds?", "max_uses?", "created_by?" }`. Returns `token`. Unknown org → **404**. |
+| `GET` | `/organizations/{organization_id}/invites` | `token` included while `active`. Unknown org → **404**. |
+| `DELETE` | `/organizations/{organization_id}/invites/{invite_id}` | Revoke. Idempotent. Status `revoked`, `token` null. Hash stays. |
+| `POST` | `/users/{user_id}/invites/redeem` | Body `{ "token" }`. Inserts an **active** member for that user. Already a member on a still-`active` token → **200** idempotent (counts as a use). A `removed` row is revived (same member id). Unknown token → **404** `NOT_FOUND` (no org leak). Redeemed / revoked / expired → **409** `CONFLICT` (`field` is `status`, `value` is the terminal status). |
 
 #### Create body
 
 ```json
-{ "role": "member", "email": "a@b.com", "expires_in_seconds": 604800, "max_uses": 1 }
+{ "email": "a@b.com", "expires_in_seconds": 604800, "max_uses": 1, "created_by": "..." }
 ```
 
-`role` default `member` (owner role requires an owner actor, same as `POST /members`). `email` is optional display metadata; it is **not** mailed. `expires_in_seconds` default 7 days, min 60, max 30 days. `max_uses` omitted → 1. JSON `null` → unlimited. `0` and negatives → **422**.
+`email` is optional display metadata; it is **not** mailed. `expires_in_seconds` default 7 days, min 60, max 30 days. `max_uses` omitted → 1. JSON `null` → unlimited. `0` and negatives → **422**. `created_by` omitted or blank → null.
 
 Token prefix `inv_`. `token_hash` is SHA-256 hex. `use_count` increments on successful redeem. When `use_count` reaches `max_uses`, status becomes `redeemed` and `token` is nulled. Unlimited (`max_uses` null) stays `active` with `token`.
+
+Redeem copies `created_by` onto the new or revived member's `added_by`. Null stays null.
 
 #### Create / list row
 
@@ -187,7 +211,6 @@ Token prefix `inv_`. `token_hash` is SHA-256 hex. `use_count` increments on succ
 {
   "id": "...",
   "organization_id": "...",
-  "role": "member",
   "email": "a@b.com",
   "token_prefix": "inv_abcd",
   "token": "inv_…",
@@ -195,26 +218,28 @@ Token prefix `inv_`. `token_hash` is SHA-256 hex. `use_count` increments on succ
   "max_uses": 1,
   "use_count": 0,
   "expires_at": "...",
-  "created_by": "...",
+  "created_by": null,
   "created_at": "..."
 }
 ```
 
-`token` is omitted on list for non-admin/non-owner, and omitted for every caller once the row is terminal.
+`token` is omitted once the row is terminal.
 
 ### Service accounts
 
-Created under an organization. One transaction: service account row + **active** member (default role `member`). Lives in **that org only**. Service accounts **cannot** be `owner`.
+Created under an organization. One transaction: service account row + **active** member. Lives in **that org only**.
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/api/organizations/{organization_id}/service-accounts` | Admin or owner; body `{ "name" }` |
-| `GET` | `/api/organizations/{organization_id}/service-accounts` | Active member |
-| `GET` | `/api/organizations/{organization_id}/service-accounts/{service_account_id}` | Active member |
-| `PATCH` | `/api/organizations/{organization_id}/service-accounts/{service_account_id}` | Admin or owner; body `{ "name" }` |
-| `DELETE` | `/api/organizations/{organization_id}/service-accounts/{service_account_id}` | Admin or owner; soft-removes the member (same as `DELETE` member) |
+| `POST` | `/organizations/{organization_id}/service-accounts` | Body `{ "name", "created_by_user_id?" }`. Unknown org → **404**. |
+| `GET` | `/organizations/{organization_id}/service-accounts` | Non-removed. Unknown org → **404**. |
+| `GET` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | **404** if missing, wrong org, or member `removed` |
+| `PATCH` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | Body `{ "name" }`. Same **404** as get. |
+| `DELETE` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | Soft-removes the member. Same **404** as get. Last non-removed member → **422**. |
 
-Lifecycle is the member row. Suspend / re-enable with `PATCH` `/members/{member_id}` (`status`).
+The member row's `added_by` is null. `created_by_user_id` is null unless sent.
+
+Lifecycle is the member row. Suspend and re-enable with `PATCH /members/{member_id}` (`status`). A removed service account is not addressable here. Re-entry is not a service-account create; the row remains.
 
 #### Service account response
 
@@ -225,30 +250,25 @@ Lifecycle is the member row. Suspend / re-enable with `PATCH` `/members/{member_
   "member_id": "...",
   "name": "deploy-bot",
   "status": "active",
-  "created_by_user_id": "...",
+  "created_by_user_id": null,
   "created_at": "...",
   "updated_at": "..."
 }
 ```
 
-`status` is the joined member’s status (`active` or `suspended`). `removed` members are not listed.
+`status` is the joined member’s status (`active` or `suspended`). `removed` members are not listed and are not returned by id.
 
 ### Member API keys
 
-Keys that authenticate **as a member** (org context). Used for automation / S2S on `organization` scope routes. Different product from `/api/user/api-keys`: the parent path is the member.
+Keys that authenticate **as a member**. Different product from `/users/{user_id}/api-keys`: the parent path is the member.
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/api/organizations/{organization_id}/members/{member_id}/api-keys` | Create; plaintext once — prefix **`{brand}-mk-1-`**. Optional `scopes` (same semantics as user keys). |
-| `GET` | `/api/organizations/{organization_id}/members/{member_id}/api-keys` | List (echoes `scopes`, never the secret) |
-| `DELETE` | `/api/organizations/{organization_id}/members/{member_id}/api-keys/{key_id}` | Soft-revoke |
+| `POST` | `/members/{member_id}/api-keys` | Create; plaintext once — prefix **`{brand}-mk-1-`**. Optional `scopes` (same semantics as user keys). |
+| `GET` | `/members/{member_id}/api-keys` | List (echoes `scopes`, never the secret) |
+| `DELETE` | `/members/{member_id}/api-keys/{key_id}` | Soft-revoke. Idempotent. Other member's key → **404** |
 
-**Who may manage keys**
-
-| Member principal | Create / list / revoke |
-|------------------|------------------------|
-| `user` (human) | That user (self) or org admin/owner |
-| `service_account` | Org admin/owner only |
+Missing or `removed` member → **404**. A `suspended` member is addressable. Validate still rejects a key whose member is not `active`.
 
 Member keys are a **separate product surface** from user keys: different table (`member_api_keys`), different plaintext prefix (`{brand}-mk-1-` vs `{brand}-sk-1-`), different validate endpoint. Both use the `X-API-Key` header. Hashing at rest is SHA-256 hex. List may include revoked keys (`revoked_at` set).
 
@@ -266,37 +286,21 @@ Member keys are a **separate product surface** from user keys: different table (
 
 Changing brand does not rewrite stored keys. Old plaintext no longer matches; those rows cannot authenticate.
 
-## Roles and status
+## Status
 
-| Role | |
-|------|--|
-| `member` | Default |
-| `admin` | Manage non-owner members and service accounts; update org; not promote/demote/remove owners |
-| `owner` | Full admin + delete org + manage other owners. **Humans only.** |
+Status is whether the member is admitted, not what they are allowed to do.
 
 | Status | |
 |--------|--|
 | `active` | Admitted |
 | `suspended` | Not admitted |
-| `removed` | Soft-deleted; not listed |
+| `removed` | Soft-deleted; not listed; not addressable |
 
-At least one **active owner** must remain. Sole owner cannot leave, be removed, or be demoted. Only **owners** may change another owner’s role/status or remove them.
-
-### Existence and authz policy
-
-| Case | HTTP / code |
-|------|-------------|
-| Unknown org, non-member, or non-**active** member on org-administration routes | **404** `NOT_FOUND` |
-| Unknown organization on `GET /api/organizations/{organization_id}/members` | **404** `NOT_FOUND` |
-| Active member, insufficient **role** | **403** `FORBIDDEN` |
-
-## Pagination
-
-Public lists: [`lists.md`](lists.md). `limit` / `starting_after` / `has_more`. Sort `id` ascending.
+`PATCH` accepts `active` or `suspended` only. `removed` is `DELETE`.
 
 ## Internal APIs
 
-Not published on the gateway. Served only on **`INTERNAL_PORT`**. Optional `INTERNAL_AUTH_TOKEN` → header `X-Plat5-Internal-Token` (constant-time compare). Unset = network-trust only (dev).
+Not published on the gateway. Served only on **`INTERNAL_PORT`**. Optional `INTERNAL_AUTH_TOKEN` → header `X-Plat5-Internal-Token` (constant-time compare). Unset = network-trust only (dev). These are lookups for a proxy, not checks on the resource handlers. Do not fold them into the resource URLs.
 
 Gateway env: `USER_APIKEY_VALIDATE_URL`, `MEMBER_APIKEY_VALIDATE_URL`, `MEMBER_RESOLVE_URL`, same `INTERNAL_AUTH_TOKEN`, same `APIKEY_BRAND`. All three URLs are required to boot.
 
@@ -368,7 +372,7 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
 **Miss:** **404** `NOT_FOUND` (no row, or `removed`).
 
-Response includes `status` but **not** `role`. Gateway admits only when `status === "active"`; any other status → gateway **404**.
+Response includes `status`. Gateway admits only when `status === "active"`; any other status → gateway **404**.
 
 Gateway caches active hits and 404 / inactive misses (`MEMBER_CACHE_TTL_SECS`, default 300s). Concurrent misses share one resolve call. Transport / 503 are not cached. Remove/suspend is visible at the edge when the TTL expires. Contract: [`gateway-contract.md`](gateway-contract.md).
 
@@ -380,16 +384,18 @@ Member API keys do **not** use this endpoint for admission: validate already ret
 organizations
 members
   user_id XOR service_account_id
-  role, status, added_by, …
+  status, added_by, …
+  unique (organization_id, user_id) where user_id is not null
+  unique (service_account_id) where service_account_id is not null
 service_accounts
   organization_id
   name, created_by_user_id, …
 organization_invites   -- token while active; token_hash always
-  organization_id, role, email?, token?, token_hash, status, max_uses, use_count, expires_at, …
+  organization_id, email?, token?, token_hash, status, max_uses, use_count, expires_at, created_by?, …
 
-user_api_keys          -- person credentials (user scope); wire {brand}-sk-1-
+user_api_keys          -- person credentials; wire {brand}-sk-1-
   user_id, name, key_prefix, key_hash, scopes, revoked_at, …
-member_api_keys        -- org principal credentials (org scope); wire {brand}-mk-1-
+member_api_keys        -- member credentials; wire {brand}-mk-1-
   member_id, name, key_prefix, key_hash, scopes, revoked_at, …
 ```
 
@@ -397,7 +403,11 @@ member_api_keys        -- org principal credentials (org scope); wire {brand}-mk
 
 Independent tables, independent packages (`userkeys` / `memberkeys`), independent validate endpoints. Not one polymorphic key system.
 
-No IdP user table and no FK to an external directory. `user_id` values are opaque strings from the gateway.
+No IdP user table and no FK to an external directory. `user_id` values are opaque strings.
+
+`organization_invites.created_by` is nullable. `members.added_by` and `service_accounts.created_by_user_id` are nullable.
+
+There is no role column.
 
 ## Runtime
 
@@ -420,12 +430,14 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - Global `/service-accounts` (SAs are org-scoped)
 - Multi-org service accounts (one SA, one org, one member)
 - Org `settings` / config bag
-- User collection or person id in the path (`/api/users`, `/api/users/me`, `/api/users/{user_id}/...`)
+- A user directory (`GET /users`). Person id is a path parameter, not a collection.
 - Platform-owned user rows / IdP account linking (opaque `user_id` only)
 - SMTP / sending invite email (identity returns a token; the console may send mail)
 - Pending member rows (membership is created only on invite redeem, status `active`)
 - Resource ACL, FGA, project permissions
+- Roles (`member` / `admin` / `owner`). Not a column, not a response field, not a later hook.
+- Caller checks, or inferring `added_by` / `created_by` / `created_by_user_id`
 - Key `scopes` as deny-all, or default-deny on unlabeled routes
 - Gateway `organization` scope on this service’s public routes
-- Auto-publishing these public routes — the operator applies the catalog (`routes.yml`)
+- Auto-publishing these public routes — the operator applies a catalog
 - Configurable `sk` / `mk` / `1`, independent full-prefix env vars, or dual-brand key accept

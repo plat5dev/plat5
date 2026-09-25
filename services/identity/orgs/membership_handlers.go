@@ -4,7 +4,6 @@ import (
 	"github.com/gofiber/fiber/v3"
 
 	"github.com/plat5dev/plat5/identity/internal/httpx"
-	"github.com/plat5dev/plat5/identity/middleware"
 )
 
 type MembershipOrgResponse struct {
@@ -16,7 +15,6 @@ type MembershipOrgResponse struct {
 type MembershipResponse struct {
 	ID           string                `json:"id"`
 	Organization MembershipOrgResponse `json:"organization"`
-	Role         string                `json:"role"`
 	Status       string                `json:"status"`
 }
 
@@ -27,7 +25,7 @@ type ListMembershipsResponse struct {
 
 func (h *Handler) ListMemberships(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
+	userID := httpx.PathParam(c, "user_id")
 	limit, startingAfter, err := httpx.ParseListParams(c)
 	if err != nil {
 		return err
@@ -56,7 +54,6 @@ func toMembershipResponse(m *Membership) MembershipResponse {
 			Name: m.OrganizationName,
 			Slug: m.OrganizationSlug,
 		},
-		Role:   string(m.Role),
 		Status: string(m.Status),
 	}
 }

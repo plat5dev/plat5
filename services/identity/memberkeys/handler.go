@@ -11,7 +11,6 @@ import (
 	"github.com/plat5dev/plat5/identity/internal/apikey"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/metrics"
-	"github.com/plat5dev/plat5/identity/middleware"
 	"github.com/plat5dev/plat5/identity/orgs"
 )
 
@@ -65,16 +64,10 @@ type ValidateResponse struct {
 
 func (h *Handler) Create(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
-	memberID := c.Params("member_id")
+	memberID := httpx.PathParam(c, "member_id")
 
-	target, err := h.authorizeKeyManage(ctx, orgID, memberID, userID)
-	if err != nil {
+	if _, err := h.visibleMember(ctx, memberID); err != nil {
 		return err
-	}
-	if target.Status != orgs.StatusActive {
-		return errors.NotFoundError("member", memberID)
 	}
 
 	var req CreateRequest
@@ -102,7 +95,6 @@ func (h *Handler) Create(c fiber.Ctx) error {
 	}
 
 	httpx.Logger(ctx).Info().
-		Str("organization_id", orgID).
 		Str("member_id", memberID).
 		Str("key_id", apiKey.ID).
 		Str("key_prefix", apiKey.KeyPrefix).
@@ -121,11 +113,9 @@ func (h *Handler) Create(c fiber.Ctx) error {
 
 func (h *Handler) List(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
-	memberID := c.Params("member_id")
+	memberID := httpx.PathParam(c, "member_id")
 
-	if _, err := h.authorizeKeyManage(ctx, orgID, memberID, userID); err != nil {
+	if _, err := h.visibleMember(ctx, memberID); err != nil {
 		return err
 	}
 
@@ -151,12 +141,10 @@ func (h *Handler) List(c fiber.Ctx) error {
 
 func (h *Handler) Revoke(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
-	memberID := c.Params("member_id")
+	memberID := httpx.PathParam(c, "member_id")
 	keyID := c.Params("key_id")
 
-	if _, err := h.authorizeKeyManage(ctx, orgID, memberID, userID); err != nil {
+	if _, err := h.visibleMember(ctx, memberID); err != nil {
 		return err
 	}
 	if keyID == "" {
@@ -171,7 +159,6 @@ func (h *Handler) Revoke(c fiber.Ctx) error {
 	}
 
 	httpx.Logger(ctx).Info().
-		Str("organization_id", orgID).
 		Str("member_id", memberID).
 		Str("key_id", key.ID).
 		Msg("member api key revoked")
@@ -218,23 +205,15 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 	})
 }
 
-func (h *Handler) authorizeKeyManage(ctx context.Context, orgID, memberID, userID string) (*orgs.Member, error) {
-	actor, err := orgs.RequireActiveMember(ctx, h.orgStore, orgID, userID)
+func (h *Handler) visibleMember(ctx context.Context, memberID string) (*orgs.Member, error) {
+	target, err := h.orgStore.GetMember(ctx, memberID)
 	if err != nil {
-		return nil, httpx.MapDB(ctx, err, "failed to load actor member", httpx.DBErr{})
-	}
-
-	target, err := h.orgStore.GetMember(ctx, orgID, memberID)
-	if err != nil {
-		return nil, httpx.MapDB(ctx, err, "failed to load target member", httpx.DBErr{
+		return nil, httpx.MapDB(ctx, err, "failed to load member", httpx.DBErr{
 			NotFound: orgs.ErrNotFound, Resource: "member", ResourceID: memberID,
 		})
 	}
 	if target.Status == orgs.StatusRemoved {
 		return nil, errors.NotFoundError("member", memberID)
-	}
-	if err := orgs.CanManageMemberKeys(actor, target); err != nil {
-		return nil, err
 	}
 	return target, nil
 }

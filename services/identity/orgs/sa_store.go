@@ -2,7 +2,6 @@ package orgs
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -21,14 +20,7 @@ const saSelect = `
 		AND m.status <> 'removed'
 `
 
-func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount, role Role, addedBy *string) (*Member, error) {
-	if role == RoleOwner {
-		return nil, fmt.Errorf("create_service_account: service accounts cannot be owners")
-	}
-	if role == "" {
-		role = RoleMember
-	}
-
+func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount, createdBy *string) (*Member, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_service_account", dbx.DefaultTimeout,
 		attribute.String("organization.id", sa.OrganizationID),
 		attribute.String("service_account.id", sa.ID),
@@ -40,6 +32,7 @@ func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount, ro
 	sa.CreatedAt = now
 	sa.UpdatedAt = now
 	sa.Status = StatusActive
+	sa.CreatedByUserID = createdBy
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -69,17 +62,15 @@ func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount, ro
 		ID:               NewULID(),
 		OrganizationID:   sa.OrganizationID,
 		ServiceAccountID: &sa.ID,
-		Role:             role,
 		Status:           StatusActive,
-		AddedBy:          addedBy,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO members
-			(id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at)
-		VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8)
-	`, m.ID, m.OrganizationID, sa.ID, m.Role, m.Status, m.AddedBy, m.CreatedAt, m.UpdatedAt)
+			(id, organization_id, user_id, service_account_id, status, added_by, created_at, updated_at)
+		VALUES ($1, $2, NULL, $3, $4, NULL, $5, $6)
+	`, m.ID, m.OrganizationID, sa.ID, m.Status, m.CreatedAt, m.UpdatedAt)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
@@ -215,10 +206,11 @@ func (s *Store) DeleteServiceAccount(ctx context.Context, organizationID, servic
 	}
 	defer tx.Rollback(ctx)
 
-	sa, err := scanServiceAccount(tx.QueryRow(ctx, saSelect+`
-		WHERE sa.id = $1 AND sa.organization_id = $2
-		FOR UPDATE OF sa, m
-	`, serviceAccountID, organizationID))
+	var exists string
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM service_accounts
+		WHERE id = $1 AND organization_id = $2
+	`, serviceAccountID, organizationID).Scan(&exists)
 	if err != nil {
 		if dbx.IsNoRows(err) {
 			return op.Expected("not found", ErrNotFound)
@@ -226,12 +218,30 @@ func (s *Store) DeleteServiceAccount(ctx context.Context, organizationID, servic
 		return op.Fail(err)
 	}
 
+	members, err := lockOrgMembers(ctx, tx, organizationID)
+	if err != nil {
+		return op.Fail(err)
+	}
+	var target *Member
+	for _, m := range members {
+		if m.ServiceAccountID != nil && *m.ServiceAccountID == serviceAccountID && m.Status != StatusRemoved {
+			target = m
+			break
+		}
+	}
+	if target == nil {
+		return op.Expected("not found", ErrNotFound)
+	}
+	if err := rejectLastMember(countNonRemoved(members), "service_account_id"); err != nil {
+		return op.Expected("last member", err)
+	}
+
 	now := time.Now().UTC()
 	_, err = tx.Exec(ctx, `
 		UPDATE members
 		SET status = 'removed', updated_at = $3
 		WHERE id = $1 AND organization_id = $2
-	`, sa.MemberID, organizationID, now)
+	`, target.ID, organizationID, now)
 	if err != nil {
 		return op.Fail(err)
 	}

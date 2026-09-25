@@ -9,7 +9,6 @@ import (
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/metrics"
-	"github.com/plat5dev/plat5/identity/middleware"
 )
 
 type CreateOrgRequest struct {
@@ -37,7 +36,7 @@ type ListOrgsResponse struct {
 
 func (h *Handler) CreateOrganization(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
+	userID := httpx.PathParam(c, "user_id")
 
 	var req CreateOrgRequest
 	if err := c.Bind().Body(&req); err != nil {
@@ -74,7 +73,7 @@ func (h *Handler) CreateOrganization(c fiber.Ctx) error {
 	}
 
 	metrics.RecordOrgCreated()
-	metrics.RecordMemberOp("create_owner")
+	metrics.RecordMemberOp("create")
 	return c.Status(fiber.StatusCreated).JSON(toOrgResponse(org))
 }
 
@@ -102,12 +101,7 @@ func (h *Handler) ListOrganizations(c fiber.Ctx) error {
 
 func (h *Handler) GetOrganization(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
-
-	if _, err := h.requireActiveMember(ctx, orgID, userID); err != nil {
-		return err
-	}
+	orgID := httpx.PathParam(c, "organization_id")
 
 	org, err := h.store.GetOrganization(ctx, orgID)
 	if err != nil {
@@ -120,16 +114,7 @@ func (h *Handler) GetOrganization(c fiber.Ctx) error {
 
 func (h *Handler) UpdateOrganization(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
-
-	actor, err := h.requireActiveMember(ctx, orgID, userID)
-	if err != nil {
-		return err
-	}
-	if err := RequireAdminOrOwner(actor, "organization.update", "organization", orgID); err != nil {
-		return err
-	}
+	orgID := httpx.PathParam(c, "organization_id")
 
 	var req UpdateOrgRequest
 	if err := c.Bind().Body(&req); err != nil {
@@ -170,16 +155,7 @@ func (h *Handler) UpdateOrganization(c fiber.Ctx) error {
 
 func (h *Handler) DeleteOrganization(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
-	orgID := c.Params("organization_id")
-
-	actor, err := h.requireActiveMember(ctx, orgID, userID)
-	if err != nil {
-		return err
-	}
-	if err := RequireOwner(actor, "organization.delete", "organization", orgID); err != nil {
-		return err
-	}
+	orgID := httpx.PathParam(c, "organization_id")
 
 	if err := h.store.DeleteOrganization(ctx, orgID); err != nil {
 		return httpx.MapDB(ctx, err, "failed to delete organization", httpx.DBErr{

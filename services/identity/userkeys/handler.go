@@ -10,7 +10,6 @@ import (
 	"github.com/plat5dev/plat5/identity/internal/apikey"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/metrics"
-	"github.com/plat5dev/plat5/identity/middleware"
 )
 
 type Handler struct {
@@ -61,7 +60,7 @@ type ValidateResponse struct {
 
 func (h *Handler) Create(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
+	userID := httpx.PathParam(c, "user_id")
 
 	var req CreateRequest
 	if err := c.Bind().Body(&req); err != nil {
@@ -107,7 +106,7 @@ func (h *Handler) Create(c fiber.Ctx) error {
 
 func (h *Handler) List(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
+	userID := httpx.PathParam(c, "user_id")
 
 	limit, startingAfter, err := httpx.ParseListParams(c)
 	if err != nil {
@@ -131,7 +130,7 @@ func (h *Handler) List(c fiber.Ctx) error {
 
 func (h *Handler) Revoke(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
+	userID := httpx.PathParam(c, "user_id")
 	keyID := c.Params("key_id")
 	if keyID == "" {
 		return errors.FieldError("key_id", errors.FallbackValidation)

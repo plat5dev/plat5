@@ -23,10 +23,10 @@ func (s *Store) CreateInvite(ctx context.Context, inv *Invite) error {
 	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO organization_invites (
-			id, organization_id, role, email, token_hash, token_prefix,
+			id, organization_id, email, token_hash, token_prefix,
 			created_by, expires_at, created_at, token, status, max_uses, use_count
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-	`, inv.ID, inv.OrganizationID, inv.Role, inv.Email, inv.TokenHash, inv.TokenPrefix,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	`, inv.ID, inv.OrganizationID, inv.Email, inv.TokenHash, inv.TokenPrefix,
 		inv.CreatedBy, inv.ExpiresAt, inv.CreatedAt, inv.Token, status, inv.MaxUses, inv.UseCount)
 	if err != nil {
 		return op.Fail(err)
@@ -170,7 +170,7 @@ func (s *Store) RedeemInvite(ctx context.Context, tokenHash, userID string) (*Me
 	}
 
 	existing, err := scanMember(tx.QueryRow(ctx, `
-		SELECT id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at
+		SELECT `+memberCols+`
 		FROM members
 		WHERE organization_id = $1 AND user_id = $2
 		FOR UPDATE
@@ -185,15 +185,14 @@ func (s *Store) RedeemInvite(ctx context.Context, tokenHash, userID string) (*Me
 	} else if err == nil {
 		_, err = tx.Exec(ctx, `
 			UPDATE members
-			SET role = $3, status = $4, added_by = $5, updated_at = $6
+			SET status = $3, added_by = $4, updated_at = $5
 			WHERE organization_id = $1 AND user_id = $2 AND status = 'removed'
-		`, inv.OrganizationID, userID, inv.Role, StatusActive, inv.CreatedBy, now)
+		`, inv.OrganizationID, userID, StatusActive, inv.CreatedBy, now)
 		if err != nil {
 			return nil, op.Fail(err)
 		}
-		existing.Role = inv.Role
 		existing.Status = StatusActive
-		existing.AddedBy = &inv.CreatedBy
+		existing.AddedBy = inv.CreatedBy
 		existing.UpdatedAt = now
 		member = existing
 	} else {
@@ -201,17 +200,16 @@ func (s *Store) RedeemInvite(ctx context.Context, tokenHash, userID string) (*Me
 			ID:             NewULID(),
 			OrganizationID: inv.OrganizationID,
 			UserID:         &userID,
-			Role:           inv.Role,
 			Status:         StatusActive,
-			AddedBy:        &inv.CreatedBy,
+			AddedBy:        inv.CreatedBy,
 			CreatedAt:      now,
 			UpdatedAt:      now,
 		}
 		_, err = tx.Exec(ctx, `
 			INSERT INTO members
-				(id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at)
-			VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8)
-		`, m.ID, m.OrganizationID, userID, m.Role, m.Status, m.AddedBy, m.CreatedAt, m.UpdatedAt)
+				(id, organization_id, user_id, service_account_id, status, added_by, created_at, updated_at)
+			VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)
+		`, m.ID, m.OrganizationID, userID, m.Status, m.AddedBy, m.CreatedAt, m.UpdatedAt)
 		if err != nil {
 			if dbx.IsUniqueViolation(err) {
 				return nil, op.SoftFail("conflict", ErrConflict, ErrConflict)

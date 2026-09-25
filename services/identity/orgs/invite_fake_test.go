@@ -13,7 +13,6 @@ import (
 	"github.com/gofiber/fiber/v3"
 
 	apierrors "github.com/plat5dev/plat5/identity/errors"
-	"github.com/plat5dev/plat5/identity/middleware"
 )
 
 type fakeInvites struct {
@@ -50,15 +49,20 @@ func cloneInvite(inv *Invite) *Invite {
 	return &cp
 }
 
-func (f *fakeInvites) GetActiveMemberForUser(_ context.Context, organizationID, userID string) (*Member, error) {
+func (f *fakeInvites) OrganizationExists(_ context.Context, organizationID string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	m := f.members[memberKey(organizationID, userID)]
-	if m == nil || m.Status != StatusActive {
-		return nil, ErrNotFound
+	for _, m := range f.members {
+		if m.OrganizationID == organizationID {
+			return true, nil
+		}
 	}
-	cp := *m
-	return &cp, nil
+	for _, inv := range f.invites {
+		if inv.OrganizationID == organizationID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (f *fakeInvites) CreateInvite(_ context.Context, inv *Invite) error {
@@ -144,14 +148,12 @@ func (f *fakeInvites) RedeemInvite(_ context.Context, tokenHash, userID string) 
 		return &cp, nil
 	}
 	uid := userID
-	added := inv.CreatedBy
 	m := &Member{
 		ID:             "mem_" + userID,
 		OrganizationID: inv.OrganizationID,
 		UserID:         &uid,
-		Role:           inv.Role,
 		Status:         StatusActive,
-		AddedBy:        &added,
+		AddedBy:        inv.CreatedBy,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
@@ -160,18 +162,12 @@ func (f *fakeInvites) RedeemInvite(_ context.Context, tokenHash, userID string) 
 	return &cp, nil
 }
 
-func testInviteApp(h *Handler, userID string) *fiber.App {
+func testInviteApp(h *Handler) *fiber.App {
 	app := fiber.New(fiber.Config{ErrorHandler: apierrors.FiberErrorHandler})
-	app.Use(func(c fiber.Ctx) error {
-		if userID != "" {
-			c.Locals(middleware.UserIDKey, userID)
-		}
-		return c.Next()
-	})
-	app.Post("/api/organizations/:organization_id/invites", h.CreateInvite)
-	app.Get("/api/organizations/:organization_id/invites", h.ListInvites)
-	app.Delete("/api/organizations/:organization_id/invites/:invite_id", h.RevokeInvite)
-	app.Post("/api/invites/redeem", h.RedeemInvite)
+	app.Post("/organizations/:organization_id/invites", h.CreateInvite)
+	app.Get("/organizations/:organization_id/invites", h.ListInvites)
+	app.Delete("/organizations/:organization_id/invites/:invite_id", h.RevokeInvite)
+	app.Post("/users/:user_id/invites/redeem", h.RedeemInvite)
 	return app
 }
 
@@ -203,7 +199,6 @@ func seedOwner(f *fakeInvites, orgID, userID string) {
 		ID:             "m-owner",
 		OrganizationID: orgID,
 		UserID:         &uid,
-		Role:           RoleOwner,
 		Status:         StatusActive,
 	}
 }
@@ -214,7 +209,6 @@ func seedMember(f *fakeInvites, orgID, userID string) {
 		ID:             "m-" + userID,
 		OrganizationID: orgID,
 		UserID:         &uid,
-		Role:           RoleMember,
 		Status:         StatusActive,
 	}
 }
