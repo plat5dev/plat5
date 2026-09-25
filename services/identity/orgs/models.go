@@ -59,6 +59,17 @@ type Organization struct {
 	UpdatedAt time.Time
 }
 
+// Membership is a user's member row joined to its organization.
+// Not a table. Active user memberships only.
+type Membership struct {
+	ID               string
+	Role             Role
+	Status           Status
+	OrganizationID   string
+	OrganizationName string
+	OrganizationSlug string
+}
+
 // Member is an org principal: exactly one of UserID or ServiceAccountID.
 type Member struct {
 	ID               string

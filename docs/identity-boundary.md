@@ -16,7 +16,7 @@ The route is a type. A handler does not get extra identity “just in case.” P
 
 **Platform role as product ACL.** Identity `owner` / `admin` / `member` is for membership administration (add member, rotate SA keys, transfer owner). Product permissions are the service’s, over the subject the scope defined.
 
-**Identity on `organization` scope.** If `GET /organizations/{id}/members` required gateway member-resolve, identity could not be the authority that defines membership. List-my-orgs and invite redeem would be special cases. Identity public APIs are `user` scope and enforce admin rules from `X-User-Id` + path.
+**Identity on `organization` scope.** If org administration required gateway member-resolve, identity could not be the authority that defines membership. Memberships and invite redeem are person routes. Catalog routes are `user` scope. Org administration enforces role from `X-User-Id` + path. `GET /api/organizations` and `GET /api/organizations/{organization_id}/members` name the resource in the path and do not use the caller.
 
 Frontend session (cookie, current-org, subdomain) is your client. The request the gateway sees must still name the subject — org in the path for `organization` scope.
 
@@ -56,8 +56,8 @@ Business services on `organization` scope get `organization_id` + `member_id` on
 
 | Routes | Scope | Why |
 |--------|-------|-----|
-| User-centric APIs (user API keys, list my orgs, invite redeem) | **`user`** | Subject is the person. |
-| **identity** public APIs | **`user` only** | Membership **authority**. Must not sit behind gateway member resolve into itself. Enforces member and admin rules in-process from `X-User-Id` + path. |
+| User-centric APIs (user API keys, memberships, invite redeem) | **`user`** | Subject is the person. The person is not in the path. |
+| **identity** catalog routes | **`user` only** | Membership **authority**. Must not sit behind gateway member resolve into itself. Org administration enforces role from `X-User-Id` + path. |
 | Business APIs under an org path | **`organization`** | Gateway admits active member; service trusts org headers and enforces resource authz. |
 
 **Default on `organization` scope:** trust gateway admission — do not re-check “is this member in the org?” Enforce **resource** authz in the service. Re-checking admission is optional defense-in-depth, not required.
@@ -86,21 +86,28 @@ No organization-scoped token exchange required for the default path.
 ### User-scoped API
 
 ```
-GET /api/organizations
+GET /api/user/memberships
 Authorization: user JWT or user API key
 
 Gateway: authn → inject X-User-Id → proxy
-Service: subject is the person; list orgs where this user has an active membership
+Service: subject is the person; list active memberships
 ```
 
-Identity public APIs are this shape (membership authority — must not sit behind member-resolve):
+Org administration is this shape (membership authority — must not sit behind member-resolve):
 
 ```
-GET /api/organizations/{organization_id}/members
+POST /api/organizations/{organization_id}/members
 Authorization: user JWT or user API key
 
 Gateway: authn → inject X-User-Id → proxy
 identity: load member for (user_id, organization_id); enforce admin rules; respond
+```
+
+Directory reads name the resource in the path. The caller is not a subject.
+
+```
+GET /api/organizations
+GET /api/organizations/{organization_id}/members
 ```
 
 ## Error split (locked)
@@ -114,7 +121,7 @@ identity: load member for (user_id, organization_id); enforce admin rules; respo
 | Member resolve / key validate down or timeout; Valkey down on a limited request; JWKS unavailable | **503** `SERVICE_UNAVAILABLE` |
 | Missing expected identity headers on a protected route (downstream) | **500** `INTERNAL_ERROR` (platform bug) |
 
-Existence policy: non-member and unknown org look the same (**404**), including on identity service org resources.
+Existence policy: non-member and unknown org look the same (**404**) on identity org-administration routes. Directory reads do not use the caller. Unknown org on `GET /api/organizations/{organization_id}/members` is still **404**.
 
 ## Missing headers
 

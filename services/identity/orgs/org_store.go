@@ -81,10 +81,8 @@ func (s *Store) GetOrganization(ctx context.Context, organizationID string) (*Or
 	return org, nil
 }
 
-func (s *Store) ListOrganizationsForUser(ctx context.Context, userID string, limit int, startingAfter string) ([]*Organization, bool, error) {
-	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_organizations_for_user", dbx.DefaultTimeout,
-		attribute.String("user.id", userID),
-	)
+func (s *Store) ListOrganizations(ctx context.Context, limit int, startingAfter string) ([]*Organization, bool, error) {
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_organizations", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
@@ -93,14 +91,12 @@ func (s *Store) ListOrganizationsForUser(ctx context.Context, userID string, lim
 		after = startingAfter
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT o.id, o.name, o.slug, o.created_at, o.updated_at
-		FROM organizations o
-		INNER JOIN members m ON m.organization_id = o.id
-		WHERE m.user_id = $1 AND m.status = 'active'
-		AND ($2::text IS NULL OR o.id > $2)
-		ORDER BY o.id ASC
-		LIMIT $3
-	`, userID, after, limit+1)
+		SELECT id, name, slug, created_at, updated_at
+		FROM organizations
+		WHERE ($1::text IS NULL OR id > $1)
+		ORDER BY id ASC
+		LIMIT $2
+	`, after, limit+1)
 	if err != nil {
 		return nil, false, op.Fail(err)
 	}

@@ -68,7 +68,9 @@ When changing labels: update compose labels and `OTEL_SERVICE_NAMESPACE` togethe
 
 | Surface | Pattern | Route scope |
 |---------|---------|-------------|
-| Identity service (authority) | `/api/users/...`, `/api/organizations/...` | **`user`** only |
+| Identity service (authority) | `/api/user/...`, `/api/organizations/...` | **`user`** for catalog routes |
+
+`user` is a scope prefix for the person in `X-User-Id`, not a collection. No `{user_id}`. Resources under it are plural (`memberships`, `api-keys`).
 | Business APIs under an org | e.g. `/api/organizations/{organization_id}/projects` | **`organization`** |
 | Internal control (not on gateway) | `/internal/user-keys/validate`, `/internal/member-keys/validate`, `/internal/members/resolve` | private / `INTERNAL_PORT` |
 

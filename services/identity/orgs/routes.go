@@ -2,16 +2,27 @@ package orgs
 
 import "github.com/gofiber/fiber/v3"
 
-// MountPublic registers organization, member, invite, and service-account routes.
-// Caller should attach auth middleware on the group (e.g. RequireUserID).
+// MountDirectory registers reads that do not use the caller.
+// Do not attach RequireUserID.
+func (h *Handler) MountDirectory(router fiber.Router) {
+	router.Get("/organizations", h.ListOrganizations)
+	router.Get("/organizations/:organization_id/members", h.ListMembers)
+}
+
+// MountMemberships registers GET /memberships. Caller attaches auth on the group.
+// Mount under /api/user.
+func (h *Handler) MountMemberships(router fiber.Router) {
+	router.Get("/memberships", h.ListMemberships)
+}
+
+// MountPublic registers organization, member, invite, and service-account routes
+// that use the caller. Caller should attach auth middleware on the group.
 func (h *Handler) MountPublic(router fiber.Router) {
 	router.Post("/", h.CreateOrganization)
-	router.Get("/", h.ListOrganizations)
 	router.Get("/:organization_id", h.GetOrganization)
 	router.Patch("/:organization_id", h.UpdateOrganization)
 	router.Delete("/:organization_id", h.DeleteOrganization)
 
-	router.Get("/:organization_id/members", h.ListMembers)
 	router.Post("/:organization_id/members", h.CreateMember)
 	router.Get("/:organization_id/members/:member_id", h.GetMember)
 	router.Patch("/:organization_id/members/:member_id", h.UpdateMember)

@@ -80,13 +80,12 @@ func (h *Handler) CreateOrganization(c fiber.Ctx) error {
 
 func (h *Handler) ListOrganizations(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
 	limit, startingAfter, err := httpx.ParseListParams(c)
 	if err != nil {
 		return err
 	}
 
-	list, hasMore, err := h.store.ListOrganizationsForUser(ctx, userID, limit, startingAfter)
+	list, hasMore, err := h.store.ListOrganizations(ctx, limit, startingAfter)
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to list organizations", httpx.DBErr{})
 	}

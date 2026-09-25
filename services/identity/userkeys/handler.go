@@ -61,9 +61,6 @@ type ValidateResponse struct {
 
 func (h *Handler) Create(c fiber.Ctx) error {
 	ctx := c.Context()
-	if err := requirePathUser(c); err != nil {
-		return err
-	}
 	userID := middleware.GetUserID(c)
 
 	var req CreateRequest
@@ -110,9 +107,6 @@ func (h *Handler) Create(c fiber.Ctx) error {
 
 func (h *Handler) List(c fiber.Ctx) error {
 	ctx := c.Context()
-	if err := requirePathUser(c); err != nil {
-		return err
-	}
 	userID := middleware.GetUserID(c)
 
 	limit, startingAfter, err := httpx.ParseListParams(c)
@@ -137,9 +131,6 @@ func (h *Handler) List(c fiber.Ctx) error {
 
 func (h *Handler) Revoke(c fiber.Ctx) error {
 	ctx := c.Context()
-	if err := requirePathUser(c); err != nil {
-		return err
-	}
 	userID := middleware.GetUserID(c)
 	keyID := c.Params("key_id")
 	if keyID == "" {
@@ -199,15 +190,6 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 func (h *Handler) invalid(c fiber.Ctx) error {
 	metrics.RecordKeyValidation(metrics.KeyScopeUser, false)
 	return c.JSON(ValidateResponse{Valid: false})
-}
-
-func requirePathUser(c fiber.Ctx) error {
-	caller := middleware.GetUserID(c)
-	pathUser := c.Params("user_id")
-	if pathUser == "" || pathUser != caller {
-		return errors.NotFoundError("user", pathUser)
-	}
-	return nil
 }
 
 func toKeyResponse(k *APIKey) KeyResponse {

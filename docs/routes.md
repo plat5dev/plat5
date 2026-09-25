@@ -306,12 +306,14 @@ services:
     url: identity:3000
     user:
       routes:
-        - path: /api/users/{user_id}/api-keys
+        - path: /api/user/memberships
+          methods: [GET]
+        - path: /api/user/api-keys
           methods: [GET, POST]
-        - path: /api/users/{user_id}/api-keys/{key_id}
+        - path: /api/user/api-keys/{key_id}
           methods: [DELETE]
         - path: /api/organizations
-          methods: [POST, GET]
+          methods: [POST]
         - path: /api/organizations/{organization_id}
           methods: [GET, PATCH, DELETE]
         - path: /api/organizations/{organization_id}/members

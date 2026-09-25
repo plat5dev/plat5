@@ -30,11 +30,11 @@ Always **`id` ascending**. IDs are ULIDs (time-sortable).
 
 | Field | |
 |-------|--|
-| named collection | Plural resource key (`organizations`, `members`, `invites`, `service_accounts`, `keys`). |
+| named collection | Plural resource key (`organizations`, `memberships`, `members`, `invites`, `service_accounts`, `keys`). |
 | `has_more` | `true` if another page exists. Always present. |
 
 When `has_more` is `true`, pass the last item’s `id` as `starting_after` on the following request.
 
 ## Identity lists
 
-All of: list orgs, members, invites, service accounts, user API keys, member API keys.
+All of: list orgs, memberships, members, invites, service accounts, user API keys, member API keys.

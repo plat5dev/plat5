@@ -24,6 +24,25 @@ func scanServiceAccount(row dbx.Scannable) (*ServiceAccount, error) {
 	return &sa, nil
 }
 
+func scanMembership(row dbx.Scannable) (*Membership, error) {
+	var m Membership
+	var role, status string
+	err := row.Scan(
+		&m.ID,
+		&role,
+		&status,
+		&m.OrganizationID,
+		&m.OrganizationName,
+		&m.OrganizationSlug,
+	)
+	if err != nil {
+		return nil, err
+	}
+	m.Role = Role(role)
+	m.Status = Status(status)
+	return &m, nil
+}
+
 func scanOrg(row dbx.Scannable) (*Organization, error) {
 	var o Organization
 	err := row.Scan(&o.ID, &o.Name, &o.Slug, &o.CreatedAt, &o.UpdatedAt)

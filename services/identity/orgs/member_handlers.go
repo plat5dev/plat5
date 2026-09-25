@@ -55,11 +55,12 @@ type ResolveResponse struct {
 
 func (h *Handler) ListMembers(c fiber.Ctx) error {
 	ctx := c.Context()
-	userID := middleware.GetUserID(c)
 	orgID := c.Params("organization_id")
 
-	if _, err := h.requireActiveMember(ctx, orgID, userID); err != nil {
-		return err
+	if _, err := h.store.GetOrganization(ctx, orgID); err != nil {
+		return httpx.MapDB(ctx, err, "failed to get organization", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "organization", ResourceID: orgID,
+		})
 	}
 
 	limit, startingAfter, err := httpx.ParseListParams(c)

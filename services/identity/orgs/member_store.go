@@ -129,6 +129,52 @@ func (s *Store) ListMembers(ctx context.Context, organizationID string, limit in
 	return out, hasMore, nil
 }
 
+func (s *Store) ListMemberships(ctx context.Context, userID string, limit int, startingAfter string) ([]*Membership, bool, error) {
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_memberships", dbx.DefaultTimeout,
+		attribute.String("user.id", userID),
+	)
+	defer cancel()
+	defer op.End()
+
+	var after any
+	if startingAfter != "" {
+		after = startingAfter
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT m.id, m.role, m.status, o.id, o.name, o.slug
+		FROM members m
+		INNER JOIN organizations o ON o.id = m.organization_id
+		WHERE m.user_id = $1 AND m.status = 'active'
+		AND ($2::text IS NULL OR m.id > $2)
+		ORDER BY m.id ASC
+		LIMIT $3
+	`, userID, after, limit+1)
+	if err != nil {
+		return nil, false, op.Fail(err)
+	}
+	defer rows.Close()
+
+	var out []*Membership
+	for rows.Next() {
+		m, err := scanMembership(rows)
+		if err != nil {
+			return nil, false, op.Fail(err)
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, op.Fail(err)
+	}
+
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	op.Attr(attribute.Int("memberships.count", len(out)))
+	op.OK("ok")
+	return out, hasMore, nil
+}
+
 // CreateUserMember inserts a new user member, or reactivates a removed one.
 // Reactivation keeps the existing member id and created_at.
 func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {

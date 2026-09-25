@@ -6,18 +6,21 @@ Boundary: [`identity-boundary.md`](identity-boundary.md). Errors: [`api-errors.m
 
 ## Scope and headers
 
-| | |
-|--|--|
-| Gateway scope (all public routes below) | **`user` only** |
-| Expect | `X-User-Id` |
-| Missing `X-User-Id` | **500** `INTERNAL_ERROR` (gateway bug) |
-| Does **not** use | `organization` scope |
+Published identity routes are **`user`** scope. This service is the **membership authority**. It must not sit behind gateway org admission into itself. It does **not** use `organization` scope.
 
-This service is the **membership authority**. It must not sit behind gateway org admission into itself. It enforces member and role rules in-process from `X-User-Id` + path.
+The path names the resource. `X-User-Id` names the actor, and only on routes that have one. The person is not a path parameter.
 
-Member **role** is domain data here. Org-scope routes do not receive it.
+| Routes | Actor |
+|--------|--------|
+| `/api/user/...` | `X-User-Id`. Missing → **500** `INTERNAL_ERROR` |
+| `POST /api/organizations`, `POST /api/invites/redeem` | `X-User-Id`. Missing → **500** |
+| Org administration | `X-User-Id` + path. Missing header → **500**. Non-member or inactive → **404**. Wrong role → **403** |
+| `GET /api/organizations` | None. Header is not read |
+| `GET /api/organizations/{organization_id}/members` | None. Header is not read |
 
-Apply `services/identity/routes.yml` (or a subset) via the route-registry. Internal validate/resolve stay on `INTERNAL_PORT`.
+Org administration is get, patch, and delete org; member create, get, update, and delete; invites; service accounts; member keys. Role is domain data here. Org-scope routes do not receive it.
+
+Apply `services/identity/routes.yml` (or a subset) via the route-registry. That catalog omits `GET /api/organizations`. The service still serves it. Internal validate/resolve stay on `INTERNAL_PORT`.
 
 ## Glossary
 
@@ -28,19 +31,43 @@ Apply `services/identity/routes.yml` (or a subset) via the route-registry. Inter
 | **member** | Org principal. Exactly one of: a **user** or a **service account**. Wire id: `member_id`. |
 | **service account** | Non-human identity created **under an organization**. Always has a member row in that org. |
 | **api key** | Bearer secret. Either **user-scoped** or **member-scoped**. Optional `scopes` labels: a restricted key (non-null list) must intersect route `required_scopes`; unlabeled routes still admit. |
+| **membership** | A user's member row in an org, with that org. Not a table. Wire resource for which orgs this person belongs to. |
 | **invite** | Org join token (`active` / `redeemed` / `revoked` / `expired`). Redeem inserts an **active** member. The host sends any email. |
 
 ## Public API
 
-### User API keys
+### Memberships
 
-Clients already know `user_id` from the IdP token. Path `user_id` must equal `X-User-Id` or → **404** `NOT_FOUND`.
+Person resource. Subject is `X-User-Id`. Active **user** memberships only: not service accounts, not `suspended`, not `removed`.
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/api/users/{user_id}/api-keys` | Create; plaintext once — prefix **`{brand}-sk-1-`**. Optional `scopes`. |
-| `GET` | `/api/users/{user_id}/api-keys` | List (no hashes / no secret); echoes `scopes` |
-| `DELETE` | `/api/users/{user_id}/api-keys/{key_id}` | Soft-revoke; idempotent |
+| `GET` | `/api/user/memberships` | Which orgs this person belongs to |
+
+#### Row
+
+```json
+{
+  "id": "...",
+  "organization": { "id": "...", "name": "Acme", "slug": "acme" },
+  "role": "owner",
+  "status": "active"
+}
+```
+
+List body key `memberships`. `id` is the member id. Pagination: [`lists.md`](lists.md). Cursor is that `id`.
+
+Not a table. A read of `members` joined to `organizations` for this user.
+
+### User API keys
+
+Person credential. Subject is `X-User-Id`. Not member keys — those live under the member: `/api/organizations/{organization_id}/members/{member_id}/api-keys`.
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `POST` | `/api/user/api-keys` | Create; plaintext once — prefix **`{brand}-sk-1-`**. Optional `scopes`. |
+| `GET` | `/api/user/api-keys` | List (no hashes / no secret); echoes `scopes` |
+| `DELETE` | `/api/user/api-keys/{key_id}` | Soft-revoke; idempotent |
 
 #### Create body
 
@@ -70,8 +97,8 @@ Prefix: `/api/organizations`
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/api/organizations` | Create; caller becomes **owner** member (`active`) |
-| `GET` | `/api/organizations` | List orgs where caller has **active** membership |
+| `POST` | `/api/organizations` | Create; caller (`X-User-Id`) becomes **owner** member (`active`) |
+| `GET` | `/api/organizations` | Every organization. Header is not read. Omitted from `routes.yml` |
 | `GET` | `/api/organizations/{organization_id}` | Active member |
 | `PATCH` | `/api/organizations/{organization_id}` | Admin or owner |
 | `DELETE` | `/api/organizations/{organization_id}` | Owner only |
@@ -100,11 +127,13 @@ Prefix: `/api/organizations`
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `GET` | `/api/organizations/{organization_id}/members` | Active member |
+| `GET` | `/api/organizations/{organization_id}/members` | Non-removed members. Header is not read. Unknown org → **404** |
 | `POST` | `/api/organizations/{organization_id}/members` | Admin or owner; add **user** — body `{ "user_id", "role?" }`. Target `user_id` must already be known (IdP id). Immediate `active`. |
 | `GET` | `/api/organizations/{organization_id}/members/{member_id}` | Active member |
 | `PATCH` | `/api/organizations/{organization_id}/members/{member_id}` | Role/status; admin/owner (self-leave allowed for humans) |
 | `DELETE` | `/api/organizations/{organization_id}/members/{member_id}` | Soft-remove; self or admin/owner |
+
+`GET` does not check the caller. Unknown organization → **404** `NOT_FOUND`. An existing org with no listed members is an empty page, not a 404.
 
 `POST` adds a **user** member (immediately `active`). Service accounts are created via the service-accounts API (member row included). Invites are a separate resource, below.
 
@@ -206,7 +235,7 @@ Lifecycle is the member row. Suspend / re-enable with `PATCH` `/members/{member_
 
 ### Member API keys
 
-Keys that authenticate **as a member** (org context). Used for automation / S2S on `organization` scope routes.
+Keys that authenticate **as a member** (org context). Used for automation / S2S on `organization` scope routes. Different product from `/api/user/api-keys`: the parent path is the member.
 
 | Method | Path | Notes |
 |--------|------|--------|
@@ -257,9 +286,9 @@ At least one **active owner** must remain. Sole owner cannot leave, be removed, 
 
 | Case | HTTP / code |
 |------|-------------|
-| Unknown org, non-member, or non-**active** member on org resources | **404** `NOT_FOUND` |
+| Unknown org, non-member, or non-**active** member on org-administration routes | **404** `NOT_FOUND` |
+| Unknown organization on `GET /api/organizations/{organization_id}/members` | **404** `NOT_FOUND` |
 | Active member, insufficient **role** | **403** `FORBIDDEN` |
-| Path `user_id` ≠ `X-User-Id` on user key routes | **404** `NOT_FOUND` |
 
 ## Pagination
 
@@ -391,7 +420,7 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - Global `/service-accounts` (SAs are org-scoped)
 - Multi-org service accounts (one SA, one org, one member)
 - Org `settings` / config bag
-- `GET /api/users` or `/api/users/me`
+- User collection or person id in the path (`/api/users`, `/api/users/me`, `/api/users/{user_id}/...`)
 - Platform-owned user rows / IdP account linking (opaque `user_id` only)
 - SMTP / sending invite email (identity returns a token; the console may send mail)
 - Pending member rows (membership is created only on invite redeem, status `active`)
