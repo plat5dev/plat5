@@ -51,22 +51,21 @@ When changing labels: update compose labels and `OTEL_SERVICE_NAMESPACE` togethe
 
 ## HTTP Routes
 
-- `kebab-case` path segments: `/api/user-profiles`
-- Prefix by surface — **no path version segment**:
-  - Authenticated API: `/api/...` (identity is the exception: no `/api`; the first segment is the subject)
-  - Public API: `/public/...`
+- `kebab-case` path segments: `/user-profiles`
+- No path version segment. No `/api` prefix.
+  - Public: `/public/...`
   - Internal (private network, not on the gateway): `/internal/...`
 - Resource names are plural nouns: `/widgets`, `/users`, `/organizations`, `/members`
 - Identity list query/body: [`lists.md`](lists.md). Business services may copy it; they are not required to.
 - Actions use HTTP methods, not verbs in paths:
-  - `POST /api/widgets` — create
-  - `GET /api/widgets/{id}` — read
-  - `PUT /api/widgets/{id}` — update
-  - `DELETE /api/widgets/{id}` — delete
+  - `POST /widgets` — create
+  - `GET /widgets/{id}` — read
+  - `PUT /widgets/{id}` — update
+  - `DELETE /widgets/{id}` — delete
 
 ### Path patterns (identity)
 
-Identity has no `/api` prefix. The first path segment is the subject.
+The first path segment is the subject.
 
 | Surface | Pattern |
 |---------|---------|
@@ -83,7 +82,7 @@ Those are identity's own URLs. The gateway edge does not put the subject in the 
 | `/org/...` | `organization` | `{subject.organization_id}` |
 | `/member/...` | `member` | `{subject.member_id}` (and `organization_id` if the template needs it) |
 
-Business APIs stay under `/api/...`. A route that needs the subject sets `upstream`. The match path does not contain a param whose name is a subject field of that scope.
+There is no `/api` prefix. A route that needs the subject sets `upstream`. The match path does not contain a param whose name is a subject field of that scope.
 
 Scopes and subject fill: [`gateway-contract.md`](gateway-contract.md). Full identity API: [`identity.md`](identity.md).
 

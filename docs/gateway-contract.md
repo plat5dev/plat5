@@ -59,10 +59,12 @@ services:
           methods: [GET]
     user:
       routes:
-        - path: /api/widgets
+        - path: /user/widgets
+          upstream: /users/{subject.user_id}/widgets
           methods: [GET, POST]
           required_scopes: [widgets:read]
-        - path: /api/features
+        - path: /user/features
+          upstream: /users/{subject.user_id}/features
           methods:
             GET:
               required_scopes: [org:read]

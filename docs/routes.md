@@ -56,7 +56,7 @@ JSON in etcd (not YAML): registry validates and canonicalizes at write time; gat
 
 ## Config Format (`routes.yml`)
 
-Auth is **scopes** (`public`, `user`, `organization`).
+Auth is **scopes** (`public`, `user`, `organization`, `member`).
 
 ```yaml
 services:
@@ -69,11 +69,11 @@ services:
 
     user:
       routes:
-        - path: /api/widgets
+        - path: /widgets
           methods: [GET, POST]
           required_scopes: [widgets:read]
 
-        - path: /api/widgets/{id}
+        - path: /widgets/{id}
           methods: [GET, DELETE]
           rate_limit:
             requests: 30
@@ -191,10 +191,10 @@ services:
         shared: true
     organization:
       routes:
-        - path: /api/projects
+        - path: /projects
           methods: [POST]
           rate_limit: writes
-        - path: /api/projects/{project_id}
+        - path: /projects/{project_id}
           methods: [DELETE]
           rate_limit: org-writes
 ```

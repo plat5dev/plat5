@@ -130,7 +130,7 @@ Point services at `http://localhost:4318` (host) or `http://host.docker.internal
 Write **JSON** to stdout always (including when OTLP is enabled). No OTLP log export.
 
 ```json
-{"timestamp":"2024-01-15T10:30:00Z","level":"info","message":"request completed","route":"/api/test","method":"GET","status":200,"duration_ms":12.5}
+{"timestamp":"2024-01-15T10:30:00Z","level":"info","message":"request completed","route":"/widgets","method":"GET","status":200,"duration_ms":12.5}
 ```
 
 ### Common fields
@@ -178,7 +178,7 @@ Do not include `error_kind` for 4xx.
 | Attributes | `http.request.method`, `url.path`, `http.route` (template only, when matched), `http.response.status_code` (when known) |
 | Status | Unset on 4xx. `Error` on 5xx with **no** description. Unset on 1xx/2xx/3xx unless a non-HTTP error occurred. |
 
-`http.route` is the matched template (`/api/organizations/:organization_id/subscribers`). Do not put the raw path there. `url.path` is the actual path (IDs allowed).
+`http.route` is the matched template (`/organizations/:organization_id/subscribers`). Do not put the raw path there. `url.path` is the actual path (IDs allowed).
 
 Do not set `url.query`, `url.scheme`, or `error.type`. Frameworks may add extra stable HTTP attributes; do not copy those onto other services.
 

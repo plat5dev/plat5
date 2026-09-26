@@ -75,7 +75,7 @@ Wrong credential for the scope is **401**. A user JWT does not become an org sub
 ### Org-scoped API
 
 ```
-GET /api/projects
+GET /org/projects
 X-API-Key: member key or member session
 
 Gateway: admit → fill `{subject.organization_id}` into `upstream` → proxy
@@ -87,7 +87,7 @@ If the handler needs `member_id`, the route is `member` scope.
 ### User-scoped API
 
 ```
-GET /api/user/widgets
+GET /user/widgets
 Authorization: user JWT or user API key
 
 Gateway: authn → fill `{subject.user_id}` into `upstream` → proxy

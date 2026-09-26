@@ -76,7 +76,7 @@ services:
     url: host.docker.internal:3000   # any URL the gateway can reach
     user:
       routes:
-        - path: /api/widgets
+        - path: /widgets
           methods: [GET, POST]
 ```
 
