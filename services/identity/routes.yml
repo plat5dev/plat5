@@ -44,6 +44,12 @@ services:
         - path: /org/service-accounts/{service_account_id}
           upstream: /organizations/{subject.organization_id}/service-accounts/{path.service_account_id}
           methods: [GET, PATCH, DELETE]
+        - path: /org/service-accounts/{service_account_id}/api-keys
+          upstream: /organizations/{subject.organization_id}/service-accounts/{path.service_account_id}/api-keys
+          methods: [GET, POST]
+        - path: /org/service-accounts/{service_account_id}/api-keys/{key_id}
+          upstream: /organizations/{subject.organization_id}/service-accounts/{path.service_account_id}/api-keys/{path.key_id}
+          methods: [DELETE]
     member:
       routes:
         - path: /member

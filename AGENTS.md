@@ -50,6 +50,7 @@ Do not add these because they would be convenient:
 - Org `settings` / platform config bag
 - A role column, or getting a user id from `member_id` for org-scope apps
 - Folding member sessions into `member_api_keys`, or returning `user_id` from session validate
+- A service-account key table, prefix, or validate URL (those keys are member keys)
 - Treating omitted identity routes as “feature off” (the process still serves them on the network)
 - Auto-merge of new identity paths into existing operator YAML
 - Shared `route-config` crate until a third consumer exists (two copies are deliberate)

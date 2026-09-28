@@ -42,7 +42,7 @@ Illegal states. Not permissions.
 - One member row per `(organization_id, user_id)`, including `removed`. One member row per service account. A service account lives in exactly one org.
 - A remove must leave at least one non-removed member. `active` and `suspended` both count. Service accounts count.
 - Invite expiry, use limits, and the conflict on a dead token.
-- A key addressed under a user or member that does not own it is **404**. That is the address, not an access check.
+- A key addressed under a user, member, or service account that does not own it is **404**. That is the address, not an access check.
 - A service account addressed under the wrong org, or whose member is `removed`, is **404**.
 - Unknown id is **404**. A removed member is **404**. Empty collection is an empty page.
 
@@ -259,9 +259,25 @@ Lifecycle is the member row. Suspend and re-enable with `PATCH /members/{member_
 
 `status` is the joined member’s status (`active` or `suspended`). `removed` members are not listed and are not returned by id.
 
+### Service account API keys
+
+Org address for that service account's member keys. Not a separate credential. Same table (`member_api_keys`), same plaintext prefix (`{brand}-mk-1-`), same validate endpoint. `/members/{member_id}/api-keys` is the self address. A key created on either path is listed and revoked on both.
+
+Who may call is the proxy, same as creating the service account. Identity does not check the caller.
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `POST` | `/organizations/{organization_id}/service-accounts/{service_account_id}/api-keys` | Create; plaintext once — prefix **`{brand}-mk-1-`**. Body same as member keys (`name`, optional `scopes`). |
+| `GET` | `/organizations/{organization_id}/service-accounts/{service_account_id}/api-keys` | List. Collection key `keys`. Echoes `scopes`, never the secret. |
+| `DELETE` | `/organizations/{organization_id}/service-accounts/{service_account_id}/api-keys/{key_id}` | Soft-revoke. Idempotent. Key not under this service account → **404**. |
+
+Missing service account, wrong org, or member `removed` → **404**, same as get. A `suspended` service account is addressable. Validate still rejects a key whose member is not `active`.
+
+Published on `organization` scope as `/org/service-accounts/{service_account_id}/api-keys`. The client names the service account, not `member_id`.
+
 ### Member API keys
 
-Keys that authenticate **as a member**. Different product from `/users/{user_id}/api-keys`: the parent path is the member.
+Keys that authenticate **as a member**. Different product from `/users/{user_id}/api-keys`: the parent path is the member. When the member is a service account, the service-account path reads and writes these same rows.
 
 | Method | Path | Notes |
 |--------|------|--------|
@@ -459,5 +475,7 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - Configurable `sk` / `mk` / `ms` / `1`, independent full-prefix env vars, or dual-brand key accept
 - Member session refresh, list, revoke, or a TTL env
 - Putting a member session in `member_api_keys`
+- A service-account key table, prefix, or validate endpoint (those keys are member keys)
+- `/organizations/{organization_id}/members/{member_id}/api-keys` (that is acting on another member; service-account keys use the service-account id)
 - `user_id` on session validate
 - A `scopes` field on session mint

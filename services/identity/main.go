@@ -130,6 +130,7 @@ func newPublicApp(
 	sessionHandler.MountPublic(users)
 
 	orgHandler.MountOrganizations(app)
+	memberKeyHandler.MountServiceAccountKeys(app)
 
 	members := app.Group("/members")
 	orgHandler.MountMembers(members)

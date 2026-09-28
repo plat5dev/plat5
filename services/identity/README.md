@@ -12,7 +12,7 @@ Contract: [`docs/identity.md`](../../docs/identity.md)
 |---------|------|
 | `orgs/` | Organizations, members, invites, service accounts |
 | `userkeys/` | User API keys (`{brand}-sk-1-`) |
-| `memberkeys/` | Member API keys (`{brand}-mk-1-`) |
+| `memberkeys/` | Member API keys (`{brand}-mk-1-`). The service-account path is the org address for the same rows. |
 | `sessions/` | Member sessions (`{brand}-ms-1-`). Mint is in `routes.yml`. Validate stays internal. |
 
 `APIKEY_BRAND` (default `plat5`) must match the gateway.

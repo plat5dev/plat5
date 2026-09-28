@@ -14,9 +14,21 @@ import (
 	"github.com/plat5dev/plat5/identity/orgs"
 )
 
+type keyStore interface {
+	Create(ctx context.Context, key *APIKey) error
+	GetByHash(ctx context.Context, keyHash string) (*Validated, error)
+	List(ctx context.Context, memberID string, limit int, startingAfter string) ([]*APIKey, bool, error)
+	Revoke(ctx context.Context, memberID, keyID string) (*APIKey, error)
+}
+
+type orgReader interface {
+	GetMember(ctx context.Context, memberID string) (*orgs.Member, error)
+	GetServiceAccount(ctx context.Context, organizationID, serviceAccountID string) (*orgs.ServiceAccount, error)
+}
+
 type Handler struct {
-	store    *Store
-	orgStore *orgs.Store
+	store    keyStore
+	orgStore orgReader
 	prefix   string
 }
 
@@ -65,10 +77,22 @@ type ValidateResponse struct {
 func (h *Handler) Create(c fiber.Ctx) error {
 	ctx := c.Context()
 	memberID := httpx.PathParam(c, "member_id")
-
 	if _, err := h.visibleMember(ctx, memberID); err != nil {
 		return err
 	}
+	return h.create(c, memberID)
+}
+
+func (h *Handler) CreateForServiceAccount(c fiber.Ctx) error {
+	memberID, err := h.serviceAccountMember(c)
+	if err != nil {
+		return err
+	}
+	return h.create(c, memberID)
+}
+
+func (h *Handler) create(c fiber.Ctx, memberID string) error {
+	ctx := c.Context()
 
 	var req CreateRequest
 	if err := c.Bind().Body(&req); err != nil {
@@ -94,12 +118,7 @@ func (h *Handler) Create(c fiber.Ctx) error {
 		return httpx.MapDB(ctx, err, "failed to store member key", httpx.DBErr{})
 	}
 
-	httpx.Logger(ctx).Info().
-		Str("member_id", memberID).
-		Str("key_id", apiKey.ID).
-		Str("key_prefix", apiKey.KeyPrefix).
-		Msg("member api key created")
-
+	logKeyEvent(c, "member api key created", memberID, apiKey.ID, apiKey.KeyPrefix)
 	metrics.RecordKeyCreated(metrics.KeyScopeMember)
 	return c.Status(fiber.StatusCreated).JSON(CreateResponse{
 		ID:        apiKey.ID,
@@ -114,10 +133,22 @@ func (h *Handler) Create(c fiber.Ctx) error {
 func (h *Handler) List(c fiber.Ctx) error {
 	ctx := c.Context()
 	memberID := httpx.PathParam(c, "member_id")
-
 	if _, err := h.visibleMember(ctx, memberID); err != nil {
 		return err
 	}
+	return h.list(c, memberID)
+}
+
+func (h *Handler) ListForServiceAccount(c fiber.Ctx) error {
+	memberID, err := h.serviceAccountMember(c)
+	if err != nil {
+		return err
+	}
+	return h.list(c, memberID)
+}
+
+func (h *Handler) list(c fiber.Ctx, memberID string) error {
+	ctx := c.Context()
 
 	limit, startingAfter, err := httpx.ParseListParams(c)
 	if err != nil {
@@ -142,11 +173,22 @@ func (h *Handler) List(c fiber.Ctx) error {
 func (h *Handler) Revoke(c fiber.Ctx) error {
 	ctx := c.Context()
 	memberID := httpx.PathParam(c, "member_id")
-	keyID := c.Params("key_id")
-
 	if _, err := h.visibleMember(ctx, memberID); err != nil {
 		return err
 	}
+	return h.revoke(c, memberID, httpx.PathParam(c, "key_id"))
+}
+
+func (h *Handler) RevokeForServiceAccount(c fiber.Ctx) error {
+	memberID, err := h.serviceAccountMember(c)
+	if err != nil {
+		return err
+	}
+	return h.revoke(c, memberID, httpx.PathParam(c, "key_id"))
+}
+
+func (h *Handler) revoke(c fiber.Ctx, memberID, keyID string) error {
+	ctx := c.Context()
 	if keyID == "" {
 		return errors.FieldError("key_id", errors.FallbackValidation)
 	}
@@ -158,11 +200,7 @@ func (h *Handler) Revoke(c fiber.Ctx) error {
 		})
 	}
 
-	httpx.Logger(ctx).Info().
-		Str("member_id", memberID).
-		Str("key_id", key.ID).
-		Msg("member api key revoked")
-
+	logKeyEvent(c, "member api key revoked", memberID, key.ID, "")
 	metrics.RecordKeyRevoked(metrics.KeyScopeMember)
 	return c.SendStatus(fiber.StatusNoContent)
 }
@@ -218,9 +256,41 @@ func (h *Handler) visibleMember(ctx context.Context, memberID string) (*orgs.Mem
 	return target, nil
 }
 
+// serviceAccountMember resolves the org address to the service account's member.
+// GetServiceAccount returns not found for a missing id, the wrong org, and a removed member.
+// Suspended remains addressable.
+func (h *Handler) serviceAccountMember(c fiber.Ctx) (string, error) {
+	ctx := c.Context()
+	orgID := httpx.PathParam(c, "organization_id")
+	saID := httpx.PathParam(c, "service_account_id")
+	sa, err := h.orgStore.GetServiceAccount(ctx, orgID, saID)
+	if err != nil {
+		return "", httpx.MapDB(ctx, err, "failed to load service account", httpx.DBErr{
+			NotFound: orgs.ErrNotFound, Resource: "service_account", ResourceID: saID,
+		})
+	}
+	return sa.MemberID, nil
+}
+
 func (h *Handler) invalid(c fiber.Ctx) error {
 	metrics.RecordKeyValidation(metrics.KeyScopeMember, false)
 	return c.JSON(ValidateResponse{Valid: false})
+}
+
+func logKeyEvent(c fiber.Ctx, msg, memberID, keyID, keyPrefix string) {
+	ev := httpx.Logger(c.Context()).Info().
+		Str("member_id", memberID).
+		Str("key_id", keyID)
+	if keyPrefix != "" {
+		ev = ev.Str("key_prefix", keyPrefix)
+	}
+	if orgID := httpx.PathParam(c, "organization_id"); orgID != "" {
+		ev = ev.Str("organization_id", orgID)
+	}
+	if saID := httpx.PathParam(c, "service_account_id"); saID != "" {
+		ev = ev.Str("service_account_id", saID)
+	}
+	ev.Msg(msg)
 }
 
 func toKeyResponse(k *APIKey) KeyResponse {

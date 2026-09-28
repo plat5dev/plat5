@@ -37,4 +37,4 @@ When `has_more` is `true`, pass the last item’s `id` as `starting_after` on th
 
 ## Identity lists
 
-All of: list orgs, memberships, members, invites, service accounts, user API keys, member API keys.
+All of: list orgs, memberships, members, invites, service accounts, user API keys, member API keys (member path and service-account path).
