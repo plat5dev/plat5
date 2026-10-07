@@ -231,7 +231,9 @@ func (e *ApiError) Response(requestID string) errorEnvelope {
 	return env
 }
 
-func FiberErrorHandler(c fiber.Ctx, err error) error {
+// FromError maps a handler error to the envelope FiberErrorHandler writes.
+// The request logger uses it too, so the logged status is the returned status.
+func FromError(err error) *ApiError {
 	apiErr := InternalError()
 
 	switch e := err.(type) {
@@ -259,7 +261,11 @@ func FiberErrorHandler(c fiber.Ctx, err error) error {
 			apiErr = InternalError()
 		}
 	}
+	return apiErr
+}
 
+func FiberErrorHandler(c fiber.Ctx, err error) error {
+	apiErr := FromError(err)
 	requestID := c.Get("X-Request-ID")
 	return c.Status(apiErr.Status).JSON(apiErr.Response(requestID))
 }
