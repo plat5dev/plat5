@@ -493,3 +493,50 @@ func (f *fakeOrgs) GetServiceAccount(_ context.Context, organizationID, serviceA
 	}
 	return sa, nil
 }
+
+// A restricted caller cannot escape the org-management guard through its own
+// member keys: every self mint stays at or under the caller's scopes.
+func TestRestrictedCallerSelfMintStaysRestricted(t *testing.T) {
+	keys := &fakeKeys{}
+	org := &fakeOrgs{}
+	org.add(saFixture("org1", "sa1", "mem-sa", orgs.StatusActive))
+	h := &Handler{store: keys, orgStore: org, prefix: testPrefix}
+	app := testKeyApp(h)
+	caller := map[string]string{"X-Plat5-Scopes": "check"}
+
+	for _, body := range []string{`{"scopes":null}`, `{}`} {
+		code, resp := doJSONHeader(t, app, http.MethodPost, "/members/mem-sa/api-keys", body, caller)
+		if code != http.StatusCreated {
+			t.Fatalf("%s: status=%d body=%s", body, code, resp)
+		}
+		created := decodeCreate(t, resp)
+		if created.Scopes == nil || len(*created.Scopes) != 1 || (*created.Scopes)[0] != "check" {
+			t.Fatalf("%s: must inherit [check], not null: %s", body, resp)
+		}
+		stored := keys.keys[len(keys.keys)-1].Scopes
+		if stored == nil || len(stored) != 1 || stored[0] != "check" {
+			t.Fatalf("%s: stored %#v", body, stored)
+		}
+	}
+
+	before := len(keys.keys)
+	code, resp := doJSONHeader(t, app, http.MethodPost, "/members/mem-sa/api-keys", `{"scopes":["admin"]}`, caller)
+	assertInsufficientScope(t, code, resp, "admin")
+	code, resp = doJSONHeader(t, app, http.MethodPost, "/members/mem-sa/api-keys", `{"scopes":["check","admin"]}`, caller)
+	assertInsufficientScope(t, code, resp, "admin")
+	if len(keys.keys) != before {
+		t.Fatalf("refused mint was stored")
+	}
+
+	code, resp = doJSONHeader(t, app, http.MethodPost, "/members/mem-sa/api-keys", `{"scopes":[]}`, caller)
+	if code != http.StatusCreated {
+		t.Fatalf("[]: status=%d body=%s", code, resp)
+	}
+	empty := decodeCreate(t, resp)
+	if empty.Scopes == nil || len(*empty.Scopes) != 0 {
+		t.Fatalf("[] must stay [] (restricted), got %s", resp)
+	}
+	if s := keys.keys[len(keys.keys)-1].Scopes; s == nil || len(s) != 0 {
+		t.Fatalf("[] stored %#v", s)
+	}
+}
