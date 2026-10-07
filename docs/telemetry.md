@@ -83,7 +83,7 @@ OTEL_RESOURCE_ATTRIBUTES=service.namespace=edge,service.version=1.2.3,service.in
 
 If both `OTEL_RESOURCE_ATTRIBUTES` and a convenience var set the same attribute, the convenience var wins. Prefer `OTEL_RESOURCE_ATTRIBUTES` for portable operator config; convenience vars are fine for our compose defaults. All services honor both.
 
-`DEPLOYMENT_ENV` is also used for non-telemetry behavior in some products (e.g. Auth disables `/dev/token` when `prod`).
+`DEPLOYMENT_ENV` is also used for non-telemetry behavior in some products (e.g. Auth requires working SMTP when `prod`). Auth's `/dev/token` is controlled separately by `AUTH_DEV_TOKEN=true`.
 
 ### Other
 
