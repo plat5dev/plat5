@@ -264,12 +264,15 @@ impl UserGateway {
             &admission,
             self.connect_timeout,
             self.read_timeout,
-        ) {
+        )
+        .await
+        {
             let (status, body) = match err {
                 rewrite::RewriteError::PathParam => (400, ApiError::invalid_request()),
                 rewrite::RewriteError::Subject | rewrite::RewriteError::Internal => {
                     (500, ApiError::internal_error())
                 }
+                rewrite::RewriteError::BadUpstream => (502, ApiError::internal_error()),
             };
             return response::write_json_error(&self.cors, session, ctx, status, body).await;
         }

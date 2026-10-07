@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use crate::route_config::{validate_shared_rate_limits, Config, ServiceConfig};
+use crate::route_config::{
+    find_route_conflicts, validate_shared_rate_limits, Config, ServiceConfig,
+};
 use axum::extract::{MatchedPath, Path, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
@@ -249,6 +251,12 @@ async fn put_service(
         &request_id,
     )
     .await?;
+    ensure_no_route_conflicts(
+        &state,
+        &[(name.clone(), Some(prepared.clone()))],
+        &request_id,
+    )
+    .await?;
     let commits = commit(&state, vec![(name.clone(), Some(prepared))], &request_id).await?;
     let commit = commits.into_iter().next().expect("one commit");
     let config = commit.config.expect("put is not a delete");
@@ -341,6 +349,7 @@ async fn apply_routes(
     }
 
     ensure_shared_policies(&state, &prepared, &request_id).await?;
+    ensure_no_route_conflicts(&state, &prepared, &request_id).await?;
 
     let commits = commit(&state, prepared, &request_id).await?;
     let results = commits
@@ -485,6 +494,32 @@ async fn ensure_shared_policies(
     }
     validate_shared_rate_limits(&all)
         .map_err(|e| AppError::validation(request_id.to_string(), e.to_string()))
+}
+
+async fn ensure_no_route_conflicts(
+    state: &AppState,
+    items: &[(String, Option<ServiceConfig>)],
+    request_id: &str,
+) -> Result<(), AppError> {
+    let existing = state.pg.list_current().await.map_err(|e| {
+        tracing::error!(error = %e, "list current for route conflicts failed");
+        AppError::service_unavailable(request_id.to_string())
+    })?;
+    let incoming: Vec<(String, ServiceConfig)> = items
+        .iter()
+        .filter_map(|(n, c)| c.clone().map(|c| (n.clone(), c)))
+        .collect();
+    let conflicts = find_route_conflicts(&existing, &incoming);
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+    Err(AppError::route_conflict(
+        request_id.to_string(),
+        format!(
+            "Route already owned by another service: {}.",
+            conflicts.join("; ")
+        ),
+    ))
 }
 
 fn config_parse_error(request_id: String, err: &impl std::fmt::Display) -> AppError {

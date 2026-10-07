@@ -39,6 +39,9 @@ curl -sS -X POST http://localhost:5002/apply \
 
 Validation is at **apply time**. Malformed config → `422 VALIDATION_ERROR`; nothing written.
 
+- Service `url` is required and must be exactly `http://host:port` (explicit port, no path or query), e.g. `http://my-service:3000`. `https://` → `422` saying TLS (https) upstreams aren't supported yet. Bare `host:port`, any other scheme, a missing port, or a path/query → `422 VALIDATION_ERROR` naming that form. Routes already stored with a bare `host:port` keep routing (the gateway strips the scheme) until re-applied. A missing `url` → `422` telling you to add the service under `upstreams:` in `plat5.yml`, or set `url` in the routes file.
+- A method+path may belong to only one service. If an incoming method+path is already owned by a **different** service, the whole apply is rejected with `409 ROUTE_CONFLICT`; the message lists each conflicting method+path and its current owner. Nothing is written. Re-applying a service's own routes replaces them and is allowed.
+
 After validation, all services in the batch commit in **one Postgres transaction** (each service gets a new revision). etcd projection follows; a reconciler retries if a put fails. `200` means desired state is recorded.
 
 JSON in etcd (not YAML): registry validates and canonicalizes at write time; gateway deserializes into route types. Nested `methods` maps are expanded at apply so etcd `methods` is always a string array.
@@ -61,7 +64,7 @@ Auth is **scopes** (`public`, `user`, `organization`, `member`).
 ```yaml
 services:
   my-service:
-    url: my-service:3000
+    url: http://my-service:3000
     public:
       routes:
         - path: /public/health
@@ -180,7 +183,7 @@ Optional map on the service. Routes may only reference a name defined **on that 
 ```yaml
 services:
   projects:
-    url: projects:3000
+    url: http://projects:3000
     rate_limits:
       writes:
         requests: 30
@@ -326,7 +329,7 @@ Apply [`services/identity/routes.yml`](../services/identity/routes.yml) or a sub
 ```yaml
 services:
   projects:
-    url: projects:3000
+    url: http://projects:3000
     organization:
       route_prefix: /api
       routes:

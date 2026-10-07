@@ -18,7 +18,7 @@ Docker (two stacks, two networks):
   auth    postgres, issuer     (skip if you already have an IdP)
 
 Your app:
-  API process on the plat5 compose network (gateway `url` = `api:3000`)
+  API process on the plat5 compose network (gateway `url` = `http://api:3000`)
   SPA anywhere (Pages, nginx, …) — talks to public api + auth URLs
 ```
 
@@ -117,7 +117,7 @@ Do not put SMTP submission on a tunnel.
 
 ## 4. Attach your API
 
-1. Run the process on **`plat5_plat5`** (external network). Hostname = the service name in `routes.yml` (e.g. `api` → `url: api:3000`).
+1. Run the process on **`plat5_plat5`** (external network). Hostname = the service name in `routes.yml` (e.g. `api` → `url: http://api:3000`).
 2. Trust the path the gateway wrote. Do not validate JWTs. [`gateway-contract.md`](gateway-contract.md).
 3. Apply identity catalog + your routes (prod does **not** seed):
 
@@ -125,7 +125,7 @@ Do not put SMTP submission on a tunnel.
 # your-api/routes.yml — set url to what the gateway can reach
 services:
   api:
-    url: api:3000
+    url: http://api:3000
     organization:
       route_prefix: /api
       routes:

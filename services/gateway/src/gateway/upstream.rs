@@ -90,7 +90,7 @@ pub fn record_admission_span(ctx: &GatewayContext, admission: &Admission) {
 }
 
 /// Build the upstream peer for a matched route and store it in context.
-pub fn build_and_store_upstream_peer(
+pub async fn build_and_store_upstream_peer(
     session: &mut Session,
     ctx: &mut GatewayContext,
     route: &Route,
@@ -137,8 +137,16 @@ pub fn build_and_store_upstream_peer(
     }
 
     let peer_addr = peer_address(&route.base_url);
+    let Some(socket_addr) = resolve_peer(&peer_addr).await else {
+        warn!(
+            route = %route.path,
+            upstream = %peer_addr,
+            "upstream address is not a resolvable host:port"
+        );
+        return Err(RewriteError::BadUpstream);
+    };
     info!(route = %route.path, upstream = %peer_addr, "forwarding request to upstream");
-    let mut peer = HttpPeer::new(peer_addr, false, String::new());
+    let mut peer = HttpPeer::new(socket_addr, false, String::new());
     peer.options.connection_timeout = Some(connect_timeout);
     peer.options.read_timeout = Some(read_timeout);
     ctx.upstream_peer = Some(Box::new(peer));
@@ -190,6 +198,13 @@ pub fn peer_address(base_url: &str) -> String {
         .to_string()
 }
 
+/// Resolve `host:port` without panicking and without blocking the executor
+/// (`lookup_host` runs the lookup on the blocking pool). `None` when malformed
+/// or unresolvable.
+async fn resolve_peer(addr: &str) -> Option<std::net::SocketAddr> {
+    tokio::net::lookup_host(addr).await.ok()?.next()
+}
+
 struct RequestHeaderInjector<'a> {
     headers: &'a mut RequestHeader,
 }
@@ -219,6 +234,23 @@ impl Injector for RequestHeaderInjector<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn resolve_peer_rejects_bad_addresses() {
+        assert!(resolve_peer("example.com").await.is_none());
+        assert!(resolve_peer("").await.is_none());
+        assert!(resolve_peer("host:notaport").await.is_none());
+        assert_eq!(
+            resolve_peer("127.0.0.1:3000").await.map(|a| a.port()),
+            Some(3000)
+        );
+    }
+
+    #[test]
+    fn peer_address_strips_scheme_so_stored_bare_routes_still_work() {
+        assert_eq!(peer_address("http://api:3000"), "api:3000");
+        assert_eq!(peer_address("api:3000"), "api:3000");
+    }
 
     #[test]
     fn strip_client_credentials_removes_auth_material() {

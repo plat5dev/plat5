@@ -16,6 +16,8 @@ pub enum RewriteError {
     Subject,
     /// Template or URI the apply-time check should have rejected.
     Internal,
+    /// Route base URL is not a usable `host:port`.
+    BadUpstream,
 }
 
 /// Substitute `{subject.*}` and `{path.*}` in an absolute upstream template.

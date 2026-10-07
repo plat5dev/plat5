@@ -64,6 +64,17 @@ impl AppError {
         }
     }
 
+    pub fn route_conflict(request_id: String, message: String) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            error_type: "invalid_request_error",
+            code: "ROUTE_CONFLICT",
+            message,
+            details: None,
+            request_id,
+        }
+    }
+
     pub fn invalid_request(request_id: String, message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
