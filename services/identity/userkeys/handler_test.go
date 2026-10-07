@@ -68,6 +68,10 @@ func (f *fakeKeys) List(context.Context, string, int, string) ([]*APIKey, bool, 
 	return nil, false, nil
 }
 
+func (f *fakeKeys) Get(context.Context, string, string) (*APIKey, error) {
+	return nil, ErrNotFound
+}
+
 func (f *fakeKeys) Revoke(context.Context, string, string) (*APIKey, error) {
 	return nil, ErrNotFound
 }

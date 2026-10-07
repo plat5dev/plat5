@@ -110,7 +110,7 @@ The path names every id the handler reads. Who may call is the proxy. Identity r
 |------|-------------|
 | Bad, missing, or wrong credential for the scope | **401** `UNAUTHORIZED` |
 | Restricted credential missing route `required_scopes` | **403** `FORBIDDEN` |
-| Mint asks for a scope the caller credential does not have | **403** `INSUFFICIENT_SCOPE` (identity) |
+| Mint asks for a scope the caller credential does not have, or a restricted caller revokes a wider or unrestricted key | **403** `INSUFFICIENT_SCOPE` (identity) |
 | Restricted credential calls an identity write that manages the org | **403** `RESTRICTED_CREDENTIAL` (identity) |
 | Unknown id (identity handlers) | **404** `NOT_FOUND` |
 | Admitted route or failed-auth IP over limit | **429** `RATE_LIMITED` |

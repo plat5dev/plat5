@@ -91,20 +91,47 @@ func ConstrainScopes(caller, requested []string) ([]string, error) {
 	if requested == nil {
 		return cloneScopes(caller), nil
 	}
+	if missing := missingScopes(caller, requested); len(missing) > 0 {
+		return nil, &InsufficientScopeError{Missing: missing}
+	}
+	return requested, nil
+}
+
+// ErrTargetUnrestricted is a restricted caller acting on a key whose scopes are null.
+var ErrTargetUnrestricted = errors.New("target credential is unrestricted")
+
+// CheckWithin is the revoke rule: a restricted caller may only act on a key whose
+// scopes fit within its own. Same subset check as the mint cap.
+//
+// caller nil: unrestricted, always allowed.
+// target nil: unrestricted key, refused with ErrTargetUnrestricted.
+// otherwise every target label must be in caller, or the error lists the ones that are not.
+func CheckWithin(caller, target []string) error {
+	if caller == nil {
+		return nil
+	}
+	if target == nil {
+		return ErrTargetUnrestricted
+	}
+	if missing := missingScopes(caller, target); len(missing) > 0 {
+		return &InsufficientScopeError{Missing: missing}
+	}
+	return nil
+}
+
+// missingScopes returns the labels in want that caller does not have, in want order.
+func missingScopes(caller, want []string) []string {
 	have := make(map[string]struct{}, len(caller))
 	for _, s := range caller {
 		have[s] = struct{}{}
 	}
 	var missing []string
-	for _, s := range requested {
+	for _, s := range want {
 		if _, ok := have[s]; !ok {
 			missing = append(missing, s)
 		}
 	}
-	if len(missing) > 0 {
-		return nil, &InsufficientScopeError{Missing: missing}
-	}
-	return requested, nil
+	return missing
 }
 
 // ParseCallerScopes parses a present X-Plat5-Scopes value.

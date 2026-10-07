@@ -443,6 +443,15 @@ func (f *fakeKeys) List(_ context.Context, memberID string, limit int, startingA
 	return out, hasMore, nil
 }
 
+func (f *fakeKeys) Get(_ context.Context, memberID, keyID string) (*APIKey, error) {
+	for _, k := range f.keys {
+		if k.ID == keyID && k.MemberID == memberID {
+			return k, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
 func (f *fakeKeys) Revoke(_ context.Context, memberID, keyID string) (*APIKey, error) {
 	for _, k := range f.keys {
 		if k.ID == keyID && k.MemberID == memberID {
@@ -538,5 +547,69 @@ func TestRestrictedCallerSelfMintStaysRestricted(t *testing.T) {
 	}
 	if s := keys.keys[len(keys.keys)-1].Scopes; s == nil || len(s) != 0 {
 		t.Fatalf("[] stored %#v", s)
+	}
+}
+
+// A restricted caller may revoke only keys whose scopes fit within its own.
+func TestRestrictedCallerRevokeWithinScopes(t *testing.T) {
+	keys := &fakeKeys{}
+	org := &fakeOrgs{}
+	org.add(saFixture("org1", "sa1", "mem-sa", orgs.StatusActive))
+	for _, k := range []*APIKey{
+		{ID: "k-check", MemberID: "mem-sa", Scopes: []string{"check"}},
+		{ID: "k-empty", MemberID: "mem-sa", Scopes: []string{}},
+		{ID: "k-open", MemberID: "mem-sa", Scopes: nil},
+		{ID: "k-wide", MemberID: "mem-sa", Scopes: []string{"check", "admin"}},
+	} {
+		keys.keys = append(keys.keys, k)
+	}
+	h := &Handler{store: keys, orgStore: org, prefix: testPrefix}
+	app := testKeyApp(h)
+	caller := map[string]string{"X-Plat5-Scopes": "check"}
+	revoked := func(id string) bool {
+		for _, k := range keys.keys {
+			if k.ID == id {
+				return k.RevokedAt != nil
+			}
+		}
+		t.Fatalf("no key %s", id)
+		return false
+	}
+
+	for _, id := range []string{"k-check", "k-empty"} {
+		code, body := doJSONHeader(t, app, http.MethodDelete, "/members/mem-sa/api-keys/"+id, "", caller)
+		if code != http.StatusNoContent || !revoked(id) {
+			t.Fatalf("%s: status=%d body=%s", id, code, body)
+		}
+	}
+
+	code, body := doJSONHeader(t, app, http.MethodDelete, "/members/mem-sa/api-keys/k-open", "", caller)
+	var env struct {
+		Error struct {
+			Code    string         `json:"code"`
+			Message string         `json:"message"`
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatal(err)
+	}
+	if code != http.StatusForbidden || env.Error.Code != "INSUFFICIENT_SCOPE" ||
+		env.Error.Message != "This credential can't revoke an unrestricted key." ||
+		env.Error.Details["scopes"] != nil || revoked("k-open") {
+		t.Fatalf("unrestricted target: status=%d body=%s", code, body)
+	}
+
+	code, body = doJSONHeader(t, app, http.MethodDelete, "/members/mem-sa/api-keys/k-wide", "", caller)
+	if code != http.StatusForbidden || revoked("k-wide") ||
+		!strings.Contains(string(body), `"message":"This credential can't revoke a key with admin."`) ||
+		!strings.Contains(string(body), `"scopes":["admin"]`) {
+		t.Fatalf("wider target: status=%d body=%s", code, body)
+	}
+
+	// Unrestricted callers are unchanged.
+	code, body = doJSON(t, app, http.MethodDelete, "/members/mem-sa/api-keys/k-open", "")
+	if code != http.StatusNoContent || !revoked("k-open") {
+		t.Fatalf("unrestricted caller: status=%d body=%s", code, body)
 	}
 }

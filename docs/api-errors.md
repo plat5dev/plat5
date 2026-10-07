@@ -46,7 +46,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `VALIDATION_ERROR` | 422 | `invalid_request_error` | That doesn't look right. | `{ fields: [{ path, message }] }` |
 | `UNAUTHORIZED` | 401 | `invalid_request_error` | Authentication required. | `{ reason }` |
 | `FORBIDDEN` | 403 | `invalid_request_error` | You don't have permission to do that. | `{ permission, resource, resource_id }` |
-| `INSUFFICIENT_SCOPE` | 403 | `invalid_request_error` | This credential can't grant that scope. | `{ scopes: string[] }` — labels the mint asked for and the caller does not have |
+| `INSUFFICIENT_SCOPE` | 403 | `invalid_request_error` | This credential can't grant that scope. | `{ scopes: string[] \| null }` — labels the mint or revoke target has and the caller does not; `null` when the revoke target is unrestricted |
 | `RESTRICTED_CREDENTIAL` | 403 | `invalid_request_error` | Restricted keys and their sessions can't manage the organization. Use an unrestricted key or a login session. | `null` |
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
@@ -58,7 +58,11 @@ The **Fallback message** column is used only when nothing more specific applies.
 
 ### `INSUFFICIENT_SCOPE`
 
-Returned by **identity** when a restricted credential mints a key and requests a scope it does not have. HTTP **403**. `message` names the missing labels (`This credential can't grant admin, projects:write.`). `details.scopes` is that same list. An omitted scope list is not this error: the new credential inherits the caller's scopes. The gateway's route check stays **403** `FORBIDDEN`.
+Returned by **identity** when a restricted credential mints a key and requests a scope it does not have. HTTP **403**. `message` names the missing labels (`This credential can't grant admin, projects:write.`). `details.scopes` is that same list. An omitted scope list is not this error: the new credential inherits the caller's scopes.
+
+Also returned when a restricted credential revokes a key wider than itself (`DELETE /members/{member_id}/api-keys/{key_id}`, `DELETE /users/{user_id}/api-keys/{key_id}`). `message` names the labels the caller lacks (`This credential can't revoke a key with admin.`) and `details.scopes` is that list. An unrestricted target is `This credential can't revoke an unrestricted key.` with `details.scopes: null`.
+
+The gateway's route check stays **403** `FORBIDDEN`.
 
 ### `RESTRICTED_CREDENTIAL`
 

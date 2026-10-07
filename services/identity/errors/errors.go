@@ -117,6 +117,27 @@ func InsufficientScope(missing []string) *ApiError {
 	}
 }
 
+// InsufficientScopeToRevoke is a restricted credential revoking a key wider than itself.
+// missing nil means the target key is unrestricted; details.scopes is then null.
+func InsufficientScopeToRevoke(missing []string) *ApiError {
+	message := "This credential can't revoke an unrestricted key."
+	var scopes interface{}
+	if missing != nil {
+		message = "This credential can't revoke a key with " + strings.Join(missing, ", ") + "."
+		scopes = missing
+	}
+	return &ApiError{
+		Type:    "invalid_request_error",
+		Code:    "INSUFFICIENT_SCOPE",
+		Message: message,
+		Details: map[string]interface{}{
+			"scopes": scopes,
+		},
+		Status: fiber.StatusForbidden,
+		Kind:   KindAuth,
+	}
+}
+
 func insufficientScopeMessage(missing []string) string {
 	if len(missing) == 0 {
 		return "This credential can't grant that scope."

@@ -106,6 +106,8 @@ Unknown tokens use the generic **404** `Resource not found.` (existence policy; 
 | More than 32 scopes | Too many scopes. |
 | Duplicate scope labels | Scope labels must be unique. |
 | Mint asks for a scope the caller lacks | This credential can't grant {labels}. |
+| Restricted caller revokes a key with labels it lacks | This credential can't revoke a key with {labels}. |
+| Restricted caller revokes an unrestricted key | This credential can't revoke an unrestricted key. |
 
 Internal validate (`key` / `token` / `key_id` required) is not product UI. Fallback 422 is enough.
 

@@ -96,14 +96,42 @@ type DBErr struct {
 	Message    string
 }
 
+// callerScopes reads X-Plat5-Scopes. nil means unrestricted (header absent).
+func callerScopes(c fiber.Ctx) ([]string, error) {
+	raw := c.Request().Header.Peek(apikey.CallerScopesHeader)
+	if raw == nil {
+		return nil, nil
+	}
+	return apikey.ParseCallerScopes(string(raw))
+}
+
+// GuardRevoke lets a restricted caller revoke only a key whose scopes fit within
+// its own (apikey.CheckWithin, the mint cap's subset check). An unrestricted target
+// is refused. Unrestricted callers pass. Refusal is 403 INSUFFICIENT_SCOPE; a
+// malformed scopes header is 500.
+func GuardRevoke(c fiber.Ctx, target []string) error {
+	caller, err := callerScopes(c)
+	if err == nil {
+		err = apikey.CheckWithin(caller, target)
+	}
+	if err == nil {
+		return nil
+	}
+	var insufficient *apikey.InsufficientScopeError
+	switch {
+	case stderrors.Is(err, apikey.ErrTargetUnrestricted):
+		return errors.InsufficientScopeToRevoke(nil)
+	case stderrors.As(err, &insufficient):
+		return errors.InsufficientScopeToRevoke(insufficient.Missing)
+	}
+	LogError(c.Context(), "invalid caller scopes", err, errors.KindInternal)
+	return errors.InternalError()
+}
+
 // ConstrainMint applies the caller credential's scopes to a key or session being created.
 // requested nil means the client omitted scopes.
 func ConstrainMint(c fiber.Ctx, requested []string) ([]string, error) {
-	raw := c.Request().Header.Peek(apikey.CallerScopesHeader)
-	if raw == nil {
-		return apikey.ConstrainScopes(nil, requested)
-	}
-	caller, err := apikey.ParseCallerScopes(string(raw))
+	caller, err := callerScopes(c)
 	if err != nil {
 		return nil, err
 	}

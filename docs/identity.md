@@ -68,7 +68,17 @@ Every identity write that manages the org returns **403** `RESTRICTED_CREDENTIAL
 | `DELETE` | `/organizations/{organization_id}/service-accounts/{service_account_id}/api-keys/{key_id}` | `/org/service-accounts/{service_account_id}/api-keys/{key_id}` |
 | `PATCH`, `DELETE` | `/members/{member_id}` | `/member` |
 
-A JWT, or a key or session with `scopes: null`, is not restricted and is unaffected. Reads are unaffected. A restricted user key may still mint a member session (the session inherits its scopes). A restricted member credential may still mint its own member keys (`/members/{member_id}/api-keys`) within the mint cap, and revoke them. Person routes (`/users/{user_id}/...`) are not org management.
+A JWT, or a key or session with `scopes: null`, is not restricted and is unaffected. Reads are unaffected. A restricted user key may still mint a member session (the session inherits its scopes). A restricted member credential may still mint its own member keys (`/members/{member_id}/api-keys`) within the mint cap: omitted or `null` scopes inherit the caller's, never `NULL`. Person routes (`/users/{user_id}/...`) are not org management.
+
+Revoke cap. The self revoke routes stay open to a restricted caller, but only for a key whose scopes fit within the caller's, the same subset check as the mint cap:
+
+| Route | Target key `scopes` | Restricted caller |
+|-------|---------------------|-------------------|
+| `DELETE /members/{member_id}/api-keys/{key_id}`, `DELETE /users/{user_id}/api-keys/{key_id}` | subset of the caller's (including itself, and `[]`) | **204** |
+| same | any label the caller does not have | **403** `INSUFFICIENT_SCOPE` — `This credential can't revoke a key with {labels}.`, `details.scopes` = those labels |
+| same | `null` (unrestricted) | **403** `INSUFFICIENT_SCOPE` — `This credential can't revoke an unrestricted key.`, `details.scopes` = `null` |
+
+Unrestricted callers revoke any key at the address, as before. The key must exist at that address first (**404** otherwise).
 
 To manage the org from a backend, use an unrestricted member key. A console uses the login session.
 
@@ -108,7 +118,7 @@ Person credential. Not member keys — those live under the member: `/members/{m
 |--------|------|--------|
 | `POST` | `/users/{user_id}/api-keys` | Create; plaintext once — prefix **`{brand}-sk-1-`**. Optional `scopes`. |
 | `GET` | `/users/{user_id}/api-keys` | List (no hashes / no secret); echoes `scopes` |
-| `DELETE` | `/users/{user_id}/api-keys/{key_id}` | Soft-revoke; idempotent. Other user's key → **404** |
+| `DELETE` | `/users/{user_id}/api-keys/{key_id}` | Soft-revoke; idempotent. Other user's key → **404**. Restricted caller: revoke cap ([restricted credentials](#restricted-credentials-cannot-manage-the-org)). |
 
 #### Create body
 
@@ -323,7 +333,7 @@ Keys that authenticate **as a member**. Different product from `/users/{user_id}
 |--------|------|--------|
 | `POST` | `/members/{member_id}/api-keys` | Create; plaintext once — prefix **`{brand}-mk-1-`**. Optional `scopes` (same semantics as user keys, including the mint cap). |
 | `GET` | `/members/{member_id}/api-keys` | List (echoes `scopes`, never the secret) |
-| `DELETE` | `/members/{member_id}/api-keys/{key_id}` | Soft-revoke. Idempotent. Other member's key → **404** |
+| `DELETE` | `/members/{member_id}/api-keys/{key_id}` | Soft-revoke. Idempotent. Other member's key → **404**. Restricted caller: revoke cap ([restricted credentials](#restricted-credentials-cannot-manage-the-org)). |
 
 Missing or `removed` member → **404**. A `suspended` member is addressable. Validate still rejects a key whose member is not `active`.
 

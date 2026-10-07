@@ -17,6 +17,7 @@ type keyStore interface {
 	Create(ctx context.Context, key *APIKey) error
 	GetByHash(ctx context.Context, keyHash string) (*APIKey, error)
 	List(ctx context.Context, userID string, limit int, startingAfter string) ([]*APIKey, bool, error)
+	Get(ctx context.Context, userID, keyID string) (*APIKey, error)
 	Revoke(ctx context.Context, userID, keyID string) (*APIKey, error)
 }
 
@@ -148,11 +149,17 @@ func (h *Handler) Revoke(c fiber.Ctx) error {
 		return errors.FieldError("key_id", errors.FallbackValidation)
 	}
 
+	notFound := httpx.DBErr{NotFound: ErrNotFound, Resource: "api_key", ResourceID: keyID}
+	target, err := h.store.Get(ctx, userID, keyID)
+	if err != nil {
+		return httpx.MapDB(ctx, err, "failed to get user key", notFound)
+	}
+	if err := httpx.GuardRevoke(c, target.Scopes); err != nil {
+		return err
+	}
 	key, err := h.store.Revoke(ctx, userID, keyID)
 	if err != nil {
-		return httpx.MapDB(ctx, err, "failed to revoke user key", httpx.DBErr{
-			NotFound: ErrNotFound, Resource: "api_key", ResourceID: keyID,
-		})
+		return httpx.MapDB(ctx, err, "failed to revoke user key", notFound)
 	}
 
 	httpx.Logger(ctx).Info().
