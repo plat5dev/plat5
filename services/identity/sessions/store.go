@@ -47,9 +47,9 @@ func (s *Store) Create(ctx context.Context, session *Session) error {
 	defer op.End()
 
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO member_sessions (id, member_id, token_prefix, token_hash, expires_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, session.ID, session.MemberID, session.TokenPrefix, session.TokenHash, session.ExpiresAt, session.CreatedAt)
+		INSERT INTO member_sessions (id, member_id, token_prefix, token_hash, scopes, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, session.ID, session.MemberID, session.TokenPrefix, session.TokenHash, session.Scopes, session.ExpiresAt, session.CreatedAt)
 	if err != nil {
 		if dbx.IsUniqueViolation(err) {
 			return op.Fail(fmt.Errorf("session token hash collision"))
@@ -69,7 +69,7 @@ func (s *Store) GetByHash(ctx context.Context, tokenHash string) (*Validated, er
 	var orgID, status string
 	err := s.pool.QueryRow(ctx, `
 		SELECT
-			s.id, s.member_id, s.token_prefix, s.token_hash, s.expires_at, s.created_at,
+			s.id, s.member_id, s.token_prefix, s.token_hash, s.scopes, s.expires_at, s.created_at,
 			m.organization_id, m.status
 		FROM member_sessions s
 		INNER JOIN members m ON m.id = s.member_id
@@ -79,6 +79,7 @@ func (s *Store) GetByHash(ctx context.Context, tokenHash string) (*Validated, er
 		&session.MemberID,
 		&session.TokenPrefix,
 		&session.TokenHash,
+		&session.Scopes,
 		&session.ExpiresAt,
 		&session.CreatedAt,
 		&orgID,

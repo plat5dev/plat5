@@ -2,6 +2,7 @@ package errors
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/gofiber/fiber/v3"
 )
@@ -96,6 +97,31 @@ func NotFoundError(resource string, id interface{}) *ApiError {
 		Status: fiber.StatusNotFound,
 		Kind:   KindValidation,
 	}
+}
+
+// InsufficientScope is a mint that asks for labels the caller credential does not have.
+// missing is named in message and repeated in details.scopes.
+func InsufficientScope(missing []string) *ApiError {
+	if missing == nil {
+		missing = []string{}
+	}
+	return &ApiError{
+		Type:    "invalid_request_error",
+		Code:    "INSUFFICIENT_SCOPE",
+		Message: insufficientScopeMessage(missing),
+		Details: map[string]interface{}{
+			"scopes": missing,
+		},
+		Status: fiber.StatusForbidden,
+		Kind:   KindAuth,
+	}
+}
+
+func insufficientScopeMessage(missing []string) string {
+	if len(missing) == 0 {
+		return "This credential can't grant that scope."
+	}
+	return "This credential can't grant " + strings.Join(missing, ", ") + "."
 }
 
 func ForbiddenError(permission, resource string, resourceID interface{}) *ApiError {

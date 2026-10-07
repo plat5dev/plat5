@@ -97,7 +97,7 @@ The route scope names the subject. `upstream` fills it. The client path does not
 | `organization` | `organization_id` |
 | `member` | `organization_id`, `member_id` |
 
-Always (all scopes): `X-Request-ID`, `traceparent`.
+Always (all scopes): `X-Request-ID`, `traceparent`. Restricted credentials also get `X-Plat5-Scopes` (absent = unrestricted). See [`gateway-contract.md`](gateway-contract.md).
 
 ## Log Fields
 

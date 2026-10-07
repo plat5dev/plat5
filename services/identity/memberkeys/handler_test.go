@@ -219,7 +219,96 @@ func testKeyApp(h *Handler) *fiber.App {
 	return app
 }
 
+func TestRestrictedCallerCannotMintWiderMemberKey(t *testing.T) {
+	keys := &fakeKeys{}
+	org := &fakeOrgs{}
+	org.add(saFixture("org1", "sa1", "mem-sa", orgs.StatusActive))
+	userID := "user1"
+	org.members["mem-user"] = &orgs.Member{
+		ID:     "mem-user",
+		UserID: &userID,
+		Status: orgs.StatusActive,
+	}
+	h := &Handler{store: keys, orgStore: org, prefix: testPrefix}
+	app := testKeyApp(h)
+	caller := map[string]string{"X-Plat5-Scopes": "projects:read"}
+
+	code, body := doJSONHeader(t, app, http.MethodPost, "/members/mem-user/api-keys", `{}`, caller)
+	if code != http.StatusCreated {
+		t.Fatalf("inherit status=%d body=%s", code, body)
+	}
+	created := decodeCreate(t, body)
+	if created.Scopes == nil || len(*created.Scopes) != 1 || (*created.Scopes)[0] != "projects:read" {
+		t.Fatalf("omitted scopes must inherit, not null: %+v", created.Scopes)
+	}
+	if keys.keys[0].Scopes == nil || len(keys.keys[0].Scopes) != 1 || keys.keys[0].Scopes[0] != "projects:read" {
+		t.Fatalf("stored: %#v", keys.keys[0].Scopes)
+	}
+
+	code, body = doJSONHeader(t, app, http.MethodPost, "/members/mem-user/api-keys", `{"scopes":["admin"]}`, caller)
+	assertInsufficientScope(t, code, body, "admin")
+	if len(keys.keys) != 1 {
+		t.Fatalf("rejected mint was stored: %d", len(keys.keys))
+	}
+
+	code, body = doJSONHeader(t, app, http.MethodPost, "/members/mem-user/api-keys", `{"scopes":["projects:read","admin"]}`, caller)
+	assertInsufficientScope(t, code, body, "admin")
+
+	code, body = doJSONHeader(t, app, http.MethodPost, "/members/mem-user/api-keys", `{"scopes":[]}`, caller)
+	if code != http.StatusCreated {
+		t.Fatalf("narrower empty: %d %s", code, body)
+	}
+	narrowed := decodeCreate(t, body)
+	if narrowed.Scopes == nil || len(*narrowed.Scopes) != 0 {
+		t.Fatalf("explicit empty must stay empty: %+v", narrowed.Scopes)
+	}
+
+	code, body = doJSONHeader(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa1/api-keys", `{"scopes":["admin"]}`, caller)
+	assertInsufficientScope(t, code, body, "admin")
+	code, body = doJSONHeader(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa1/api-keys", `{}`, caller)
+	if code != http.StatusCreated {
+		t.Fatalf("sa inherit: %d %s", code, body)
+	}
+	saKey := decodeCreate(t, body)
+	if saKey.Scopes == nil || len(*saKey.Scopes) != 1 || (*saKey.Scopes)[0] != "projects:read" {
+		t.Fatalf("sa scopes: %+v", saKey.Scopes)
+	}
+	if keys.keys[len(keys.keys)-1].MemberID != "mem-sa" {
+		t.Fatalf("sa member: %+v", keys.keys[len(keys.keys)-1])
+	}
+
+	code, body = doJSON(t, app, http.MethodPost, "/members/mem-user/api-keys", `{"scopes":["admin"]}`)
+	if code != http.StatusCreated {
+		t.Fatalf("unrestricted caller: %d %s", code, body)
+	}
+	open := decodeCreate(t, body)
+	if open.Scopes == nil || len(*open.Scopes) != 1 || (*open.Scopes)[0] != "admin" {
+		t.Fatalf("unrestricted may request admin: %+v", open.Scopes)
+	}
+	code, body = doJSON(t, app, http.MethodPost, "/members/mem-user/api-keys", `{}`)
+	if code != http.StatusCreated {
+		t.Fatalf("unrestricted omit: %d %s", code, body)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if scopes, ok := raw["scopes"]; !ok || scopes != nil {
+		t.Fatalf("unrestricted omit must stay null: %s", body)
+	}
+
+	code, body = doJSONHeader(t, app, http.MethodPost, "/members/mem-user/api-keys", `{}`, map[string]string{"X-Plat5-Scopes": "NOT A SCOPE"})
+	if code != http.StatusInternalServerError {
+		t.Fatalf("bad caller header: %d %s", code, body)
+	}
+}
+
 func doJSON(t *testing.T, app *fiber.App, method, path, body string) (int, []byte) {
+	t.Helper()
+	return doJSONHeader(t, app, method, path, body, nil)
+}
+
+func doJSONHeader(t *testing.T, app *fiber.App, method, path, body string, headers map[string]string) (int, []byte) {
 	t.Helper()
 	var rdr io.Reader
 	if body != "" {
@@ -228,6 +317,9 @@ func doJSON(t *testing.T, app *fiber.App, method, path, body string) (int, []byt
 	req := httptest.NewRequest(method, path, rdr)
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	resp, err := app.Test(req)
 	if err != nil {
@@ -239,6 +331,52 @@ func doJSON(t *testing.T, app *fiber.App, method, path, body string) (int, []byt
 		t.Fatal(err)
 	}
 	return resp.StatusCode, b
+}
+
+func decodeCreate(t *testing.T, body []byte) CreateResponse {
+	t.Helper()
+	var created CreateResponse
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatal(err)
+	}
+	return created
+}
+
+func assertInsufficientScope(t *testing.T, code int, body []byte, missing string) {
+	t.Helper()
+	if code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", code, body)
+	}
+	var env struct {
+		Error struct {
+			Type    string         `json:"type"`
+			Code    string         `json:"code"`
+			Message string         `json:"message"`
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.Error.Type != "invalid_request_error" || env.Error.Code != "INSUFFICIENT_SCOPE" {
+		t.Fatalf("envelope: %s", body)
+	}
+	if !strings.Contains(env.Error.Message, missing) {
+		t.Fatalf("message %q does not name %s", env.Error.Message, missing)
+	}
+	list, ok := env.Error.Details["scopes"].([]any)
+	if !ok {
+		t.Fatalf("details: %s", body)
+	}
+	found := false
+	for _, item := range list {
+		if item == missing {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("details scopes missing %s: %s", missing, body)
+	}
 }
 
 func decodeKeys(t *testing.T, body []byte) ListResponse {

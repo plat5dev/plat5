@@ -35,6 +35,7 @@ Use these only when a more specific sentence does not apply.
 | `VALIDATION_ERROR` | 422 | That doesn't look right. |
 | `UNAUTHORIZED` | 401 | Authentication required. |
 | `FORBIDDEN` | 403 | You don't have permission to do that. |
+| `INSUFFICIENT_SCOPE` | 403 | This credential can't grant that scope. |
 | `NOT_FOUND` | 404 | Resource not found. |
 | `CONFLICT` | 409 | That already exists. |
 | `PAYLOAD_TOO_LARGE` | 413 | Request body is too large. |
@@ -103,6 +104,7 @@ Unknown tokens use the generic **404** `Resource not found.` (existence policy; 
 | Scope label > 64 chars | That scope label is too long. |
 | More than 32 scopes | Too many scopes. |
 | Duplicate scope labels | Scope labels must be unique. |
+| Mint asks for a scope the caller lacks | This credential can't grant {labels}. |
 
 Internal validate (`key` / `token` / `key_id` required) is not product UI. Fallback 422 is enough.
 

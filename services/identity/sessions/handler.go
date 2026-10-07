@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"context"
 	stderrors "errors"
 	"strings"
 	"time"
@@ -14,9 +15,18 @@ import (
 	"github.com/plat5dev/plat5/identity/orgs"
 )
 
+type sessionStore interface {
+	Create(ctx context.Context, session *Session) error
+	GetByHash(ctx context.Context, tokenHash string) (*Validated, error)
+}
+
+type memberResolver interface {
+	ResolveMember(ctx context.Context, userID, organizationID string) (*orgs.Member, error)
+}
+
 type Handler struct {
-	store    *Store
-	orgStore *orgs.Store
+	store    sessionStore
+	orgStore memberResolver
 	prefix   string
 }
 
@@ -25,23 +35,25 @@ func NewHandler(store *Store, orgStore *orgs.Store, prefix string) *Handler {
 }
 
 type CreateResponse struct {
-	Token          string `json:"token"`
-	ExpiresAt      string `json:"expires_at"`
-	MemberID       string `json:"member_id"`
-	OrganizationID string `json:"organization_id"`
+	Token          string    `json:"token"`
+	ExpiresAt      string    `json:"expires_at"`
+	MemberID       string    `json:"member_id"`
+	OrganizationID string    `json:"organization_id"`
+	Scopes         *[]string `json:"scopes"`
 }
 
 type ValidateRequest struct {
 	Token string `json:"token"`
 }
 
-// validPayload is the validate hit. scopes is null. No user_id.
-func validPayload(memberID, organizationID string) fiber.Map {
+// validPayload is the validate hit. No user_id.
+// scopes nil is unrestricted; a non-nil list is restricted.
+func validPayload(memberID, organizationID string, scopes []string) fiber.Map {
 	return fiber.Map{
 		"valid":           true,
 		"member_id":       memberID,
 		"organization_id": organizationID,
-		"scopes":          nil,
+		"scopes":          apikey.WireScopesJSON(scopes),
 	}
 }
 
@@ -70,6 +82,11 @@ func (h *Handler) Create(c fiber.Ctx) error {
 		return errors.NotFoundError("member", userID+":"+orgID)
 	}
 
+	scopes, err := httpx.ConstrainMint(c, nil)
+	if err != nil {
+		return httpx.MapMintScopes(ctx, err)
+	}
+
 	plaintext, err := apikey.Generate(h.prefix)
 	if err != nil {
 		httpx.LogError(ctx, "failed to generate session token", err, errors.KindInternal)
@@ -77,7 +94,7 @@ func (h *Handler) Create(c fiber.Ctx) error {
 	}
 
 	now := time.Now().UTC()
-	session := New(member.ID, plaintext, h.prefix, now)
+	session := New(member.ID, plaintext, h.prefix, scopes, now)
 	if err := h.store.Create(ctx, session); err != nil {
 		return httpx.MapDB(ctx, err, "failed to store member session", httpx.DBErr{})
 	}
@@ -95,6 +112,7 @@ func (h *Handler) Create(c fiber.Ctx) error {
 		ExpiresAt:      httpx.FormatTime(session.ExpiresAt),
 		MemberID:       member.ID,
 		OrganizationID: member.OrganizationID,
+		Scopes:         apikey.WireScopes(session.Scopes),
 	})
 }
 
@@ -125,7 +143,7 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 	}
 
 	metrics.RecordSessionValidation(true)
-	return c.JSON(validPayload(found.Session.MemberID, found.OrganizationID))
+	return c.JSON(validPayload(found.Session.MemberID, found.OrganizationID, found.Session.Scopes))
 }
 
 func (h *Handler) invalid(c fiber.Ctx) error {
