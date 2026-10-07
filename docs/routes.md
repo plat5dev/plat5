@@ -97,14 +97,14 @@ Same path, different per-verb `required_scopes` / `rate_limit` — nested `metho
                 window_seconds: 1
 ```
 
-`url` is whatever the **gateway** can reach (cluster DNS, public HTTPS, `host.docker.internal:PORT`, etc.). How you run the process is out of scope for Plat5.
+`url` is exactly `http://host:port`, where `host` is anything the **gateway** can reach (cluster DNS name, `host.docker.internal`, an IP). No `https://` (TLS upstreams aren't supported yet), no path, no query; anything else is `422`. How you run the process is out of scope for Plat5.
 
 ### Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `services` | `map<string, ServiceConfig>` | Top-level wrapper. Keys are service names. |
-| `url` | `string` | Upstream URL (hostname:port or absolute URL the gateway can dial). |
+| `url` | `string` | Upstream, exactly `http://host:port` (e.g. `http://my-service:3000`). |
 | `rate_limits` | `map<string, RateLimitPolicy>?` | Optional on the **service**. Named policies this service’s routes may reference. |
 | `public` | `ScopeConfig?` | No authentication. |
 | `user` | `ScopeConfig?` | User JWT or **user** API key. |
