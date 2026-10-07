@@ -37,9 +37,14 @@ func RequestLogger(telem *telemetry.Telemetry) fiber.Handler {
 
 		err := c.Next()
 
-		// ErrorHandler runs after middleware; response status is still default
-		// when handlers return *ApiError. Prefer the error's status for logs/metrics.
-		status := resolveStatus(c, err)
+		// ErrorHandler runs after middleware, so the response status is not set yet
+		// when a handler returns an error. Map it the same way the ErrorHandler does.
+		status := c.Response().StatusCode()
+		var apiErr *errors.ApiError
+		if err != nil {
+			apiErr = errors.FromError(err)
+			status = apiErr.Status
+		}
 		duration := time.Since(start)
 
 		routePattern := "unknown"
@@ -49,12 +54,12 @@ func RequestLogger(telem *telemetry.Telemetry) fiber.Handler {
 
 		metrics.ObserveRequest(routePattern, c.Method(), status, duration)
 
+		kind := errors.KindInternal.String()
+		if apiErr != nil && apiErr.Kind.String() != "" {
+			kind = apiErr.Kind.String()
+		}
 		if status >= 500 {
 			span := trace.SpanFromContext(c.Context())
-			kind := errors.KindInternal.String()
-			if apiErr, ok := err.(*errors.ApiError); ok && apiErr.Kind.String() != "" {
-				kind = apiErr.Kind.String()
-			}
 			span.SetAttributes(attribute.String("error.kind", kind))
 			span.SetStatus(codes.Error, "")
 		}
@@ -67,11 +72,7 @@ func RequestLogger(telem *telemetry.Telemetry) fiber.Handler {
 			Logger()
 
 		if err != nil {
-			if apiErr, ok := err.(*errors.ApiError); ok && apiErr.Status >= 500 {
-				kind := apiErr.Kind.String()
-				if kind == "" {
-					kind = errors.KindInternal.String()
-				}
+			if status >= 500 {
 				logger.Error().
 					Bool("error", true).
 					Str("error_kind", kind).
@@ -86,21 +87,4 @@ func RequestLogger(telem *telemetry.Telemetry) fiber.Handler {
 		logger.Info().Msg("request completed")
 		return nil
 	}
-}
-
-func resolveStatus(c fiber.Ctx, err error) int {
-	if err != nil {
-		switch e := err.(type) {
-		case *errors.ApiError:
-			return e.Status
-		case *fiber.Error:
-			return e.Code
-		default:
-			if code := c.Response().StatusCode(); code >= 400 {
-				return code
-			}
-			return fiber.StatusInternalServerError
-		}
-	}
-	return c.Response().StatusCode()
 }

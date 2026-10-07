@@ -142,7 +142,7 @@ Write **JSON** to stdout always (including when OTLP is enabled). No OTLP log ex
 | `message` | Log message |
 | `route` | HTTP route pattern |
 | `method` | HTTP method |
-| `status` | HTTP status code |
+| `status` | HTTP status code the client received (for a returned error, the status the error handler writes) |
 | `duration_ms` | Request duration |
 | `request_id` | Correlation ID |
 | `trace_id` / `span_id` | When a span is active |
