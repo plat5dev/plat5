@@ -217,6 +217,8 @@ impl UserGateway {
                     "permission": "required_scopes",
                     "resource": "route",
                     "resource_id": route.path,
+                    // Any one of these would have admitted the request.
+                    "required_scopes": route.required_scopes,
                 }))),
             )
             .await;

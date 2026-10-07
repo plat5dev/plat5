@@ -96,14 +96,20 @@ type DBErr struct {
 	Message    string
 }
 
+// CallerScopes is the caller's effective scopes from X-Plat5-Scopes, which the
+// gateway sets. nil is unrestricted (header absent).
+func CallerScopes(c fiber.Ctx) ([]string, error) {
+	raw := c.Request().Header.Peek(apikey.CallerScopesHeader)
+	if raw == nil {
+		return nil, nil
+	}
+	return apikey.ParseCallerScopes(string(raw))
+}
+
 // ConstrainMint applies the caller credential's scopes to a key or session being created.
 // requested nil means the client omitted scopes.
 func ConstrainMint(c fiber.Ctx, requested []string) ([]string, error) {
-	raw := c.Request().Header.Peek(apikey.CallerScopesHeader)
-	if raw == nil {
-		return apikey.ConstrainScopes(nil, requested)
-	}
-	caller, err := apikey.ParseCallerScopes(string(raw))
+	caller, err := CallerScopes(c)
 	if err != nil {
 		return nil, err
 	}

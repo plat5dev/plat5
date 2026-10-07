@@ -19,7 +19,9 @@ Contract: [`docs/identity.md`](../../docs/identity.md)
 
 List includes `token` while the invite is active. The host sends any email.
 
-A restricted caller cannot mint a wider key or member session. The gateway sends that caller's scopes in `X-Plat5-Scopes` (absent = unrestricted). Omitted scopes are copied from the caller. A label the caller does not have is **403** `INSUFFICIENT_SCOPE`. Contract: [`docs/identity.md`](../../docs/identity.md).
+A restricted caller cannot mint a wider key or member session, assign a role with labels it lacks, or act on a member whose role has labels it lacks. The gateway sends that caller's effective scopes in `X-Plat5-Scopes` (absent = unrestricted). Omitted scopes are copied from the caller. A label the caller does not have is **403** `INSUFFICIENT_SCOPE`. Contract: [`docs/identity.md`](../../docs/identity.md).
+
+`ROLES_FILE` (optional) is the deployment's roles file, read at boot. Member key and session validate return the member's role labels intersected with the credential's scopes. Unset → every member is unrestricted. Contract: [`docs/roles.md`](../../docs/roles.md).
 
 ## Local
 

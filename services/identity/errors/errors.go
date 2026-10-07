@@ -124,6 +124,14 @@ func insufficientScopeMessage(missing []string) string {
 	return "This credential can't grant " + strings.Join(missing, ", ") + "."
 }
 
+// InsufficientRole is a role assignment, or an act on a member, that needs labels
+// the caller does not have. Same code as a mint; message names the role.
+func InsufficientRole(message string, missing []string) *ApiError {
+	err := InsufficientScope(missing)
+	err.Message = message
+	return err
+}
+
 func ForbiddenError(permission, resource string, resourceID interface{}) *ApiError {
 	return &ApiError{
 		Type:    "invalid_request_error",

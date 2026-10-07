@@ -152,6 +152,7 @@ func (f *fakeInvites) RedeemInvite(_ context.Context, tokenHash, userID string) 
 		ID:             "mem_" + userID,
 		OrganizationID: inv.OrganizationID,
 		UserID:         &uid,
+		Role:           inv.Role,
 		Status:         StatusActive,
 		AddedBy:        inv.CreatedBy,
 		CreatedAt:      now,

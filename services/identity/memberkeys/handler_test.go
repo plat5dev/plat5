@@ -408,7 +408,8 @@ func assertNotFound(t *testing.T, code int, body []byte, resource, id string) {
 }
 
 type fakeKeys struct {
-	keys []*APIKey
+	keys      []*APIKey
+	validated *Validated
 }
 
 func (f *fakeKeys) Create(_ context.Context, key *APIKey) error {
@@ -417,7 +418,10 @@ func (f *fakeKeys) Create(_ context.Context, key *APIKey) error {
 }
 
 func (f *fakeKeys) GetByHash(context.Context, string) (*Validated, error) {
-	return nil, ErrNotFound
+	if f.validated == nil {
+		return nil, ErrNotFound
+	}
+	return f.validated, nil
 }
 
 func (f *fakeKeys) List(_ context.Context, memberID string, limit int, startingAfter string) ([]*APIKey, bool, error) {
@@ -469,6 +473,7 @@ func (f *fakeOrgs) add(sa *orgs.ServiceAccount) {
 		ID:               sa.MemberID,
 		OrganizationID:   sa.OrganizationID,
 		ServiceAccountID: &saID,
+		Role:             sa.Role,
 		Status:           sa.Status,
 	}
 }

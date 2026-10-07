@@ -22,6 +22,8 @@ Plat5 owns **opaque user ids** (as strings from the gateway), API keys, member s
 | Global person | **User** | `user_id` (opaque string from IdP via gateway) |
 | Isolation boundary | **Organization** | Do not call it tenant. |
 | Org principal | **Member** | User *or* service account in an org; wire id `member_id` |
+| What a member holds | **Role** | Deployment-defined slug on a member; its labels come from the roles file ([`roles.md`](roles.md)). Plat5 names no roles. |
+| Route requirement / credential narrowing | **Scope label** | Opaque `[a-z0-9:._-]+`. Routes require them; roles grant them; keys and sessions narrow them. |
 | Non-human org identity | **Service account** | Created under an organization; always has a member row |
 | Credential | **API key** | User-scoped or member-scoped |
 | Short-lived org credential | **Member session** | One active user member, one org. Not an API key. |
@@ -97,7 +99,7 @@ The route scope names the subject. `upstream` fills it. The client path does not
 | `organization` | `organization_id` |
 | `member` | `organization_id`, `member_id` |
 
-Always (all scopes): `X-Request-ID`, `traceparent`. Restricted credentials also get `X-Plat5-Scopes` (absent = unrestricted). See [`gateway-contract.md`](gateway-contract.md).
+Always (all scopes): `X-Request-ID`, `traceparent`. Restricted callers also get `X-Plat5-Scopes`: the effective labels, role intersected with credential for member credentials (absent = unrestricted). See [`gateway-contract.md`](gateway-contract.md).
 
 ## Log Fields
 

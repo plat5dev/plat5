@@ -13,6 +13,7 @@ func scanServiceAccount(row dbx.Scannable) (*ServiceAccount, error) {
 		&sa.MemberID,
 		&sa.Name,
 		&sa.CreatedByUserID,
+		&sa.Role,
 		&status,
 		&sa.CreatedAt,
 		&sa.UpdatedAt,
@@ -29,6 +30,7 @@ func scanMembership(row dbx.Scannable) (*Membership, error) {
 	var status string
 	err := row.Scan(
 		&m.ID,
+		&m.Role,
 		&status,
 		&m.OrganizationID,
 		&m.OrganizationName,
@@ -50,7 +52,7 @@ func scanOrg(row dbx.Scannable) (*Organization, error) {
 	return &o, nil
 }
 
-const memberCols = `id, organization_id, user_id, service_account_id, status, added_by, created_at, updated_at`
+const memberCols = `id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at`
 
 func scanMember(row dbx.Scannable) (*Member, error) {
 	var m Member
@@ -60,6 +62,7 @@ func scanMember(row dbx.Scannable) (*Member, error) {
 		&m.OrganizationID,
 		&m.UserID,
 		&m.ServiceAccountID,
+		&m.Role,
 		&status,
 		&m.AddedBy,
 		&m.CreatedAt,

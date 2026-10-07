@@ -70,6 +70,21 @@ Use these only when a more specific sentence does not apply.
 | PATCH status not `active` or `suspended` | Status must be active or suspended. |
 | Duplicate user in org | This person is already a member. |
 | Remove last member | Delete the organization instead of its last member. |
+| PATCH at the org address with no fields | Nothing to update. |
+
+### Roles
+
+Members, invites, and service accounts.
+
+| When | `message` |
+|------|-----------|
+| `role` not a slug in the roles file | That role doesn't exist. |
+| `role` sent with no roles file | Roles aren't set up for this deployment. |
+| Demote, remove, or delete the last `creator_role` holder | Keep at least one member with the {creator_role} role. |
+| Assign a role with a label the caller lacks | You can't assign the {role} role. |
+| Act on a member whose role has a label the caller lacks | You can't change a member with the {role} role. |
+
+The last two are **403** `INSUFFICIENT_SCOPE`. The rest are **422** `VALIDATION_ERROR` with `path` `role`, except the last-holder rule on a remove, whose `path` matches the last-member rule (`member_id`, or `service_account_id` on a service-account delete).
 
 ### Service accounts
 

@@ -118,7 +118,7 @@ func (s *Store) ListMemberships(ctx context.Context, userID string, limit int, s
 		after = startingAfter
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT m.id, m.status, o.id, o.name, o.slug
+		SELECT m.id, m.role, m.status, o.id, o.name, o.slug
 		FROM members m
 		INNER JOIN organizations o ON o.id = m.organization_id
 		WHERE m.user_id = $1 AND m.status = 'active'
@@ -189,9 +189,9 @@ func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 		now := time.Now().UTC()
 		_, err = tx.Exec(ctx, `
 			UPDATE members
-			SET status = $3, added_by = $4, updated_at = $5
+			SET role = $3, status = $4, added_by = $5, updated_at = $6
 			WHERE organization_id = $1 AND user_id = $2 AND status = 'removed'
-		`, m.OrganizationID, *m.UserID, m.Status, m.AddedBy, now)
+		`, m.OrganizationID, *m.UserID, m.Role, m.Status, m.AddedBy, now)
 		if err != nil {
 			return op.Fail(err)
 		}
@@ -208,9 +208,9 @@ func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO members
-			(id, organization_id, user_id, service_account_id, status, added_by, created_at, updated_at)
-		VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)
-	`, m.ID, m.OrganizationID, *m.UserID, m.Status, m.AddedBy, m.CreatedAt, m.UpdatedAt)
+			(id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at)
+		VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8)
+	`, m.ID, m.OrganizationID, *m.UserID, m.Role, m.Status, m.AddedBy, m.CreatedAt, m.UpdatedAt)
 	if err != nil {
 		if dbx.IsUniqueViolation(err) {
 			return op.SoftFail("conflict", ErrConflict, ErrConflict)
@@ -225,9 +225,14 @@ func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 	return nil
 }
 
-// MutateMember locks every member in the target's org, invokes fn with the
-// non-removed count, and persists status on success. Removed is not an address.
-func (s *Store) MutateMember(ctx context.Context, memberID string, fn func(m *Member, nonRemoved int) error) (*Member, error) {
+// MemberChange checks and applies a write to target. members is every row in
+// the org, locked, target included. Return an error to refuse the write.
+type MemberChange func(target *Member, members []*Member) error
+
+// MutateMember locks every member in the target's org, applies change, and
+// persists role and status. organizationID "" is the self address (any org);
+// otherwise a member in another org is not found. Removed is not an address.
+func (s *Store) MutateMember(ctx context.Context, organizationID, memberID string, change MemberChange) (*Member, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "mutate_member", dbx.DefaultTimeout,
 		attribute.String("member.id", memberID),
 	)
@@ -240,17 +245,20 @@ func (s *Store) MutateMember(ctx context.Context, memberID string, fn func(m *Me
 	}
 	defer tx.Rollback(ctx)
 
-	var organizationID string
-	err = tx.QueryRow(ctx, `SELECT organization_id FROM members WHERE id = $1`, memberID).Scan(&organizationID)
+	var memberOrg string
+	err = tx.QueryRow(ctx, `SELECT organization_id FROM members WHERE id = $1`, memberID).Scan(&memberOrg)
 	if err != nil {
 		if dbx.IsNoRows(err) {
 			return nil, op.Expected("not found", ErrNotFound)
 		}
 		return nil, op.Fail(err)
 	}
-	op.Attr(attribute.String("organization.id", organizationID))
+	if organizationID != "" && organizationID != memberOrg {
+		return nil, op.Expected("other org", ErrNotFound)
+	}
+	op.Attr(attribute.String("organization.id", memberOrg))
 
-	members, err := lockOrgMembers(ctx, tx, organizationID)
+	members, err := lockOrgMembers(ctx, tx, memberOrg)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
@@ -266,16 +274,16 @@ func (s *Store) MutateMember(ctx context.Context, memberID string, fn func(m *Me
 		return nil, op.Expected("not found", ErrNotFound)
 	}
 
-	if err := fn(target, countNonRemoved(members)); err != nil {
+	if err := change(target, members); err != nil {
 		return nil, op.Expected("rejected", err)
 	}
 
 	target.UpdatedAt = time.Now().UTC()
 	tag, err := tx.Exec(ctx, `
 		UPDATE members
-		SET status = $3, updated_at = $4
+		SET role = $3, status = $4, updated_at = $5
 		WHERE organization_id = $1 AND id = $2
-	`, organizationID, memberID, target.Status, target.UpdatedAt)
+	`, memberOrg, memberID, target.Role, target.Status, target.UpdatedAt)
 	if err != nil {
 		return nil, op.Fail(err)
 	}

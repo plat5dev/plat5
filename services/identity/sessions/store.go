@@ -36,6 +36,8 @@ type Validated struct {
 	Session        *Session
 	OrganizationID string
 	MemberStatus   string
+	// MemberRole is resolved against the roles file at validate. Nil is unrestricted.
+	MemberRole *string
 }
 
 func (s *Store) Create(ctx context.Context, session *Session) error {
@@ -67,10 +69,11 @@ func (s *Store) GetByHash(ctx context.Context, tokenHash string) (*Validated, er
 
 	var session Session
 	var orgID, status string
+	var role *string
 	err := s.pool.QueryRow(ctx, `
 		SELECT
 			s.id, s.member_id, s.token_prefix, s.token_hash, s.scopes, s.expires_at, s.created_at,
-			m.organization_id, m.status
+			m.organization_id, m.status, m.role
 		FROM member_sessions s
 		INNER JOIN members m ON m.id = s.member_id
 		WHERE s.token_hash = $1
@@ -84,6 +87,7 @@ func (s *Store) GetByHash(ctx context.Context, tokenHash string) (*Validated, er
 		&session.CreatedAt,
 		&orgID,
 		&status,
+		&role,
 	)
 	if err != nil {
 		if dbx.IsNoRows(err) {
@@ -96,6 +100,7 @@ func (s *Store) GetByHash(ctx context.Context, tokenHash string) (*Validated, er
 		Session:        &session,
 		OrganizationID: orgID,
 		MemberStatus:   status,
+		MemberRole:     role,
 	}, nil
 }
 

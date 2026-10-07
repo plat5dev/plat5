@@ -1,9 +1,21 @@
 # Deferred
 
-## Acting on another member
+## Gateway policy-engine hook (AuthZEN)
 
-The gateway catalog will not publish a route where the client names a member id. Identity still serves `GET` / `PATCH` / `DELETE /members/{member_id}` on the public port. A member acts on itself through `member` scope, which fills `subject.member_id`.
+An optional AuthZEN 1.0 evaluation call from the gateway, after the label check, for decisions that need more than route labels. Subject is the member (`member_id` and `organization_id`, no `user_id`). Action is the route label. Resource is the service, the route, and its path params. Cached on the admission TTL. Engine unreachable → **503**.
 
-Service-account keys are not this. They are published under `service_account_id` on organization scope. The member id stays off the client path.
+Ready: a deployment that needs a resource-level decision its service cannot make. Until then, resource authz stays in the service. No policy engine in the default stack.
 
-Ready: a check that the resource member belongs to the credential's org, without returning `user_id` to the gateway, and without the gateway calling the public member route through itself. Until then, do not publish that path.
+## Roles without a restart
+
+Identity reads the roles file at boot. Ready: a deployment that changes roles often enough that a restart hurts. Then an internal admin endpoint, applied the way routes are.
+
+## Per-org custom roles
+
+Every org gets the deployment's roles. `GET /organizations/{organization_id}/roles` already has the org in the path. Ready: a customer org that needs a role the deployment does not define.
+
+## Keys that follow the role
+
+A key minted with omitted `scopes` by a caller whose role has a label list snapshots those labels. It does not gain labels the role gains later. A caller with an unrestricted role mints `NULL`, which follows the role.
+
+Ready: identity can tell a caller's own narrowing apart from its role labels on `organization` scope, without a second header.

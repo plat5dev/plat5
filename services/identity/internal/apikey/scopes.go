@@ -9,6 +9,9 @@ import (
 const (
 	MaxScopeCount = 32
 	MaxScopeLen   = 64
+	// MaxCallerScopes bounds X-Plat5-Scopes. A member's effective set can be a
+	// whole role, which may hold more labels than one key mint asks for.
+	MaxCallerScopes = 64
 )
 
 var scopeLabelRe = regexp.MustCompile(`^[a-z0-9:._-]+$`)
@@ -107,6 +110,36 @@ func ConstrainScopes(caller, requested []string) ([]string, error) {
 	return requested, nil
 }
 
+// Intersect is the effective set of two scope lists. nil is unrestricted, so it
+// is the identity: nil and nil is nil. The result keeps a's order.
+func Intersect(a, b []string) []string {
+	if a == nil {
+		if b == nil {
+			return nil
+		}
+		return cloneScopes(b)
+	}
+	if b == nil {
+		return cloneScopes(a)
+	}
+	have := make(map[string]struct{}, len(b))
+	for _, s := range b {
+		have[s] = struct{}{}
+	}
+	out := make([]string, 0, len(a))
+	for _, s := range a {
+		if _, ok := have[s]; ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// ValidLabel is the label hygiene shared by key scopes, route required_scopes, and roles.
+func ValidLabel(s string) bool {
+	return s != "" && len(s) <= MaxScopeLen && scopeLabelRe.MatchString(s)
+}
+
 // ParseCallerScopes parses a present X-Plat5-Scopes value.
 // Empty or "[]" is a restricted credential with no labels, not unrestricted.
 func ParseCallerScopes(raw string) ([]string, error) {
@@ -115,7 +148,7 @@ func ParseCallerScopes(raw string) ([]string, error) {
 		return []string{}, nil
 	}
 	parts := strings.Split(raw, ",")
-	if len(parts) > MaxScopeCount {
+	if len(parts) > MaxCallerScopes {
 		return nil, ErrCallerScopes
 	}
 	out := make([]string, 0, len(parts))

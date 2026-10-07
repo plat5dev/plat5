@@ -188,3 +188,56 @@ func itoa(i int) string {
 	}
 	return string(b[n:])
 }
+
+func TestIntersect(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b []string
+		want []string
+	}{
+		{"both unrestricted", nil, nil, nil},
+		{"a unrestricted", nil, []string{"x"}, []string{"x"}},
+		{"b unrestricted", []string{"x", "y"}, nil, []string{"x", "y"}},
+		{"overlap keeps a's order", []string{"y", "x", "z"}, []string{"x", "y"}, []string{"y", "x"}},
+		{"no overlap is restricted", []string{"x"}, []string{"y"}, []string{}},
+		{"empty stays restricted", []string{}, nil, []string{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Intersect(tc.a, tc.b)
+			if (got == nil) != (tc.want == nil) {
+				t.Fatalf("nil-ness: got %#v want %#v", got, tc.want)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %#v want %#v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("got %#v want %#v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestIntersectDoesNotAlias(t *testing.T) {
+	a := []string{"x"}
+	got := Intersect(a, nil)
+	got[0] = "changed"
+	if a[0] != "x" {
+		t.Fatal("Intersect returned the caller's backing array")
+	}
+}
+
+func TestValidLabel(t *testing.T) {
+	for _, ok := range []string{"a", "org:members:write", "x.y_z-1"} {
+		if !ValidLabel(ok) {
+			t.Fatalf("%q should be valid", ok)
+		}
+	}
+	for _, bad := range []string{"", "*", "Upper", "has space", string(make([]byte, MaxScopeLen+1))} {
+		if ValidLabel(bad) {
+			t.Fatalf("%q should be invalid", bad)
+		}
+	}
+}

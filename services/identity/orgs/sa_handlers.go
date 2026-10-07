@@ -9,6 +9,7 @@ import (
 
 type CreateServiceAccountRequest struct {
 	Name            string  `json:"name"`
+	Role            *string `json:"role"`
 	CreatedByUserID *string `json:"created_by_user_id"`
 }
 
@@ -21,6 +22,7 @@ type ServiceAccountResponse struct {
 	OrganizationID  string  `json:"organization_id"`
 	MemberID        string  `json:"member_id"`
 	Name            string  `json:"name"`
+	Role            *string `json:"role"`
 	Status          string  `json:"status"`
 	CreatedByUserID *string `json:"created_by_user_id"`
 	CreatedAt       string  `json:"created_at"`
@@ -48,11 +50,23 @@ func (h *Handler) CreateServiceAccount(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	role, err := h.roles.Choose(req.Role)
+	if err != nil {
+		return err
+	}
+	caller, err := callerScopes(c)
+	if err != nil {
+		return err
+	}
+	if err := h.roles.CheckAssign(caller, role); err != nil {
+		return err
+	}
 
 	sa := &ServiceAccount{
 		ID:             NewULID(),
 		OrganizationID: orgID,
 		Name:           name,
+		Role:           role,
 	}
 	if _, err := h.store.CreateServiceAccount(ctx, sa, createdBy); err != nil {
 		return httpx.MapDB(ctx, err, "failed to create service account", httpx.DBErr{
@@ -120,6 +134,9 @@ func (h *Handler) UpdateServiceAccount(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if err := h.checkActOnServiceAccount(c, orgID, saID); err != nil {
+		return err
+	}
 
 	sa, err := h.store.UpdateServiceAccount(ctx, orgID, saID, name)
 	if err != nil {
@@ -135,12 +152,45 @@ func (h *Handler) DeleteServiceAccount(c fiber.Ctx) error {
 	orgID := httpx.PathParam(c, "organization_id")
 	saID := c.Params("service_account_id")
 
-	if err := h.store.DeleteServiceAccount(ctx, orgID, saID); err != nil {
+	caller, err := callerScopes(c)
+	if err != nil {
+		return err
+	}
+
+	err = h.store.DeleteServiceAccount(ctx, orgID, saID, func(target *Member, members []*Member) error {
+		if err := h.roles.CheckActOn(caller, target.Role); err != nil {
+			return err
+		}
+		if err := rejectLastMember(countNonRemoved(members), "service_account_id"); err != nil {
+			return err
+		}
+		prior := *target
+		target.Status = StatusRemoved
+		return rejectLastCreator(h.roles, members, prior, "service_account_id")
+	})
+	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to delete service account", httpx.DBErr{
 			NotFound: ErrNotFound, Resource: "service_account", ResourceID: saID,
 		})
 	}
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// checkActOnServiceAccount is the grant cap on a service account's role.
+// A missing SA, the wrong org, or a removed member is 404.
+func (h *Handler) checkActOnServiceAccount(c fiber.Ctx, orgID, saID string) error {
+	ctx := c.Context()
+	sa, err := h.store.GetServiceAccount(ctx, orgID, saID)
+	if err != nil {
+		return httpx.MapDB(ctx, err, "failed to get service account", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "service_account", ResourceID: saID,
+		})
+	}
+	caller, err := callerScopes(c)
+	if err != nil {
+		return err
+	}
+	return h.roles.CheckActOn(caller, sa.Role)
 }
 
 func toServiceAccountResponse(sa *ServiceAccount) ServiceAccountResponse {
@@ -149,6 +199,7 @@ func toServiceAccountResponse(sa *ServiceAccount) ServiceAccountResponse {
 		OrganizationID:  sa.OrganizationID,
 		MemberID:        sa.MemberID,
 		Name:            sa.Name,
+		Role:            sa.Role,
 		Status:          string(sa.Status),
 		CreatedByUserID: sa.CreatedByUserID,
 		CreatedAt:       httpx.FormatTime(sa.CreatedAt),

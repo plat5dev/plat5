@@ -1,0 +1,43 @@
+package orgs
+
+import (
+	"github.com/gofiber/fiber/v3"
+
+	"github.com/plat5dev/plat5/identity/internal/apikey"
+	"github.com/plat5dev/plat5/identity/internal/httpx"
+)
+
+type RoleResponse struct {
+	Slug string `json:"slug"`
+	// Scopes null is every label (["*"] in the file).
+	Scopes *[]string `json:"scopes"`
+}
+
+type ListRolesResponse struct {
+	Roles       []RoleResponse `json:"roles"`
+	CreatorRole *string        `json:"creator_role"`
+	DefaultRole *string        `json:"default_role"`
+}
+
+// ListRoles is the deployment's roles file. The org is in the path so a later
+// per-org role set has an address; today every org gets the same list.
+// Not paginated: the file is the whole list.
+func (h *Handler) ListRoles(c fiber.Ctx) error {
+	ctx := c.Context()
+	orgID := httpx.PathParam(c, "organization_id")
+
+	if err := h.requireOrganization(ctx, orgID); err != nil {
+		return err
+	}
+
+	list := h.roles.List()
+	out := ListRolesResponse{
+		Roles:       make([]RoleResponse, 0, len(list)),
+		CreatorRole: h.roles.Creator(),
+		DefaultRole: h.roles.Default(),
+	}
+	for _, r := range list {
+		out.Roles = append(out.Roles, RoleResponse{Slug: r.Slug, Scopes: apikey.WireScopes(r.Scopes)})
+	}
+	return c.JSON(out)
+}

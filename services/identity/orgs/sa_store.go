@@ -12,7 +12,7 @@ import (
 const saSelect = `
 	SELECT
 		sa.id, sa.organization_id, m.id, sa.name, sa.created_by_user_id,
-		m.status, sa.created_at, sa.updated_at
+		m.role, m.status, sa.created_at, sa.updated_at
 	FROM service_accounts sa
 	INNER JOIN members m
 		ON m.service_account_id = sa.id
@@ -62,15 +62,16 @@ func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount, cr
 		ID:               NewULID(),
 		OrganizationID:   sa.OrganizationID,
 		ServiceAccountID: &sa.ID,
+		Role:             sa.Role,
 		Status:           StatusActive,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO members
-			(id, organization_id, user_id, service_account_id, status, added_by, created_at, updated_at)
-		VALUES ($1, $2, NULL, $3, $4, NULL, $5, $6)
-	`, m.ID, m.OrganizationID, sa.ID, m.Status, m.CreatedAt, m.UpdatedAt)
+			(id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at)
+		VALUES ($1, $2, NULL, $3, $4, $5, NULL, $6, $7)
+	`, m.ID, m.OrganizationID, sa.ID, m.Role, m.Status, m.CreatedAt, m.UpdatedAt)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
@@ -193,7 +194,8 @@ func (s *Store) UpdateServiceAccount(ctx context.Context, organizationID, servic
 }
 
 // DeleteServiceAccount soft-removes the SA member (same as DELETE member).
-func (s *Store) DeleteServiceAccount(ctx context.Context, organizationID, serviceAccountID string) error {
+// change sees the SA's member and every member of the org, locked.
+func (s *Store) DeleteServiceAccount(ctx context.Context, organizationID, serviceAccountID string, change MemberChange) error {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "delete_service_account", dbx.DefaultTimeout,
 		attribute.String("service_account.id", serviceAccountID),
 	)
@@ -232,8 +234,8 @@ func (s *Store) DeleteServiceAccount(ctx context.Context, organizationID, servic
 	if target == nil {
 		return op.Expected("not found", ErrNotFound)
 	}
-	if err := rejectLastMember(countNonRemoved(members), "service_account_id"); err != nil {
-		return op.Expected("last member", err)
+	if err := change(target, members); err != nil {
+		return op.Expected("rejected", err)
 	}
 
 	now := time.Now().UTC()

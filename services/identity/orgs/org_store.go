@@ -10,7 +10,8 @@ import (
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 )
 
-func (s *Store) CreateOrganization(ctx context.Context, org *Organization, userID string) (*Member, error) {
+// CreateOrganization inserts the org and its creator as an active member with role.
+func (s *Store) CreateOrganization(ctx context.Context, org *Organization, userID string, role *string) (*Member, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_organization", dbx.DefaultTimeout,
 		attribute.String("organization.id", org.ID),
 	)
@@ -38,6 +39,7 @@ func (s *Store) CreateOrganization(ctx context.Context, org *Organization, userI
 		ID:             NewULID(),
 		OrganizationID: org.ID,
 		UserID:         &userID,
+		Role:           role,
 		Status:         StatusActive,
 		CreatedAt:      org.CreatedAt,
 		UpdatedAt:      org.UpdatedAt,
@@ -45,9 +47,9 @@ func (s *Store) CreateOrganization(ctx context.Context, org *Organization, userI
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO members
-			(id, organization_id, user_id, service_account_id, status, added_by, created_at, updated_at)
-		VALUES ($1, $2, $3, NULL, $4, NULL, $5, $6)
-	`, m.ID, m.OrganizationID, userID, m.Status, m.CreatedAt, m.UpdatedAt)
+			(id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at)
+		VALUES ($1, $2, $3, NULL, $4, $5, NULL, $6, $7)
+	`, m.ID, m.OrganizationID, userID, m.Role, m.Status, m.CreatedAt, m.UpdatedAt)
 	if err != nil {
 		return nil, op.Fail(err)
 	}

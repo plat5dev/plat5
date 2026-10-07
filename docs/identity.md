@@ -6,7 +6,9 @@ Boundary: [`identity-boundary.md`](identity-boundary.md). Errors: [`api-errors.m
 
 The service is a function of the URL. The path names every id the operation uses. If the handler does not read an id, it is not in the path.
 
-Who may call is the proxy. This service does not know which proxy called, and it does not grow a second policy for a second caller. When it mints a key or a member session it reads `X-Plat5-Scopes`, which the gateway sets from the caller credential.
+Who may call is the proxy. This service does not know which proxy called, and it does not grow a second policy for a second caller. When it mints a key or a member session, assigns a role, or acts on another member, it reads `X-Plat5-Scopes`, which the gateway sets from the caller credential.
+
+Roles are the deployment's. Identity reads the roles file at boot and resolves a member's role at validate. Model and rules: [`roles.md`](roles.md).
 
 There is no `/api` prefix. The first path segment is the subject.
 
@@ -27,6 +29,7 @@ Public routes are not auto-published. The process still serves them on the publi
 | **user** | Platform person. Opaque `user_id` string. Not a table. |
 | **organization** | Isolation boundary users and service accounts join. |
 | **member** | Org principal. Exactly one of: a **user** or a **service account**. Wire id: `member_id`. |
+| **role** | Slug on a member. The deployment's roles file says which labels it grants. Plat5 defines no role names. `NULL` is unrestricted. [`roles.md`](roles.md) |
 | **service account** | Non-human identity created **under an organization**. Always has a member row in that org. |
 | **api key** | Bearer secret. Either **user-scoped** or **member-scoped**. Optional `scopes` labels: a restricted key (non-null list) must intersect route `required_scopes`; unlabeled routes still admit. A restricted key cannot mint a wider key or session. |
 | **member session** | Short-lived credential for one active user member in one org. Opaque token. Not an API key. `scopes` null is unrestricted. A session minted from a restricted user key carries that key's scopes. |
@@ -43,10 +46,12 @@ Illegal states. Not permissions.
 - A remove must leave at least one non-removed member. `active` and `suspended` both count. Service accounts count.
 - Invite expiry, use limits, and the conflict on a dead token.
 - A key addressed under a user, member, or service account that does not own it is **404**. That is the address, not an access check.
-- A service account addressed under the wrong org, or whose member is `removed`, is **404**.
+- A service account or member addressed under the wrong org, or whose member is `removed`, is **404**.
 - Unknown id is **404**. A removed member is **404**. Empty collection is an empty page.
+- A `role` that is not a slug in the roles file, or any `role` when there is no roles file, is **422**.
+- A write may not take an org's non-removed members holding `creator_role` from one to zero (**422**).
 
-Validation (**422**) and conflict (**409**) stay where the data is wrong. Identity does not decide who may call. It does refuse to mint a key or session wider than the caller's scopes (**403** `INSUFFICIENT_SCOPE`).
+Validation (**422**) and conflict (**409**) stay where the data is wrong. Identity does not decide who may call. It does refuse to hand out more than the caller holds: a key or session wider than the caller's scopes, a role with labels the caller lacks, or an act on a member whose role holds labels the caller lacks (**403** `INSUFFICIENT_SCOPE`). Grant cap: [`roles.md`](roles.md#grant-cap).
 
 ## Public API
 
@@ -68,11 +73,12 @@ Active **user** memberships only: not service accounts, not `suspended`, not `re
 {
   "id": "...",
   "organization": { "id": "...", "name": "Acme", "slug": "acme" },
+  "role": "admin",
   "status": "active"
 }
 ```
 
-List body key `memberships`. `id` is the member id. Cursor is that `id`.
+List body key `memberships`. `id` is the member id. Cursor is that `id`. `role` is `string | null`.
 
 Not a table. A read of `members` joined to `organizations` for this user.
 
@@ -120,6 +126,8 @@ Identity does not enforce route `required_scopes`. That check is the gateway's, 
 
 The same mint cap applies to member keys, service-account keys, and member sessions.
 
+For a member credential the header is the effective set: the member's role labels intersected with the credential's scopes ([`roles.md`](roles.md)). A key minted with omitted `scopes` by a caller whose role has a label list stores a snapshot of those labels. It does not gain labels the role gains later. [`roles.md`](roles.md#keys-minted-by-a-role-restricted-caller)
+
 Hygiene (422 `VALIDATION_ERROR` on `scopes`): each label `[a-z0-9:._-]+`, max 64 characters, max 32 labels, unique. Create and list echo `scopes` as `string[] | null` (`null` = unrestricted). Never echo the secret except on create (`key`).
 
 Create **201** also includes `"key": "{brand}-sk-1-…"` once.
@@ -128,7 +136,7 @@ Create **201** also includes `"key": "{brand}-sk-1-…"` once.
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/users/{user_id}/organizations` | Create. Body `{ "name", "slug?" }`. Inserts an **active** member for that user. `added_by` is null. |
+| `POST` | `/users/{user_id}/organizations` | Create. Body `{ "name", "slug?" }`. Inserts an **active** member for that user with `creator_role` (`NULL` without a roles file). `added_by` is null. |
 | `GET` | `/organizations` | Every organization. |
 | `GET` | `/organizations/{organization_id}` | **404** if missing |
 | `PATCH` | `/organizations/{organization_id}` | Name and slug. Slug uniqueness stays. |
@@ -159,17 +167,36 @@ Create **201** also includes `"key": "{brand}-sk-1-…"` once.
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/organizations/{organization_id}/members` | Non-removed members. Unknown org → **404**. Empty org → empty page. |
-| `POST` | `/organizations/{organization_id}/members` | Body `{ "user_id", "added_by?" }`. Immediate `active`. |
+| `POST` | `/organizations/{organization_id}/members` | Body `{ "user_id", "role?", "added_by?" }`. Immediate `active`. `role` omitted → `default_role`. Grant cap on the role. |
 
-One address for a member. Do not also serve `/organizations/{organization_id}/members/{member_id}`.
+A member has two addresses, like a service account. Both read and write the same row.
+
+| Address | Who is acting | Published |
+|---------|---------------|-----------|
+| `/members/{member_id}` | The member, on itself | `member` scope, `/member` |
+| `/organizations/{organization_id}/members/{member_id}` | The org, on one of its members | `organization` scope, `/org/members/{member_id}` |
+
+Self address:
 
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/members/{member_id}` | **404** if missing or `removed` |
 | `PATCH` | `/members/{member_id}` | Body `{ "status" }`. `active` or `suspended` only. `removed` → **422**. Already `removed` → **404**. |
-| `DELETE` | `/members/{member_id}` | Soft-remove. Already `removed` → **404**. Last non-removed member → **422**. |
+| `DELETE` | `/members/{member_id}` | Soft-remove. Already `removed` → **404**. Last non-removed member → **422**. Last `creator_role` holder → **422**. |
 
-`POST` adds a **user** member (immediately `active`). A non-removed duplicate is **409** `CONFLICT` (`field` is `user_id`). A `removed` row for that user is revived: same member id, `active`, `added_by` from the body. Member keys are not revoked on remove, so a revive re-admits those keys.
+The self address does not change `role`, and the grant cap does not apply to it. A member may suspend or remove itself.
+
+Org address:
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `GET` | `/organizations/{organization_id}/members/{member_id}` | **404** if missing, in another org, or `removed` |
+| `PATCH` | `/organizations/{organization_id}/members/{member_id}` | Body `{ "status?", "role?" }`, at least one. `status` as on the self address. Same **404** as get. Grant cap on the member's current role and on the new role. Last `creator_role` holder → **422**. |
+| `DELETE` | `/organizations/{organization_id}/members/{member_id}` | Soft-remove. Same **404** as get. Grant cap on the member's current role. Last non-removed member → **422**. Last `creator_role` holder → **422**. |
+
+Grant cap and last `creator_role` holder: [`roles.md`](roles.md).
+
+`POST` adds a **user** member (immediately `active`). A non-removed duplicate is **409** `CONFLICT` (`field` is `user_id`). A `removed` row for that user is revived: same member id, `active`, `role` and `added_by` from the body (`role` omitted → `default_role`). Member keys are not revoked on remove, so a revive re-admits those keys.
 
 Service accounts are created via the service-accounts API (member row included). Invites are a separate resource, below.
 
@@ -186,6 +213,7 @@ Suspending the last active member is allowed. The org still has a member.
   "principal": "user",
   "user_id": "...",
   "service_account_id": null,
+  "role": "member",
   "status": "active",
   "added_by": null,
   "created_at": "...",
@@ -193,7 +221,7 @@ Suspending the last active member is allowed. The org still has a member.
 }
 ```
 
-`principal` is `"user"` or `"service_account"`. Exactly one of `user_id` / `service_account_id` is non-null. `added_by` is null unless sent.
+`principal` is `"user"` or `"service_account"`. Exactly one of `user_id` / `service_account_id` is non-null. `role` is `string | null`. `added_by` is null unless sent.
 
 ### Invites
 
@@ -205,7 +233,7 @@ List, redeem, and revoke expire lazily: if `expires_at` is in the past and statu
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/organizations/{organization_id}/invites` | Body `{ "email?", "expires_in_seconds?", "max_uses?", "created_by?" }`. Returns `token`. Unknown org → **404**. |
+| `POST` | `/organizations/{organization_id}/invites` | Body `{ "email?", "role?", "expires_in_seconds?", "max_uses?", "created_by?" }`. Returns `token`. Unknown org → **404**. `role` omitted → `default_role`. Grant cap on the role. |
 | `GET` | `/organizations/{organization_id}/invites` | `token` included while `active`. Unknown org → **404**. |
 | `DELETE` | `/organizations/{organization_id}/invites/{invite_id}` | Revoke. Idempotent. Status `revoked`, `token` null. Hash stays. |
 | `POST` | `/users/{user_id}/invites/redeem` | Body `{ "token" }`. Inserts an **active** member for that user. Already a member on a still-`active` token → **200** idempotent (counts as a use). A `removed` row is revived (same member id). Unknown token → **404** `NOT_FOUND` (no org leak). Redeemed / revoked / expired → **409** `CONFLICT` (`field` is `status`, `value` is the terminal status). |
@@ -213,14 +241,14 @@ List, redeem, and revoke expire lazily: if `expires_at` is in the past and statu
 #### Create body
 
 ```json
-{ "email": "a@b.com", "expires_in_seconds": 604800, "max_uses": 1, "created_by": "..." }
+{ "email": "a@b.com", "role": "member", "expires_in_seconds": 604800, "max_uses": 1, "created_by": "..." }
 ```
 
-`email` is optional display metadata; it is **not** mailed. `expires_in_seconds` default 7 days, min 60, max 30 days. `max_uses` omitted → 1. JSON `null` → unlimited. `0` and negatives → **422**. `created_by` omitted or blank → null.
+`role` is checked and capped at create, not at redeem. `email` is optional display metadata; it is **not** mailed. `expires_in_seconds` default 7 days, min 60, max 30 days. `max_uses` omitted → 1. JSON `null` → unlimited. `0` and negatives → **422**. `created_by` omitted or blank → null.
 
 Token prefix `inv_`. `token_hash` is SHA-256 hex. `use_count` increments on successful redeem. When `use_count` reaches `max_uses`, status becomes `redeemed` and `token` is nulled. Unlimited (`max_uses` null) stays `active` with `token`.
 
-Redeem copies `created_by` onto the new or revived member's `added_by`. Null stays null.
+Redeem copies `created_by` onto the new or revived member's `added_by`, and the invite's `role` onto its `role`. Null stays null. A slug since removed from the roles file is copied as-is and grants nothing. Already a member: redeem does not change the existing role.
 
 #### Create / list row
 
@@ -229,6 +257,7 @@ Redeem copies `created_by` onto the new or revived member's `added_by`. Null sta
   "id": "...",
   "organization_id": "...",
   "email": "a@b.com",
+  "role": "member",
   "token_prefix": "inv_abcd",
   "token": "inv_…",
   "status": "active",
@@ -248,15 +277,15 @@ Created under an organization. One transaction: service account row + **active**
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/organizations/{organization_id}/service-accounts` | Body `{ "name", "created_by_user_id?" }`. Unknown org → **404**. |
+| `POST` | `/organizations/{organization_id}/service-accounts` | Body `{ "name", "role?", "created_by_user_id?" }`. Unknown org → **404**. `role` omitted → `default_role`. Grant cap on the role. |
 | `GET` | `/organizations/{organization_id}/service-accounts` | Non-removed. Unknown org → **404**. |
 | `GET` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | **404** if missing, wrong org, or member `removed` |
-| `PATCH` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | Body `{ "name" }`. Same **404** as get. |
-| `DELETE` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | Soft-removes the member. Same **404** as get. Last non-removed member → **422**. |
+| `PATCH` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | Body `{ "name" }`. Same **404** as get. Grant cap on the member's role. |
+| `DELETE` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | Soft-removes the member. Same **404** as get. Grant cap on the member's role. Last non-removed member → **422**. Last `creator_role` holder → **422**. |
 
 The member row's `added_by` is null. `created_by_user_id` is null unless sent.
 
-Lifecycle is the member row. Suspend and re-enable with `PATCH /members/{member_id}` (`status`). A removed service account is not addressable here. Re-entry is not a service-account create; the row remains.
+Lifecycle and role are the member row. Suspend, re-enable, or change role at the org address, `PATCH /organizations/{organization_id}/members/{member_id}`, with the service account's `member_id`. A removed service account is not addressable here. Re-entry is not a service-account create; the row remains.
 
 #### Service account response
 
@@ -266,6 +295,7 @@ Lifecycle is the member row. Suspend and re-enable with `PATCH /members/{member_
   "organization_id": "...",
   "member_id": "...",
   "name": "deploy-bot",
+  "role": "member",
   "status": "active",
   "created_by_user_id": null,
   "created_at": "...",
@@ -273,13 +303,13 @@ Lifecycle is the member row. Suspend and re-enable with `PATCH /members/{member_
 }
 ```
 
-`status` is the joined member’s status (`active` or `suspended`). `removed` members are not listed and are not returned by id.
+`status` and `role` are the joined member's (`status` is `active` or `suspended`; `role` is `string | null`). `removed` members are not listed and are not returned by id.
 
 ### Service account API keys
 
 Org address for that service account's member keys. Not a separate credential. Same table (`member_api_keys`), same plaintext prefix (`{brand}-mk-1-`), same validate endpoint. `/members/{member_id}/api-keys` is the self address. A key created on either path is listed and revoked on both.
 
-Who may call is the proxy, same as creating the service account. Identity does not check the caller. The mint cap still applies.
+Who may call is the proxy, same as creating the service account. The mint cap applies, and so does the grant cap on the service account's role: minting or revoking its keys acts on that member ([`roles.md`](roles.md#grant-cap)).
 
 | Method | Path | Notes |
 |--------|------|--------|
@@ -319,7 +349,7 @@ Who may call is the proxy. A user JWT and an unrestricted user API key are the s
 
 Empty `user_id` or `organization_id` → **422**. `user_id` longer than 128 → **422**.
 
-There is no `scopes` field on the request. A restricted caller inherits exactly its own scopes. An unrestricted caller mints `scopes: null`.
+There is no `scopes` field on the request. The session stores the caller's scopes: exactly its own when restricted, `null` when unrestricted. The member's role is not stored on the session. Validate intersects it every time, so a role change reaches existing sessions.
 
 #### Mint response
 
@@ -329,11 +359,20 @@ There is no `scopes` field on the request. A restricted caller inherits exactly 
   "expires_at": "...",
   "member_id": "...",
   "organization_id": "...",
-  "scopes": null
+  "role": "admin",
+  "scopes": ["org:write", "org:members:write", "org:service-accounts:write"]
 }
 ```
 
-No `user_id`. `scopes` is `string[] | null` (`null` when the caller is unrestricted; the caller's labels when the caller is restricted). Hashing at rest is SHA-256 hex. Plaintext is returned once.
+No `user_id`. `role` is `string | null`. `scopes` is `string[] | null`: the effective set at mint, the same value validate would return now (role labels intersected with the stored scopes). A console can use it to show or hide actions. Hashing at rest is SHA-256 hex. Plaintext is returned once.
+
+### Roles
+
+The deployment's roles, from the roles file. Same list for every org today. Shape and rules: [`roles.md`](roles.md#listing-roles).
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `GET` | `/organizations/{organization_id}/roles` | `{ "roles": [{ "slug", "scopes" }], "creator_role", "default_role" }`. Sorted by slug. Not paginated. Unknown org → **404**. No roles file → `roles: []`, both fields `null`. |
 
 ### API key brand
 
@@ -401,8 +440,10 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
 | Result | Response |
 |--------|----------|
-| Valid active member key | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "scopes": null }` (`scopes` same as user keys) |
+| Valid active member key | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "scopes": null }` (`scopes` same meaning as user keys) |
 | Wrong prefix / missing / revoked / inactive member / unknown | **200** `{ "valid": false }` |
+
+`scopes` is the effective set: the member's role labels intersected with the key's stored scopes ([`roles.md`](roles.md#resolution)). Role resolution happens here. The response carries no role.
 
 Gateway: prefix `{brand}-mk-1-` → this URL. **`organization` and `member` scopes** (see gateway contract). Same cache as user keys and sessions (`APIKEY_CACHE_TTL_SECS`).
 
@@ -426,7 +467,7 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 | Unexpired session, member `active` | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "scopes": null }` or `"scopes": ["profile:read"]` or `"scopes": []` |
 | Wrong prefix / missing / expired / member not `active` / unknown | **200** `{ "valid": false }` |
 
-No `user_id`. `scopes` is `string[] | null`, same meaning as a key: `null` skips route `required_scopes` (a JWT, or a session minted by an unrestricted caller). A non-null list is restricted. Gateway: prefix `{brand}-ms-1-` → `MEMBER_SESSION_VALIDATE_URL`. **`organization` and `member` scopes.** Same cache TTL as API keys (`APIKEY_CACHE_TTL_SECS`).
+No `user_id`. `scopes` is `string[] | null`, same meaning as a key, and the same effective set: the member's role labels intersected with the session's stored scopes. `null` skips route `required_scopes`: the role is unrestricted and the session was minted by an unrestricted caller. A non-null list is restricted. Gateway: prefix `{brand}-ms-1-` → `MEMBER_SESSION_VALIDATE_URL`. **`organization` and `member` scopes.** Same cache TTL as API keys (`APIKEY_CACHE_TTL_SECS`).
 
 ## Data model (logical)
 
@@ -434,14 +475,14 @@ No `user_id`. `scopes` is `string[] | null`, same meaning as a key: `null` skips
 organizations
 members
   user_id XOR service_account_id
-  status, added_by, …
+  role?, status, added_by, …
   unique (organization_id, user_id) where user_id is not null
   unique (service_account_id) where service_account_id is not null
 service_accounts
   organization_id
   name, created_by_user_id, …
 organization_invites   -- token while active; token_hash always
-  organization_id, email?, token?, token_hash, status, max_uses, use_count, expires_at, created_by?, …
+  organization_id, email?, role?, token?, token_hash, status, max_uses, use_count, expires_at, created_by?, …
 
 user_api_keys          -- person credentials; wire {brand}-sk-1-
   user_id, name, key_prefix, key_hash, scopes, revoked_at, …
@@ -451,7 +492,7 @@ member_sessions        -- short-lived user-member credential; wire {brand}-ms-1-
   member_id, token_prefix, token_hash, scopes, expires_at, …
 ```
 
-`scopes` is `TEXT[]` on key tables and on `member_sessions`. SQL `NULL` = unrestricted. Empty array = restricted, no labels (same rule as mint). Validate returns that value. A session minted before this column existed stays `NULL` (unrestricted), which is what mint used to store.
+`scopes` is `TEXT[]` on key tables and on `member_sessions`. SQL `NULL` = unrestricted. Empty array = restricted, no labels (same rule as mint). User key validate returns that value. Member key and session validate return it intersected with the member's role labels. A session minted before this column existed stays `NULL` (unrestricted), which is what mint used to store.
 
 Independent tables, independent packages (`userkeys` / `memberkeys` / `sessions`), independent validate endpoints. Not one polymorphic credential system.
 
@@ -459,7 +500,7 @@ No IdP user table and no FK to an external directory. `user_id` values are opaqu
 
 `organization_invites.created_by` is nullable. `members.added_by` and `service_accounts.created_by_user_id` are nullable.
 
-There is no role column.
+`members.role` and `organization_invites.role` are nullable `TEXT` slugs. No `CHECK` constraint: the roles file gives them meaning, and identity checks the slug against it on write. `NULL` is unrestricted. Rows from before roles stay `NULL`.
 
 ## Runtime
 
@@ -473,6 +514,7 @@ There is no role column.
 | Database | Plat5 Postgres via `DATABASE_URL` |
 | Schema | **`identity`** (service-owned; tables + `schema_migrations`) |
 | `APIKEY_BRAND` | default `plat5`; same value as gateway |
+| `ROLES_FILE` | optional; path to the roles file, read at boot. Unset → no roles. Invalid → refuse boot. [`roles.md`](roles.md) |
 
 Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 
@@ -487,8 +529,9 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - SMTP / sending invite email (identity returns a token; the console may send mail)
 - Pending member rows. Add-by-`user_id` and invite redeem both insert an **active** member.
 - Resource ACL, FGA, project permissions
-- Roles (`member` / `admin` / `owner`). Not a column, not a response field, not a hook.
-- Caller checks beyond the mint scope cap, or inferring `added_by` / `created_by` / `created_by_user_id`
+- Role names or meanings in identity code. The deployment's roles file names roles and grants their labels.
+- More than one role per member, per-org custom roles, or reloading the roles file without a restart
+- Caller checks beyond the grant cap (keys, sessions, roles, acting on a member), or inferring `added_by` / `created_by` / `created_by_user_id`
 - Key `scopes` as deny-all, or default-deny on unlabeled routes
 - Auto-publishing these public routes — the operator applies a catalog
 - Configurable `sk` / `mk` / `ms` / `1`, independent full-prefix env vars, or dual-brand key accept

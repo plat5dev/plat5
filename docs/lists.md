@@ -4,7 +4,7 @@ How Plat5 **identity** public lists work.
 
 Business services behind the gateway may copy this. Identity public lists use it.
 
-Route-registry admin lists (`GET /services`, revisions) return the full set.
+Route-registry admin lists (`GET /services`, revisions) return the full set. So does identity's `GET /organizations/{organization_id}/roles`: it reads the roles file, not a table ([`roles.md`](roles.md#listing-roles)).
 
 ## Query
 

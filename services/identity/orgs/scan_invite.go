@@ -11,6 +11,7 @@ func scanInvite(row dbx.Scannable) (*Invite, error) {
 		&inv.ID,
 		&inv.OrganizationID,
 		&inv.Email,
+		&inv.Role,
 		&inv.TokenHash,
 		&inv.TokenPrefix,
 		&inv.CreatedBy,
@@ -28,5 +29,5 @@ func scanInvite(row dbx.Scannable) (*Invite, error) {
 	return &inv, nil
 }
 
-const inviteSelectCols = `id, organization_id, email, token_hash, token_prefix,
+const inviteSelectCols = `id, organization_id, email, role, token_hash, token_prefix,
 			created_by, expires_at, created_at, token, status, max_uses, use_count`

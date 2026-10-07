@@ -14,7 +14,7 @@ The route is a type. A handler does not get extra identity. Plat5 authenticates 
 
 **Person-centric policy on an org route.** `organization` has `organization_id`. `member` has `organization_id` and `member_id`. Neither has `user_id`. If the graph is `user:U` on `doc:D`, those routes cannot feed it without a lookup you own. Person-centric policy belongs on `user` routes. Policy that needs the member belongs on `member` scope.
 
-**Roles are not product ACL.** Identity has no roles. Product permissions are the service’s, over the subject the scope defined. Do not add an owner / admin / member column.
+**Roles are the deployment's, and they are not product ACL.** Plat5 names no roles. The deployment's roles file says which labels a role grants, and the gateway checks those labels against the route. Whether this member may touch this project is still the service's, over the subject the scope defined, or a policy engine's. Plat5 does not ship an owner / admin / member.
 
 **User-subject routes stay on `user` scope.** `organization` and `member` do not have `user_id`. Identity's organization and member routes are published on those scopes because the template fills the subject from the credential. The handler reads the path. Who may call is the proxy.
 
@@ -28,11 +28,12 @@ Trusting the rewritten path is a perimeter protocol: [`gateway-contract.md`](gat
 |-------|----------|--------|
 | **Authentication** | Who is this? | Gateway + **IdP (JWT)** / identity keys and sessions (credentials stripped before upstream) |
 | **Scope projection** | Which fields is this route allowed to see? | Gateway. The credential is the proof. The scope drops fields. |
-| **Credential route scopes** | Does this restricted key or session share a label with `required_scopes`? | Gateway after admission. Restricted = non-null `scopes` (`[]` or labels), including a member session minted from a restricted user key. JWTs and `null` skip. Omitted `required_scopes` → any admitted principal. |
-| **Resource authorization** | Can this member do X to project/doc/…? | **Business services** — over the subject in the path |
-| **Who may call identity** | Who may add members, mint keys, delete an org? | The proxy in front of identity. The service refuses illegal states only. |
+| **Role resolution** | Which labels does this member's role grant? | Identity, from the deployment's roles file, at member key and session validate ([`roles.md`](roles.md)). The gateway never sees a role. |
+| **Route labels** | Do the caller's effective scopes share a label with `required_scopes`? | Gateway after admission. Effective = the member's role labels intersected with the credential's scopes. Restricted = non-null (`[]` or labels), including a member session minted from a restricted user key. JWTs and `null` skip. Omitted `required_scopes` → any admitted principal. |
+| **Resource authorization** | Can this member do X to project/doc/…? | **Business services** — over the subject in the path, or a policy engine they call |
+| **Who may call identity** | Who may add members, mint keys, delete an org? | Route labels on the identity catalog, at the gateway. Identity refuses illegal states and grants wider than the caller holds. |
 
-Route `required_scopes` is a credential intersection: the restricted credential’s labels and the route’s labels must overlap.
+Route `required_scopes` is an intersection: the caller's effective labels and the route's labels must overlap. One shared label is enough.
 
 ## Route scopes → subject
 
@@ -45,13 +46,13 @@ Route `required_scopes` is a credential intersection: the restricted credential�
 
 One subject per scope. `organization` does not include `member_id` or `user_id`. `member` does not include `user_id`.
 
-Always: `X-Request-ID`, `traceparent`. When the credential is restricted, the gateway also sets `X-Plat5-Scopes` (absent means unrestricted). The edge may record dropped ids on spans for ops — that is not the app contract.
+Always: `X-Request-ID`, `traceparent`. When the caller's effective scopes are restricted, the gateway also sets `X-Plat5-Scopes` (absent means unrestricted). The edge may record dropped ids on spans for ops — that is not the app contract.
 
-## No roles
+## Roles
 
-Identity has no `member` / `admin` / `owner` column, response field, or hook. Who may call is not a role. Do not add the column.
+Plat5 ships no role names. A member carries a role slug, and the deployment's roles file says which labels it grants ([`roles.md`](roles.md)). Identity resolves the role at validate. The gateway checks labels and never sees a role. Without a roles file every member is unrestricted.
 
-Business services on `organization` scope get `organization_id` only. `member` scope gets `organization_id` and `member_id`. Resource permissions are the service’s problem.
+A role decides which routes a member may call. It does not decide what a member may do to a resource. Business services on `organization` scope get `organization_id` only. `member` scope gets `organization_id` and `member_id`. Resource permissions are the service's problem, or a policy engine's.
 
 ## Who uses which scope
 
@@ -99,25 +100,26 @@ Service: subject is the person
 ```
 GET /users/{user_id}/memberships
 POST /organizations/{organization_id}/members
+PATCH /organizations/{organization_id}/members/{member_id}
 PATCH /members/{member_id}
 ```
 
-The path names every id the handler reads. Who may call is the proxy. Identity refuses illegal states: slug uniqueness, one membership row per user per org, last member, the invite machine, an address that does not exist, and a minted key or session wider than the caller's scopes.
+The path names every id the handler reads. The catalog's route labels decide who may call. Identity refuses illegal states: slug uniqueness, one membership row per user per org, last member, last `creator_role` holder, the invite machine, an address that does not exist, a role not in the roles file, and a grant wider than the caller holds (a minted key or session, an assigned role, or an act on a member whose role the caller does not cover).
 
 ## Error split (locked)
 
 | Case | HTTP / code |
 |------|-------------|
 | Bad, missing, or wrong credential for the scope | **401** `UNAUTHORIZED` |
-| Restricted credential missing route `required_scopes` | **403** `FORBIDDEN` |
-| Mint asks for a scope the caller credential does not have | **403** `INSUFFICIENT_SCOPE` (identity) |
+| Caller's effective scopes miss route `required_scopes` | **403** `FORBIDDEN` |
+| Mint asks for a scope the caller does not have; a role assignment or an act on a member needs labels the caller lacks | **403** `INSUFFICIENT_SCOPE` (identity) |
 | Unknown id (identity handlers) | **404** `NOT_FOUND` |
 | Admitted route or failed-auth IP over limit | **429** `RATE_LIMITED` |
 | Key or session validate down or timeout; Valkey down on a limited request; JWKS unavailable | **503** `SERVICE_UNAVAILABLE` |
 | Path param is not one segment | **400** `INVALID_REQUEST` |
 | Subject id is not one segment | **500** `INTERNAL_ERROR` |
 
-Identity **404**s an unknown id, a removed member, and a key or service account addressed under the wrong parent. It does not **404** "not a member." The gateway does not **404** a wrong credential. Inactive, expired, and unknown credentials are **401**.
+Identity **404**s an unknown id, a removed member, and a key, member, or service account addressed under the wrong parent. It does not **404** "not a member." The gateway does not **404** a wrong credential. Inactive, expired, and unknown credentials are **401**.
 
 ## Invites
 
@@ -129,7 +131,7 @@ Org invites live in **identity** (`organization_invites`). Create, list, and rev
 - FGA / ReBAC engines
 - Tenant as a name for an organization
 - Operator / employee admin planes
-- A role column. Identity has no `member` / `admin` / `owner`. Do not add one.
+- Role names or meanings in Plat5. The deployment names roles in its roles file.
 - Service accounts as a parallel auth system (they are members with keys)
 - Multi-org service accounts
 - SMTP in identity (invites return a token; the console sends mail if it wants)

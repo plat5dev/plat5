@@ -34,21 +34,28 @@ Read the doc, don’t re-derive:
 | etcd prefix: `edge/gateway/routes/` | routes.md |
 | Named rate-limit policies on the service; `shared: true` is opt-in cross-service; limiter subject follows route scope | [`docs/routes.md`](docs/routes.md), [`docs/gateway-contract.md`](docs/gateway-contract.md) |
 | Rate-limit counters in Valkey; replicas share one budget; Valkey required to boot; fail-closed 503 | [`docs/gateway-contract.md`](docs/gateway-contract.md), [`docs/routes.md`](docs/routes.md) |
-| Admission cache in-process (positive + negative); singleflight; TTL is revoke/suspend latency | [`docs/gateway-contract.md`](docs/gateway-contract.md), [`docs/identity.md`](docs/identity.md) |
-| Gateway admits and fills the route subject into `upstream`. Resource authz stays in the service | identity-boundary |
+| Admission cache in-process (positive + negative); singleflight; TTL is revoke/suspend/role-change latency | [`docs/gateway-contract.md`](docs/gateway-contract.md), [`docs/identity.md`](docs/identity.md) |
+| Gateway admits and fills the route subject into `upstream`. Resource authz stays in the service, or a policy engine it calls | identity-boundary |
+| Roles are the deployment's: `ROLES_FILE` on identity, read at boot. Plat5 names no roles. Identity resolves the role at validate. The gateway sees labels only | [`docs/roles.md`](docs/roles.md) |
+| Effective scopes = role labels ∩ credential scopes. A caller cannot assign a role, or act on a member, with labels it lacks | roles.md |
+| A member has two addresses: `/members/{member_id}` (itself) and `/organizations/{organization_id}/members/{member_id}` (the org acting on it) | identity.md |
 
 ## Stop conditions
 
 Do not add these because they would be convenient:
 
 - `user_id` on `organization` or `member` scope. `member_id` on `organization` scope
-- Gateway RBAC / FGA / project ACL
+- Role resolution, FGA, or project ACL in the gateway. The gateway checks labels only
+- A policy engine (Topaz, OPA, …) in the default stack
 - User-subject identity routes on `organization` or `member` scope
 - Platform-wide user directory or SMTP in identity
 - Global / platform admin service accounts
 - Multi-org service accounts (`home_organization_id`, SA member in a second org)
 - Org `settings` / platform config bag
-- A role column, or getting a user id from `member_id` for org-scope apps
+- Role names or meanings in Plat5 code (`owner` / `admin` / `member`), or getting a user id from `member_id` for org-scope apps
+- Roles in the route registry, etcd, or the gateway
+- More than one role per member, or per-org custom roles (deferred)
+- Renaming `X-Plat5-Scopes`, or a second header for the caller's authority
 - Folding member sessions into `member_api_keys`, or returning `user_id` from session validate
 - A service-account key table, prefix, or validate URL (those keys are member keys)
 - Treating omitted identity routes as “feature off” (the process still serves them on the network)

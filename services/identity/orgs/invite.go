@@ -32,6 +32,7 @@ type Invite struct {
 	ID             string
 	OrganizationID string
 	Email          *string
+	Role           *string
 	Token          *string
 	TokenHash      string
 	TokenPrefix    string

@@ -14,11 +14,19 @@ import (
 
 type CreateMemberRequest struct {
 	UserID  string  `json:"user_id"`
+	Role    *string `json:"role"`
 	AddedBy *string `json:"added_by"`
 }
 
+// UpdateMemberRequest is the self address. It does not change role.
 type UpdateMemberRequest struct {
 	Status *string `json:"status"`
+}
+
+// UpdateOrgMemberRequest is the org address: the org acting on one of its members.
+type UpdateOrgMemberRequest struct {
+	Status *string `json:"status"`
+	Role   *string `json:"role"`
 }
 
 type MemberResponse struct {
@@ -27,6 +35,7 @@ type MemberResponse struct {
 	Principal        string  `json:"principal"`
 	UserID           *string `json:"user_id"`
 	ServiceAccountID *string `json:"service_account_id"`
+	Role             *string `json:"role"`
 	Status           string  `json:"status"`
 	AddedBy          *string `json:"added_by"`
 	CreatedAt        string  `json:"created_at"`
@@ -90,12 +99,24 @@ func (h *Handler) CreateMember(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	role, err := h.roles.Choose(req.Role)
+	if err != nil {
+		return err
+	}
+	caller, err := callerScopes(c)
+	if err != nil {
+		return err
+	}
+	if err := h.roles.CheckAssign(caller, role); err != nil {
+		return err
+	}
 
 	now := time.Now().UTC()
 	m := &Member{
 		ID:             NewULID(),
 		OrganizationID: orgID,
 		UserID:         &targetUser,
+		Role:           role,
 		Status:         StatusActive,
 		AddedBy:        addedBy,
 		CreatedAt:      now,
@@ -124,6 +145,7 @@ func (h *Handler) GetMember(c fiber.Ctx) error {
 	return c.JSON(toMemberResponse(m))
 }
 
+// UpdateMember is the self address: status only, no grant cap.
 func (h *Handler) UpdateMember(c fiber.Ctx) error {
 	ctx := c.Context()
 	memberID := httpx.PathParam(c, "member_id")
@@ -140,8 +162,8 @@ func (h *Handler) UpdateMember(c fiber.Ctx) error {
 		return err
 	}
 
-	m, err := h.store.MutateMember(ctx, memberID, func(m *Member, _ int) error {
-		m.Status = status
+	m, err := h.store.MutateMember(ctx, "", memberID, func(target *Member, _ []*Member) error {
+		target.Status = status
 		return nil
 	})
 	if err != nil {
@@ -154,16 +176,120 @@ func (h *Handler) UpdateMember(c fiber.Ctx) error {
 	return c.JSON(toMemberResponse(m))
 }
 
+// DeleteMember is the self address: a member leaves, no grant cap.
 func (h *Handler) DeleteMember(c fiber.Ctx) error {
+	return h.removeMember(c, "")
+}
+
+// GetOrgMember is the org address. A member in another org is not found.
+func (h *Handler) GetOrgMember(c fiber.Ctx) error {
+	ctx := c.Context()
+	orgID := httpx.PathParam(c, "organization_id")
+	memberID := httpx.PathParam(c, "member_id")
+
+	m, err := h.visibleMember(ctx, memberID)
+	if err != nil {
+		return err
+	}
+	if m.OrganizationID != orgID {
+		return errors.NotFoundError("member", memberID)
+	}
+	return c.JSON(toMemberResponse(m))
+}
+
+// UpdateOrgMember is the org acting on one of its members: status and role.
+// The caller must cover the member's current role, and any role it assigns.
+func (h *Handler) UpdateOrgMember(c fiber.Ctx) error {
+	ctx := c.Context()
+	orgID := httpx.PathParam(c, "organization_id")
+	memberID := httpx.PathParam(c, "member_id")
+
+	var req UpdateOrgMemberRequest
+	if err := c.Bind().Body(&req); err != nil {
+		return err
+	}
+	if req.Status == nil && req.Role == nil {
+		return errors.FieldError("body", "Nothing to update.")
+	}
+	var status Status
+	if req.Status != nil {
+		parsed, err := ParsePatchStatus(*req.Status)
+		if err != nil {
+			return err
+		}
+		status = parsed
+	}
+	var role *string
+	if req.Role != nil {
+		chosen, err := h.roles.Choose(req.Role)
+		if err != nil {
+			return err
+		}
+		role = chosen
+	}
+	caller, err := callerScopes(c)
+	if err != nil {
+		return err
+	}
+
+	m, err := h.store.MutateMember(ctx, orgID, memberID, func(target *Member, members []*Member) error {
+		if err := h.roles.CheckActOn(caller, target.Role); err != nil {
+			return err
+		}
+		if err := h.roles.CheckAssign(caller, role); err != nil {
+			return err
+		}
+		prior := *target
+		if status != "" {
+			target.Status = status
+		}
+		if role != nil {
+			target.Role = role
+		}
+		return rejectLastCreator(h.roles, members, prior, "role")
+	})
+	if err != nil {
+		return httpx.MapDB(ctx, err, "failed to update member", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "member", ResourceID: memberID,
+		})
+	}
+
+	metrics.RecordMemberOp("update")
+	return c.JSON(toMemberResponse(m))
+}
+
+// DeleteOrgMember is the org removing one of its members. Grant cap on the member's role.
+func (h *Handler) DeleteOrgMember(c fiber.Ctx) error {
+	return h.removeMember(c, httpx.PathParam(c, "organization_id"))
+}
+
+// removeMember soft-removes at either address. orgID "" is the self address,
+// which skips the grant cap. Both keep the last member and the last creator_role holder.
+func (h *Handler) removeMember(c fiber.Ctx, orgID string) error {
 	ctx := c.Context()
 	memberID := httpx.PathParam(c, "member_id")
 
-	_, err := h.store.MutateMember(ctx, memberID, func(m *Member, nonRemoved int) error {
-		if err := rejectLastMember(nonRemoved, "member_id"); err != nil {
+	var caller []string
+	if orgID != "" {
+		scopes, err := callerScopes(c)
+		if err != nil {
 			return err
 		}
-		m.Status = StatusRemoved
-		return nil
+		caller = scopes
+	}
+
+	_, err := h.store.MutateMember(ctx, orgID, memberID, func(target *Member, members []*Member) error {
+		if orgID != "" {
+			if err := h.roles.CheckActOn(caller, target.Role); err != nil {
+				return err
+			}
+		}
+		if err := rejectLastMember(countNonRemoved(members), "member_id"); err != nil {
+			return err
+		}
+		prior := *target
+		target.Status = StatusRemoved
+		return rejectLastCreator(h.roles, members, prior, "member_id")
 	})
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to remove member", httpx.DBErr{
@@ -195,6 +321,7 @@ func toMemberResponse(m *Member) MemberResponse {
 		Principal:        m.Principal(),
 		UserID:           m.UserID,
 		ServiceAccountID: m.ServiceAccountID,
+		Role:             m.Role,
 		Status:           string(m.Status),
 		AddedBy:          m.AddedBy,
 		CreatedAt:        httpx.FormatTime(m.CreatedAt),

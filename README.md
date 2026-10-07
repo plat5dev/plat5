@@ -47,6 +47,7 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defau
 | [`docs/routes.md`](docs/routes.md) | Route config format |
 | [`docs/route-registry.md`](docs/route-registry.md) | Apply routes via admin API |
 | [`docs/identity.md`](docs/identity.md) | Identity service API |
+| [`docs/roles.md`](docs/roles.md) | Deployment-defined roles and the labels they grant |
 | [`docs/api-errors.md`](docs/api-errors.md) | Error envelope |
 | [`docs/telemetry.md`](docs/telemetry.md) | Logs, traces, metrics |
 

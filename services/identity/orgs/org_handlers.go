@@ -64,7 +64,7 @@ func (h *Handler) CreateOrganization(c fiber.Ctx) error {
 		UpdatedAt: now,
 	}
 
-	if _, err := h.store.CreateOrganization(ctx, org, userID); err != nil {
+	if _, err := h.store.CreateOrganization(ctx, org, userID, h.roles.Creator()); err != nil {
 		return httpx.MapDB(ctx, err, "failed to create organization", httpx.DBErr{
 			NotFound: ErrNotFound, Resource: "organization", ResourceID: org.ID,
 			Conflict: ErrConflict, Field: "slug", FieldValue: slug,

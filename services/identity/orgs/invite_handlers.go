@@ -30,6 +30,7 @@ func (h *Handler) inviteStore() inviteStore {
 
 type CreateInviteRequest struct {
 	Email            string  `json:"email"`
+	Role             *string `json:"role"`
 	ExpiresInSeconds *int    `json:"expires_in_seconds"`
 	CreatedBy        *string `json:"created_by"`
 }
@@ -38,6 +39,7 @@ type InviteResponse struct {
 	ID             string  `json:"id"`
 	OrganizationID string  `json:"organization_id"`
 	Email          *string `json:"email"`
+	Role           *string `json:"role"`
 	TokenPrefix    string  `json:"token_prefix"`
 	Token          string  `json:"token,omitempty"`
 	Status         string  `json:"status"`
@@ -111,6 +113,18 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	// Checked and capped here, not at redeem: the invitee is not a member yet.
+	role, err := h.roles.Choose(req.Role)
+	if err != nil {
+		return err
+	}
+	caller, err := callerScopes(c)
+	if err != nil {
+		return err
+	}
+	if err := h.roles.CheckAssign(caller, role); err != nil {
+		return err
+	}
 
 	plaintext, err := GenerateInviteToken()
 	if err != nil {
@@ -123,6 +137,7 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 		ID:             NewULID(),
 		OrganizationID: orgID,
 		Email:          email,
+		Role:           role,
 		Token:          &plaintext,
 		TokenHash:      HashInviteToken(plaintext),
 		TokenPrefix:    InviteDisplayPrefix(plaintext),
@@ -227,6 +242,7 @@ func toInviteResponse(inv *Invite, includeToken bool) InviteResponse {
 		ID:             inv.ID,
 		OrganizationID: inv.OrganizationID,
 		Email:          inv.Email,
+		Role:           inv.Role,
 		TokenPrefix:    inv.TokenPrefix,
 		Status:         string(inv.Status),
 		MaxUses:        inv.MaxUses,

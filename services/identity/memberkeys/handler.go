@@ -12,6 +12,7 @@ import (
 	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/metrics"
 	"github.com/plat5dev/plat5/identity/orgs"
+	"github.com/plat5dev/plat5/identity/roles"
 )
 
 type keyStore interface {
@@ -30,10 +31,12 @@ type Handler struct {
 	store    keyStore
 	orgStore orgReader
 	prefix   string
+	// roles resolves effective scopes at validate and caps acting on a service account.
+	roles *roles.Set
 }
 
-func NewHandler(store *Store, orgStore *orgs.Store, prefix string) *Handler {
-	return &Handler{store: store, orgStore: orgStore, prefix: prefix}
+func NewHandler(store *Store, orgStore *orgs.Store, prefix string, roleSet *roles.Set) *Handler {
+	return &Handler{store: store, orgStore: orgStore, prefix: prefix, roles: roleSet}
 }
 
 type CreateRequest struct {
@@ -83,12 +86,16 @@ func (h *Handler) Create(c fiber.Ctx) error {
 	return h.create(c, memberID)
 }
 
+// CreateForServiceAccount acts on the service account's member: grant cap on its role.
 func (h *Handler) CreateForServiceAccount(c fiber.Ctx) error {
-	memberID, err := h.serviceAccountMember(c)
+	sa, err := h.serviceAccount(c)
 	if err != nil {
 		return err
 	}
-	return h.create(c, memberID)
+	if err := h.checkActOn(c, sa); err != nil {
+		return err
+	}
+	return h.create(c, sa.MemberID)
 }
 
 func (h *Handler) create(c fiber.Ctx, memberID string) error {
@@ -144,11 +151,11 @@ func (h *Handler) List(c fiber.Ctx) error {
 }
 
 func (h *Handler) ListForServiceAccount(c fiber.Ctx) error {
-	memberID, err := h.serviceAccountMember(c)
+	sa, err := h.serviceAccount(c)
 	if err != nil {
 		return err
 	}
-	return h.list(c, memberID)
+	return h.list(c, sa.MemberID)
 }
 
 func (h *Handler) list(c fiber.Ctx, memberID string) error {
@@ -183,12 +190,16 @@ func (h *Handler) Revoke(c fiber.Ctx) error {
 	return h.revoke(c, memberID, httpx.PathParam(c, "key_id"))
 }
 
+// RevokeForServiceAccount acts on the service account's member: grant cap on its role.
 func (h *Handler) RevokeForServiceAccount(c fiber.Ctx) error {
-	memberID, err := h.serviceAccountMember(c)
+	sa, err := h.serviceAccount(c)
 	if err != nil {
 		return err
 	}
-	return h.revoke(c, memberID, httpx.PathParam(c, "key_id"))
+	if err := h.checkActOn(c, sa); err != nil {
+		return err
+	}
+	return h.revoke(c, sa.MemberID, httpx.PathParam(c, "key_id"))
 }
 
 func (h *Handler) revoke(c fiber.Ctx, memberID, keyID string) error {
@@ -243,7 +254,8 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 		"valid":           true,
 		"member_id":       memberKey.Key.MemberID,
 		"organization_id": memberKey.OrganizationID,
-		"scopes":          apikey.WireScopesJSON(memberKey.Key.Scopes),
+		// Effective: role grant ∩ the key's stored scopes. The role itself does not leave identity.
+		"scopes": apikey.WireScopesJSON(h.roles.Resolve(memberKey.MemberRole, memberKey.Key.Scopes)),
 	})
 }
 
@@ -260,20 +272,29 @@ func (h *Handler) visibleMember(ctx context.Context, memberID string) (*orgs.Mem
 	return target, nil
 }
 
-// serviceAccountMember resolves the org address to the service account's member.
+// serviceAccount resolves the org address to the service account and its member.
 // GetServiceAccount returns not found for a missing id, the wrong org, and a removed member.
 // Suspended remains addressable.
-func (h *Handler) serviceAccountMember(c fiber.Ctx) (string, error) {
+func (h *Handler) serviceAccount(c fiber.Ctx) (*orgs.ServiceAccount, error) {
 	ctx := c.Context()
 	orgID := httpx.PathParam(c, "organization_id")
 	saID := httpx.PathParam(c, "service_account_id")
 	sa, err := h.orgStore.GetServiceAccount(ctx, orgID, saID)
 	if err != nil {
-		return "", httpx.MapDB(ctx, err, "failed to load service account", httpx.DBErr{
+		return nil, httpx.MapDB(ctx, err, "failed to load service account", httpx.DBErr{
 			NotFound: orgs.ErrNotFound, Resource: "service_account", ResourceID: saID,
 		})
 	}
-	return sa.MemberID, nil
+	return sa, nil
+}
+
+// checkActOn is the grant cap on the service account's role (docs/roles.md).
+func (h *Handler) checkActOn(c fiber.Ctx, sa *orgs.ServiceAccount) error {
+	caller, err := httpx.CallerScopes(c)
+	if err != nil {
+		return httpx.MapMintScopes(c.Context(), err)
+	}
+	return h.roles.CheckActOn(caller, sa.Role)
 }
 
 func (h *Handler) invalid(c fiber.Ctx) error {

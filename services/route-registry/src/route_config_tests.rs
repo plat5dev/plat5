@@ -565,4 +565,28 @@ mod tests {
             "{scope_err}"
         );
     }
+
+    /// The identity catalog is operator-owned YAML; it has to apply as shipped.
+    #[test]
+    fn identity_catalog_applies() {
+        let config: Config = serde_yaml::from_str(include_str!("../../identity/routes.yml"))
+            .expect("identity catalog parses");
+        config.validate().expect("identity catalog validates");
+        for (name, svc) in config.services {
+            let prepared = svc.prepare_for_registry(&name).expect("identity catalog expands");
+            let org = prepared.organization.expect("organization scope");
+            let delete_org = org
+                .routes
+                .iter()
+                .find(|r| r.path == "/org" && r.methods == ["DELETE"])
+                .expect("DELETE /org");
+            assert_eq!(delete_org.required_scopes.as_deref(), Some(&["org:delete".to_string()][..]));
+            let get_org = org
+                .routes
+                .iter()
+                .find(|r| r.path == "/org" && r.methods == ["GET"])
+                .expect("GET /org");
+            assert!(get_org.required_scopes.is_none(), "reads stay unlabeled");
+        }
+    }
 }

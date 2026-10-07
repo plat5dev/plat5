@@ -48,16 +48,16 @@ The scope chooses what the route is allowed to see. It is not a second proof. A 
 
 ### Caller scopes
 
-After admission, the gateway sets `X-Plat5-Scopes` from the credential. Trust it the way you trust `{subject.*}` in the path: only if the upstream is on a network the gateway alone can reach.
+After admission, the gateway sets `X-Plat5-Scopes` from the validate result's `scopes`. For a member key or member session that is the effective set: the member's role labels intersected with the credential's scopes. Identity resolves the role ([`roles.md`](roles.md)). The gateway does not see roles. Trust the header the way you trust `{subject.*}` in the path: only if the upstream is on a network the gateway alone can reach.
 
-| Credential | Header |
-|------------|--------|
-| Public, JWT, or `scopes: null` (unrestricted key or session) | absent |
-| Restricted (`scopes` non-null, including `[]`) | present |
+| Caller | Header |
+|--------|--------|
+| Public, JWT, or validate `scopes: null` (unrestricted) | absent |
+| Restricted (validate `scopes` non-null, including `[]`) | present |
 
 The value is comma-separated labels (`projects:read,projects:write`). The two-character value `[]` means a restricted credential with no labels. An empty header is not used — an absent header means unrestricted, so the empty list must be visible.
 
-Identity uses this on key and session mint. A restricted caller cannot mint a wider credential. Other services may read the same header. Do not accept a client-supplied value on a port the gateway does not sit in front of.
+Identity uses this on key and session mint, role assignment, and acting on another member. A restricted caller cannot grant more than it holds. Other services may read the same header. Do not accept a client-supplied value on a port the gateway does not sit in front of.
 
 ## Route Configuration
 
@@ -92,7 +92,9 @@ Services publish via the **route-registry** admin API (`POST /apply`). Gateway l
 
 ### API key `required_scopes`
 
-After match + admission: if the route has `required_scopes` **and** the credential has a non-null scopes list (restricted API key or member session), the lists must have a nonempty intersection or **403** `FORBIDDEN`. JWTs and credentials with `scopes: null` skip. `scopes: []` is restricted — it cannot satisfy any `required_scopes` and gets **403** there; unlabeled routes still admit it. A member session minted from a restricted user key carries that key's scopes and is checked the same way.
+After match + admission: if the route has `required_scopes` **and** validate returned a non-null scopes list (restricted API key or member session), the lists must have a nonempty intersection or **403** `FORBIDDEN`. One shared label is enough. For a member credential the list is the effective set (role labels intersected with the credential's scopes). JWTs and `scopes: null` skip. `scopes: []` is restricted — it cannot satisfy any `required_scopes` and gets **403** there; unlabeled routes still admit it. A member session minted from a restricted user key carries that key's scopes and is checked the same way.
+
+The **403** `details` are `{ "permission": "required_scopes", "resource": "route", "resource_id": "<route path>", "required_scopes": [...] }`. `required_scopes` is the route's list, so a client can tell which labels would have admitted it.
 
 ### Rate limits
 
@@ -227,7 +229,7 @@ In-process per replica.
 
 Do not cache identity **503** / transport failures. Concurrent misses for the same cache key share **one** identity call (singleflight). Raw API keys and JWTs are hashed before use as cache keys.
 
-Revoke, suspend, and remove are visible at the edge when the TTL expires.
+Revoke, suspend, remove, and role changes are visible at the edge when the TTL expires.
 
 ## Boot / ready
 
@@ -238,7 +240,7 @@ Revoke, suspend, and remove are visible at the edge when the TTL expires.
 | Case | Code |
 |------|------|
 | Auth failure (bad/missing credential) | `UNAUTHORIZED` (401) — gateway only |
-| Restricted API key missing route `required_scopes` | `FORBIDDEN` (403) |
+| Restricted credential's effective scopes miss route `required_scopes` | `FORBIDDEN` (403) |
 | Route not registered | `NOT_FOUND` (404) |
 | Request body too large | `PAYLOAD_TOO_LARGE` (413) |
 | Rate limit (admitted route or failed-auth IP) | `RATE_LIMITED` (429); `Retry-After`; admitted limited routes also `X-RateLimit-*` |

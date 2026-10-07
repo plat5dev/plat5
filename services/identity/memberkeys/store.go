@@ -35,6 +35,8 @@ type Validated struct {
 	Key            *APIKey
 	OrganizationID string
 	MemberStatus   string
+	// MemberRole is resolved against the roles file at validate. Nil is unrestricted.
+	MemberRole *string
 }
 
 func (s *Store) Create(ctx context.Context, key *APIKey) error {
@@ -65,10 +67,11 @@ func (s *Store) GetByHash(ctx context.Context, keyHash string) (*Validated, erro
 
 	var key APIKey
 	var orgID, status string
+	var role *string
 	err := s.pool.QueryRow(ctx, `
 		SELECT
 			k.id, k.member_id, k.name, k.key_prefix, k.key_hash, k.scopes, k.created_at, k.revoked_at,
-			m.organization_id, m.status
+			m.organization_id, m.status, m.role
 		FROM member_api_keys k
 		INNER JOIN members m ON m.id = k.member_id
 		WHERE k.key_hash = $1
@@ -83,6 +86,7 @@ func (s *Store) GetByHash(ctx context.Context, keyHash string) (*Validated, erro
 		&key.RevokedAt,
 		&orgID,
 		&status,
+		&role,
 	)
 	if err != nil {
 		if dbx.IsNoRows(err) {
@@ -95,6 +99,7 @@ func (s *Store) GetByHash(ctx context.Context, keyHash string) (*Validated, erro
 		Key:            &key,
 		OrganizationID: orgID,
 		MemberStatus:   status,
+		MemberRole:     role,
 	}, nil
 }
 

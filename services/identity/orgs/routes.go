@@ -18,6 +18,11 @@ func (h *Handler) MountOrganizations(router fiber.Router) {
 
 	router.Get("/organizations/:organization_id/members", h.ListMembers)
 	router.Post("/organizations/:organization_id/members", h.CreateMember)
+	router.Get("/organizations/:organization_id/members/:member_id", h.GetOrgMember)
+	router.Patch("/organizations/:organization_id/members/:member_id", h.UpdateOrgMember)
+	router.Delete("/organizations/:organization_id/members/:member_id", h.DeleteOrgMember)
+
+	router.Get("/organizations/:organization_id/roles", h.ListRoles)
 
 	router.Get("/organizations/:organization_id/invites", h.ListInvites)
 	router.Post("/organizations/:organization_id/invites", h.CreateInvite)

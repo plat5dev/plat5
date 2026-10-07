@@ -13,6 +13,7 @@ import (
 	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/metrics"
 	"github.com/plat5dev/plat5/identity/orgs"
+	"github.com/plat5dev/plat5/identity/roles"
 )
 
 type sessionStore interface {
@@ -28,18 +29,22 @@ type Handler struct {
 	store    sessionStore
 	orgStore memberResolver
 	prefix   string
+	// roles resolves effective scopes. The role is not stored on the session.
+	roles *roles.Set
 }
 
-func NewHandler(store *Store, orgStore *orgs.Store, prefix string) *Handler {
-	return &Handler{store: store, orgStore: orgStore, prefix: prefix}
+func NewHandler(store *Store, orgStore *orgs.Store, prefix string, roleSet *roles.Set) *Handler {
+	return &Handler{store: store, orgStore: orgStore, prefix: prefix, roles: roleSet}
 }
 
 type CreateResponse struct {
-	Token          string    `json:"token"`
-	ExpiresAt      string    `json:"expires_at"`
-	MemberID       string    `json:"member_id"`
-	OrganizationID string    `json:"organization_id"`
-	Scopes         *[]string `json:"scopes"`
+	Token          string  `json:"token"`
+	ExpiresAt      string  `json:"expires_at"`
+	MemberID       string  `json:"member_id"`
+	OrganizationID string  `json:"organization_id"`
+	Role           *string `json:"role"`
+	// Scopes is the effective set at mint: what validate would return now.
+	Scopes *[]string `json:"scopes"`
 }
 
 type ValidateRequest struct {
@@ -112,7 +117,8 @@ func (h *Handler) Create(c fiber.Ctx) error {
 		ExpiresAt:      httpx.FormatTime(session.ExpiresAt),
 		MemberID:       member.ID,
 		OrganizationID: member.OrganizationID,
-		Scopes:         apikey.WireScopes(session.Scopes),
+		Role:           member.Role,
+		Scopes:         apikey.WireScopes(h.roles.Resolve(member.Role, session.Scopes)),
 	})
 }
 
@@ -143,7 +149,8 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 	}
 
 	metrics.RecordSessionValidation(true)
-	return c.JSON(validPayload(found.Session.MemberID, found.OrganizationID, found.Session.Scopes))
+	scopes := h.roles.Resolve(found.MemberRole, found.Session.Scopes)
+	return c.JSON(validPayload(found.Session.MemberID, found.OrganizationID, scopes))
 }
 
 func (h *Handler) invalid(c fiber.Ctx) error {

@@ -21,6 +21,7 @@ import (
 	"github.com/plat5dev/plat5/identity/metrics"
 	"github.com/plat5dev/plat5/identity/middleware"
 	"github.com/plat5dev/plat5/identity/orgs"
+	"github.com/plat5dev/plat5/identity/roles"
 	"github.com/plat5dev/plat5/identity/sessions"
 	"github.com/plat5dev/plat5/identity/telemetry"
 	"github.com/plat5dev/plat5/identity/userkeys"
@@ -30,6 +31,10 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("invalid identity configuration: %v", err)
+	}
+	roleSet, err := roles.Load(cfg.RolesFile)
+	if err != nil {
+		log.Fatalf("invalid roles file: %v", err)
 	}
 	ctx := context.Background()
 
@@ -52,10 +57,10 @@ func main() {
 	}
 
 	orgStore := orgs.NewStore(pool)
-	orgHandler := orgs.NewHandler(orgStore)
+	orgHandler := orgs.NewHandler(orgStore, roleSet)
 	userKeyHandler := userkeys.NewHandler(userkeys.NewStore(pool), cfg.UserKeyPrefix)
-	memberKeyHandler := memberkeys.NewHandler(memberkeys.NewStore(pool), orgStore, cfg.MemberKeyPrefix)
-	sessionHandler := sessions.NewHandler(sessions.NewStore(pool), orgStore, cfg.SessionPrefix)
+	memberKeyHandler := memberkeys.NewHandler(memberkeys.NewStore(pool), orgStore, cfg.MemberKeyPrefix, roleSet)
+	sessionHandler := sessions.NewHandler(sessions.NewStore(pool), orgStore, cfg.SessionPrefix, roleSet)
 
 	app := newPublicApp(telem, orgHandler, userKeyHandler, memberKeyHandler, sessionHandler)
 	internalApp := newInternalApp(telem, pool, cfg.InternalAuthToken, orgHandler, userKeyHandler, memberKeyHandler, sessionHandler)
@@ -65,6 +70,8 @@ func main() {
 		Str("port", cfg.Port).
 		Str("internal_port", cfg.InternalPort).
 		Str("apikey_brand", cfg.APIKeyBrand).
+		Str("roles_file", cfg.RolesFile).
+		Int("roles", len(roleSet.List())).
 		Msg("starting identity server")
 
 	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
