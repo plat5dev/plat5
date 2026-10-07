@@ -73,14 +73,14 @@ curl -sS -X POST http://localhost:5002/apply \
 ```yaml
 services:
   widgets:
-    url: host.docker.internal:3000   # any URL the gateway can reach
+    url: http://host.docker.internal:3000   # http://host:port the gateway can reach
     user:
       routes:
         - path: /widgets
           methods: [GET, POST]
 ```
 
-`url` is from the **gateway’s** network view (in-cluster DNS, public HTTPS, `host.docker.internal`, etc.). Plat5 does not run your app process.
+`url` is from the **gateway’s** network view (in-cluster DNS, `host.docker.internal`, etc.). It must be exactly `http://host:port` (explicit port, no path or query; bare `host:port`, `https://` and other schemes are rejected). Plat5 does not run your app process.
 
 ### Response shape
 
@@ -94,7 +94,7 @@ Success apply (`200`) — desired state committed:
 }
 ```
 
-Validation / auth / empty body failures use the Plat5 envelope (`api-errors.md`) and write nothing. A Postgres failure rolls the whole batch back (`503`). etcd projection is retried by the reconciler; apply does not fail after a successful commit.
+Validation / auth / empty body failures use the Plat5 envelope (`api-errors.md`) and write nothing. A bad or missing service `url` is `422 VALIDATION_ERROR`. A method+path already owned by a **different** service rejects the whole apply with `409 ROUTE_CONFLICT` (message lists each method+path and its owner). Re-applying a service's own routes replaces them and is not a conflict. A Postgres failure rolls the whole batch back (`503`). etcd projection is retried by the reconciler; apply does not fail after a successful commit.
 
 ## Revisions
 

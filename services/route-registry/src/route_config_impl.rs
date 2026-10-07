@@ -1,6 +1,7 @@
 impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
         for (name, service) in &self.services {
+            validate_service_url(name, &service.url)?;
             if service.public.is_none()
                 && service.user.is_none()
                 && service.organization.is_none()
@@ -104,6 +105,97 @@ fn expand_nested_methods(scope: &mut ScopeConfig) {
         }
     }
     scope.routes = out;
+}
+
+fn service_method_paths(svc: &ServiceConfig) -> impl Iterator<Item = (String, String)> + '_ {
+    [
+        svc.public.as_ref(),
+        svc.user.as_ref(),
+        svc.organization.as_ref(),
+        svc.member.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .flat_map(|scope| scope.routes.iter())
+    .flat_map(|r| r.methods.iter().map(|m| (m.clone(), r.path.clone())))
+}
+
+/// Method+path pairs in `incoming` already owned by a different service in
+/// `existing` (or claimed by another incoming service). Services being applied
+/// replace their own current routes, so those never conflict.
+/// Returns sorted `"METHOD /path (owned by svc)"` lines.
+pub fn find_route_conflicts(
+    existing: &HashMap<String, ServiceConfig>,
+    incoming: &[(String, ServiceConfig)],
+) -> Vec<String> {
+    let mut owners: HashMap<(String, String), &str> = HashMap::new();
+    for (name, svc) in existing {
+        if incoming.iter().any(|(n, _)| n == name) {
+            continue;
+        }
+        for key in service_method_paths(svc) {
+            owners.insert(key, name);
+        }
+    }
+    let mut out = HashSet::new();
+    for (name, svc) in incoming {
+        for key in service_method_paths(svc) {
+            match owners.get(&key) {
+                Some(owner) if *owner != name => {
+                    out.insert(format!("{} {} (owned by '{}')", key.0, key.1, owner));
+                }
+                Some(_) => {}
+                None => {
+                    owners.insert(key, name);
+                }
+            }
+        }
+    }
+    let mut out: Vec<String> = out.into_iter().collect();
+    out.sort();
+    out
+}
+
+const URL_FORM: &str = "expected http://host:port, e.g. http://my-service:3000";
+
+/// Service `url` must be exactly `http://host:port`: explicit port, no path or query.
+fn validate_service_url(service: &str, url: &str) -> Result<(), ConfigError> {
+    let bad = |reason: String| ConfigError::InvalidRoute {
+        service: service.to_string(),
+        reason,
+    };
+    if url.trim().is_empty() {
+        return Err(bad(
+            "service `url` is missing: add the service under `upstreams:` in plat5.yml, \
+             or set `url` in the routes file"
+                .to_string(),
+        ));
+    }
+    let Some(rest) = url.strip_prefix("http://") else {
+        return Err(bad(format!(
+            "service url '{url}' must start with http:// ({URL_FORM})"
+        )));
+    };
+    if rest.contains(['/', '?', '#']) {
+        return Err(bad(format!(
+            "service url '{url}' must not have a path or query ({URL_FORM})"
+        )));
+    }
+    let port_ok = rest
+        .rsplit_once(':')
+        .map(|(host, port)| {
+            !host.is_empty()
+                && !host.contains(['@', ' '])
+                && !port.is_empty()
+                && port.parse::<u16>().is_ok_and(|p| p != 0)
+        })
+        .unwrap_or(false);
+    if !port_ok {
+        return Err(bad(format!(
+            "service url '{url}' needs a host and an explicit port ({URL_FORM})"
+        )));
+    }
+    Ok(())
 }
 
 fn reject_duplicate_path_methods(service: &str, svc: &ServiceConfig) -> Result<(), ConfigError> {

@@ -3,7 +3,7 @@
 # GET /organizations is served by identity and omitted here.
 services:
   identity:
-    url: identity:3000
+    url: http://identity:3000
     user:
       routes:
         - path: /user/memberships

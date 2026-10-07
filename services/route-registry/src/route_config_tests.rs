@@ -15,7 +15,7 @@ mod tests {
 
     fn user_service(routes: Vec<RouteConfig>) -> ServiceConfig {
         ServiceConfig {
-            url: "w:3000".into(),
+            url: "http://w:3000".into(),
             rate_limits: None,
             public: None,
             user: Some(ScopeConfig {
@@ -25,6 +25,80 @@ mod tests {
             organization: None,
             member: None,
         }
+    }
+
+    fn validate_url(url: &str) -> Result<(), ConfigError> {
+        let mut svc = user_service(vec![route("/a", &["GET"])]);
+        svc.url = url.into();
+        Config {
+            services: HashMap::from([("s".to_string(), svc)]),
+        }
+        .validate()
+    }
+
+    #[test]
+    fn url_accepts_http_host_port() {
+        validate_url("http://my-service:3000").unwrap();
+        validate_url("http://127.0.0.1:8080").unwrap();
+    }
+
+    #[test]
+    fn url_rejects_bad_forms() {
+        for url in [
+            "https://example.com",
+            "https://example.com:443",
+            "http://example.com",
+            "http://example.com:",
+            "http://example.com:3000/x",
+            "http://example.com:3000?a=1",
+            "http://:3000",
+            "http://example.com:99999",
+            "ftp://example.com:21",
+            "my-service",
+            "my-service:3000",
+            "http://my-service:3000/x",
+        ] {
+            let msg = validate_url(url).unwrap_err().to_string();
+            assert!(msg.contains("http://my-service:3000"), "{url}: {msg}");
+        }
+    }
+
+    #[test]
+    fn missing_url_is_a_validation_error_not_a_parse_error() {
+        let cfg: Config = serde_json::from_value(serde_json::json!({
+            "services": { "s": { "user": { "routes": [{ "path": "/a", "methods": ["GET"] }] } } }
+        }))
+        .expect("parses");
+        let msg = cfg.validate().unwrap_err().to_string();
+        assert!(msg.contains("upstreams:"), "{msg}");
+        assert!(msg.contains("plat5.yml"), "{msg}");
+    }
+
+    #[test]
+    fn route_conflicts_name_owner_and_allow_self_replace() {
+        let existing = HashMap::from([
+            ("features".to_string(), user_service(vec![route("/org/features", &["GET"])])),
+            ("mine".to_string(), user_service(vec![route("/m", &["GET"])])),
+        ]);
+        let evil = user_service(vec![route("/org/features", &["GET", "POST"])]);
+        let conflicts = find_route_conflicts(&existing, &[("aaa-evil".into(), evil)]);
+        assert_eq!(conflicts, vec!["GET /org/features (owned by 'features')"]);
+
+        // Same service re-applying its own routes, even changed, is fine.
+        let again = user_service(vec![route("/m", &["GET"]), route("/m2", &["GET"])]);
+        assert!(find_route_conflicts(&existing, &[("mine".into(), again)]).is_empty());
+
+        // Same path, different method is not a conflict.
+        let other = user_service(vec![route("/org/features", &["POST"])]);
+        assert!(find_route_conflicts(&existing, &[("x".into(), other)]).is_empty());
+
+        // Two incoming services claiming the same method+path conflict.
+        let a = user_service(vec![route("/n", &["GET"])]);
+        let b = user_service(vec![route("/n", &["GET"])]);
+        assert_eq!(
+            find_route_conflicts(&HashMap::new(), &[("a".into(), a), ("b".into(), b)]).len(),
+            1
+        );
     }
 
     fn parse_route(value: serde_json::Value) -> RouteConfig {
@@ -50,7 +124,7 @@ mod tests {
     #[test]
     fn prepare_expands_prefix() {
         let svc = ServiceConfig {
-            url: "orgs:3000".into(),
+            url: "http://orgs:3000".into(),
             rate_limits: None,
             public: None,
             user: Some(ScopeConfig {
@@ -387,7 +461,7 @@ mod tests {
 
     fn org_service(routes: Vec<RouteConfig>) -> ServiceConfig {
         ServiceConfig {
-            url: "w:3000".into(),
+            url: "http://w:3000".into(),
             rate_limits: None,
             public: None,
             user: None,
@@ -453,7 +527,7 @@ mod tests {
         let mut r = route("/{project_id}", &["GET"]);
         r.upstream = Some("/projects/{path.project_id}".into());
         let svc = ServiceConfig {
-            url: "p:3000".into(),
+            url: "http://p:3000".into(),
             rate_limits: None,
             public: None,
             user: None,

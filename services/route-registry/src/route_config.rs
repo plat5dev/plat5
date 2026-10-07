@@ -29,6 +29,8 @@ pub struct RateLimitPolicy {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ServiceConfig {
+    /// Empty when omitted; `validate` rejects it with a clear message.
+    #[serde(default)]
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limits: Option<HashMap<String, RateLimitPolicy>>,

@@ -52,7 +52,7 @@ Routes live in etcd under `edge/gateway/routes/`. Scopes are `public` / `user` /
 ```yaml
 services:
   my-service:
-    url: my-service:3000
+    url: http://my-service:3000
     public:
       routes:
         - path: /public/health

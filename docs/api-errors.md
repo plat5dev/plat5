@@ -48,6 +48,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `FORBIDDEN` | 403 | `invalid_request_error` | You don't have permission to do that. | `{ permission, resource, resource_id }` |
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
+| `ROUTE_CONFLICT` | 409 | `invalid_request_error` | (route-registry apply) Message lists each conflicting method+path and its owner service. | — |
 | `PAYLOAD_TOO_LARGE` | 413 | `invalid_request_error` | Request body is too large. | `{ max_size_bytes }` |
 | `RATE_LIMITED` | 429 | `api_error` | Too many requests. Try again in a moment. | `{ retry_after_seconds }` |
 | `INTERNAL_ERROR` | 500 | `api_error` | An unexpected error occurred. | `null` |
