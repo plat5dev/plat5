@@ -94,11 +94,11 @@ Success apply (`200`) — desired state committed:
 }
 ```
 
-Validation / auth / empty body failures use the Plat5 envelope (`api-errors.md`) and write nothing. A bad or missing service `url` is `422 VALIDATION_ERROR`. A method+path already owned by a **different** service rejects the whole apply with `409 ROUTE_CONFLICT` (message lists each method+path and its owner). Re-applying a service's own routes replaces them and is not a conflict. A Postgres failure rolls the whole batch back (`503`). etcd projection is retried by the reconciler; apply does not fail after a successful commit.
+Validation / auth / empty body failures use the Plat5 envelope (`api-errors.md`) and write nothing. A bad or missing service `url` is `422 VALIDATION_ERROR`. A non-canonical path (trailing `/`, uppercase outside `{params}`) is `422`. A method + path shape (params match params, literals match only literals) already owned by a **different** service rejects the whole apply with `409 ROUTE_CONFLICT` (message lists each route and its owner). `PUT /services/{name}` and restore run exactly the same checks; see [routes.md](routes.md). Re-applying a service's own routes replaces them and is not a conflict. A Postgres failure rolls the whole batch back (`503`). etcd projection is retried by the reconciler; apply does not fail after a successful commit.
 
 ## Revisions
 
-Each write (apply/put/delete/restore) appends a revision. Restore appends a new revision that copies an old config.
+Each write (apply/put/delete/restore) appends a revision. Restore appends a new revision that copies an old config after validating it like an apply: an old revision with a now-invalid `url` or path is `422`, and one whose routes another service owns now is `409 ROUTE_CONFLICT`.
 
 Delete stores `config: null` and clears the etcd key. History remains. Restore of a delete revision is `422`.
 
