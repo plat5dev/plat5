@@ -196,7 +196,7 @@ TLS terminates at the **edge / load balancer**, not the gateway process. Edge de
 
 ## CORS
 
-Gateway handles `OPTIONS` preflight and adds `Access-Control-Allow-*` on responses. Services behind the gateway have no CORS config. Direct-exposed services handle CORS as needed.
+Gateway answers every `OPTIONS` request as a preflight: `204 No Content`, no body, `Access-Control-Allow-*` and `Access-Control-Max-Age: 86400`; the connection stays reusable. It adds `Access-Control-Allow-*` on responses. Services behind the gateway have no CORS config. Direct-exposed services handle CORS as needed.
 
 ## Security headers
 
