@@ -50,6 +50,7 @@ impl ServeHttp for HealthHttpApp {
             _ => Response::builder()
                 .status(404)
                 .header(http::header::CONTENT_TYPE, "text/plain")
+                .header(http::header::CONTENT_LENGTH, "Not Found".len())
                 .body(b"Not Found".to_vec())
                 .unwrap(),
         }
