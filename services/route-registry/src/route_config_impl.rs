@@ -171,6 +171,14 @@ fn validate_service_url(service: &str, url: &str) -> Result<(), ConfigError> {
                 .to_string(),
         ));
     }
+    if url
+        .get(..8)
+        .is_some_and(|p| p.eq_ignore_ascii_case("https://"))
+    {
+        return Err(bad(format!(
+            "service url '{url}': TLS (https) upstreams aren't supported yet ({URL_FORM})"
+        )));
+    }
     let Some(rest) = url.strip_prefix("http://") else {
         return Err(bad(format!(
             "service url '{url}' must start with http:// ({URL_FORM})"

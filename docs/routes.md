@@ -39,7 +39,7 @@ curl -sS -X POST http://localhost:5002/apply \
 
 Validation is at **apply time**. Malformed config → `422 VALIDATION_ERROR`; nothing written.
 
-- Service `url` is required and must be exactly `http://host:port` (explicit port, no path or query), e.g. `http://my-service:3000`. Bare `host:port`, `https://`, any other scheme, a missing port, or a path/query → `422 VALIDATION_ERROR` naming that form. Routes already stored with a bare `host:port` keep routing (the gateway strips the scheme) until re-applied. A missing `url` → `422` telling you to add the service under `upstreams:` in `plat5.yml`, or set `url` in the routes file.
+- Service `url` is required and must be exactly `http://host:port` (explicit port, no path or query), e.g. `http://my-service:3000`. `https://` → `422` saying TLS (https) upstreams aren't supported yet. Bare `host:port`, any other scheme, a missing port, or a path/query → `422 VALIDATION_ERROR` naming that form. Routes already stored with a bare `host:port` keep routing (the gateway strips the scheme) until re-applied. A missing `url` → `422` telling you to add the service under `upstreams:` in `plat5.yml`, or set `url` in the routes file.
 - A method+path may belong to only one service. If an incoming method+path is already owned by a **different** service, the whole apply is rejected with `409 ROUTE_CONFLICT`; the message lists each conflicting method+path and its current owner. Nothing is written. Re-applying a service's own routes replaces them and is allowed.
 
 After validation, all services in the batch commit in **one Postgres transaction** (each service gets a new revision). etcd projection follows; a reconciler retries if a put fails. `200` means desired state is recorded.
