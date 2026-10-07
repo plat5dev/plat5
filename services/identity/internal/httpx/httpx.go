@@ -110,6 +110,17 @@ func ConstrainMint(c fiber.Ctx, requested []string) ([]string, error) {
 	return apikey.ConstrainScopes(caller, requested)
 }
 
+// RequireUnrestricted guards identity writes that manage the org (members,
+// invites, service accounts and their keys, the org row). A restricted caller
+// (X-Plat5-Scopes present, including "[]") gets 403 RESTRICTED_CREDENTIAL.
+// Absent means a JWT or a key or session with scopes null: unchanged.
+func RequireUnrestricted(c fiber.Ctx) error {
+	if c.Request().Header.Peek(apikey.CallerScopesHeader) != nil {
+		return errors.RestrictedCredential()
+	}
+	return c.Next()
+}
+
 // MapMintScopes turns a mint-cap failure into an API error.
 // A label the caller lacks is 403. A malformed scopes header is 500.
 func MapMintScopes(ctx context.Context, err error) error {

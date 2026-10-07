@@ -1,6 +1,10 @@
 package memberkeys
 
-import "github.com/gofiber/fiber/v3"
+import (
+	"github.com/gofiber/fiber/v3"
+
+	"github.com/plat5dev/plat5/identity/internal/httpx"
+)
 
 // MountPublic registers member API key routes. Mount under /members.
 // Those are the self address. MountServiceAccountKeys is the org address for
@@ -12,11 +16,12 @@ func (h *Handler) MountPublic(router fiber.Router) {
 }
 
 // MountServiceAccountKeys registers the org address for a service account's
-// member keys. Mount on the application root.
+// member keys. Mount on the application root. Create and revoke manage the org
+// and refuse restricted credentials (httpx.RequireUnrestricted).
 func (h *Handler) MountServiceAccountKeys(router fiber.Router) {
-	router.Post("/organizations/:organization_id/service-accounts/:service_account_id/api-keys", h.CreateForServiceAccount)
+	router.Post("/organizations/:organization_id/service-accounts/:service_account_id/api-keys", httpx.RequireUnrestricted, h.CreateForServiceAccount)
 	router.Get("/organizations/:organization_id/service-accounts/:service_account_id/api-keys", h.ListForServiceAccount)
-	router.Delete("/organizations/:organization_id/service-accounts/:service_account_id/api-keys/:key_id", h.RevokeForServiceAccount)
+	router.Delete("/organizations/:organization_id/service-accounts/:service_account_id/api-keys/:key_id", httpx.RequireUnrestricted, h.RevokeForServiceAccount)
 }
 
 // MountInternal registers validate on a router scoped under /internal.

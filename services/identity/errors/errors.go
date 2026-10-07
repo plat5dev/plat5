@@ -124,6 +124,19 @@ func insufficientScopeMessage(missing []string) string {
 	return "This credential can't grant " + strings.Join(missing, ", ") + "."
 }
 
+// RestrictedCredential is a restricted key or session (non-null scopes) calling an
+// identity write that manages the org. Those need an unrestricted credential.
+func RestrictedCredential() *ApiError {
+	return &ApiError{
+		Type:    "invalid_request_error",
+		Code:    "RESTRICTED_CREDENTIAL",
+		Message: "Restricted keys and their sessions can't manage the organization. Use an unrestricted key or a login session.",
+		Details: nil,
+		Status:  fiber.StatusForbidden,
+		Kind:    KindAuth,
+	}
+}
+
 func ForbiddenError(permission, resource string, resourceID interface{}) *ApiError {
 	return &ApiError{
 		Type:    "invalid_request_error",
