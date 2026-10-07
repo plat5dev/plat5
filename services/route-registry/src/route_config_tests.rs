@@ -70,8 +70,8 @@ mod tests {
         }))
         .expect("parses");
         let msg = cfg.validate().unwrap_err().to_string();
-        assert!(msg.contains("upstreams:"), "{msg}");
-        assert!(msg.contains("plat5.yml"), "{msg}");
+        assert!(msg.contains("set `url`"), "{msg}");
+        assert!(!msg.contains("plat5.yml"), "{msg}");
     }
 
     #[test]
