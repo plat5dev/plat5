@@ -199,9 +199,7 @@ fn validate_service_url(service: &str, url: &str) -> Result<(), ConfigError> {
     };
     if url.trim().is_empty() {
         return Err(bad(
-            "service `url` is missing: add the service under `upstreams:` in plat5.yml, \
-             or set `url` in the routes file"
-                .to_string(),
+            format!("service `url` is missing: set `url` ({URL_FORM})"),
         ));
     }
     if url
@@ -222,18 +220,30 @@ fn validate_service_url(service: &str, url: &str) -> Result<(), ConfigError> {
             "service url '{url}' must not have a path or query ({URL_FORM})"
         )));
     }
-    let port_ok = rest
-        .rsplit_once(':')
-        .map(|(host, port)| {
-            !host.is_empty()
-                && !host.contains(['@', ' '])
-                && !port.is_empty()
-                && port.parse::<u16>().is_ok_and(|p| p != 0)
-        })
-        .unwrap_or(false);
-    if !port_ok {
+    if rest.contains('@') {
         return Err(bad(format!(
-            "service url '{url}' needs a host and an explicit port ({URL_FORM})"
+            "service url '{url}' must not contain credentials (user@host); \
+             the gateway sends no upstream auth ({URL_FORM})"
+        )));
+    }
+    let Some((host, port)) = rest.rsplit_once(':') else {
+        return Err(bad(format!(
+            "service url '{url}' needs an explicit port ({URL_FORM})"
+        )));
+    };
+    if host.is_empty() || host.contains(char::is_whitespace) {
+        return Err(bad(format!(
+            "service url '{url}' needs a host ({URL_FORM})"
+        )));
+    }
+    if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(bad(format!(
+            "service url '{url}' port '{port}' must be a number ({URL_FORM})"
+        )));
+    }
+    if !port.parse::<u32>().is_ok_and(|p| (1..=65535).contains(&p)) {
+        return Err(bad(format!(
+            "service url '{url}' port {port} is out of range (1-65535; {URL_FORM})"
         )));
     }
     Ok(())
