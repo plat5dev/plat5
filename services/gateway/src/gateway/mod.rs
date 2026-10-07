@@ -77,8 +77,10 @@ impl UserGateway {
         }
     }
 
+    /// CORS preflight: 204 with no body. A 204 has no body by definition, so the
+    /// response is complete after the headers and the connection can be reused.
     async fn handle_preflight(&self, session: &mut Session, ctx: &GatewayContext) -> Result<bool> {
-        let mut header = ResponseHeader::build(200, None)?;
+        let mut header = ResponseHeader::build(204, None)?;
         response::apply_security_headers(&mut header)?;
         self.cors
             .apply(&mut header, ctx.request_origin.as_deref())?;
