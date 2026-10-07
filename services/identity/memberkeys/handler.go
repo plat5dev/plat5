@@ -106,6 +106,10 @@ func (h *Handler) create(c fiber.Ctx, memberID string) error {
 	if err != nil {
 		return mapScopeError(err)
 	}
+	scopes, err = httpx.ConstrainMint(c, scopes)
+	if err != nil {
+		return httpx.MapMintScopes(ctx, err)
+	}
 
 	plaintext, err := apikey.Generate(h.prefix)
 	if err != nil {

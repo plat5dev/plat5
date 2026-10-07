@@ -18,7 +18,8 @@ pub struct MemberSessionValidation {
     pub valid: bool,
     pub member_id: Option<String>,
     pub organization_id: Option<String>,
-    /// Always null on a hit. None skips `required_scopes`, same as a JWT.
+    /// None = unrestricted (skip `required_scopes`). Some = restricted, including empty.
+    /// A session minted from a restricted user key carries that key's scopes.
     #[serde(default)]
     pub scopes: Option<Vec<String>>,
 }

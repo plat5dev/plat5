@@ -8,7 +8,7 @@ Boundary: [`identity-boundary.md`](identity-boundary.md). Routes: [`routes.md`](
 
 | Layer | Responsibility |
 |-------|---------------|
-| **Gateway** | Routing, authentication (JWT, API key, member session), scope projection, API-key `required_scopes`, rate limits, subject fill into `upstream`, CORS, security headers, trace propagation |
+| **Gateway** | Routing, authentication (JWT, API key, member session), scope projection, credential `required_scopes`, rate limits, subject fill into `upstream`, caller scopes header, CORS, security headers, trace propagation |
 | **Edge / Load Balancer** | TLS termination (e.g. Cloudflare Zero Trust tunnels) |
 | **Downstream services** | Business logic, data access, resource authorization |
 
@@ -33,8 +33,9 @@ The gateway removes these request headers before the upstream call.
 |--------|-----|
 | `Authorization` | Consumed for JWT authn; must not leak bearer tokens to apps |
 | `X-API-Key` | Consumed for API-key authn; must not leak raw keys to apps |
+| `X-Plat5-Scopes` | Client must not choose the caller's scopes. The gateway removes it, then sets it from the admitted credential (below). |
 
-Clients still send credential headers **to the gateway**. Services behind the gateway will not receive them. CORS may still allow browsers to send them.
+Clients still send credential headers **to the gateway**. Services behind the gateway will not receive `Authorization` or `X-API-Key`. CORS may still allow browsers to send them.
 
 ### Always (all scopes)
 
@@ -44,6 +45,19 @@ Clients still send credential headers **to the gateway**. Services behind the ga
 | `traceparent` | W3C trace context (OTel propagation) |
 
 The scope chooses what the route is allowed to see. It is not a second proof. A user JWT and a user API key are the same proof. `organization` and `member` share one credential. That credential always carries `member_id` and `organization_id`. The scope drops fields before `upstream` substitution. Spans may still record the dropped ids. The app contract does not.
+
+### Caller scopes
+
+After admission, the gateway sets `X-Plat5-Scopes` from the credential. Trust it the way you trust `{subject.*}` in the path: only if the upstream is on a network the gateway alone can reach.
+
+| Credential | Header |
+|------------|--------|
+| Public, JWT, or `scopes: null` (unrestricted key or session) | absent |
+| Restricted (`scopes` non-null, including `[]`) | present |
+
+The value is comma-separated labels (`projects:read,projects:write`). The two-character value `[]` means a restricted credential with no labels. An empty header is not used — an absent header means unrestricted, so the empty list must be visible.
+
+Identity uses this on key and session mint. A restricted caller cannot mint a wider credential. Other services may read the same header. Do not accept a client-supplied value on a port the gateway does not sit in front of.
 
 ## Route Configuration
 
@@ -78,7 +92,7 @@ Services publish via the **route-registry** admin API (`POST /apply`). Gateway l
 
 ### API key `required_scopes`
 
-After match + admission: if the route has `required_scopes` **and** the API key has a non-null scopes list, the lists must have a nonempty intersection or **403** `FORBIDDEN`. JWTs, unrestricted keys, and member sessions (`scopes: null`) skip. A key with `scopes: []` is restricted (empty list) — it cannot satisfy any `required_scopes` and gets **403** there; unlabeled routes still admit it.
+After match + admission: if the route has `required_scopes` **and** the credential has a non-null scopes list (restricted API key or member session), the lists must have a nonempty intersection or **403** `FORBIDDEN`. JWTs and credentials with `scopes: null` skip. `scopes: []` is restricted — it cannot satisfy any `required_scopes` and gets **403** there; unlabeled routes still admit it. A member session minted from a restricted user key carries that key's scopes and is checked the same way.
 
 ### Rate limits
 
@@ -134,7 +148,7 @@ Prefix dispatch happens before the identity call. One member-credential result (
 
 1. Bad, missing, or wrong credential → **401** `UNAUTHORIZED`
 2. Validate unavailable → **503** `SERVICE_UNAVAILABLE`
-3. Admitted → `required_scopes` (restricted keys only; session `scopes: null` skips) → **403** `FORBIDDEN` on miss
+3. Admitted → `required_scopes` (restricted credentials only; `scopes: null` skips) → **403** `FORBIDDEN` on miss
 4. Then per-route rate limit → **429** `RATE_LIMITED`
 5. Then substitute `{subject.*}` and `{path.*}` in `upstream` (bad path param → **400**, bad subject id → **500**)
 
@@ -207,7 +221,7 @@ In-process per replica.
 | JWT claims | Validated token (TTL from `exp`) | — | token `exp` |
 | User API key | Valid key → `user_id` + `scopes` | Invalid key | `APIKEY_CACHE_TTL_SECS` (default 300) |
 | Member API key | Valid key → `member_id` + `organization_id` + `scopes` | Invalid key | same |
-| Member session | Valid token → `member_id` + `organization_id` + `scopes: null` | Invalid token | same |
+| Member session | Valid token → `member_id` + `organization_id` + `scopes` | Invalid token | same |
 
 `APIKEY_CACHE_TTL_SECS` covers user keys, member keys, and sessions. Do not rename it for sessions.
 

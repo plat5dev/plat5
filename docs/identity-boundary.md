@@ -28,11 +28,11 @@ Trusting the rewritten path is a perimeter protocol: [`gateway-contract.md`](gat
 |-------|----------|--------|
 | **Authentication** | Who is this? | Gateway + **IdP (JWT)** / identity keys and sessions (credentials stripped before upstream) |
 | **Scope projection** | Which fields is this route allowed to see? | Gateway. The credential is the proof. The scope drops fields. |
-| **API key route scopes** | Does this restricted key share a label with `required_scopes`? | Gateway after admission. Restricted = non-null `scopes` (`[]` or labels). JWTs and `null` skip. Omitted `required_scopes` → any admitted principal. |
+| **Credential route scopes** | Does this restricted key or session share a label with `required_scopes`? | Gateway after admission. Restricted = non-null `scopes` (`[]` or labels), including a member session minted from a restricted user key. JWTs and `null` skip. Omitted `required_scopes` → any admitted principal. |
 | **Resource authorization** | Can this member do X to project/doc/…? | **Business services** — over the subject in the path |
 | **Who may call identity** | Who may add members, mint keys, delete an org? | The proxy in front of identity. The service refuses illegal states only. |
 
-Route `required_scopes` is a credential intersection: the restricted key’s labels and the route’s labels must overlap.
+Route `required_scopes` is a credential intersection: the restricted credential’s labels and the route’s labels must overlap.
 
 ## Route scopes → subject
 
@@ -45,7 +45,7 @@ Route `required_scopes` is a credential intersection: the restricted key’s lab
 
 One subject per scope. `organization` does not include `member_id` or `user_id`. `member` does not include `user_id`.
 
-Always: `X-Request-ID`, `traceparent`. The edge may record dropped ids on spans for ops — that is not the app contract.
+Always: `X-Request-ID`, `traceparent`. When the credential is restricted, the gateway also sets `X-Plat5-Scopes` (absent means unrestricted). The edge may record dropped ids on spans for ops — that is not the app contract.
 
 ## No roles
 
@@ -102,14 +102,15 @@ POST /organizations/{organization_id}/members
 PATCH /members/{member_id}
 ```
 
-The path names every id the handler reads. Who may call is the proxy. Identity refuses illegal states: slug uniqueness, one membership row per user per org, last member, the invite machine, and an address that does not exist.
+The path names every id the handler reads. Who may call is the proxy. Identity refuses illegal states: slug uniqueness, one membership row per user per org, last member, the invite machine, an address that does not exist, and a minted key or session wider than the caller's scopes.
 
 ## Error split (locked)
 
 | Case | HTTP / code |
 |------|-------------|
 | Bad, missing, or wrong credential for the scope | **401** `UNAUTHORIZED` |
-| Restricted API key missing route `required_scopes` | **403** `FORBIDDEN` |
+| Restricted credential missing route `required_scopes` | **403** `FORBIDDEN` |
+| Mint asks for a scope the caller credential does not have | **403** `INSUFFICIENT_SCOPE` (identity) |
 | Unknown id (identity handlers) | **404** `NOT_FOUND` |
 | Admitted route or failed-auth IP over limit | **429** `RATE_LIMITED` |
 | Key or session validate down or timeout; Valkey down on a limited request; JWKS unavailable | **503** `SERVICE_UNAVAILABLE` |

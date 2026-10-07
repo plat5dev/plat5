@@ -46,6 +46,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `VALIDATION_ERROR` | 422 | `invalid_request_error` | That doesn't look right. | `{ fields: [{ path, message }] }` |
 | `UNAUTHORIZED` | 401 | `invalid_request_error` | Authentication required. | `{ reason }` |
 | `FORBIDDEN` | 403 | `invalid_request_error` | You don't have permission to do that. | `{ permission, resource, resource_id }` |
+| `INSUFFICIENT_SCOPE` | 403 | `invalid_request_error` | This credential can't grant that scope. | `{ scopes: string[] }` — labels the mint asked for and the caller does not have |
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
 | `ROUTE_CONFLICT` | 409 | `invalid_request_error` | (route-registry apply) Message lists each conflicting method+path and its owner service. | — |
@@ -53,6 +54,10 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `RATE_LIMITED` | 429 | `api_error` | Too many requests. Try again in a moment. | `{ retry_after_seconds }` |
 | `INTERNAL_ERROR` | 500 | `api_error` | An unexpected error occurred. | `null` |
 | `SERVICE_UNAVAILABLE` | 503 | `api_error` | Service temporarily unavailable. | `null` |
+
+### `INSUFFICIENT_SCOPE`
+
+Returned by **identity** when a restricted credential mints a key and requests a scope it does not have. HTTP **403**. `message` names the missing labels (`This credential can't grant admin, projects:write.`). `details.scopes` is that same list. An omitted scope list is not this error: the new credential inherits the caller's scopes. The gateway's route check stays **403** `FORBIDDEN`.
 
 ### `UNAUTHORIZED`
 
