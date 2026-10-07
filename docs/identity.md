@@ -6,7 +6,7 @@ Boundary: [`identity-boundary.md`](identity-boundary.md). Errors: [`api-errors.m
 
 The service is a function of the URL. The path names every id the operation uses. If the handler does not read an id, it is not in the path.
 
-Who may call is the proxy. This service does not know which proxy called, and it does not grow a second policy for a second caller. When it mints a key or a member session it reads `X-Plat5-Scopes`, which the gateway sets from the caller credential.
+Who may call is the proxy. This service does not know which proxy called, and it does not grow a second policy for a second caller. It reads `X-Plat5-Scopes`, which the gateway sets from the caller credential, for two things only: capping the scopes of a key or member session it mints, and refusing org management from a restricted credential ([below](#restricted-credentials-cannot-manage-the-org)).
 
 There is no `/api` prefix. The first path segment is the subject.
 
@@ -46,7 +46,31 @@ Illegal states. Not permissions.
 - A service account addressed under the wrong org, or whose member is `removed`, is **404**.
 - Unknown id is **404**. A removed member is **404**. Empty collection is an empty page.
 
-Validation (**422**) and conflict (**409**) stay where the data is wrong. Identity does not decide who may call. It does refuse to mint a key or session wider than the caller's scopes (**403** `INSUFFICIENT_SCOPE`).
+Validation (**422**) and conflict (**409**) stay where the data is wrong. Identity does not decide who may call. It does refuse to mint a key or session wider than the caller's scopes (**403** `INSUFFICIENT_SCOPE`), and it refuses org management from a restricted credential (**403** `RESTRICTED_CREDENTIAL`).
+
+## Restricted credentials cannot manage the org
+
+A restricted credential is a key or member session whose `scopes` is non-null (`[]` or labels). The gateway marks it by sending `X-Plat5-Scopes`. Scope labels are the operator's product labels (e.g. `check`). Identity has no labels of its own, so a restricted credential cannot carry the authority to manage the org.
+
+Every identity write that manages the org returns **403** `RESTRICTED_CREDENTIAL` to a restricted caller, before the handler runs:
+
+> Restricted keys and their sessions can't manage the organization. Use an unrestricted key or a login session.
+
+| Method | Identity path | Catalog path |
+|--------|---------------|--------------|
+| `PATCH`, `DELETE` | `/organizations/{organization_id}` | `/org` |
+| `POST` | `/organizations/{organization_id}/members` | `/org/members` |
+| `POST` | `/organizations/{organization_id}/invites` | `/org/invites` |
+| `DELETE` | `/organizations/{organization_id}/invites/{invite_id}` | `/org/invites/{invite_id}` |
+| `POST` | `/organizations/{organization_id}/service-accounts` | `/org/service-accounts` |
+| `PATCH`, `DELETE` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | `/org/service-accounts/{service_account_id}` |
+| `POST` | `/organizations/{organization_id}/service-accounts/{service_account_id}/api-keys` | `/org/service-accounts/{service_account_id}/api-keys` |
+| `DELETE` | `/organizations/{organization_id}/service-accounts/{service_account_id}/api-keys/{key_id}` | `/org/service-accounts/{service_account_id}/api-keys/{key_id}` |
+| `PATCH`, `DELETE` | `/members/{member_id}` | `/member` |
+
+A JWT, or a key or session with `scopes: null`, is not restricted and is unaffected. Reads are unaffected. A restricted user key may still mint a member session (the session inherits its scopes). A restricted member credential may still mint its own member keys (`/members/{member_id}/api-keys`) within the mint cap, and revoke them. Person routes (`/users/{user_id}/...`) are not org management.
+
+To manage the org from a backend, use an unrestricted member key. A console uses the login session.
 
 ## Public API
 
@@ -118,7 +142,7 @@ The 403 message names the missing labels. Explicit `[]` is a subset of every cal
 
 Identity does not enforce route `required_scopes`. That check is the gateway's, on routes the operator labeled. Keep redeem unlabeled when it is published — the invitee is not a member yet. Member keys never hit user routes. Gateway: [`gateway-contract.md`](gateway-contract.md), [`routes.md`](routes.md).
 
-The same mint cap applies to member keys, service-account keys, and member sessions.
+The same mint cap applies to member keys and member sessions. Service-account keys are minted on an org-management route, so a restricted caller gets **403** `RESTRICTED_CREDENTIAL` there instead.
 
 Hygiene (422 `VALIDATION_ERROR` on `scopes`): each label `[a-z0-9:._-]+`, max 64 characters, max 32 labels, unique. Create and list echo `scopes` as `string[] | null` (`null` = unrestricted). Never echo the secret except on create (`key`).
 
@@ -279,11 +303,11 @@ Lifecycle is the member row. Suspend and re-enable with `PATCH /members/{member_
 
 Org address for that service account's member keys. Not a separate credential. Same table (`member_api_keys`), same plaintext prefix (`{brand}-mk-1-`), same validate endpoint. `/members/{member_id}/api-keys` is the self address. A key created on either path is listed and revoked on both.
 
-Who may call is the proxy, same as creating the service account. Identity does not check the caller. The mint cap still applies.
+Who may call is the proxy, same as creating the service account. Create and revoke manage the org: a restricted caller gets **403** `RESTRICTED_CREDENTIAL` ([above](#restricted-credentials-cannot-manage-the-org)).
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/organizations/{organization_id}/service-accounts/{service_account_id}/api-keys` | Create; plaintext once — prefix **`{brand}-mk-1-`**. Body same as member keys (`name`, optional `scopes`), including the mint cap. |
+| `POST` | `/organizations/{organization_id}/service-accounts/{service_account_id}/api-keys` | Create; plaintext once — prefix **`{brand}-mk-1-`**. Body same as member keys (`name`, optional `scopes`). Restricted caller → **403** `RESTRICTED_CREDENTIAL`. |
 | `GET` | `/organizations/{organization_id}/service-accounts/{service_account_id}/api-keys` | List. Collection key `keys`. Echoes `scopes`, never the secret. |
 | `DELETE` | `/organizations/{organization_id}/service-accounts/{service_account_id}/api-keys/{key_id}` | Soft-revoke. Idempotent. Key not under this service account → **404**. |
 

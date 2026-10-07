@@ -102,7 +102,7 @@ POST /organizations/{organization_id}/members
 PATCH /members/{member_id}
 ```
 
-The path names every id the handler reads. Who may call is the proxy. Identity refuses illegal states: slug uniqueness, one membership row per user per org, last member, the invite machine, an address that does not exist, and a minted key or session wider than the caller's scopes.
+The path names every id the handler reads. Who may call is the proxy. Identity refuses illegal states: slug uniqueness, one membership row per user per org, last member, the invite machine, an address that does not exist, a minted key or session wider than the caller's scopes, and org management (members, invites, service accounts and their keys, the org row) from a restricted credential.
 
 ## Error split (locked)
 
@@ -111,6 +111,7 @@ The path names every id the handler reads. Who may call is the proxy. Identity r
 | Bad, missing, or wrong credential for the scope | **401** `UNAUTHORIZED` |
 | Restricted credential missing route `required_scopes` | **403** `FORBIDDEN` |
 | Mint asks for a scope the caller credential does not have | **403** `INSUFFICIENT_SCOPE` (identity) |
+| Restricted credential calls an identity write that manages the org | **403** `RESTRICTED_CREDENTIAL` (identity) |
 | Unknown id (identity handlers) | **404** `NOT_FOUND` |
 | Admitted route or failed-auth IP over limit | **429** `RATE_LIMITED` |
 | Key or session validate down or timeout; Valkey down on a limited request; JWKS unavailable | **503** `SERVICE_UNAVAILABLE` |

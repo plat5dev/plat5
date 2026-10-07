@@ -36,6 +36,7 @@ Use these only when a more specific sentence does not apply.
 | `UNAUTHORIZED` | 401 | Authentication required. |
 | `FORBIDDEN` | 403 | You don't have permission to do that. |
 | `INSUFFICIENT_SCOPE` | 403 | This credential can't grant that scope. |
+| `RESTRICTED_CREDENTIAL` | 403 | Restricted keys and their sessions can't manage the organization. Use an unrestricted key or a login session. |
 | `NOT_FOUND` | 404 | Resource not found. |
 | `CONFLICT` | 409 | That already exists. |
 | `PAYLOAD_TOO_LARGE` | 413 | Request body is too large. |

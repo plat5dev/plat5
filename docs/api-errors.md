@@ -47,6 +47,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `UNAUTHORIZED` | 401 | `invalid_request_error` | Authentication required. | `{ reason }` |
 | `FORBIDDEN` | 403 | `invalid_request_error` | You don't have permission to do that. | `{ permission, resource, resource_id }` |
 | `INSUFFICIENT_SCOPE` | 403 | `invalid_request_error` | This credential can't grant that scope. | `{ scopes: string[] }` — labels the mint asked for and the caller does not have |
+| `RESTRICTED_CREDENTIAL` | 403 | `invalid_request_error` | Restricted keys and their sessions can't manage the organization. Use an unrestricted key or a login session. | `null` |
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
 | `ROUTE_CONFLICT` | 409 | `invalid_request_error` | (route-registry apply) Message lists each conflicting method+path and its owner service. | — |
@@ -58,6 +59,10 @@ The **Fallback message** column is used only when nothing more specific applies.
 ### `INSUFFICIENT_SCOPE`
 
 Returned by **identity** when a restricted credential mints a key and requests a scope it does not have. HTTP **403**. `message` names the missing labels (`This credential can't grant admin, projects:write.`). `details.scopes` is that same list. An omitted scope list is not this error: the new credential inherits the caller's scopes. The gateway's route check stays **403** `FORBIDDEN`.
+
+### `RESTRICTED_CREDENTIAL`
+
+Returned by **identity** when a restricted credential (a key or member session with non-null `scopes`, including `[]`) calls a write that manages the org: members, invites, service accounts and their keys, or the org row. HTTP **403**. `details` is null. The fix is an unrestricted key or a login session. Route list: [`identity.md`](identity.md#restricted-credentials-cannot-manage-the-org).
 
 ### `UNAUTHORIZED`
 

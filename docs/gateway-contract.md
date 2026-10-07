@@ -57,7 +57,7 @@ After admission, the gateway sets `X-Plat5-Scopes` from the credential. Trust it
 
 The value is comma-separated labels (`projects:read,projects:write`). The two-character value `[]` means a restricted credential with no labels. An empty header is not used — an absent header means unrestricted, so the empty list must be visible.
 
-Identity uses this on key and session mint. A restricted caller cannot mint a wider credential. Other services may read the same header. Do not accept a client-supplied value on a port the gateway does not sit in front of.
+Identity uses this on key and session mint (a restricted caller cannot mint a wider credential) and to refuse org management from a restricted caller (**403** `RESTRICTED_CREDENTIAL`, [`identity.md`](identity.md#restricted-credentials-cannot-manage-the-org)). Other services may read the same header. Do not accept a client-supplied value on a port the gateway does not sit in front of.
 
 ## Route Configuration
 
