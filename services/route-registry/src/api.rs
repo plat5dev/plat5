@@ -244,20 +244,8 @@ async fn put_service(
     Json(body): Json<ServiceConfig>,
 ) -> Result<impl IntoResponse, AppError> {
     let request_id = request_id_from_headers(&headers);
-    let prepared = prepare_named(&name, body, &request_id)?;
-    ensure_shared_policies(
-        &state,
-        &[(name.clone(), Some(prepared.clone()))],
-        &request_id,
-    )
-    .await?;
-    ensure_no_route_conflicts(
-        &state,
-        &[(name.clone(), Some(prepared.clone()))],
-        &request_id,
-    )
-    .await?;
-    let commits = commit(&state, vec![(name.clone(), Some(prepared))], &request_id).await?;
+    let prepared = check_upserts(&state, vec![(name, body)], &request_id).await?;
+    let commits = commit(&state, prepared, &request_id).await?;
     let commit = commits.into_iter().next().expect("one commit");
     let config = commit.config.expect("put is not a delete");
     Ok((
@@ -342,14 +330,8 @@ async fn apply_routes(
         .validate()
         .map_err(|e| AppError::validation(request_id.clone(), e.to_string()))?;
 
-    let mut prepared = Vec::new();
-    for (name, service) in config.services {
-        let cfg = prepare_named(&name, service, &request_id)?;
-        prepared.push((name, Some(cfg)));
-    }
-
-    ensure_shared_policies(&state, &prepared, &request_id).await?;
-    ensure_no_route_conflicts(&state, &prepared, &request_id).await?;
+    let prepared =
+        check_upserts(&state, config.services.into_iter().collect(), &request_id).await?;
 
     let commits = commit(&state, prepared, &request_id).await?;
     let results = commits
@@ -447,9 +429,10 @@ async fn restore_revision(
         ));
     };
 
-    let overlay = vec![(name.clone(), Some(config))];
-    ensure_shared_policies(&state, &overlay, &request_id).await?;
-    let commits = commit(&state, overlay, &request_id).await?;
+    // A revision is restored as if it were put now: current url form, path
+    // form, shared rate limits and route conflicts all apply.
+    let prepared = check_upserts(&state, vec![(name, config)], &request_id).await?;
+    let commits = commit(&state, prepared, &request_id).await?;
     let commit = commits.into_iter().next().expect("one commit");
     let config = commit.config.expect("restore is not a delete");
     Ok((
@@ -529,6 +512,24 @@ fn config_parse_error(request_id: String, err: &impl std::fmt::Display) -> AppEr
     } else {
         AppError::invalid_request(request_id, format!("invalid route config: {msg}"))
     }
+}
+
+/// The one validation path for every write that upserts services (apply, put,
+/// restore): per-service config (url, paths, routes), shared rate limits
+/// against current state, and 409 route conflicts with other services.
+async fn check_upserts(
+    state: &AppState,
+    items: Vec<(String, ServiceConfig)>,
+    request_id: &str,
+) -> Result<Vec<(String, Option<ServiceConfig>)>, AppError> {
+    let mut prepared = Vec::with_capacity(items.len());
+    for (name, service) in items {
+        let cfg = prepare_named(&name, service, request_id)?;
+        prepared.push((name, Some(cfg)));
+    }
+    ensure_shared_policies(state, &prepared, request_id).await?;
+    ensure_no_route_conflicts(state, &prepared, request_id).await?;
+    Ok(prepared)
 }
 
 fn prepare_named(
