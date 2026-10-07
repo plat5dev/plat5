@@ -120,33 +120,66 @@ fn service_method_paths(svc: &ServiceConfig) -> impl Iterator<Item = (String, St
     .flat_map(|r| r.methods.iter().map(|m| (m.clone(), r.path.clone())))
 }
 
-/// Method+path pairs in `incoming` already owned by a different service in
-/// `existing` (or claimed by another incoming service). Services being applied
-/// replace their own current routes, so those never conflict.
-/// Returns sorted `"METHOD /path (owned by svc)"` lines.
+/// Matching shape of a path: every `{param}` becomes `{}`, literals are
+/// lowercased, and a trailing `/` is dropped. `/a/{x}` and `/a/{y}` share a
+/// shape; a literal segment never matches a parameter segment.
+pub fn path_shape(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    let mut rest = path;
+    while let Some(start) = rest.find('{') {
+        out.push_str(&rest[..start].to_ascii_lowercase());
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('}') else {
+            out.push_str(&rest[start..].to_ascii_lowercase());
+            rest = "";
+            break;
+        };
+        out.push_str("{}");
+        rest = &after[end + 1..];
+    }
+    out.push_str(&rest.to_ascii_lowercase());
+    if out.len() > 1 && out.ends_with('/') {
+        out.pop();
+    }
+    out
+}
+
+/// Routes in `incoming` whose method and path shape (see `path_shape`) are
+/// already owned by a different service in `existing` (or claimed by another
+/// incoming service). Services being applied replace their own current routes,
+/// so those never conflict, and shapes only clash for the same method.
+/// Returns sorted `"METHOD /path (owned by 'svc' as /their/path)"` lines.
 pub fn find_route_conflicts(
     existing: &HashMap<String, ServiceConfig>,
     incoming: &[(String, ServiceConfig)],
 ) -> Vec<String> {
-    let mut owners: HashMap<(String, String), &str> = HashMap::new();
+    let mut owners: HashMap<(String, String), (&str, String)> = HashMap::new();
     for (name, svc) in existing {
         if incoming.iter().any(|(n, _)| n == name) {
             continue;
         }
-        for key in service_method_paths(svc) {
-            owners.insert(key, name);
+        for (method, path) in service_method_paths(svc) {
+            owners.insert((method, path_shape(&path)), (name, path));
         }
     }
     let mut out = HashSet::new();
     for (name, svc) in incoming {
-        for key in service_method_paths(svc) {
+        for (method, path) in service_method_paths(svc) {
+            let key = (method, path_shape(&path));
             match owners.get(&key) {
-                Some(owner) if *owner != name => {
-                    out.insert(format!("{} {} (owned by '{}')", key.0, key.1, owner));
+                Some((owner, owner_path)) if *owner != name => {
+                    if *owner_path == path {
+                        out.insert(format!("{} {} (owned by '{}')", key.0, path, owner));
+                    } else {
+                        out.insert(format!(
+                            "{} {} (owned by '{}' as {})",
+                            key.0, path, owner, owner_path
+                        ));
+                    }
                 }
                 Some(_) => {}
                 None => {
-                    owners.insert(key, name);
+                    owners.insert(key, (name, path));
                 }
             }
         }
@@ -166,9 +199,7 @@ fn validate_service_url(service: &str, url: &str) -> Result<(), ConfigError> {
     };
     if url.trim().is_empty() {
         return Err(bad(
-            "service `url` is missing: add the service under `upstreams:` in plat5.yml, \
-             or set `url` in the routes file"
-                .to_string(),
+            format!("service `url` is missing: set `url` ({URL_FORM})"),
         ));
     }
     if url
@@ -189,18 +220,30 @@ fn validate_service_url(service: &str, url: &str) -> Result<(), ConfigError> {
             "service url '{url}' must not have a path or query ({URL_FORM})"
         )));
     }
-    let port_ok = rest
-        .rsplit_once(':')
-        .map(|(host, port)| {
-            !host.is_empty()
-                && !host.contains(['@', ' '])
-                && !port.is_empty()
-                && port.parse::<u16>().is_ok_and(|p| p != 0)
-        })
-        .unwrap_or(false);
-    if !port_ok {
+    if rest.contains('@') {
         return Err(bad(format!(
-            "service url '{url}' needs a host and an explicit port ({URL_FORM})"
+            "service url '{url}' must not contain credentials (user@host); \
+             the gateway sends no upstream auth ({URL_FORM})"
+        )));
+    }
+    let Some((host, port)) = rest.rsplit_once(':') else {
+        return Err(bad(format!(
+            "service url '{url}' needs an explicit port ({URL_FORM})"
+        )));
+    };
+    if host.is_empty() || host.contains(char::is_whitespace) {
+        return Err(bad(format!(
+            "service url '{url}' needs a host ({URL_FORM})"
+        )));
+    }
+    if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(bad(format!(
+            "service url '{url}' port '{port}' must be a number ({URL_FORM})"
+        )));
+    }
+    if !port.parse::<u32>().is_ok_and(|p| (1..=65535).contains(&p)) {
+        return Err(bad(format!(
+            "service url '{url}' port {port} is out of range (1-65535; {URL_FORM})"
         )));
     }
     Ok(())

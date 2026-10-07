@@ -310,6 +310,7 @@ fn validate_path_and_upstream(
         service: service.to_string(),
         reason: format!("{scope_name} route '{expanded_path}': {reason}"),
     })?;
+    validate_path_form(service, scope_name, expanded_path)?;
     let forbidden = scope_subject_fields(scope_name);
     for name in &params {
         if forbidden.contains(&name.as_str()) {
@@ -370,6 +371,48 @@ fn validate_path_and_upstream(
                 });
             }
         }
+    }
+    Ok(())
+}
+
+/// Paths are canonical: no trailing `/` (except `/` itself) and no uppercase
+/// letters outside `{params}`. Variants are rejected, not rewritten, so the
+/// stored path is exactly what was sent.
+fn validate_path_form(service: &str, scope_name: &str, path: &str) -> Result<(), ConfigError> {
+    let bad = |reason: String| ConfigError::InvalidRoute {
+        service: service.to_string(),
+        reason: format!("{scope_name} route '{path}' {reason}"),
+    };
+    if path.len() > 1 && path.ends_with('/') {
+        return Err(bad(format!(
+            "must not end with '/' (use '{}')",
+            path.trim_end_matches('/')
+        )));
+    }
+    let mut depth = 0usize;
+    let mut upper = false;
+    for c in path.chars() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            c if depth == 0 && c.is_ascii_uppercase() => upper = true,
+            _ => {}
+        }
+    }
+    if upper {
+        let mut fixed = String::with_capacity(path.len());
+        let mut depth = 0usize;
+        for c in path.chars() {
+            match c {
+                '{' => depth += 1,
+                '}' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            fixed.push(if depth == 0 { c.to_ascii_lowercase() } else { c });
+        }
+        return Err(bad(format!(
+            "must be lowercase outside {{params}} (use '{fixed}')"
+        )));
     }
     Ok(())
 }

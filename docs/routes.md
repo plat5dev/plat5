@@ -37,10 +37,14 @@ curl -sS -X POST http://localhost:5002/apply \
   --data-binary @routes.yml
 ```
 
-Validation is at **apply time**. Malformed config → `422 VALIDATION_ERROR`; nothing written.
+Validation is at **apply time**, and the same checks run on `PUT /services/{name}` and on revision restore (a restored revision must pass today's rules). Malformed config → `422 VALIDATION_ERROR`; nothing written.
 
-- Service `url` is required and must be exactly `http://host:port` (explicit port, no path or query), e.g. `http://my-service:3000`. `https://` → `422` saying TLS (https) upstreams aren't supported yet. Bare `host:port`, any other scheme, a missing port, or a path/query → `422 VALIDATION_ERROR` naming that form. Routes already stored with a bare `host:port` keep routing (the gateway strips the scheme) until re-applied. A missing `url` → `422` telling you to add the service under `upstreams:` in `plat5.yml`, or set `url` in the routes file.
-- A method+path may belong to only one service. If an incoming method+path is already owned by a **different** service, the whole apply is rejected with `409 ROUTE_CONFLICT`; the message lists each conflicting method+path and its current owner. Nothing is written. Re-applying a service's own routes replaces them and is allowed.
+- Service `url` is required and must be exactly `http://host:port` (explicit port, no path or query), e.g. `http://my-service:3000`. `https://` → `422` saying TLS (https) upstreams aren't supported yet. Bare `host:port`, any other scheme, a missing port, or a path/query → `422 VALIDATION_ERROR` naming that form. Routes already stored with a bare `host:port` keep routing (the gateway strips the scheme) until re-applied. `http://user@host:port` → `422` saying credentials aren't allowed; a port outside 1–65535 → `422` saying it is out of range. A missing `url` → `422` telling you to set `url` (the CLI catches this first and points at `upstreams:` in `plat5.yml`).
+- Paths are canonical and are **rejected, not rewritten**: no trailing `/` (except `/` itself) and no uppercase letters outside `{params}` (param names keep their case). `/user/profile/` and `/USER/profile` → `422` naming the canonical form (`/user/profile`). This applies to the full path after `route_prefix` is joined.
+- A route may belong to only one service, compared by **shape**: each `{param}` matches any other `{param}`, a literal segment matches only the same literal (a literal never matches a param). If an incoming method + shape is already owned by a **different** service, the whole apply is rejected with `409 ROUTE_CONFLICT`; the message lists each conflicting route and its current owner (and the owner's path when it differs, e.g. `GET /a/{x} (owned by 'a2' as /a/{y})`). Nothing is written.
+  - Only the **same method** conflicts: `GET /a/{x}` in one service and `POST /a/{y}` in another are fine.
+  - Literal vs param never conflicts: `/a/special` and `/a/{x}` can live in different services.
+  - Inside one service, shapes don't conflict: `POST /subscribers/{id}/subscriptions/change` and `GET /subscribers/{id}/subscriptions/{subscription_id}` apply cleanly. Re-applying a service's own routes replaces them and is allowed.
 
 After validation, all services in the batch commit in **one Postgres transaction** (each service gets a new revision). etcd projection follows; a reconciler retries if a put fails. `200` means desired state is recorded.
 
@@ -97,14 +101,14 @@ Same path, different per-verb `required_scopes` / `rate_limit` — nested `metho
                 window_seconds: 1
 ```
 
-`url` is whatever the **gateway** can reach (cluster DNS, public HTTPS, `host.docker.internal:PORT`, etc.). How you run the process is out of scope for Plat5.
+`url` is exactly `http://host:port`, where `host` is anything the **gateway** can reach (cluster DNS name, `host.docker.internal`, an IP). No `https://` (TLS upstreams aren't supported yet), no path, no query; anything else is `422`. How you run the process is out of scope for Plat5.
 
 ### Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `services` | `map<string, ServiceConfig>` | Top-level wrapper. Keys are service names. |
-| `url` | `string` | Upstream URL (hostname:port or absolute URL the gateway can dial). |
+| `url` | `string` | Upstream, exactly `http://host:port` (e.g. `http://my-service:3000`). |
 | `rate_limits` | `map<string, RateLimitPolicy>?` | Optional on the **service**. Named policies this service’s routes may reference. |
 | `public` | `ScopeConfig?` | No authentication. |
 | `user` | `ScopeConfig?` | User JWT or **user** API key. |
