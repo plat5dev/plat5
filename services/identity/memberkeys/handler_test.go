@@ -263,15 +263,20 @@ func TestRestrictedCallerCannotMintWiderMemberKey(t *testing.T) {
 		t.Fatalf("explicit empty must stay empty: %+v", narrowed.Scopes)
 	}
 
-	code, body = doJSONHeader(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa1/api-keys", `{"scopes":["admin"]}`, caller)
-	assertInsufficientScope(t, code, body, "admin")
-	code, body = doJSONHeader(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa1/api-keys", `{}`, caller)
-	if code != http.StatusCreated {
-		t.Fatalf("sa inherit: %d %s", code, body)
+	// The org address for a service account's keys manages the org: restricted callers are refused.
+	before := len(keys.keys)
+	for _, body := range []string{`{}`, `{"scopes":["projects:read"]}`} {
+		code, resp := doJSONHeader(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa1/api-keys", body, caller)
+		if code != http.StatusForbidden || !strings.Contains(string(resp), `"code":"RESTRICTED_CREDENTIAL"`) {
+			t.Fatalf("restricted sa key mint: %d %s", code, resp)
+		}
 	}
-	saKey := decodeCreate(t, body)
-	if saKey.Scopes == nil || len(*saKey.Scopes) != 1 || (*saKey.Scopes)[0] != "projects:read" {
-		t.Fatalf("sa scopes: %+v", saKey.Scopes)
+	if len(keys.keys) != before {
+		t.Fatalf("refused sa mint was stored")
+	}
+	code, body = doJSON(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa1/api-keys", `{}`)
+	if code != http.StatusCreated {
+		t.Fatalf("unrestricted sa mint: %d %s", code, body)
 	}
 	if keys.keys[len(keys.keys)-1].MemberID != "mem-sa" {
 		t.Fatalf("sa member: %+v", keys.keys[len(keys.keys)-1])
