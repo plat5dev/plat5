@@ -11,23 +11,25 @@ import (
 const TTL = time.Hour
 
 // Session is a short-lived credential for one user member in one org.
-// Not an API key: no name, no scopes column, no revoke.
+// Not an API key: no name, no revoke. Scopes nil = unrestricted; empty = no labels.
 type Session struct {
 	ID          string
 	MemberID    string
 	TokenPrefix string
 	TokenHash   string
+	Scopes      []string
 	ExpiresAt   time.Time
 	CreatedAt   time.Time
 }
 
-func New(memberID, token, prefix string, now time.Time) *Session {
+func New(memberID, token, prefix string, scopes []string, now time.Time) *Session {
 	now = now.UTC()
 	return &Session{
 		ID:          id.New(),
 		MemberID:    memberID,
 		TokenPrefix: apikey.DisplayPrefix(token, prefix),
 		TokenHash:   apikey.Hash(token),
+		Scopes:      scopes,
 		ExpiresAt:   now.Add(TTL),
 		CreatedAt:   now,
 	}

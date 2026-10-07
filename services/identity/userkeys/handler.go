@@ -1,6 +1,7 @@
 package userkeys
 
 import (
+	"context"
 	stderrors "errors"
 	"strings"
 
@@ -12,8 +13,15 @@ import (
 	"github.com/plat5dev/plat5/identity/metrics"
 )
 
+type keyStore interface {
+	Create(ctx context.Context, key *APIKey) error
+	GetByHash(ctx context.Context, keyHash string) (*APIKey, error)
+	List(ctx context.Context, userID string, limit int, startingAfter string) ([]*APIKey, bool, error)
+	Revoke(ctx context.Context, userID, keyID string) (*APIKey, error)
+}
+
 type Handler struct {
-	store  *Store
+	store  keyStore
 	prefix string
 }
 
@@ -74,6 +82,10 @@ func (h *Handler) Create(c fiber.Ctx) error {
 	scopes, err := apikey.NormalizeScopes(req.Scopes)
 	if err != nil {
 		return mapScopeError(err)
+	}
+	scopes, err = httpx.ConstrainMint(c, scopes)
+	if err != nil {
+		return httpx.MapMintScopes(ctx, err)
 	}
 
 	plaintext, err := apikey.Generate(h.prefix)

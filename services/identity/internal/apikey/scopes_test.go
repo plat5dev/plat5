@@ -1,6 +1,7 @@
 package apikey
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -65,6 +66,93 @@ func TestNormalizeScopesRejects(t *testing.T) {
 	_, err := NormalizeScopes(&tooMany)
 	if err != ErrScopeTooMany {
 		t.Errorf("too many: got %v", err)
+	}
+}
+
+func TestConstrainScopes(t *testing.T) {
+	t.Run("unrestricted keeps the request", func(t *testing.T) {
+		if got, err := ConstrainScopes(nil, nil); err != nil || got != nil {
+			t.Fatalf("nil request: got %#v err %v", got, err)
+		}
+		empty := []string{}
+		got, err := ConstrainScopes(nil, empty)
+		if err != nil || got == nil || len(got) != 0 {
+			t.Fatalf("empty request: got %#v err %v", got, err)
+		}
+		got, err = ConstrainScopes(nil, []string{"admin"})
+		if err != nil || len(got) != 1 || got[0] != "admin" {
+			t.Fatalf("list request: got %#v err %v", got, err)
+		}
+	})
+
+	t.Run("restricted inherit is never null", func(t *testing.T) {
+		caller := []string{"projects:read", "projects:write"}
+		got, err := ConstrainScopes(caller, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got == nil || len(got) != 2 || got[0] != "projects:read" || got[1] != "projects:write" {
+			t.Fatalf("inherit: %#v", got)
+		}
+		caller[0] = "mutated"
+		if got[0] != "projects:read" {
+			t.Fatal("inherit must copy")
+		}
+
+		none := []string{}
+		got, err = ConstrainScopes(none, nil)
+		if err != nil || got == nil || len(got) != 0 {
+			t.Fatalf("empty inherit: %#v err %v", got, err)
+		}
+	})
+
+	t.Run("subset keeps the request", func(t *testing.T) {
+		caller := []string{"projects:read", "projects:write"}
+		got, err := ConstrainScopes(caller, []string{"projects:write"})
+		if err != nil || len(got) != 1 || got[0] != "projects:write" {
+			t.Fatalf("subset: %#v err %v", got, err)
+		}
+		got, err = ConstrainScopes(caller, []string{})
+		if err != nil || got == nil || len(got) != 0 {
+			t.Fatalf("explicit empty is a subset: %#v err %v", got, err)
+		}
+	})
+
+	t.Run("missing labels", func(t *testing.T) {
+		caller := []string{"projects:read"}
+		_, err := ConstrainScopes(caller, []string{"projects:read", "admin", "billing:write"})
+		var insufficient *InsufficientScopeError
+		if !errors.As(err, &insufficient) {
+			t.Fatalf("err: %v", err)
+		}
+		if len(insufficient.Missing) != 2 || insufficient.Missing[0] != "admin" || insufficient.Missing[1] != "billing:write" {
+			t.Fatalf("missing: %#v", insufficient.Missing)
+		}
+
+		_, err = ConstrainScopes([]string{}, []string{"admin"})
+		if !errors.As(err, &insufficient) || len(insufficient.Missing) != 1 || insufficient.Missing[0] != "admin" {
+			t.Fatalf("empty caller: %v", err)
+		}
+	})
+}
+
+func TestParseCallerScopes(t *testing.T) {
+	got, err := ParseCallerScopes("[]")
+	if err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("empty marker: %#v err %v", got, err)
+	}
+	got, err = ParseCallerScopes("")
+	if err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("blank: %#v err %v", got, err)
+	}
+	got, err = ParseCallerScopes(" projects:read, projects:write ")
+	if err != nil || len(got) != 2 || got[0] != "projects:read" || got[1] != "projects:write" {
+		t.Fatalf("labels: %#v err %v", got, err)
+	}
+	for _, raw := range []string{"Admin", "projects:read,projects:read", "a,,b", "[] ,projects:read"} {
+		if _, err := ParseCallerScopes(raw); err != ErrCallerScopes {
+			t.Errorf("%q: got %v", raw, err)
+		}
 	}
 }
 

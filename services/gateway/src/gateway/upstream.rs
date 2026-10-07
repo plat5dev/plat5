@@ -20,10 +20,45 @@ use super::rewrite::{self, RewriteError, SubjectRef};
 
 const CLIENT_CREDENTIAL_HEADERS: &[&str] = &["Authorization", "X-API-Key"];
 
+/// Caller scopes for upstream. Absent = unrestricted. Present = restricted.
+/// Empty list is the value `[]`. Otherwise comma-separated labels.
+const CREDENTIAL_SCOPES_HEADER: &str = "X-Plat5-Scopes";
+
 pub fn strip_client_credentials(req: &mut RequestHeader) {
     for name in CLIENT_CREDENTIAL_HEADERS {
         req.remove_header(*name);
     }
+}
+
+/// Drop any client-supplied scopes header, then set the admitted credential's scopes.
+/// None leaves the header absent (JWT, unrestricted key or session, public).
+/// Some, including empty, sets it. Failing to set a restricted list is a proxy error:
+/// an absent header would look unrestricted upstream.
+pub fn apply_credential_scopes(
+    req: &mut RequestHeader,
+    scopes: Option<&[String]>,
+) -> std::result::Result<(), RewriteError> {
+    req.remove_header(CREDENTIAL_SCOPES_HEADER);
+    let Some(scopes) = scopes else {
+        return Ok(());
+    };
+    let value = encode_credential_scopes(scopes);
+    req.insert_header(CREDENTIAL_SCOPES_HEADER, value.as_str())
+        .map_err(|err| {
+            warn!(
+                error_kind = ErrorKind::Internal.as_str(),
+                error_message = %err,
+                "failed to set credential scopes header"
+            );
+            RewriteError::Internal
+        })
+}
+
+fn encode_credential_scopes(scopes: &[String]) -> String {
+    if scopes.is_empty() {
+        return "[]".to_string();
+    }
+    scopes.join(",")
 }
 
 pub fn record_admission_span(ctx: &GatewayContext, admission: &Admission) {
@@ -65,6 +100,7 @@ pub fn build_and_store_upstream_peer(
     read_timeout: Duration,
 ) -> std::result::Result<(), RewriteError> {
     strip_client_credentials(session.req_header_mut());
+    apply_credential_scopes(session.req_header_mut(), admission.key_scopes())?;
 
     if let Some(template) = route.upstream.as_deref() {
         let upstream_path = rewrite::substitute(template, params, subject_ref(admission))?;
@@ -201,6 +237,41 @@ mod tests {
                 .get("X-Request-ID")
                 .and_then(|v| v.to_str().ok()),
             Some("req-1")
+        );
+    }
+
+    #[test]
+    fn apply_credential_scopes_replaces_client_value() {
+        let mut req = RequestHeader::build("POST", b"/member/api-keys", None).unwrap();
+        req.insert_header("X-Plat5-Scopes", "admin").unwrap();
+        let scopes = ["projects:read".to_string(), "projects:write".to_string()];
+        apply_credential_scopes(&mut req, Some(scopes.as_slice())).unwrap();
+        assert_eq!(
+            req.headers
+                .get("X-Plat5-Scopes")
+                .and_then(|v| v.to_str().ok()),
+            Some("projects:read,projects:write")
+        );
+    }
+
+    #[test]
+    fn apply_credential_scopes_absent_when_unrestricted() {
+        let mut req = RequestHeader::build("POST", b"/user/api-keys", None).unwrap();
+        req.insert_header("X-Plat5-Scopes", "admin").unwrap();
+        apply_credential_scopes(&mut req, None).unwrap();
+        assert!(req.headers.get("X-Plat5-Scopes").is_none());
+    }
+
+    #[test]
+    fn apply_credential_scopes_empty_list_is_present() {
+        let mut req = RequestHeader::build("POST", b"/member/api-keys", None).unwrap();
+        let scopes: Vec<String> = vec![];
+        apply_credential_scopes(&mut req, Some(scopes.as_slice())).unwrap();
+        assert_eq!(
+            req.headers
+                .get("X-Plat5-Scopes")
+                .and_then(|v| v.to_str().ok()),
+            Some("[]")
         );
     }
 

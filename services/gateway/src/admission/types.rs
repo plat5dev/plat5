@@ -7,7 +7,7 @@ pub struct AuthContext {
     pub user_id: String,
     pub auth_type: AuthType,
     pub kid: Option<String>,
-    /// API key granted scopes. None = JWT or unrestricted key (skip route required_scopes).
+    /// Granted scopes. None = JWT or unrestricted key (skip route required_scopes).
     pub key_scopes: Option<Vec<String>>,
 }
 
@@ -33,8 +33,8 @@ pub enum Admission {
 }
 
 impl Admission {
-    /// Granted API-key scopes when the credential is a restricted key.
-    /// None = JWT, unrestricted key, session (`scopes: null`), or public — skip required_scopes.
+    /// Granted scopes when the credential is restricted (non-null list, including empty).
+    /// None = JWT, unrestricted key, unrestricted session, or public — skip required_scopes.
     pub fn key_scopes(&self) -> Option<&[String]> {
         match self {
             Admission::User {
