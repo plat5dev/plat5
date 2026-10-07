@@ -4,7 +4,7 @@ Rust reverse proxy built on Pingora. Handles request routing, JWT / API key / me
 
 ## Local Development
 
-Requires the Rust toolchain from `rust-toolchain.toml` (or default stable). Install via `rustup`.
+Requires stable Rust (install via `rustup`) and `protoc` (`protobuf-compiler`, needed by the etcd client build).
 
 ```bash
 cd services/gateway
@@ -87,5 +87,5 @@ The gateway loads route configuration from etcd (watch). Writes go through **rou
 
 ## Span Status
 
-- **Client errors** (400, 401, 403, 404, 413, 429): span status `Ok`.
+- **Client errors** (400, 401, 403, 404, 413, 429): span status unset.
 - **Unexpected failures** (5xx, proxy/network errors): span status `Error`, set `error.kind`.
