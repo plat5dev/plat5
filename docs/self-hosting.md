@@ -44,7 +44,7 @@ cp .env.template .env   # set secrets + AUTH_VERSION
 docker compose -f docker-compose.prod.yml --env-file .env up -d
 ```
 
-Required: `POSTGRES_PASSWORD`, `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`. Prod (`DEPLOYMENT_ENV=prod`) fails closed without all three SMTP vars. Mail is **not** bundled — Resend/SES, or a host MTA.
+Required: `POSTGRES_PASSWORD`, `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`. Without all three SMTP vars the issuer still starts, but sending a login code fails (in every environment). Never set `AUTH_DEV_MODE` here: it logs login codes and enables `POST /dev/token`. Mail is **not** bundled — Resend/SES, or a host MTA.
 
 If the issuer reaches SMTP on the Docker host, Auth's prod compose already maps `host.docker.internal` on the issuer (`extra_hosts: host.docker.internal:host-gateway`):
 
