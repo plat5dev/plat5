@@ -25,7 +25,7 @@ Services expose Prometheus `/metrics` on the internal port ([`telemetry.md`](tel
 | `identity` | Plat5 identity backend: `identity` |
 | `edge` | Gateway (`gateway`), route registry (`route-registry`) |
 | `api` | Business API services — **not** Plat5 identity |
-| `infra` | Dependencies (etcd, postgres) |
+| `infra` | Dependencies (etcd, postgres, valkey) |
 
 ### Platform service labels
 

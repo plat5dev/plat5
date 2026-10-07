@@ -295,7 +295,7 @@ Subject fill and service rules: [`gateway-contract.md`](gateway-contract.md). La
 
 ### Service Health vs Route Existence
 
-Decoupled. Service down → gateway still knows the route → **503**. Missing route (nothing registered that path) → **404**.
+Decoupled. Service down → gateway still knows the route → **502** `SERVICE_UNAVAILABLE`. Missing route (nothing registered that path) → **404**.
 
 ## `organization` and `member`
 

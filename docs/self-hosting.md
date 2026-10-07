@@ -46,13 +46,7 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d
 
 Required: `POSTGRES_PASSWORD`, `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`. Prod (`DEPLOYMENT_ENV=prod`) fails closed without all three SMTP vars. Mail is **not** bundled — Resend/SES, or a host MTA.
 
-If the issuer reaches SMTP on the Docker host:
-
-```yaml
-# extra_hosts on the issuer service
-extra_hosts:
-  - "host.docker.internal:host-gateway"
-```
+If the issuer reaches SMTP on the Docker host, Auth's prod compose already maps `host.docker.internal` on the issuer (`extra_hosts: host.docker.internal:host-gateway`):
 
 ```
 SMTP_HOST=host.docker.internal

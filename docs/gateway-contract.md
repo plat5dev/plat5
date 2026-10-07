@@ -74,7 +74,7 @@ services:
 
 `methods` may be a list (route-level `required_scopes` / `rate_limit` apply to every verb) or a nested map (per-verb). Nested maps are expanded at apply into one etcd row per verb; the gateway always sees `methods` as a string array. Full schema: [`routes.md`](routes.md).
 
-Services publish via the **route-registry** admin API (`POST /apply`). Gateway loads at startup and watches etcd. Route existence is decoupled from service health — a downed service returns 503, not 404.
+Services publish via the **route-registry** admin API (`POST /apply`). Gateway loads at startup and watches etcd. Route existence is decoupled from service health — a downed service returns 502 `SERVICE_UNAVAILABLE`, not 404.
 
 ### API key `required_scopes`
 
@@ -134,9 +134,9 @@ Prefix dispatch happens before the identity call. One member-credential result (
 
 1. Bad, missing, or wrong credential → **401** `UNAUTHORIZED`
 2. Validate unavailable → **503** `SERVICE_UNAVAILABLE`
-3. Admitted → substitute `{subject.*}` in `upstream`
-4. Then `required_scopes` (restricted keys only; session `scopes: null` skips) → **403** `FORBIDDEN` on miss
-5. Then per-route rate limit → **429** `RATE_LIMITED`
+3. Admitted → `required_scopes` (restricted keys only; session `scopes: null` skips) → **403** `FORBIDDEN` on miss
+4. Then per-route rate limit → **429** `RATE_LIMITED`
+5. Then substitute `{subject.*}` and `{path.*}` in `upstream` (bad path param → **400**, bad subject id → **500**)
 
 Gateway chooses validate URL by **wire prefix** before calling identity. Prefixes come from `APIKEY_BRAND` (same env as identity; unset → `plat5`). Contract: [`identity.md`](identity.md).
 
@@ -228,7 +228,8 @@ Revoke, suspend, and remove are visible at the edge when the TTL expires.
 | Route not registered | `NOT_FOUND` (404) |
 | Request body too large | `PAYLOAD_TOO_LARGE` (413) |
 | Rate limit (admitted route or failed-auth IP) | `RATE_LIMITED` (429); `Retry-After`; admitted limited routes also `X-RateLimit-*` |
-| Upstream or auth infra down (JWKS, Valkey, key or session validate) | `SERVICE_UNAVAILABLE` (503); proxy upstream failure may surface as **502** with the same `SERVICE_UNAVAILABLE` code |
+| Auth infra down (JWKS, Valkey, key or session validate) | `SERVICE_UNAVAILABLE` (503) |
+| Upstream unreachable, timed out, or failing mid-proxy | **502** with the `SERVICE_UNAVAILABLE` code |
 | Path param is not one segment | `INVALID_REQUEST` (400) |
 | Subject id is not one segment | `INTERNAL_ERROR` (500) |
 | Gateway internal failure mid-proxy | `INTERNAL_ERROR` (500) |
