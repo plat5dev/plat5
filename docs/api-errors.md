@@ -49,7 +49,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `INSUFFICIENT_SCOPE` | 403 | `invalid_request_error` | This credential can't grant that scope. | `{ scopes: string[] }` — labels the mint asked for and the caller does not have |
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
-| `ROUTE_CONFLICT` | 409 | `invalid_request_error` | (route-registry apply) Message lists each conflicting method+path and its owner service. | — |
+| `ROUTE_CONFLICT` | 409 | `invalid_request_error` | (route-registry apply, put, restore) Message lists each conflicting route (same method, same path shape) and its owner service. | — |
 | `PAYLOAD_TOO_LARGE` | 413 | `invalid_request_error` | Request body is too large. | `{ max_size_bytes }` |
 | `RATE_LIMITED` | 429 | `api_error` | Too many requests. Try again in a moment. | `{ retry_after_seconds }` |
 | `INTERNAL_ERROR` | 500 | `api_error` | An unexpected error occurred. | `null` |

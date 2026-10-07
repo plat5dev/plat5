@@ -37,10 +37,14 @@ curl -sS -X POST http://localhost:5002/apply \
   --data-binary @routes.yml
 ```
 
-Validation is at **apply time**. Malformed config → `422 VALIDATION_ERROR`; nothing written.
+Validation is at **apply time**, and the same checks run on `PUT /services/{name}` and on revision restore (a restored revision must pass today's rules). Malformed config → `422 VALIDATION_ERROR`; nothing written.
 
 - Service `url` is required and must be exactly `http://host:port` (explicit port, no path or query), e.g. `http://my-service:3000`. `https://` → `422` saying TLS (https) upstreams aren't supported yet. Bare `host:port`, any other scheme, a missing port, or a path/query → `422 VALIDATION_ERROR` naming that form. Routes already stored with a bare `host:port` keep routing (the gateway strips the scheme) until re-applied. A missing `url` → `422` telling you to add the service under `upstreams:` in `plat5.yml`, or set `url` in the routes file.
-- A method+path may belong to only one service. If an incoming method+path is already owned by a **different** service, the whole apply is rejected with `409 ROUTE_CONFLICT`; the message lists each conflicting method+path and its current owner. Nothing is written. Re-applying a service's own routes replaces them and is allowed.
+- Paths are canonical and are **rejected, not rewritten**: no trailing `/` (except `/` itself) and no uppercase letters outside `{params}` (param names keep their case). `/user/profile/` and `/USER/profile` → `422` naming the canonical form (`/user/profile`). This applies to the full path after `route_prefix` is joined.
+- A route may belong to only one service, compared by **shape**: each `{param}` matches any other `{param}`, a literal segment matches only the same literal (a literal never matches a param). If an incoming method + shape is already owned by a **different** service, the whole apply is rejected with `409 ROUTE_CONFLICT`; the message lists each conflicting route and its current owner (and the owner's path when it differs, e.g. `GET /a/{x} (owned by 'a2' as /a/{y})`). Nothing is written.
+  - Only the **same method** conflicts: `GET /a/{x}` in one service and `POST /a/{y}` in another are fine.
+  - Literal vs param never conflicts: `/a/special` and `/a/{x}` can live in different services.
+  - Inside one service, shapes don't conflict: `POST /subscribers/{id}/subscriptions/change` and `GET /subscribers/{id}/subscriptions/{subscription_id}` apply cleanly. Re-applying a service's own routes replaces them and is allowed.
 
 After validation, all services in the batch commit in **one Postgres transaction** (each service gets a new revision). etcd projection follows; a reconciler retries if a put fails. `200` means desired state is recorded.
 
