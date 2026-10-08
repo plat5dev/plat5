@@ -23,7 +23,7 @@ Plat5 owns **opaque user ids** (as strings from the gateway), API keys, member s
 | Isolation boundary | **Organization** | Do not call it tenant. |
 | Org principal | **Member** | User *or* service account in an org; wire id `member_id` |
 | What a member holds | **Role** | Deployment-defined slug on a member; its labels come from the roles file ([`roles.md`](roles.md)). Plat5 names no roles. |
-| Route requirement | **Scope label** | Opaque `[a-z0-9:._-]+`. Routes require them; roles grant them. Keys and sessions carry their member's. |
+| Route requirement | **Label** | Opaque `[a-z0-9:._-]+`. Routes require them (`required_labels`); roles grant them. Keys and sessions carry their member's. Not `scope`: route `scope` is `public` / `user` / `organization` / `member`. |
 | Non-human org identity | **Service account** | Created under an organization; always has a member row |
 | Credential | **API key** | User-scoped or member-scoped |
 | Short-lived org credential | **Member session** | One active user member, one org. Not an API key. |
