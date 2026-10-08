@@ -57,8 +57,6 @@ Validation (**422**) and conflict (**409**) stay where the data is wrong. Identi
 
 Pagination: [`lists.md`](lists.md). `limit`, `starting_after`, `has_more`, sort `id` ascending.
 
-`added_by`, `created_by`, and `created_by_user_id` are not inferred. The proxy sends them in the body when it wants them stored. Omitted or blank means null.
-
 ### Memberships
 
 Active **user** memberships only: not service accounts, not `suspended`, not `removed`.
@@ -112,7 +110,7 @@ Create **201** also includes `"key": "{brand}-sk-1-…"` once.
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/users/{user_id}/organizations` | Create. Body `{ "name", "slug?" }`. Inserts an **active** member for that user with `creator_role`. `added_by` is null. |
+| `POST` | `/users/{user_id}/organizations` | Create. Body `{ "name", "slug?" }`. Inserts an **active** member for that user with `creator_role`. |
 | `GET` | `/organizations` | Every organization. |
 | `GET` | `/organizations/{organization_id}` | **404** if missing |
 | `PATCH` | `/organizations/{organization_id}` | Name and slug. Slug uniqueness stays. |
@@ -143,7 +141,7 @@ Create **201** also includes `"key": "{brand}-sk-1-…"` once.
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/organizations/{organization_id}/members` | Non-removed members. Unknown org → **404**. Empty org → empty page. |
-| `POST` | `/organizations/{organization_id}/members` | Body `{ "user_id", "role?", "added_by?" }`. Immediate `active`. `role` omitted → `default_role`. |
+| `POST` | `/organizations/{organization_id}/members` | Body `{ "user_id", "role?" }`. Immediate `active`. `role` omitted → `default_role`. |
 
 A member has two addresses, like a service account. Both read and write the same row.
 
@@ -172,7 +170,7 @@ Org address:
 
 Who may assign a role, and the last `creator_role` holder: [`roles.md`](roles.md).
 
-`POST` adds a **user** member (immediately `active`). A non-removed duplicate is **409** `CONFLICT` (`field` is `user_id`). A `removed` row for that user is revived: same member id, `active`, `role` and `added_by` from the body (`role` omitted → `default_role`). Member keys are not revoked on remove, so a revive re-admits those keys.
+`POST` adds a **user** member (immediately `active`). A non-removed duplicate is **409** `CONFLICT` (`field` is `user_id`). A `removed` row for that user is revived: same member id, `active`, `role` from the body (omitted → `default_role`). Member keys are not revoked on remove, so a revive re-admits those keys.
 
 Service accounts are created via the service-accounts API (member row included). Invites are a separate resource, below.
 
@@ -191,13 +189,12 @@ Suspending the last active member is allowed. The org still has a member.
   "service_account_id": null,
   "role": "member",
   "status": "active",
-  "added_by": null,
   "created_at": "...",
   "updated_at": "..."
 }
 ```
 
-`principal` is `"user"` or `"service_account"`. Exactly one of `user_id` / `service_account_id` is non-null. `role` is `string | null`: `null` when roles are off ([`roles.md`](roles.md#the-model)). `added_by` is null unless sent.
+`principal` is `"user"` or `"service_account"`. Exactly one of `user_id` / `service_account_id` is non-null. `role` is `string | null`: `null` when roles are off ([`roles.md`](roles.md#the-model)).
 
 ### Invites
 
@@ -209,7 +206,7 @@ List, redeem, and revoke expire lazily: if `expires_at` is in the past and statu
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/organizations/{organization_id}/invites` | Body `{ "email?", "role?", "expires_in_seconds?", "max_uses?", "created_by?" }`. Returns `token`. Unknown org → **404**. `role` omitted → `default_role`. |
+| `POST` | `/organizations/{organization_id}/invites` | Body `{ "email?", "role?", "expires_in_seconds?", "max_uses?" }`. Returns `token`. Unknown org → **404**. `role` omitted → `default_role`. |
 | `GET` | `/organizations/{organization_id}/invites` | `token` included while `active`. Unknown org → **404**. |
 | `DELETE` | `/organizations/{organization_id}/invites/{invite_id}` | Revoke. Idempotent. Status `revoked`, `token` null. Hash stays. |
 | `POST` | `/users/{user_id}/invites/redeem` | Body `{ "token" }`. Inserts an **active** member for that user. Already a member on a still-`active` token → **200** idempotent (counts as a use). A `removed` row is revived (same member id). Unknown token → **404** `NOT_FOUND` (no org leak). Redeemed / revoked / expired → **409** `CONFLICT` (`field` is `status`, `value` is the terminal status). |
@@ -217,14 +214,14 @@ List, redeem, and revoke expire lazily: if `expires_at` is in the past and statu
 #### Create body
 
 ```json
-{ "email": "a@b.com", "role": "member", "expires_in_seconds": 604800, "max_uses": 1, "created_by": "..." }
+{ "email": "a@b.com", "role": "member", "expires_in_seconds": 604800, "max_uses": 1 }
 ```
 
-`role` is checked at create, not at redeem. `email` is optional display metadata; it is **not** mailed. `expires_in_seconds` default 7 days, min 60, max 30 days. `max_uses` omitted → 1. JSON `null` → unlimited. `0` and negatives → **422**. `created_by` omitted or blank → null.
+`role` is checked at create, not at redeem. `email` is optional display metadata; it is **not** mailed. `expires_in_seconds` default 7 days, min 60, max 30 days. `max_uses` omitted → 1. JSON `null` → unlimited. `0` and negatives → **422**.
 
 Token prefix `inv_`. `token_hash` is SHA-256 hex. `use_count` increments on successful redeem. When `use_count` reaches `max_uses`, status becomes `redeemed` and `token` is nulled. Unlimited (`max_uses` null) stays `active` with `token`.
 
-Redeem copies `created_by` onto the new or revived member's `added_by`, and the invite's `role` onto its `role`. A slug since removed from the roles file is copied as-is and grants nothing. Already a member: redeem does not change the existing role.
+Redeem copies the invite's `role` onto the new or revived member's `role`. A slug since removed from the roles file is copied as-is and grants nothing. Already a member: redeem does not change the existing role.
 
 #### Create / list row
 
@@ -240,7 +237,6 @@ Redeem copies `created_by` onto the new or revived member's `added_by`, and the 
   "max_uses": 1,
   "use_count": 0,
   "expires_at": "...",
-  "created_by": null,
   "created_at": "..."
 }
 ```
@@ -255,13 +251,11 @@ A service account is the org's. It is not tied to the member who created it: its
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/organizations/{organization_id}/service-accounts` | Body `{ "name", "role?", "created_by_user_id?" }`. Unknown org → **404**. `role` omitted → `service_account_default_role`, or `default_role` when that is unset. |
+| `POST` | `/organizations/{organization_id}/service-accounts` | Body `{ "name", "role?" }`. Unknown org → **404**. `role` omitted → `service_account_default_role`, or `default_role` when that is unset. |
 | `GET` | `/organizations/{organization_id}/service-accounts` | Non-removed. Unknown org → **404**. |
 | `GET` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | **404** if missing, wrong org, or member `removed` |
 | `PATCH` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | Body `{ "name" }`. Same **404** as get. |
 | `DELETE` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | Soft-removes the member. Same **404** as get. Last non-removed member → **422**. Last `creator_role` holder → **422**. |
-
-The member row's `added_by` is null. `created_by_user_id` is null unless sent. It is attribution only and grants nothing.
 
 Lifecycle and role are the member row. Suspend, re-enable, or change role at the org address, `PATCH /organizations/{organization_id}/members/{member_id}`, with the service account's `member_id`. A removed service account is not addressable here. Re-entry is not a service-account create; the row remains.
 
@@ -275,7 +269,6 @@ Lifecycle and role are the member row. Suspend, re-enable, or change role at the
   "name": "deploy-bot",
   "role": "member",
   "status": "active",
-  "created_by_user_id": null,
   "created_at": "...",
   "updated_at": "..."
 }
@@ -453,14 +446,14 @@ No `user_id`. `labels` is the member's role labels, same as a member key. Gatewa
 organizations
 members
   user_id XOR service_account_id
-  role?, status, added_by, …
+  role?, status, …
   unique (organization_id, user_id) where user_id is not null
   unique (service_account_id) where service_account_id is not null
 service_accounts
   organization_id
-  name, created_by_user_id, …
+  name, …
 organization_invites   -- token while active; token_hash always
-  organization_id, email?, role?, token?, token_hash, status, max_uses, use_count, expires_at, created_by?, …
+  organization_id, email?, role?, token?, token_hash, status, max_uses, use_count, expires_at, …
 
 user_api_keys          -- person credentials; wire {brand}-sk-1-
   user_id, name, key_prefix, key_hash, revoked_at, …
@@ -475,8 +468,6 @@ Keys and sessions hold no labels of their own. Member key and session validate r
 Independent tables, independent packages (`userkeys` / `memberkeys` / `sessions`), independent validate endpoints. Not one polymorphic credential system.
 
 No IdP user table and no FK to an external directory. `user_id` values are opaque strings.
-
-`organization_invites.created_by` is nullable. `members.added_by` and `service_accounts.created_by_user_id` are nullable.
 
 `members.role` and `organization_invites.role` are nullable `TEXT` slugs. No `CHECK` constraint: the roles file gives them meaning, and identity checks the slug against it on write. `NULL` while roles are off. With roles on, writes always set a role.
 
@@ -510,7 +501,7 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - Role names or meanings in identity code. The deployment's roles file names roles and grants their labels.
 - More than one role per member, per-org custom roles, or reloading the roles file without a restart
 - Caller checks of any kind: a grant cap on roles, on acting on a member, or on minting keys and sessions
-- Inferring `added_by` / `created_by` / `created_by_user_id`
+- Attribution: who added a member, created an invite, or created a service account
 - Key or session labels, or default-deny on unlabeled routes
 - A service account tied to the member who created it
 - Auto-publishing these public routes — the operator applies a catalog
@@ -520,4 +511,4 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - A service-account key table, prefix, or validate endpoint (those keys are member keys)
 - `/organizations/{organization_id}/members/{member_id}/api-keys` (that is acting on another member; service-account keys use the service-account id)
 - `user_id` on session validate
-- A `labels` field on session mint (the session carries the member's role)
+- A `labels` field in the session mint body to narrow a session (the session carries the member's role)

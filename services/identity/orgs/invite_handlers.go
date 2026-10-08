@@ -32,7 +32,6 @@ type CreateInviteRequest struct {
 	Email            string  `json:"email"`
 	Role             *string `json:"role"`
 	ExpiresInSeconds *int    `json:"expires_in_seconds"`
-	CreatedBy        *string `json:"created_by"`
 }
 
 type InviteResponse struct {
@@ -46,7 +45,6 @@ type InviteResponse struct {
 	MaxUses        *int    `json:"max_uses"`
 	UseCount       int     `json:"use_count"`
 	ExpiresAt      string  `json:"expires_at"`
-	CreatedBy      *string `json:"created_by"`
 	CreatedAt      string  `json:"created_at"`
 }
 
@@ -96,11 +94,6 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 		}
 	}
 
-	createdBy, err := optionalUserID(req.CreatedBy, "created_by")
-	if err != nil {
-		return err
-	}
-
 	email, err := ParseInviteEmail(req.Email)
 	if err != nil {
 		return err
@@ -137,7 +130,6 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 		Status:         InviteStatusActive,
 		MaxUses:        maxUses,
 		UseCount:       0,
-		CreatedBy:      createdBy,
 		ExpiresAt:      now.Add(ttl),
 		CreatedAt:      now,
 	}
@@ -241,7 +233,6 @@ func (h *Handler) toInviteResponse(inv *Invite, includeToken bool) InviteRespons
 		MaxUses:        inv.MaxUses,
 		UseCount:       inv.UseCount,
 		ExpiresAt:      httpx.FormatTime(inv.ExpiresAt),
-		CreatedBy:      inv.CreatedBy,
 		CreatedAt:      httpx.FormatTime(inv.CreatedAt),
 	}
 	if includeToken && inv.Token != nil && inv.Status == InviteStatusActive {

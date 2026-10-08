@@ -29,20 +29,6 @@ func (h *Handler) requireOrganization(ctx context.Context, orgID string) error {
 	return nil
 }
 
-func optionalUserID(raw *string, path string) (*string, error) {
-	if raw == nil {
-		return nil, nil
-	}
-	id := strings.TrimSpace(*raw)
-	if id == "" {
-		return nil, nil
-	}
-	if len(id) > MaxUserIDLen {
-		return nil, errors.FieldError(path, "That user ID is too long.")
-	}
-	return &id, nil
-}
-
 func requireName(raw, path string, maxLen int) (string, error) {
 	name := strings.TrimSpace(raw)
 	if name == "" {

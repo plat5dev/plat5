@@ -13,9 +13,8 @@ import (
 )
 
 type CreateMemberRequest struct {
-	UserID  string  `json:"user_id"`
-	Role    *string `json:"role"`
-	AddedBy *string `json:"added_by"`
+	UserID string  `json:"user_id"`
+	Role   *string `json:"role"`
 }
 
 // UpdateMemberRequest is the self address. It does not change role.
@@ -37,7 +36,6 @@ type MemberResponse struct {
 	ServiceAccountID *string `json:"service_account_id"`
 	Role             *string `json:"role"`
 	Status           string  `json:"status"`
-	AddedBy          *string `json:"added_by"`
 	CreatedAt        string  `json:"created_at"`
 	UpdatedAt        string  `json:"updated_at"`
 }
@@ -95,10 +93,6 @@ func (h *Handler) CreateMember(c fiber.Ctx) error {
 	if len(targetUser) > MaxUserIDLen {
 		return errors.FieldError("user_id", "That user ID is too long.")
 	}
-	addedBy, err := optionalUserID(req.AddedBy, "added_by")
-	if err != nil {
-		return err
-	}
 	role, err := h.roles.Choose(req.Role)
 	if err != nil {
 		return err
@@ -111,7 +105,6 @@ func (h *Handler) CreateMember(c fiber.Ctx) error {
 		UserID:         &targetUser,
 		Role:           role,
 		Status:         StatusActive,
-		AddedBy:        addedBy,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
@@ -290,7 +283,6 @@ func (h *Handler) toMemberResponse(m *Member) MemberResponse {
 		ServiceAccountID: m.ServiceAccountID,
 		Role:             m.Role,
 		Status:           string(m.Status),
-		AddedBy:          m.AddedBy,
 		CreatedAt:        httpx.FormatTime(m.CreatedAt),
 		UpdatedAt:        httpx.FormatTime(m.UpdatedAt),
 	}

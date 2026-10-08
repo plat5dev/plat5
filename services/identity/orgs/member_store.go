@@ -189,9 +189,9 @@ func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 		now := time.Now().UTC()
 		_, err = tx.Exec(ctx, `
 			UPDATE members
-			SET role = $3, status = $4, added_by = $5, updated_at = $6
+			SET role = $3, status = $4, updated_at = $5
 			WHERE organization_id = $1 AND user_id = $2 AND status = 'removed'
-		`, m.OrganizationID, *m.UserID, m.Role, m.Status, m.AddedBy, now)
+		`, m.OrganizationID, *m.UserID, m.Role, m.Status, now)
 		if err != nil {
 			return op.Fail(err)
 		}
@@ -208,9 +208,9 @@ func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO members
-			(id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at)
-		VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8)
-	`, m.ID, m.OrganizationID, *m.UserID, m.Role, m.Status, m.AddedBy, m.CreatedAt, m.UpdatedAt)
+			(id, organization_id, user_id, service_account_id, role, status, created_at, updated_at)
+		VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)
+	`, m.ID, m.OrganizationID, *m.UserID, m.Role, m.Status, m.CreatedAt, m.UpdatedAt)
 	if err != nil {
 		if dbx.IsUniqueViolation(err) {
 			return op.SoftFail("conflict", ErrConflict, ErrConflict)

@@ -12,7 +12,6 @@ CREATE TABLE service_accounts (
     id                  TEXT PRIMARY KEY,
     organization_id     TEXT NOT NULL REFERENCES organizations (id) ON DELETE CASCADE,
     name                TEXT NOT NULL,
-    created_by_user_id  TEXT,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -29,7 +28,6 @@ CREATE TABLE members (
     service_account_id  TEXT REFERENCES service_accounts (id) ON DELETE CASCADE,
     role                TEXT,
     status              TEXT NOT NULL CHECK (status IN ('active', 'suspended', 'removed')),
-    added_by            TEXT,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK (
@@ -66,7 +64,6 @@ CREATE TABLE organization_invites (
                          CHECK (status IN ('active', 'redeemed', 'revoked', 'expired')),
     max_uses         INTEGER,
     use_count        INTEGER NOT NULL DEFAULT 0,
-    created_by       TEXT,
     expires_at       TIMESTAMPTZ NOT NULL,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK ((status = 'active') = (token IS NOT NULL)),

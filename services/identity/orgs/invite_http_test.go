@@ -15,7 +15,7 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 	h := &Handler{invites: f, roles: starterSet(t)}
 	app := testInviteApp(h)
 
-	code, body := doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{"email":"a@b.com","created_by":"owner1"}`)
+	code, body := doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{"email":"a@b.com"}`)
 	if code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", code, body)
 	}
@@ -34,9 +34,6 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 	}
 	if created.Email == nil || *created.Email != "a@b.com" {
 		t.Fatalf("email: %+v", created.Email)
-	}
-	if created.CreatedBy == nil || *created.CreatedBy != "owner1" {
-		t.Fatalf("created_by: %+v", created.CreatedBy)
 	}
 	token := created.Token
 	inviteID := created.ID
@@ -63,9 +60,6 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 	}
 	if mem.Status != string(StatusActive) || mem.UserID == nil || *mem.UserID != "invitee1" {
 		t.Fatalf("member: %+v", mem)
-	}
-	if mem.AddedBy == nil || *mem.AddedBy != "owner1" {
-		t.Fatalf("added_by: %+v", mem.AddedBy)
 	}
 
 	code, body = doJSON(t, app, http.MethodGet, "/organizations/org1/invites", "")
@@ -188,7 +182,6 @@ func TestInviteExpireRevokeAndUnknown(t *testing.T) {
 		TokenHash:      HashInviteToken(expiredTok),
 		TokenPrefix:    InviteDisplayPrefix(expiredTok),
 		Status:         InviteStatusActive,
-		CreatedBy:      strPtr("owner1"),
 		ExpiresAt:      now.Add(-time.Minute),
 		CreatedAt:      now.Add(-time.Hour),
 	}

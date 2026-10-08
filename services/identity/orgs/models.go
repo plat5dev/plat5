@@ -62,7 +62,6 @@ type Member struct {
 	// Role is a slug from the roles file. Nil only when roles are off (docs/roles.md).
 	Role      *string
 	Status    Status
-	AddedBy   *string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -71,15 +70,14 @@ type Member struct {
 // Always paired with exactly one member row in that org.
 // Status is the joined member’s status (active or suspended; removed is unlistable).
 type ServiceAccount struct {
-	ID              string
-	OrganizationID  string
-	MemberID        string // filled on read via join
-	Name            string
-	Role            *string // filled on read via join
-	Status          Status  // filled on read via join
-	CreatedByUserID *string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID             string
+	OrganizationID string
+	MemberID       string // filled on read via join
+	Name           string
+	Role           *string // filled on read via join
+	Status         Status  // filled on read via join
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 func (m *Member) Principal() string {

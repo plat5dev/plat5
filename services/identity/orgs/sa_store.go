@@ -11,7 +11,7 @@ import (
 
 const saSelect = `
 	SELECT
-		sa.id, sa.organization_id, m.id, sa.name, sa.created_by_user_id,
+		sa.id, sa.organization_id, m.id, sa.name,
 		m.role, m.status, sa.created_at, sa.updated_at
 	FROM service_accounts sa
 	INNER JOIN members m
@@ -20,7 +20,7 @@ const saSelect = `
 		AND m.status <> 'removed'
 `
 
-func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount, createdBy *string) (*Member, error) {
+func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount) (*Member, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_service_account", dbx.DefaultTimeout,
 		attribute.String("organization.id", sa.OrganizationID),
 		attribute.String("service_account.id", sa.ID),
@@ -32,7 +32,6 @@ func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount, cr
 	sa.CreatedAt = now
 	sa.UpdatedAt = now
 	sa.Status = StatusActive
-	sa.CreatedByUserID = createdBy
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -51,9 +50,9 @@ func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount, cr
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO service_accounts
-			(id, organization_id, name, created_by_user_id, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, sa.ID, sa.OrganizationID, sa.Name, sa.CreatedByUserID, sa.CreatedAt, sa.UpdatedAt)
+			(id, organization_id, name, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`, sa.ID, sa.OrganizationID, sa.Name, sa.CreatedAt, sa.UpdatedAt)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
@@ -69,8 +68,8 @@ func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount, cr
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO members
-			(id, organization_id, user_id, service_account_id, role, status, added_by, created_at, updated_at)
-		VALUES ($1, $2, NULL, $3, $4, $5, NULL, $6, $7)
+			(id, organization_id, user_id, service_account_id, role, status, created_at, updated_at)
+		VALUES ($1, $2, NULL, $3, $4, $5, $6, $7)
 	`, m.ID, m.OrganizationID, sa.ID, m.Role, m.Status, m.CreatedAt, m.UpdatedAt)
 	if err != nil {
 		return nil, op.Fail(err)

@@ -39,7 +39,6 @@ type Invite struct {
 	Status         InviteStatus
 	MaxUses        *int
 	UseCount       int
-	CreatedBy      *string
 	ExpiresAt      time.Time
 	CreatedAt      time.Time
 }

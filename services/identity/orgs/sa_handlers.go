@@ -8,9 +8,8 @@ import (
 )
 
 type CreateServiceAccountRequest struct {
-	Name            string  `json:"name"`
-	Role            *string `json:"role"`
-	CreatedByUserID *string `json:"created_by_user_id"`
+	Name string  `json:"name"`
+	Role *string `json:"role"`
 }
 
 type UpdateServiceAccountRequest struct {
@@ -18,15 +17,14 @@ type UpdateServiceAccountRequest struct {
 }
 
 type ServiceAccountResponse struct {
-	ID              string  `json:"id"`
-	OrganizationID  string  `json:"organization_id"`
-	MemberID        string  `json:"member_id"`
-	Name            string  `json:"name"`
-	Role            *string `json:"role"`
-	Status          string  `json:"status"`
-	CreatedByUserID *string `json:"created_by_user_id"`
-	CreatedAt       string  `json:"created_at"`
-	UpdatedAt       string  `json:"updated_at"`
+	ID             string  `json:"id"`
+	OrganizationID string  `json:"organization_id"`
+	MemberID       string  `json:"member_id"`
+	Name           string  `json:"name"`
+	Role           *string `json:"role"`
+	Status         string  `json:"status"`
+	CreatedAt      string  `json:"created_at"`
+	UpdatedAt      string  `json:"updated_at"`
 }
 
 type ListServiceAccountsResponse struct {
@@ -46,10 +44,6 @@ func (h *Handler) CreateServiceAccount(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	createdBy, err := optionalUserID(req.CreatedByUserID, "created_by_user_id")
-	if err != nil {
-		return err
-	}
 	role, err := h.roles.ChooseServiceAccount(req.Role)
 	if err != nil {
 		return err
@@ -61,7 +55,7 @@ func (h *Handler) CreateServiceAccount(c fiber.Ctx) error {
 		Name:           name,
 		Role:           role,
 	}
-	if _, err := h.store.CreateServiceAccount(ctx, sa, createdBy); err != nil {
+	if _, err := h.store.CreateServiceAccount(ctx, sa); err != nil {
 		return httpx.MapDB(ctx, err, "failed to create service account", httpx.DBErr{
 			NotFound: ErrNotFound, Resource: "organization", ResourceID: orgID,
 		})
@@ -159,14 +153,13 @@ func (h *Handler) DeleteServiceAccount(c fiber.Ctx) error {
 
 func (h *Handler) toServiceAccountResponse(sa *ServiceAccount) ServiceAccountResponse {
 	return ServiceAccountResponse{
-		ID:              sa.ID,
-		OrganizationID:  sa.OrganizationID,
-		MemberID:        sa.MemberID,
-		Name:            sa.Name,
-		Role:            sa.Role,
-		Status:          string(sa.Status),
-		CreatedByUserID: sa.CreatedByUserID,
-		CreatedAt:       httpx.FormatTime(sa.CreatedAt),
-		UpdatedAt:       httpx.FormatTime(sa.UpdatedAt),
+		ID:             sa.ID,
+		OrganizationID: sa.OrganizationID,
+		MemberID:       sa.MemberID,
+		Name:           sa.Name,
+		Role:           sa.Role,
+		Status:         string(sa.Status),
+		CreatedAt:      httpx.FormatTime(sa.CreatedAt),
+		UpdatedAt:      httpx.FormatTime(sa.UpdatedAt),
 	}
 }
