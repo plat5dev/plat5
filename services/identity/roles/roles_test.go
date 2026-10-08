@@ -49,18 +49,19 @@ func TestParseStarter(t *testing.T) {
 
 func TestParseRejects(t *testing.T) {
 	cases := map[string]string{
-		"empty file":         ``,
-		"no roles":           "roles: {}\ncreator_role: a\ndefault_role: a\n",
-		"unknown key":        "roles: {a: []}\ncreator_role: a\ndefault_role: a\nextra: 1\n",
-		"missing creator":    "roles: {a: []}\ndefault_role: a\n",
-		"creator not a role": "roles: {a: []}\ncreator_role: b\ndefault_role: a\n",
-		"missing default":    "roles: {a: []}\ncreator_role: a\n",
-		"default not a role": "roles: {a: []}\ncreator_role: a\ndefault_role: b\n",
-		"bad slug":           "roles: {Admin: []}\ncreator_role: Admin\ndefault_role: Admin\n",
-		"null labels":        "roles: {a: }\ncreator_role: a\ndefault_role: a\n",
-		"star not alone":     "roles: {a: ['*', x]}\ncreator_role: a\ndefault_role: a\n",
-		"bad label":          "roles: {a: [Bad]}\ncreator_role: a\ndefault_role: a\n",
-		"duplicate label":    "roles: {a: [x, x]}\ncreator_role: a\ndefault_role: a\n",
+		"empty file":            ``,
+		"no roles":              "roles: {}\ncreator_role: a\ndefault_role: a\n",
+		"unknown key":           "roles: {a: []}\ncreator_role: a\ndefault_role: a\nextra: 1\n",
+		"missing creator":       "roles: {a: []}\ndefault_role: a\n",
+		"creator not a role":    "roles: {a: []}\ncreator_role: b\ndefault_role: a\n",
+		"missing default":       "roles: {a: []}\ncreator_role: a\n",
+		"default not a role":    "roles: {a: []}\ncreator_role: a\ndefault_role: b\n",
+		"bad slug":              "roles: {Admin: []}\ncreator_role: Admin\ndefault_role: Admin\n",
+		"null labels":           "roles: {a: }\ncreator_role: a\ndefault_role: a\n",
+		"star not alone":        "roles: {a: ['*', x]}\ncreator_role: a\ndefault_role: a\n",
+		"bad label":             "roles: {a: [Bad]}\ncreator_role: a\ndefault_role: a\n",
+		"duplicate label":       "roles: {a: [x, x]}\ncreator_role: a\ndefault_role: a\n",
+		"sa default not a role": "roles: {a: []}\ncreator_role: a\ndefault_role: a\nservice_account_default_role: b\n",
 	}
 	for name, src := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -139,6 +140,32 @@ func TestList(t *testing.T) {
 	}
 	if got[2].Scopes != nil {
 		t.Fatal("owner lists as every label (nil)")
+	}
+}
+
+func TestServiceAccountDefault(t *testing.T) {
+	s := mustParse(t, starter)
+	if got := *s.ServiceAccountDefault(); got != "member" {
+		t.Fatalf("unset falls back to default_role, got %q", got)
+	}
+
+	s = mustParse(t, starter+"service_account_default_role: admin\n")
+	got, err := s.ChooseServiceAccount(nil)
+	if err != nil || got == nil || *got != "admin" {
+		t.Fatalf("omitted is service_account_default_role, got %v %v", got, err)
+	}
+	got, err = s.ChooseServiceAccount(strp("owner"))
+	if err != nil || *got != "owner" {
+		t.Fatalf("explicit role wins, got %v %v", got, err)
+	}
+	if got, _ := s.Choose(nil); *got != "member" {
+		t.Fatalf("people still get default_role, got %q", *got)
+	}
+	assertField(t, func() error { _, err := s.ChooseServiceAccount(strp("nope")); return err }(), "That role doesn't exist.")
+
+	var none *Set
+	if none.ServiceAccountDefault() != nil {
+		t.Fatal("no roles file: no service-account default")
 	}
 }
 

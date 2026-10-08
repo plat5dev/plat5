@@ -50,7 +50,7 @@ func (h *Handler) CreateServiceAccount(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	role, err := h.roles.Choose(req.Role)
+	role, err := h.roles.ChooseServiceAccount(req.Role)
 	if err != nil {
 		return err
 	}

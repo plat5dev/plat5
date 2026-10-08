@@ -255,7 +255,7 @@ A service account is the org's. It is not tied to the member who created it: its
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/organizations/{organization_id}/service-accounts` | Body `{ "name", "role?", "created_by_user_id?" }`. Unknown org → **404**. `role` omitted → `default_role`. |
+| `POST` | `/organizations/{organization_id}/service-accounts` | Body `{ "name", "role?", "created_by_user_id?" }`. Unknown org → **404**. `role` omitted → `service_account_default_role`, or `default_role` when that is unset. |
 | `GET` | `/organizations/{organization_id}/service-accounts` | Non-removed. Unknown org → **404**. |
 | `GET` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | **404** if missing, wrong org, or member `removed` |
 | `PATCH` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | Body `{ "name" }`. Same **404** as get. |
@@ -350,7 +350,7 @@ The deployment's roles, from the roles file. Same list for every org today. Shap
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `GET` | `/organizations/{organization_id}/roles` | `{ "roles": [{ "slug", "scopes" }], "creator_role", "default_role" }`. Sorted by slug. Not paginated. Unknown org → **404**. No roles file → `roles: []`, both fields `null`. |
+| `GET` | `/organizations/{organization_id}/roles` | `{ "roles": [{ "slug", "scopes" }], "creator_role", "default_role", "service_account_default_role" }`. Sorted by slug. Not paginated. Unknown org → **404**. No roles file → `roles: []`, the three fields `null`. |
 
 ### API key brand
 

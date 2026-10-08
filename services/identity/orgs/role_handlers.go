@@ -17,6 +17,8 @@ type ListRolesResponse struct {
 	Roles       []RoleResponse `json:"roles"`
 	CreatorRole *string        `json:"creator_role"`
 	DefaultRole *string        `json:"default_role"`
+	// ServiceAccountDefaultRole is resolved: default_role when the file leaves it unset.
+	ServiceAccountDefaultRole *string `json:"service_account_default_role"`
 }
 
 // ListRoles is the deployment's roles file. The org is in the path so a later
@@ -35,6 +37,8 @@ func (h *Handler) ListRoles(c fiber.Ctx) error {
 		Roles:       make([]RoleResponse, 0, len(list)),
 		CreatorRole: h.roles.Creator(),
 		DefaultRole: h.roles.Default(),
+
+		ServiceAccountDefaultRole: h.roles.ServiceAccountDefault(),
 	}
 	for _, r := range list {
 		out.Roles = append(out.Roles, RoleResponse{Slug: r.Slug, Scopes: apikey.WireScopes(r.Scopes)})

@@ -41,6 +41,7 @@ default_role: member
 | label list | Same hygiene as key scopes: `[a-z0-9:._-]+`, max 64 chars, unique. Max 64 labels. `[]` grants no labels. `["*"]` grants every label; `*` is valid only alone. |
 | `creator_role` | Required. A slug in `roles`. Assigned to whoever creates an org. |
 | `default_role` | Required. A slug in `roles`. Assigned when a write omits `role`. |
+| `service_account_default_role` | Optional. A slug in `roles`. Assigned when a service-account create omits `role`. Unset → `default_role`. |
 
 Unknown keys refuse boot.
 
@@ -71,7 +72,7 @@ The gateway caches validate for `APIKEY_CACHE_TTL_SECS`. A role change is visibl
 | `POST /users/{user_id}/organizations` | `creator_role`. No body field. |
 | `POST /organizations/{organization_id}/members` | `role` in the body, or `default_role` |
 | `POST /organizations/{organization_id}/invites` | `role` in the body, or `default_role`. Stored on the invite. Redeem assigns it. |
-| `POST /organizations/{organization_id}/service-accounts` | `role` in the body, or `default_role` |
+| `POST /organizations/{organization_id}/service-accounts` | `role` in the body, or `service_account_default_role` (unset → `default_role`) |
 | `PATCH /organizations/{organization_id}/members/{member_id}` | `role` in the body |
 
 Without a roles file, `role` in a body is **422**. With one, a slug not in the file is **422**.
@@ -100,11 +101,12 @@ A write may not take an org's count of non-removed members holding `creator_role
     { "slug": "owner", "scopes": null }
   ],
   "creator_role": "owner",
-  "default_role": "member"
+  "default_role": "member",
+  "service_account_default_role": "member"
 }
 ```
 
-`scopes: null` is `["*"]`. Sorted by slug. Not paginated: the file is the whole list. Unknown org → **404**. No roles file → `roles: []` and both fields `null`.
+`scopes: null` is `["*"]`. Sorted by slug. Not paginated: the file is the whole list. Unknown org → **404**. `service_account_default_role` is resolved: `default_role` when the file leaves it unset. No roles file → `roles: []` and all three fields `null`.
 
 The org is in the path so that a later per-org role set has an address. Today every org gets the same list.
 

@@ -35,12 +35,15 @@ type Set struct {
 	grants  map[string][]string
 	creator string
 	def     string
+	saDef   string
 }
 
 type file struct {
 	Roles       map[string][]string `yaml:"roles"`
 	CreatorRole string              `yaml:"creator_role"`
 	DefaultRole string              `yaml:"default_role"`
+	// ServiceAccountDefaultRole is optional. Unset is default_role.
+	ServiceAccountDefaultRole string `yaml:"service_account_default_role"`
 }
 
 // Load reads ROLES_FILE. An empty path is no roles file (nil, nil).
@@ -91,6 +94,13 @@ func Parse(data []byte) (*Set, error) {
 	}
 	s.creator = f.CreatorRole
 	s.def = f.DefaultRole
+	s.saDef = f.DefaultRole
+	if f.ServiceAccountDefaultRole != "" {
+		if _, ok := s.grants[f.ServiceAccountDefaultRole]; !ok {
+			return nil, fmt.Errorf("roles file: service_account_default_role %q is not a role", f.ServiceAccountDefaultRole)
+		}
+		s.saDef = f.ServiceAccountDefaultRole
+	}
 	return s, nil
 }
 
@@ -142,6 +152,17 @@ func (s *Set) Default() *string {
 	return &d
 }
 
+// ServiceAccountDefault is the role a service-account create gets when it omits
+// one: service_account_default_role, or default_role when that is unset. Nil
+// without a roles file.
+func (s *Set) ServiceAccountDefault() *string {
+	if s == nil {
+		return nil
+	}
+	d := s.saDef
+	return &d
+}
+
 // Grants is what a member's role grants, and so what every key and session of
 // that member carries. A nil role, or no roles file, is every label (nil). A
 // slug no longer in the file grants nothing.
@@ -172,8 +193,18 @@ func (s *Set) List() []Role {
 // Choose validates `role` from a request body. Omitted (or null) is default_role.
 // Any role without a roles file, or a slug not in it, is 422.
 func (s *Set) Choose(raw *string) (*string, error) {
+	return s.choose(raw, s.Default())
+}
+
+// ChooseServiceAccount is Choose for a service-account create: omitted is
+// ServiceAccountDefault.
+func (s *Set) ChooseServiceAccount(raw *string) (*string, error) {
+	return s.choose(raw, s.ServiceAccountDefault())
+}
+
+func (s *Set) choose(raw, omitted *string) (*string, error) {
 	if raw == nil {
-		return s.Default(), nil
+		return omitted, nil
 	}
 	if s == nil {
 		return nil, errors.FieldError("role", "Roles aren't set up for this deployment.")
