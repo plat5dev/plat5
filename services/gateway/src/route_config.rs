@@ -81,8 +81,9 @@ pub struct RouteConfig {
     /// Placeholders stay in etcd; the gateway substitutes at request time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream: Option<String>,
-    /// Optional API-key scope labels this route requires.
-    /// Omitted = any admitted principal. JWTs and unrestricted keys skip the check.
+    /// Optional labels this route requires (any one of them).
+    /// Omitted = any admitted principal. A member key or session must hold `*` or one of them;
+    /// its labels are its member's role labels. User credentials skip the check.
     /// Route-level value applies only to the flat methods list form.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_labels: Option<Vec<String>>,
