@@ -14,7 +14,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/plat5dev/plat5/identity/errors"
-	"github.com/plat5dev/plat5/identity/internal/apikey"
 	"github.com/plat5dev/plat5/identity/internal/id"
 )
 
@@ -94,37 +93,6 @@ type DBErr struct {
 	Field      string
 	FieldValue interface{}
 	Message    string
-}
-
-// CallerScopes is the caller's effective scopes from X-Plat5-Scopes, which the
-// gateway sets. nil is unrestricted (header absent).
-func CallerScopes(c fiber.Ctx) ([]string, error) {
-	raw := c.Request().Header.Peek(apikey.CallerScopesHeader)
-	if raw == nil {
-		return nil, nil
-	}
-	return apikey.ParseCallerScopes(string(raw))
-}
-
-// ConstrainMint applies the caller credential's scopes to a key or session being created.
-// requested nil means the client omitted scopes.
-func ConstrainMint(c fiber.Ctx, requested []string) ([]string, error) {
-	caller, err := CallerScopes(c)
-	if err != nil {
-		return nil, err
-	}
-	return apikey.ConstrainScopes(caller, requested)
-}
-
-// MapMintScopes turns a mint-cap failure into an API error.
-// A label the caller lacks is 403. A malformed scopes header is 500.
-func MapMintScopes(ctx context.Context, err error) error {
-	var insufficient *apikey.InsufficientScopeError
-	if stderrors.As(err, &insufficient) {
-		return errors.InsufficientScope(insufficient.Missing)
-	}
-	LogError(ctx, "invalid caller scopes", err, errors.KindInternal)
-	return errors.InternalError()
 }
 
 // MapDB maps store sentinels and *errors.ApiError through; logs unexpected errors as INTERNAL.

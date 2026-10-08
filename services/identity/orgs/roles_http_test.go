@@ -3,14 +3,8 @@ package orgs
 import (
 	"encoding/json"
 	stderrors "errors"
-	"io"
 	"net/http"
-	"net/http/httptest"
-	"reflect"
-	"strings"
 	"testing"
-
-	"github.com/gofiber/fiber/v3"
 
 	apierrors "github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/roles"
@@ -24,8 +18,6 @@ roles:
 creator_role: owner
 default_role: member
 `
-
-const adminScopes = "org:write,org:members:write,org:service-accounts:write"
 
 func starterSet(t *testing.T) *roles.Set {
 	t.Helper()
@@ -68,27 +60,22 @@ func TestInviteRoleDefaultsAndRedeemAssignsIt(t *testing.T) {
 	}
 }
 
-func TestInviteRoleGrantCap(t *testing.T) {
+// No grant cap: whoever may call the route assigns any role.
+func TestInviteAssignsAnyRole(t *testing.T) {
 	f := newFakeInvites()
 	seedOwner(f, "org1", "owner1")
 	app := testInviteApp(&Handler{invites: f, roles: starterSet(t)})
-	admin := map[string]string{"X-Plat5-Scopes": adminScopes}
 
-	code, body := doJSONHeaders(t, app, http.MethodPost, "/organizations/org1/invites", `{"role":"owner"}`, admin)
-	assertInsufficientRole(t, code, body, "You can't assign the owner role.", []string{"*"})
-
-	code, body = doJSONHeaders(t, app, http.MethodPost, "/organizations/org1/invites", `{"role":"admin"}`, admin)
+	code, body := doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{"role":"owner"}`)
 	if code != http.StatusCreated {
-		t.Fatalf("admin invites an admin: %d %s", code, body)
+		t.Fatalf("invite an owner: %d %s", code, body)
 	}
-
-	code, body = doJSONHeaders(t, app, http.MethodPost, "/organizations/org1/invites", `{"role":"admin"}`,
-		map[string]string{"X-Plat5-Scopes": "org:members:write"})
-	assertInsufficientRole(t, code, body, "You can't assign the admin role.", []string{"org:write", "org:service-accounts:write"})
-
-	code, body = doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{"role":"owner"}`)
-	if code != http.StatusCreated {
-		t.Fatalf("unrestricted caller invites an owner: %d %s", code, body)
+	var inv InviteResponse
+	if err := json.Unmarshal(body, &inv); err != nil {
+		t.Fatal(err)
+	}
+	if inv.Role == nil || *inv.Role != "owner" {
+		t.Fatalf("role: %s", body)
 	}
 }
 
@@ -187,52 +174,6 @@ func assertLastCreator(t *testing.T, err error, path string) {
 	fields := apiErr.Details.(map[string]any)["fields"].([]apierrors.Field)
 	if len(fields) != 1 || fields[0].Path != path {
 		t.Fatalf("fields %+v, want path %q", fields, path)
-	}
-}
-
-func doJSONHeaders(t *testing.T, app *fiber.App, method, path, body string, headers map[string]string) (int, []byte) {
-	t.Helper()
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return resp.StatusCode, b
-}
-
-func assertInsufficientRole(t *testing.T, code int, body []byte, message string, missing []string) {
-	t.Helper()
-	if code != http.StatusForbidden {
-		t.Fatalf("want 403, got %d %s", code, body)
-	}
-	var env struct {
-		Error struct {
-			Code    string         `json:"code"`
-			Message string         `json:"message"`
-			Details map[string]any `json:"details"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &env); err != nil {
-		t.Fatal(err)
-	}
-	if env.Error.Code != "INSUFFICIENT_SCOPE" || env.Error.Message != message {
-		t.Fatalf("got %s", body)
-	}
-	got := []string{}
-	for _, v := range env.Error.Details["scopes"].([]any) {
-		got = append(got, v.(string))
-	}
-	if !reflect.DeepEqual(got, missing) {
-		t.Fatalf("details.scopes %v, want %v", got, missing)
 	}
 }
 

@@ -38,9 +38,9 @@ func (s *Store) Create(ctx context.Context, key *APIKey) error {
 	defer op.End()
 
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO user_api_keys (id, user_id, name, key_prefix, key_hash, scopes, created_at, revoked_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, key.ID, key.UserID, key.Name, key.KeyPrefix, key.KeyHash, key.Scopes, key.CreatedAt, key.RevokedAt)
+		INSERT INTO user_api_keys (id, user_id, name, key_prefix, key_hash, created_at, revoked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, key.ID, key.UserID, key.Name, key.KeyPrefix, key.KeyHash, key.CreatedAt, key.RevokedAt)
 	if err != nil {
 		if dbx.IsUniqueViolation(err) {
 			return op.Fail(fmt.Errorf("key hash collision detected"))
@@ -57,7 +57,7 @@ func (s *Store) GetByHash(ctx context.Context, keyHash string) (*APIKey, error) 
 	defer op.End()
 
 	key, err := scanKey(s.pool.QueryRow(ctx, `
-		SELECT id, user_id, name, key_prefix, key_hash, scopes, created_at, revoked_at
+		SELECT id, user_id, name, key_prefix, key_hash, created_at, revoked_at
 		FROM user_api_keys
 		WHERE key_hash = $1
 	`, keyHash))
@@ -83,7 +83,7 @@ func (s *Store) List(ctx context.Context, userID string, limit int, startingAfte
 		after = startingAfter
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, user_id, name, key_prefix, scopes, created_at, revoked_at
+		SELECT id, user_id, name, key_prefix, created_at, revoked_at
 		FROM user_api_keys
 		WHERE user_id = $1 AND ($2::text IS NULL OR id > $2)
 		ORDER BY id ASC
@@ -128,7 +128,7 @@ func (s *Store) Revoke(ctx context.Context, userID, keyID string) (*APIKey, erro
 		UPDATE user_api_keys
 		SET revoked_at = COALESCE(revoked_at, $1)
 		WHERE id = $2 AND user_id = $3
-		RETURNING id, user_id, name, key_prefix, key_hash, scopes, created_at, revoked_at
+		RETURNING id, user_id, name, key_prefix, key_hash, created_at, revoked_at
 	`, now, keyID, userID))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -148,7 +148,6 @@ func scanKey(row dbx.Scannable) (*APIKey, error) {
 		&key.Name,
 		&key.KeyPrefix,
 		&key.KeyHash,
-		&key.Scopes,
 		&key.CreatedAt,
 		&key.RevokedAt,
 	)
@@ -168,7 +167,6 @@ func scanKeyList(row dbx.Scannable) (*APIKey, error) {
 		&key.UserID,
 		&key.Name,
 		&key.KeyPrefix,
-		&key.Scopes,
 		&key.CreatedAt,
 		&key.RevokedAt,
 	)

@@ -21,9 +21,8 @@ import (
 // on the wire, every label is a null scopes list.
 const Wildcard = "*"
 
-// MaxLabels caps one role's label list. A member's effective set travels on
-// X-Plat5-Scopes, so it shares that bound.
-const MaxLabels = apikey.MaxCallerScopes
+// MaxLabels caps one role's label list.
+const MaxLabels = 64
 
 // Role is one entry of the file. Scopes nil is every label.
 type Role struct {
@@ -143,8 +142,9 @@ func (s *Set) Default() *string {
 	return &d
 }
 
-// Grants is what a member's role grants. A nil role, or no roles file, is every
-// label (nil). A slug no longer in the file grants nothing.
+// Grants is what a member's role grants, and so what every key and session of
+// that member carries. A nil role, or no roles file, is every label (nil). A
+// slug no longer in the file grants nothing.
 func (s *Set) Grants(role *string) []string {
 	if s == nil || role == nil {
 		return nil
@@ -154,11 +154,6 @@ func (s *Set) Grants(role *string) []string {
 		return []string{}
 	}
 	return grant
-}
-
-// Resolve is a member credential's effective scopes: role grant ∩ credential scopes.
-func (s *Set) Resolve(role *string, credential []string) []string {
-	return apikey.Intersect(s.Grants(role), credential)
 }
 
 // List is the file's roles, sorted by slug. Empty without a roles file.
@@ -188,53 +183,4 @@ func (s *Set) Choose(raw *string) (*string, error) {
 		return nil, errors.FieldError("role", "That role doesn't exist.")
 	}
 	return &slug, nil
-}
-
-// CheckAssign refuses a role with a label the caller lacks. caller nil is unrestricted.
-func (s *Set) CheckAssign(caller []string, role *string) error {
-	if s == nil || role == nil {
-		return nil
-	}
-	if missing := Missing(caller, s.Grants(role)); len(missing) > 0 {
-		return errors.InsufficientRole("You can't assign the "+*role+" role.", missing)
-	}
-	return nil
-}
-
-// CheckActOn refuses acting on a member whose role has a label the caller lacks.
-// Without a roles file there is nothing to protect: the key mint cap is the only cap.
-func (s *Set) CheckActOn(caller []string, role *string) error {
-	if s == nil {
-		return nil
-	}
-	missing := Missing(caller, s.Grants(role))
-	if len(missing) == 0 {
-		return nil
-	}
-	if role == nil {
-		return errors.InsufficientRole("You can't change an unrestricted member.", missing)
-	}
-	return errors.InsufficientRole("You can't change a member with the "+*role+" role.", missing)
-}
-
-// Missing lists the labels in need the caller does not hold. A nil caller holds
-// every label. A nil need is every label, which a restricted caller is missing as "*".
-func Missing(caller, need []string) []string {
-	if caller == nil {
-		return nil
-	}
-	if need == nil {
-		return []string{Wildcard}
-	}
-	have := make(map[string]struct{}, len(caller))
-	for _, s := range caller {
-		have[s] = struct{}{}
-	}
-	var missing []string
-	for _, s := range need {
-		if _, ok := have[s]; !ok {
-			missing = append(missing, s)
-		}
-	}
-	return missing
 }

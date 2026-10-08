@@ -13,7 +13,7 @@ import (
 	"github.com/plat5dev/plat5/identity/roles"
 )
 
-func TestSessionMintReturnsRoleAndEffectiveScopes(t *testing.T) {
+func TestSessionMintReturnsRoleAndItsLabels(t *testing.T) {
 	set, err := roles.Parse([]byte(`
 roles:
   owner: ["*"]
@@ -40,8 +40,7 @@ default_role: member
 	h.MountPublic(app.Group("/users"))
 	h.MountInternal(app.Group("/internal"))
 
-	// A user JWT: no X-Plat5-Scopes.
-	code, body := doSession(t, app, http.MethodPost, "/users/user1/organizations/org1/session", nil)
+	code, body := doSession(t, app, http.MethodPost, "/users/user1/organizations/org1/session")
 	if code != http.StatusCreated {
 		t.Fatalf("create: %d %s", code, body)
 	}
@@ -53,10 +52,7 @@ default_role: member
 		t.Fatalf("role: %s", body)
 	}
 	if created.Scopes == nil || !reflect.DeepEqual(*created.Scopes, []string{"org:write", "org:members:write"}) {
-		t.Fatalf("effective scopes at mint: %s", body)
-	}
-	if store.created.Scopes != nil {
-		t.Fatalf("the session stores the caller's scopes (unrestricted), not the role: %#v", store.created.Scopes)
+		t.Fatalf("role labels at mint: %s", body)
 	}
 
 	store.validated = &Validated{
@@ -74,7 +70,7 @@ default_role: member
 
 func assertValidateScopes(t *testing.T, app *fiber.App, token string, want []any) {
 	t.Helper()
-	code, body := doSessionJSON(t, app, http.MethodPost, "/internal/member-sessions/validate", `{"token":"`+token+`"}`, nil)
+	code, body := doSessionJSON(t, app, http.MethodPost, "/internal/member-sessions/validate", `{"token":"`+token+`"}`)
 	if code != http.StatusOK {
 		t.Fatalf("validate: %d %s", code, body)
 	}

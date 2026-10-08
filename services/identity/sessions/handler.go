@@ -29,7 +29,7 @@ type Handler struct {
 	store    sessionStore
 	orgStore memberResolver
 	prefix   string
-	// roles resolves effective scopes. The role is not stored on the session.
+	// roles resolves the member's labels. The role is not stored on the session.
 	roles *roles.Set
 }
 
@@ -43,7 +43,7 @@ type CreateResponse struct {
 	MemberID       string  `json:"member_id"`
 	OrganizationID string  `json:"organization_id"`
 	Role           *string `json:"role"`
-	// Scopes is the effective set at mint: what validate would return now.
+	// Scopes is the member's role labels at mint: what validate would return now.
 	Scopes *[]string `json:"scopes"`
 }
 
@@ -52,7 +52,7 @@ type ValidateRequest struct {
 }
 
 // validPayload is the validate hit. No user_id.
-// scopes nil is unrestricted; a non-nil list is restricted.
+// scopes is the member's role labels: nil is unrestricted; a non-nil list is restricted.
 func validPayload(memberID, organizationID string, scopes []string) fiber.Map {
 	return fiber.Map{
 		"valid":           true,
@@ -87,11 +87,6 @@ func (h *Handler) Create(c fiber.Ctx) error {
 		return errors.NotFoundError("member", userID+":"+orgID)
 	}
 
-	scopes, err := httpx.ConstrainMint(c, nil)
-	if err != nil {
-		return httpx.MapMintScopes(ctx, err)
-	}
-
 	plaintext, err := apikey.Generate(h.prefix)
 	if err != nil {
 		httpx.LogError(ctx, "failed to generate session token", err, errors.KindInternal)
@@ -99,7 +94,7 @@ func (h *Handler) Create(c fiber.Ctx) error {
 	}
 
 	now := time.Now().UTC()
-	session := New(member.ID, plaintext, h.prefix, scopes, now)
+	session := New(member.ID, plaintext, h.prefix, now)
 	if err := h.store.Create(ctx, session); err != nil {
 		return httpx.MapDB(ctx, err, "failed to store member session", httpx.DBErr{})
 	}
@@ -118,7 +113,7 @@ func (h *Handler) Create(c fiber.Ctx) error {
 		MemberID:       member.ID,
 		OrganizationID: member.OrganizationID,
 		Role:           member.Role,
-		Scopes:         apikey.WireScopes(h.roles.Resolve(member.Role, session.Scopes)),
+		Scopes:         apikey.WireScopes(h.roles.Grants(member.Role)),
 	})
 }
 
@@ -149,7 +144,7 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 	}
 
 	metrics.RecordSessionValidation(true)
-	scopes := h.roles.Resolve(found.MemberRole, found.Session.Scopes)
+	scopes := h.roles.Grants(found.MemberRole)
 	return c.JSON(validPayload(found.Session.MemberID, found.OrganizationID, scopes))
 }
 

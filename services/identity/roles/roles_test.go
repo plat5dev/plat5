@@ -104,40 +104,27 @@ func TestNilSetIsUnrestricted(t *testing.T) {
 	if s.Grants(strp("anything")) != nil {
 		t.Fatal("no roles file grants every label")
 	}
-	if got := s.Resolve(strp("x"), []string{"a"}); !reflect.DeepEqual(got, []string{"a"}) {
-		t.Fatalf("resolve passes the credential through, got %#v", got)
-	}
 	if got := s.List(); got == nil || len(got) != 0 {
 		t.Fatalf("list is empty, got %#v", got)
 	}
-	if err := s.CheckActOn([]string{}, strp("x")); err != nil {
-		t.Fatalf("no roles file: no act-on cap, got %v", err)
-	}
-	if err := s.CheckAssign([]string{}, nil); err != nil {
-		t.Fatal(err)
-	}
 }
 
-func TestResolve(t *testing.T) {
+func TestGrants(t *testing.T) {
 	s := mustParse(t, starter)
 	cases := []struct {
-		name       string
-		role       *string
-		credential []string
-		want       []string
+		name string
+		role *string
+		want []string
 	}{
-		{"wildcard role, unrestricted key", strp("owner"), nil, nil},
-		{"wildcard role, narrowed key", strp("owner"), []string{"x"}, []string{"x"}},
-		{"null role, unrestricted key", nil, nil, nil},
-		{"null role, narrowed key", nil, []string{"x"}, []string{"x"}},
-		{"label role, unrestricted key", strp("admin"), nil, []string{"org:write", "org:members:write", "org:service-accounts:write"}},
-		{"label role, narrowed key", strp("admin"), []string{"org:write", "x"}, []string{"org:write"}},
-		{"empty role", strp("member"), nil, []string{}},
-		{"slug removed from file", strp("gone"), nil, []string{}},
+		{"wildcard role", strp("owner"), nil},
+		{"null role", nil, nil},
+		{"label role", strp("admin"), []string{"org:write", "org:members:write", "org:service-accounts:write"}},
+		{"empty role", strp("member"), []string{}},
+		{"slug removed from file", strp("gone"), []string{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := s.Resolve(tc.role, tc.credential)
+			got := s.Grants(tc.role)
 			if (got == nil) != (tc.want == nil) || !reflect.DeepEqual(append([]string{}, got...), append([]string{}, tc.want...)) {
 				t.Fatalf("got %#v want %#v", got, tc.want)
 			}
@@ -175,60 +162,10 @@ func TestChoose(t *testing.T) {
 	assertField(t, func() error { _, err := none.Choose(strp("admin")); return err }(), "Roles aren't set up for this deployment.")
 }
 
-func TestCheckAssign(t *testing.T) {
-	s := mustParse(t, starter)
-	admin := s.Grants(strp("admin"))
-
-	if err := s.CheckAssign(nil, strp("owner")); err != nil {
-		t.Fatalf("unrestricted caller assigns anything: %v", err)
-	}
-	if err := s.CheckAssign(admin, strp("admin")); err != nil {
-		t.Fatalf("admin assigns admin: %v", err)
-	}
-	if err := s.CheckAssign(admin, strp("member")); err != nil {
-		t.Fatalf("admin assigns member: %v", err)
-	}
-	assertInsufficient(t, s.CheckAssign(admin, strp("owner")), "You can't assign the owner role.", []string{"*"})
-	assertInsufficient(t, s.CheckAssign([]string{"org:write"}, strp("admin")), "You can't assign the admin role.",
-		[]string{"org:members:write", "org:service-accounts:write"})
-}
-
-func TestCheckActOn(t *testing.T) {
-	s := mustParse(t, starter)
-	admin := s.Grants(strp("admin"))
-
-	if err := s.CheckActOn(admin, strp("member")); err != nil {
-		t.Fatalf("admin acts on member: %v", err)
-	}
-	if err := s.CheckActOn(admin, strp("gone")); err != nil {
-		t.Fatalf("a removed role grants nothing, so anyone may fix it: %v", err)
-	}
-	assertInsufficient(t, s.CheckActOn(admin, strp("owner")), "You can't change a member with the owner role.", []string{"*"})
-	assertInsufficient(t, s.CheckActOn(admin, nil), "You can't change an unrestricted member.", []string{"*"})
-	if err := s.CheckActOn(nil, nil); err != nil {
-		t.Fatalf("unrestricted caller acts on anyone: %v", err)
-	}
-}
-
 func assertField(t *testing.T, err error, message string) {
 	t.Helper()
 	var apiErr *errors.ApiError
 	if !stderrors.As(err, &apiErr) || apiErr.Code != "VALIDATION_ERROR" || apiErr.Message != message {
 		t.Fatalf("want 422 %q, got %v", message, err)
-	}
-}
-
-func assertInsufficient(t *testing.T, err error, message string, missing []string) {
-	t.Helper()
-	var apiErr *errors.ApiError
-	if !stderrors.As(err, &apiErr) || apiErr.Code != "INSUFFICIENT_SCOPE" || apiErr.Status != 403 {
-		t.Fatalf("want 403 INSUFFICIENT_SCOPE, got %v", err)
-	}
-	if apiErr.Message != message {
-		t.Fatalf("message %q, want %q", apiErr.Message, message)
-	}
-	details := apiErr.Details.(map[string]any)
-	if !reflect.DeepEqual(details["scopes"], missing) {
-		t.Fatalf("details.scopes %#v, want %#v", details["scopes"], missing)
 	}
 }

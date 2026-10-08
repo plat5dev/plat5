@@ -30,25 +30,22 @@ func starterSet(t *testing.T) *roles.Set {
 
 func rolePtr(s string) *string { return &s }
 
-func TestValidateReturnsEffectiveScopes(t *testing.T) {
+func TestValidateReturnsRoleLabels(t *testing.T) {
 	cases := []struct {
-		name      string
-		role      *string
-		keyScopes []string
-		want      any
+		name string
+		role *string
+		want any
 	}{
-		{"owner, unrestricted key", rolePtr("owner"), nil, nil},
-		{"owner, narrowed key", rolePtr("owner"), []string{"x"}, []any{"x"}},
-		{"admin, unrestricted key", rolePtr("admin"), nil, []any{"org:write", "org:members:write", "org:service-accounts:write"}},
-		{"admin, narrowed key", rolePtr("admin"), []string{"org:write", "x"}, []any{"org:write"}},
-		{"member", rolePtr("member"), nil, []any{}},
-		{"role removed from the file", rolePtr("gone"), nil, []any{}},
-		{"null role", nil, nil, nil},
+		{"owner", rolePtr("owner"), nil},
+		{"admin", rolePtr("admin"), []any{"org:write", "org:members:write", "org:service-accounts:write"}},
+		{"member", rolePtr("member"), []any{}},
+		{"role removed from the file", rolePtr("gone"), []any{}},
+		{"null role", nil, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			keys := &fakeKeys{validated: &Validated{
-				Key:            &APIKey{ID: "k1", MemberID: "mem1", Scopes: tc.keyScopes},
+				Key:            &APIKey{ID: "k1", MemberID: "mem1"},
 				OrganizationID: "org1",
 				MemberStatus:   string(orgs.StatusActive),
 				MemberRole:     tc.role,
@@ -78,56 +75,24 @@ func TestValidateReturnsEffectiveScopes(t *testing.T) {
 	}
 }
 
-func TestServiceAccountKeysCapOnRole(t *testing.T) {
+// A service account is the org's, not the caller's. Whoever may call the route
+// mints and revokes its keys, whatever its role.
+func TestServiceAccountKeysForAnyRole(t *testing.T) {
 	keys := &fakeKeys{}
 	org := &fakeOrgs{}
 	ownerSA := saFixture("org1", "sa-owner", "mem-owner", orgs.StatusActive)
 	ownerSA.Role = rolePtr("owner")
-	memberSA := saFixture("org1", "sa-member", "mem-member", orgs.StatusActive)
-	memberSA.Role = rolePtr("member")
 	org.add(ownerSA)
-	org.add(memberSA)
 	h := &Handler{store: keys, orgStore: org, prefix: testPrefix, roles: starterSet(t)}
 	app := testKeyApp(h)
-	admin := map[string]string{"X-Plat5-Scopes": "org:write,org:members:write,org:service-accounts:write"}
-
-	code, body := doJSONHeader(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa-owner/api-keys", `{}`, admin)
-	assertRoleCap(t, code, body, "You can't change a member with the owner role.")
-
-	code, body = doJSONHeader(t, app, http.MethodDelete, "/organizations/org1/service-accounts/sa-owner/api-keys/k1", "", admin)
-	assertRoleCap(t, code, body, "You can't change a member with the owner role.")
-
-	code, body = doJSONHeader(t, app, http.MethodGet, "/organizations/org1/service-accounts/sa-owner/api-keys", "", admin)
-	if code != http.StatusOK {
-		t.Fatalf("listing is a read, not capped: %d %s", code, body)
-	}
-
-	code, body = doJSONHeader(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa-member/api-keys", `{}`, admin)
+	code, body := doJSON(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa-owner/api-keys", `{}`)
 	if code != http.StatusCreated {
-		t.Fatalf("admin mints for a member-role SA: %d %s", code, body)
+		t.Fatalf("mint for an owner SA: %d %s", code, body)
 	}
+	created := decodeCreate(t, body)
 
-	code, body = doJSON(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa-owner/api-keys", `{}`)
-	if code != http.StatusCreated {
-		t.Fatalf("unrestricted caller mints for an owner SA: %d %s", code, body)
-	}
-}
-
-func assertRoleCap(t *testing.T, code int, body []byte, message string) {
-	t.Helper()
-	if code != http.StatusForbidden {
-		t.Fatalf("want 403, got %d %s", code, body)
-	}
-	var env struct {
-		Error struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &env); err != nil {
-		t.Fatal(err)
-	}
-	if env.Error.Code != "INSUFFICIENT_SCOPE" || env.Error.Message != message {
-		t.Fatalf("got %s", body)
+	code, body = doJSON(t, app, http.MethodDelete, "/organizations/org1/service-accounts/sa-owner/api-keys/"+created.ID, "")
+	if code != http.StatusNoContent {
+		t.Fatalf("revoke for an owner SA: %d %s", code, body)
 	}
 }

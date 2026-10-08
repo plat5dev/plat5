@@ -13,9 +13,3 @@ Identity reads the roles file at boot. Ready: a deployment that changes roles of
 ## Per-org custom roles
 
 Every org gets the deployment's roles. `GET /organizations/{organization_id}/roles` already has the org in the path. Ready: a customer org that needs a role the deployment does not define.
-
-## Keys that follow the role
-
-A key minted with omitted `scopes` by a caller whose role has a label list snapshots those labels. It does not gain labels the role gains later. A caller with an unrestricted role mints `NULL`, which follows the role.
-
-Ready: identity can tell a caller's own narrowing apart from its role labels on `organization` scope, without a second header.

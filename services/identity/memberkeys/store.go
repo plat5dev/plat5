@@ -47,9 +47,9 @@ func (s *Store) Create(ctx context.Context, key *APIKey) error {
 	defer op.End()
 
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO member_api_keys (id, member_id, name, key_prefix, key_hash, scopes, created_at, revoked_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, key.ID, key.MemberID, key.Name, key.KeyPrefix, key.KeyHash, key.Scopes, key.CreatedAt, key.RevokedAt)
+		INSERT INTO member_api_keys (id, member_id, name, key_prefix, key_hash, created_at, revoked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, key.ID, key.MemberID, key.Name, key.KeyPrefix, key.KeyHash, key.CreatedAt, key.RevokedAt)
 	if err != nil {
 		if dbx.IsUniqueViolation(err) {
 			return op.Fail(fmt.Errorf("key hash collision detected"))
@@ -70,7 +70,7 @@ func (s *Store) GetByHash(ctx context.Context, keyHash string) (*Validated, erro
 	var role *string
 	err := s.pool.QueryRow(ctx, `
 		SELECT
-			k.id, k.member_id, k.name, k.key_prefix, k.key_hash, k.scopes, k.created_at, k.revoked_at,
+			k.id, k.member_id, k.name, k.key_prefix, k.key_hash, k.created_at, k.revoked_at,
 			m.organization_id, m.status, m.role
 		FROM member_api_keys k
 		INNER JOIN members m ON m.id = k.member_id
@@ -81,7 +81,6 @@ func (s *Store) GetByHash(ctx context.Context, keyHash string) (*Validated, erro
 		&key.Name,
 		&key.KeyPrefix,
 		&key.KeyHash,
-		&key.Scopes,
 		&key.CreatedAt,
 		&key.RevokedAt,
 		&orgID,
@@ -115,7 +114,7 @@ func (s *Store) List(ctx context.Context, memberID string, limit int, startingAf
 		after = startingAfter
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, member_id, name, key_prefix, scopes, created_at, revoked_at
+		SELECT id, member_id, name, key_prefix, created_at, revoked_at
 		FROM member_api_keys
 		WHERE member_id = $1 AND ($2::text IS NULL OR id > $2)
 		ORDER BY id ASC
@@ -134,7 +133,6 @@ func (s *Store) List(ctx context.Context, memberID string, limit int, startingAf
 			&key.MemberID,
 			&key.Name,
 			&key.KeyPrefix,
-			&key.Scopes,
 			&key.CreatedAt,
 			&key.RevokedAt,
 		); err != nil {
@@ -168,7 +166,7 @@ func (s *Store) Revoke(ctx context.Context, memberID, keyID string) (*APIKey, er
 		UPDATE member_api_keys
 		SET revoked_at = COALESCE(revoked_at, $1)
 		WHERE id = $2 AND member_id = $3
-		RETURNING id, member_id, name, key_prefix, key_hash, scopes, created_at, revoked_at
+		RETURNING id, member_id, name, key_prefix, key_hash, created_at, revoked_at
 	`, now, keyID, memberID))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -188,7 +186,6 @@ func scanKey(row dbx.Scannable) (*APIKey, error) {
 		&key.Name,
 		&key.KeyPrefix,
 		&key.KeyHash,
-		&key.Scopes,
 		&key.CreatedAt,
 		&key.RevokedAt,
 	)

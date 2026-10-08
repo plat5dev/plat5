@@ -46,7 +46,6 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `VALIDATION_ERROR` | 422 | `invalid_request_error` | That doesn't look right. | `{ fields: [{ path, message }] }` |
 | `UNAUTHORIZED` | 401 | `invalid_request_error` | Authentication required. | `{ reason }` |
 | `FORBIDDEN` | 403 | `invalid_request_error` | You don't have permission to do that. | `{ permission, resource, resource_id, required_scopes }` |
-| `INSUFFICIENT_SCOPE` | 403 | `invalid_request_error` | This credential can't grant that scope. | `{ scopes: string[] }` — labels the mint, role assignment, or act on a member needs and the caller does not have |
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
 | `ROUTE_CONFLICT` | 409 | `invalid_request_error` | (route-registry apply, put, restore) Message lists each conflicting route (same method, same path shape) and its owner service. | — |
@@ -55,15 +54,9 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `INTERNAL_ERROR` | 500 | `api_error` | An unexpected error occurred. | `null` |
 | `SERVICE_UNAVAILABLE` | 503 | `api_error` | Service temporarily unavailable. | `null` |
 
-### `INSUFFICIENT_SCOPE`
-
-Returned by **identity** when a restricted credential mints a key and requests a scope it does not have. HTTP **403**. `message` names the missing labels (`This credential can't grant admin, projects:write.`). `details.scopes` is that same list. An omitted scope list is not this error: the new credential inherits the caller's scopes. The gateway's route check stays **403** `FORBIDDEN`.
-
-Also returned when the caller assigns a role, or acts on a member through the org address, and lacks a label of that role ([`roles.md`](roles.md#grant-cap)). `message` names the role (`You can't assign the owner role.`, `You can't change a member with the owner role.`). `details.scopes` lists the missing labels, `["*"]` for an unrestricted role.
-
 ### `FORBIDDEN`
 
-Returned by the **gateway** when the caller's effective scopes share no label with the route's `required_scopes`. `details.required_scopes` is the route's list. Any one of those labels would have admitted the request.
+Returned by the **gateway** when the member's role labels share no label with the route's `required_scopes`. `details.required_scopes` is the route's list. Any one of those labels would have admitted the request.
 
 ### `UNAUTHORIZED`
 

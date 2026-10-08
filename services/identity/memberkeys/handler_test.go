@@ -13,6 +13,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 
 	"github.com/plat5dev/plat5/identity/errors"
+	"github.com/plat5dev/plat5/identity/internal/apikey"
 	"github.com/plat5dev/plat5/identity/orgs"
 )
 
@@ -33,7 +34,7 @@ func TestServiceAccountKeysAreMemberKeys(t *testing.T) {
 	h := &Handler{store: keys, orgStore: org, prefix: testPrefix}
 	app := testKeyApp(h)
 
-	code, body := doJSON(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa1/api-keys", `{"name":"ci","scopes":["widgets:read"]}`)
+	code, body := doJSON(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa1/api-keys", `{"name":"ci"}`)
 	if code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", code, body)
 	}
@@ -44,15 +45,15 @@ func TestServiceAccountKeysAreMemberKeys(t *testing.T) {
 	if created.Name != "ci" || !strings.HasPrefix(created.Key, testPrefix) || !strings.HasPrefix(created.KeyPrefix, testPrefix) {
 		t.Fatalf("create: %+v", created)
 	}
-	if created.Scopes == nil || len(*created.Scopes) != 1 || (*created.Scopes)[0] != "widgets:read" {
-		t.Fatalf("scopes: %+v", created.Scopes)
-	}
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := raw["member_id"]; ok {
 		t.Fatalf("create must not echo member_id: %s", body)
+	}
+	if _, ok := raw["scopes"]; ok {
+		t.Fatalf("create must not echo scopes: %s", body)
 	}
 	if _, ok := raw["key"]; !ok {
 		t.Fatalf("plaintext missing: %s", body)
@@ -168,9 +169,9 @@ func TestServiceAccountKeyAddress(t *testing.T) {
 		t.Fatalf("suspended member: %+v", keys.keys[len(keys.keys)-1])
 	}
 
-	code, body = doJSON(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa1/api-keys", `{"scopes":["BAD"]}`)
+	code, body = doJSON(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa1/api-keys", `{"scopes":["widgets:read"]}`)
 	if code != http.StatusUnprocessableEntity {
-		t.Fatalf("bad scopes: %d %s", code, body)
+		t.Fatalf("scopes must be refused: %d %s", code, body)
 	}
 
 	code, body = doJSON(t, app, http.MethodGet, "/organizations/org1/service-accounts/sa2/api-keys", "")
@@ -219,7 +220,7 @@ func testKeyApp(h *Handler) *fiber.App {
 	return app
 }
 
-func TestRestrictedCallerCannotMintWiderMemberKey(t *testing.T) {
+func TestMemberKeyRefusesScopes(t *testing.T) {
 	keys := &fakeKeys{}
 	org := &fakeOrgs{}
 	org.add(saFixture("org1", "sa1", "mem-sa", orgs.StatusActive))
@@ -231,84 +232,25 @@ func TestRestrictedCallerCannotMintWiderMemberKey(t *testing.T) {
 	}
 	h := &Handler{store: keys, orgStore: org, prefix: testPrefix}
 	app := testKeyApp(h)
-	caller := map[string]string{"X-Plat5-Scopes": "projects:read"}
 
-	code, body := doJSONHeader(t, app, http.MethodPost, "/members/mem-user/api-keys", `{}`, caller)
+	for _, path := range []string{"/members/mem-user/api-keys", "/organizations/org1/service-accounts/sa1/api-keys"} {
+		for _, req := range []string{`{"scopes":["admin"]}`, `{"scopes":[]}`} {
+			code, body := doJSON(t, app, http.MethodPost, path, req)
+			assertScopesRefused(t, code, body)
+		}
+	}
+	if len(keys.keys) != 0 {
+		t.Fatalf("refused mint was stored: %d", len(keys.keys))
+	}
+
+	code, body := doJSON(t, app, http.MethodPost, "/members/mem-user/api-keys", `{"scopes":null}`)
 	if code != http.StatusCreated {
-		t.Fatalf("inherit status=%d body=%s", code, body)
+		t.Fatalf("null scopes is omitted: %d %s", code, body)
 	}
-	created := decodeCreate(t, body)
-	if created.Scopes == nil || len(*created.Scopes) != 1 || (*created.Scopes)[0] != "projects:read" {
-		t.Fatalf("omitted scopes must inherit, not null: %+v", created.Scopes)
-	}
-	if keys.keys[0].Scopes == nil || len(keys.keys[0].Scopes) != 1 || keys.keys[0].Scopes[0] != "projects:read" {
-		t.Fatalf("stored: %#v", keys.keys[0].Scopes)
-	}
-
-	code, body = doJSONHeader(t, app, http.MethodPost, "/members/mem-user/api-keys", `{"scopes":["admin"]}`, caller)
-	assertInsufficientScope(t, code, body, "admin")
-	if len(keys.keys) != 1 {
-		t.Fatalf("rejected mint was stored: %d", len(keys.keys))
-	}
-
-	code, body = doJSONHeader(t, app, http.MethodPost, "/members/mem-user/api-keys", `{"scopes":["projects:read","admin"]}`, caller)
-	assertInsufficientScope(t, code, body, "admin")
-
-	code, body = doJSONHeader(t, app, http.MethodPost, "/members/mem-user/api-keys", `{"scopes":[]}`, caller)
-	if code != http.StatusCreated {
-		t.Fatalf("narrower empty: %d %s", code, body)
-	}
-	narrowed := decodeCreate(t, body)
-	if narrowed.Scopes == nil || len(*narrowed.Scopes) != 0 {
-		t.Fatalf("explicit empty must stay empty: %+v", narrowed.Scopes)
-	}
-
-	code, body = doJSONHeader(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa1/api-keys", `{"scopes":["admin"]}`, caller)
-	assertInsufficientScope(t, code, body, "admin")
-	code, body = doJSONHeader(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa1/api-keys", `{}`, caller)
-	if code != http.StatusCreated {
-		t.Fatalf("sa inherit: %d %s", code, body)
-	}
-	saKey := decodeCreate(t, body)
-	if saKey.Scopes == nil || len(*saKey.Scopes) != 1 || (*saKey.Scopes)[0] != "projects:read" {
-		t.Fatalf("sa scopes: %+v", saKey.Scopes)
-	}
-	if keys.keys[len(keys.keys)-1].MemberID != "mem-sa" {
-		t.Fatalf("sa member: %+v", keys.keys[len(keys.keys)-1])
-	}
-
-	code, body = doJSON(t, app, http.MethodPost, "/members/mem-user/api-keys", `{"scopes":["admin"]}`)
-	if code != http.StatusCreated {
-		t.Fatalf("unrestricted caller: %d %s", code, body)
-	}
-	open := decodeCreate(t, body)
-	if open.Scopes == nil || len(*open.Scopes) != 1 || (*open.Scopes)[0] != "admin" {
-		t.Fatalf("unrestricted may request admin: %+v", open.Scopes)
-	}
-	code, body = doJSON(t, app, http.MethodPost, "/members/mem-user/api-keys", `{}`)
-	if code != http.StatusCreated {
-		t.Fatalf("unrestricted omit: %d %s", code, body)
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(body, &raw); err != nil {
-		t.Fatal(err)
-	}
-	if scopes, ok := raw["scopes"]; !ok || scopes != nil {
-		t.Fatalf("unrestricted omit must stay null: %s", body)
-	}
-
-	code, body = doJSONHeader(t, app, http.MethodPost, "/members/mem-user/api-keys", `{}`, map[string]string{"X-Plat5-Scopes": "NOT A SCOPE"})
-	if code != http.StatusInternalServerError {
-		t.Fatalf("bad caller header: %d %s", code, body)
-	}
+	decodeCreate(t, body)
 }
 
 func doJSON(t *testing.T, app *fiber.App, method, path, body string) (int, []byte) {
-	t.Helper()
-	return doJSONHeader(t, app, method, path, body, nil)
-}
-
-func doJSONHeader(t *testing.T, app *fiber.App, method, path, body string, headers map[string]string) (int, []byte) {
 	t.Helper()
 	var rdr io.Reader
 	if body != "" {
@@ -317,9 +259,6 @@ func doJSONHeader(t *testing.T, app *fiber.App, method, path, body string, heade
 	req := httptest.NewRequest(method, path, rdr)
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
-	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
 	}
 	resp, err := app.Test(req)
 	if err != nil {
@@ -342,40 +281,28 @@ func decodeCreate(t *testing.T, body []byte) CreateResponse {
 	return created
 }
 
-func assertInsufficientScope(t *testing.T, code int, body []byte, missing string) {
+func assertScopesRefused(t *testing.T, code int, body []byte) {
 	t.Helper()
-	if code != http.StatusForbidden {
+	if code != http.StatusUnprocessableEntity {
 		t.Fatalf("status=%d body=%s", code, body)
 	}
 	var env struct {
 		Error struct {
-			Type    string         `json:"type"`
-			Code    string         `json:"code"`
-			Message string         `json:"message"`
-			Details map[string]any `json:"details"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Details struct {
+				Fields []struct {
+					Path string `json:"path"`
+				} `json:"fields"`
+			} `json:"details"`
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(body, &env); err != nil {
 		t.Fatal(err)
 	}
-	if env.Error.Type != "invalid_request_error" || env.Error.Code != "INSUFFICIENT_SCOPE" {
+	if env.Error.Code != "VALIDATION_ERROR" || env.Error.Message != apikey.ScopesRefused ||
+		len(env.Error.Details.Fields) != 1 || env.Error.Details.Fields[0].Path != "scopes" {
 		t.Fatalf("envelope: %s", body)
-	}
-	if !strings.Contains(env.Error.Message, missing) {
-		t.Fatalf("message %q does not name %s", env.Error.Message, missing)
-	}
-	list, ok := env.Error.Details["scopes"].([]any)
-	if !ok {
-		t.Fatalf("details: %s", body)
-	}
-	found := false
-	for _, item := range list {
-		if item == missing {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("details scopes missing %s: %s", missing, body)
 	}
 }
 

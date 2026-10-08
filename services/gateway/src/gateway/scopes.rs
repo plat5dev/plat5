@@ -1,16 +1,13 @@
-/// Whether an API key's scope list satisfies a route's `required_scopes`.
+/// Whether the caller's labels satisfy a route's `required_scopes`.
 ///
 /// - No `required_scopes` on the route → allow.
-/// - `key_scopes == None` (JWT, unrestricted key, or unrestricted session) → skip / allow.
+/// - `granted == None` (a user, or a member whose role is unrestricted) → skip / allow.
 /// - Otherwise require a nonempty intersection.
-pub fn key_satisfies_required_scopes(
-    required: Option<&[String]>,
-    key_scopes: Option<&[String]>,
-) -> bool {
+pub fn satisfies_required_scopes(required: Option<&[String]>, granted: Option<&[String]>) -> bool {
     let Some(required) = required.filter(|r| !r.is_empty()) else {
         return true;
     };
-    let Some(granted) = key_scopes else {
+    let Some(granted) = granted else {
         return true;
     };
     required
@@ -27,48 +24,42 @@ mod tests {
     }
 
     #[test]
-    fn unrestricted_key_passes_required_scopes() {
+    fn unrestricted_role_passes_required_scopes() {
         let required = s(&["read"]);
-        assert!(key_satisfies_required_scopes(
-            Some(required.as_slice()),
-            None
-        ));
+        assert!(satisfies_required_scopes(Some(required.as_slice()), None));
     }
 
     #[test]
-    fn jwt_skips_required_scopes() {
+    fn user_skips_required_scopes() {
         let required = s(&["read", "write"]);
-        assert!(key_satisfies_required_scopes(
-            Some(required.as_slice()),
-            None
-        ));
+        assert!(satisfies_required_scopes(Some(required.as_slice()), None));
     }
 
     #[test]
-    fn scoped_key_hit() {
+    fn role_label_hit() {
         let required = s(&["read", "write"]);
         let granted = s(&["write", "reports.export"]);
-        assert!(key_satisfies_required_scopes(
+        assert!(satisfies_required_scopes(
             Some(required.as_slice()),
             Some(granted.as_slice())
         ));
     }
 
     #[test]
-    fn scoped_key_miss() {
+    fn role_label_miss() {
         let required = s(&["read"]);
         let granted = s(&["write"]);
-        assert!(!key_satisfies_required_scopes(
+        assert!(!satisfies_required_scopes(
             Some(required.as_slice()),
             Some(granted.as_slice())
         ));
     }
 
     #[test]
-    fn empty_key_scopes_grant_nothing() {
+    fn empty_role_grants_nothing() {
         let required = s(&["read"]);
         let granted: Vec<String> = vec![];
-        assert!(!key_satisfies_required_scopes(
+        assert!(!satisfies_required_scopes(
             Some(required.as_slice()),
             Some(granted.as_slice())
         ));
@@ -77,13 +68,10 @@ mod tests {
     #[test]
     fn no_required_scopes_allows_anything() {
         let granted = s(&["read"]);
-        assert!(key_satisfies_required_scopes(
-            None,
-            Some(granted.as_slice())
-        ));
-        assert!(key_satisfies_required_scopes(None, None));
+        assert!(satisfies_required_scopes(None, Some(granted.as_slice())));
+        assert!(satisfies_required_scopes(None, None));
         let empty: Vec<String> = vec![];
-        assert!(key_satisfies_required_scopes(
+        assert!(satisfies_required_scopes(
             Some(empty.as_slice()),
             Some(granted.as_slice())
         ));

@@ -4,8 +4,6 @@ import (
 	"context"
 	"strings"
 
-	"github.com/gofiber/fiber/v3"
-
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/roles"
@@ -20,16 +18,6 @@ type Handler struct {
 
 func NewHandler(store *Store, roleSet *roles.Set) *Handler {
 	return &Handler{store: store, roles: roleSet}
-}
-
-// callerScopes is the caller's effective scopes for the grant cap. nil is unrestricted.
-// A malformed header is a platform bug: 500.
-func callerScopes(c fiber.Ctx) ([]string, error) {
-	caller, err := httpx.CallerScopes(c)
-	if err != nil {
-		return nil, httpx.MapMintScopes(c.Context(), err)
-	}
-	return caller, nil
 }
 
 func (h *Handler) requireOrganization(ctx context.Context, orgID string) error {

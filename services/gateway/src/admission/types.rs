@@ -7,47 +7,41 @@ pub struct AuthContext {
     pub user_id: String,
     pub auth_type: AuthType,
     pub kid: Option<String>,
-    /// Granted scopes. None = JWT or unrestricted key (skip route required_scopes).
-    pub key_scopes: Option<Vec<String>>,
 }
 
 /// Successful route admission. This is the projection, not the proof.
 /// Organization does not carry `member_id`. Member does not carry `user_id`.
+///
+/// A credential carries its principal's labels. A member's are its role's,
+/// resolved by identity at validate. A user has no role, so no labels to check.
 pub enum Admission {
     Public,
     User {
         user_id: String,
         auth_type: AuthType,
         kid: Option<String>,
-        key_scopes: Option<Vec<String>>,
     },
     Organization {
         organization_id: String,
-        key_scopes: Option<Vec<String>>,
+        scopes: Option<Vec<String>>,
     },
     Member {
         organization_id: String,
         member_id: String,
-        key_scopes: Option<Vec<String>>,
+        scopes: Option<Vec<String>>,
     },
 }
 
 impl Admission {
-    /// Granted scopes when the credential is restricted (non-null list, including empty).
-    /// None = JWT, unrestricted key, unrestricted session, or public — skip required_scopes.
-    pub fn key_scopes(&self) -> Option<&[String]> {
+    /// The member's labels when its role is restricted (non-null list, including empty).
+    /// None = unrestricted role, a user, or public — skip required_scopes.
+    pub fn scopes(&self) -> Option<&[String]> {
         match self {
-            Admission::User {
-                key_scopes: Some(s),
-                ..
-            }
-            | Admission::Organization {
-                key_scopes: Some(s),
-                ..
+            Admission::Organization {
+                scopes: Some(s), ..
             }
             | Admission::Member {
-                key_scopes: Some(s),
-                ..
+                scopes: Some(s), ..
             } => Some(s.as_slice()),
             _ => None,
         }

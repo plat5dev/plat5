@@ -103,13 +103,6 @@ func (h *Handler) CreateMember(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	caller, err := callerScopes(c)
-	if err != nil {
-		return err
-	}
-	if err := h.roles.CheckAssign(caller, role); err != nil {
-		return err
-	}
 
 	now := time.Now().UTC()
 	m := &Member{
@@ -145,7 +138,7 @@ func (h *Handler) GetMember(c fiber.Ctx) error {
 	return c.JSON(toMemberResponse(m))
 }
 
-// UpdateMember is the self address: status only, no grant cap.
+// UpdateMember is the self address: status only.
 func (h *Handler) UpdateMember(c fiber.Ctx) error {
 	ctx := c.Context()
 	memberID := httpx.PathParam(c, "member_id")
@@ -176,7 +169,7 @@ func (h *Handler) UpdateMember(c fiber.Ctx) error {
 	return c.JSON(toMemberResponse(m))
 }
 
-// DeleteMember is the self address: a member leaves, no grant cap.
+// DeleteMember is the self address: a member leaves.
 func (h *Handler) DeleteMember(c fiber.Ctx) error {
 	return h.removeMember(c, "")
 }
@@ -198,7 +191,6 @@ func (h *Handler) GetOrgMember(c fiber.Ctx) error {
 }
 
 // UpdateOrgMember is the org acting on one of its members: status and role.
-// The caller must cover the member's current role, and any role it assigns.
 func (h *Handler) UpdateOrgMember(c fiber.Ctx) error {
 	ctx := c.Context()
 	orgID := httpx.PathParam(c, "organization_id")
@@ -227,18 +219,7 @@ func (h *Handler) UpdateOrgMember(c fiber.Ctx) error {
 		}
 		role = chosen
 	}
-	caller, err := callerScopes(c)
-	if err != nil {
-		return err
-	}
-
 	m, err := h.store.MutateMember(ctx, orgID, memberID, func(target *Member, members []*Member) error {
-		if err := h.roles.CheckActOn(caller, target.Role); err != nil {
-			return err
-		}
-		if err := h.roles.CheckAssign(caller, role); err != nil {
-			return err
-		}
 		prior := *target
 		if status != "" {
 			target.Status = status
@@ -258,32 +239,18 @@ func (h *Handler) UpdateOrgMember(c fiber.Ctx) error {
 	return c.JSON(toMemberResponse(m))
 }
 
-// DeleteOrgMember is the org removing one of its members. Grant cap on the member's role.
+// DeleteOrgMember is the org removing one of its members.
 func (h *Handler) DeleteOrgMember(c fiber.Ctx) error {
 	return h.removeMember(c, httpx.PathParam(c, "organization_id"))
 }
 
-// removeMember soft-removes at either address. orgID "" is the self address,
-// which skips the grant cap. Both keep the last member and the last creator_role holder.
+// removeMember soft-removes at either address. orgID "" is the self address.
+// Both keep the last member and the last creator_role holder.
 func (h *Handler) removeMember(c fiber.Ctx, orgID string) error {
 	ctx := c.Context()
 	memberID := httpx.PathParam(c, "member_id")
 
-	var caller []string
-	if orgID != "" {
-		scopes, err := callerScopes(c)
-		if err != nil {
-			return err
-		}
-		caller = scopes
-	}
-
 	_, err := h.store.MutateMember(ctx, orgID, memberID, func(target *Member, members []*Member) error {
-		if orgID != "" {
-			if err := h.roles.CheckActOn(caller, target.Role); err != nil {
-				return err
-			}
-		}
 		if err := rejectLastMember(countNonRemoved(members), "member_id"); err != nil {
 			return err
 		}

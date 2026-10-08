@@ -18,8 +18,8 @@ pub struct MemberSessionValidation {
     pub valid: bool,
     pub member_id: Option<String>,
     pub organization_id: Option<String>,
-    /// None = unrestricted (skip `required_scopes`). Some = restricted, including empty.
-    /// A session minted from a restricted user key carries that key's scopes.
+    /// The member's role labels. None = unrestricted (skip `required_scopes`).
+    /// Some = restricted, including empty.
     #[serde(default)]
     pub scopes: Option<Vec<String>>,
 }

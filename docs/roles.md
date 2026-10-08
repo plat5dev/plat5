@@ -6,15 +6,16 @@ Boundary: [`identity-boundary.md`](identity-boundary.md). Identity API: [`identi
 
 ## The model
 
-Three things decide what a member credential may call.
+Two things decide what a member credential may call.
 
 | Piece | Says | Owner |
 |-------|------|-------|
 | Route `required_scopes` | Which labels the route needs (any one of them) | The service's `routes.yml` |
 | Role | Which labels the member holds | The deployment's roles file, resolved by identity |
-| Credential `scopes` | Which of those labels this key or session carries | Whoever minted it |
 
-Effective scopes are the role's labels intersected with the credential's scopes. The gateway checks effective scopes against the route. It does not see roles.
+A credential belongs to a principal and carries that principal's permissions. A member key or member session carries the member's role labels. Nothing narrows it: keys and sessions have no scopes of their own. To give a machine less, give it a service account with a smaller role.
+
+The gateway checks the member's labels against the route. It does not see roles. Services see neither: the gateway is the only place this level of access is decided.
 
 User credentials on `user` routes have no role. Roles are org membership.
 
@@ -47,23 +48,21 @@ Unknown keys refuse boot.
 
 ## Resolution
 
-Identity resolves the role at member key validate and member session validate. The validate `scopes` is the effective set. The gateway never gets the role, only that set.
+Identity resolves the role at member key validate and member session validate. The validate `scopes` is the role's labels. The gateway never gets the role, only its labels.
 
-| Member role | Credential `scopes` | Validate `scopes` |
-|-------------|---------------------|-------------------|
-| `["*"]` or `NULL` | `null` | `null` |
-| `["*"]` or `NULL` | a list | that list |
-| a label list | `null` | the role's labels |
-| a label list | a list | the intersection |
-| a slug not in the file | any | `[]` |
+| Member role | Validate `scopes` |
+|-------------|-------------------|
+| `["*"]` or `NULL` | `null` |
+| a label list | that list |
+| a slug not in the file | `[]` |
 
-`*` does not leave identity. On the wire, unrestricted is still `null` and an absent `X-Plat5-Scopes`.
+`*` does not leave identity. On the wire, unrestricted is `null`.
 
 A `NULL` role is unrestricted. That is every member when there is no roles file, and every row written before there was one. With a roles file, every new member row gets a role. To tighten existing members, assign them roles.
 
 A slug removed from the file grants nothing, so members who still hold it fail closed.
 
-The gateway caches validate for `APIKEY_CACHE_TTL_SECS`. A role change is visible at the edge when that TTL expires, like a suspend. It applies to existing keys and sessions, because validate intersects again every time.
+The gateway caches validate for `APIKEY_CACHE_TTL_SECS`. A role change is visible at the edge when that TTL expires, like a suspend. It applies to existing keys and sessions, because validate resolves the role every time. A key follows its member's role: it gains labels the role gains, and loses labels the role loses.
 
 ## Assigning
 
@@ -77,26 +76,17 @@ The gateway caches validate for `APIKEY_CACHE_TTL_SECS`. A role change is visibl
 
 Without a roles file, `role` in a body is **422**. With one, a slug not in the file is **422**.
 
-## Grant cap
+## Who may assign
 
-The caller's effective scopes arrive on `X-Plat5-Scopes`, as they do for key mint. A caller cannot hand out more than it holds, and cannot act on a member who holds more than it does.
+There is no grant cap. Identity does not compare the caller to the role it assigns, or to the member it acts on. Whoever may call the route may assign any role, including one with more labels than its own, and may act on any member. The route's labels decide who may call. That is the gateway's check ([`routes.md`](routes.md)).
 
-- Assigning a role needs every label of that role. A `["*"]` role needs an unrestricted caller.
-- Changing, suspending, or removing another member through the org address needs every label of that member's current role. The same holds for a service account, and for minting or revoking its keys.
-- Org create is not capped. The creator is the first member.
-- Redeem is not capped. The invite's creator was, at create.
+A service account is the org's, not its creator's. Its role is its own, and its keys carry that role. Whoever may create a service account, or mint its keys, may create one with any role.
 
-A miss is **403** `INSUFFICIENT_SCOPE`. `details.scopes` lists the missing labels (`["*"]` for an unrestricted role).
-
-An unrestricted caller (no header) passes. Without a roles file, a member credential is unrestricted unless its own scopes narrow it, so the cap is the key mint cap and nothing more.
+So the labels that reach these routes are as strong as the strongest role. In the starter roles file, `admin` holds `org:members:write`, so an `admin` can make any member, itself included, an `owner`. Give those labels only to members you would trust with every role.
 
 ## Last creator role
 
 A write may not take an org's count of non-removed members holding `creator_role` from one to zero. That covers a demotion, a remove at either address, and a service-account delete. **422**. Suspending is allowed, as it is for the last member. Deleting the org is not blocked.
-
-## Keys minted by a role-restricted caller
-
-Key mint copies the caller's effective scopes when `scopes` is omitted ([`identity.md`](identity.md)). For a caller whose role has a label list, that copy is a snapshot. The key does not gain labels the role gains later. It still loses labels the role loses, because validate intersects again. A caller whose effective scopes are unrestricted mints `NULL`, which follows the role.
 
 ## Listing roles
 
@@ -131,10 +121,13 @@ The catalog ([`services/identity/routes.yml`](../services/identity/routes.yml)) 
 
 Labels are opaque. These names live in the catalog, not in identity code. An operator who edits the catalog edits the labels.
 
-A restricted key without these labels gets **403** on these routes. That includes keys minted before the catalog carried the labels.
+A member whose role lacks these labels gets **403** on these routes, with any of its keys or sessions.
 
 ## Not here
 
+- Key or session scopes, or any other way to narrow a credential below its principal
+- A grant cap: comparing the caller to the role it assigns, or to the member it acts on
+- Telling services the caller's role or labels
 - Role names or meanings in Plat5 code
 - Roles in the route registry, etcd, or the gateway
 - More than one role per member

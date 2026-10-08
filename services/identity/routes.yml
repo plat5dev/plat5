@@ -3,7 +3,7 @@
 # GET /organizations is served by identity and omitted here.
 #
 # Writes that manage the org carry labels. A member's role grants labels
-# (docs/roles.md); a key or session can narrow them. Reads stay unlabeled,
+# (docs/roles.md); its keys and sessions carry them. Reads stay unlabeled,
 # except the invite list, which returns live tokens. Labels are opaque: edit
 # them here, not in identity.
 services:

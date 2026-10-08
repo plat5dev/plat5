@@ -7,7 +7,7 @@ import (
 
 func TestExpiredAtBoundary(t *testing.T) {
 	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
-	s := New("mem_1", "plat5-ms-1-secret", "plat5-ms-1-", nil, now)
+	s := New("mem_1", "plat5-ms-1-secret", "plat5-ms-1-", now)
 	if s.Expired(now) {
 		t.Fatal("fresh session is not expired")
 	}

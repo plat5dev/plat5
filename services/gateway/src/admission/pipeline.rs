@@ -14,10 +14,11 @@ use super::types::{
 };
 
 /// Member key or member session, before the scope drops fields.
+/// `scopes` is the member's role labels.
 struct MemberProof {
     member_id: String,
     organization_id: String,
-    key_scopes: Option<Vec<String>>,
+    scopes: Option<Vec<String>>,
 }
 
 /// Composes auth domains into route-scope admission decisions.
@@ -63,7 +64,6 @@ impl Admissor {
                 user_id: auth.user_id,
                 auth_type: auth.auth_type,
                 kid: auth.kid,
-                key_scopes: auth.key_scopes,
             });
         }
 
@@ -77,7 +77,6 @@ impl Admissor {
             user_id: auth.user_id,
             auth_type: auth.auth_type,
             kid: auth.kid,
-            key_scopes: auth.key_scopes,
         })
     }
 
@@ -113,12 +112,12 @@ impl Admissor {
         match scope {
             RouteScope::Organization => Ok(Admission::Organization {
                 organization_id: proof.organization_id,
-                key_scopes: proof.key_scopes,
+                scopes: proof.scopes,
             }),
             RouteScope::Member => Ok(Admission::Member {
                 organization_id: proof.organization_id,
                 member_id: proof.member_id,
-                key_scopes: proof.key_scopes,
+                scopes: proof.scopes,
             }),
             RouteScope::Public | RouteScope::User => Err(AdmitError::Internal(
                 "member credential on a user subject route",
@@ -186,7 +185,7 @@ impl Admissor {
             } => Ok(MemberProof {
                 member_id,
                 organization_id,
-                key_scopes: scopes,
+                scopes,
             }),
         }
     }
@@ -253,7 +252,7 @@ impl Admissor {
             } => Ok(MemberProof {
                 member_id,
                 organization_id,
-                key_scopes: scopes,
+                scopes,
             }),
         }
     }
@@ -278,7 +277,6 @@ impl Admissor {
                         user_id,
                         auth_type: AuthType::Jwt,
                         kid: cached_claims.header.kid.clone(),
-                        key_scopes: None,
                     });
                 }
 
@@ -307,7 +305,6 @@ impl Admissor {
                     user_id,
                     auth_type: AuthType::Jwt,
                     kid: Some(kid),
-                    key_scopes: None,
                 })
             }
             _ => Err(AuthError::InvalidAuthorizationHeader),
@@ -330,10 +327,7 @@ impl Admissor {
                                 ));
                             }
                         };
-                        Ok(CachedUserApiKey::Valid {
-                            user_id,
-                            scopes: v.scopes.clone(),
-                        })
+                        Ok(CachedUserApiKey::Valid { user_id })
                     }
                     Err(UserApiKeyError::InvalidKey) => Ok(CachedUserApiKey::Invalid),
                     Err(e) => Err(e),
@@ -359,11 +353,10 @@ impl Admissor {
 
         match cached {
             CachedUserApiKey::Invalid => Err(AdmitError::Auth(AuthError::InvalidUserApiKey)),
-            CachedUserApiKey::Valid { user_id, scopes } => Ok(AuthContext {
+            CachedUserApiKey::Valid { user_id } => Ok(AuthContext {
                 user_id,
                 auth_type: AuthType::UserApiKey,
                 kid: None,
-                key_scopes: scopes,
             }),
         }
     }

@@ -31,7 +31,7 @@ type Handler struct {
 	store    keyStore
 	orgStore orgReader
 	prefix   string
-	// roles resolves effective scopes at validate and caps acting on a service account.
+	// roles resolves the member's labels at validate.
 	roles *roles.Set
 }
 
@@ -40,17 +40,17 @@ func NewHandler(store *Store, orgStore *orgs.Store, prefix string, roleSet *role
 }
 
 type CreateRequest struct {
-	Name   string    `json:"name"`
+	Name string `json:"name"`
+	// Scopes is refused when present. See apikey.ScopesRefused.
 	Scopes *[]string `json:"scopes"`
 }
 
 type CreateResponse struct {
-	ID        string    `json:"id"`
-	Key       string    `json:"key"`
-	KeyPrefix string    `json:"key_prefix"`
-	Name      string    `json:"name"`
-	Scopes    *[]string `json:"scopes"`
-	CreatedAt string    `json:"created_at"`
+	ID        string `json:"id"`
+	Key       string `json:"key"`
+	KeyPrefix string `json:"key_prefix"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at"`
 }
 
 type ListResponse struct {
@@ -59,12 +59,11 @@ type ListResponse struct {
 }
 
 type KeyResponse struct {
-	ID        string    `json:"id"`
-	KeyPrefix string    `json:"key_prefix"`
-	Name      string    `json:"name"`
-	Scopes    *[]string `json:"scopes"`
-	CreatedAt string    `json:"created_at"`
-	RevokedAt *string   `json:"revoked_at"`
+	ID        string  `json:"id"`
+	KeyPrefix string  `json:"key_prefix"`
+	Name      string  `json:"name"`
+	CreatedAt string  `json:"created_at"`
+	RevokedAt *string `json:"revoked_at"`
 }
 
 type ValidateRequest struct {
@@ -86,13 +85,11 @@ func (h *Handler) Create(c fiber.Ctx) error {
 	return h.create(c, memberID)
 }
 
-// CreateForServiceAccount acts on the service account's member: grant cap on its role.
+// CreateForServiceAccount mints a key for the service account's member. The key
+// carries the service account's role, not the caller's.
 func (h *Handler) CreateForServiceAccount(c fiber.Ctx) error {
 	sa, err := h.serviceAccount(c)
 	if err != nil {
-		return err
-	}
-	if err := h.checkActOn(c, sa); err != nil {
 		return err
 	}
 	return h.create(c, sa.MemberID)
@@ -109,13 +106,8 @@ func (h *Handler) create(c fiber.Ctx, memberID string) error {
 	if err != nil {
 		return errors.FieldError("name", "Name is too long.")
 	}
-	scopes, err := apikey.NormalizeScopes(req.Scopes)
-	if err != nil {
-		return mapScopeError(err)
-	}
-	scopes, err = httpx.ConstrainMint(c, scopes)
-	if err != nil {
-		return httpx.MapMintScopes(ctx, err)
+	if req.Scopes != nil {
+		return errors.FieldError("scopes", apikey.ScopesRefused)
 	}
 
 	plaintext, err := apikey.Generate(h.prefix)
@@ -124,7 +116,7 @@ func (h *Handler) create(c fiber.Ctx, memberID string) error {
 		return errors.InternalError()
 	}
 
-	apiKey := New(memberID, name, plaintext, h.prefix, scopes)
+	apiKey := New(memberID, name, plaintext, h.prefix)
 	if err := h.store.Create(ctx, apiKey); err != nil {
 		return httpx.MapDB(ctx, err, "failed to store member key", httpx.DBErr{})
 	}
@@ -136,7 +128,6 @@ func (h *Handler) create(c fiber.Ctx, memberID string) error {
 		Key:       plaintext,
 		KeyPrefix: apiKey.KeyPrefix,
 		Name:      apiKey.Name,
-		Scopes:    apikey.WireScopes(apiKey.Scopes),
 		CreatedAt: httpx.FormatTime(apiKey.CreatedAt),
 	})
 }
@@ -190,13 +181,9 @@ func (h *Handler) Revoke(c fiber.Ctx) error {
 	return h.revoke(c, memberID, httpx.PathParam(c, "key_id"))
 }
 
-// RevokeForServiceAccount acts on the service account's member: grant cap on its role.
 func (h *Handler) RevokeForServiceAccount(c fiber.Ctx) error {
 	sa, err := h.serviceAccount(c)
 	if err != nil {
-		return err
-	}
-	if err := h.checkActOn(c, sa); err != nil {
 		return err
 	}
 	return h.revoke(c, sa.MemberID, httpx.PathParam(c, "key_id"))
@@ -254,8 +241,8 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 		"valid":           true,
 		"member_id":       memberKey.Key.MemberID,
 		"organization_id": memberKey.OrganizationID,
-		// Effective: role grant ∩ the key's stored scopes. The role itself does not leave identity.
-		"scopes": apikey.WireScopesJSON(h.roles.Resolve(memberKey.MemberRole, memberKey.Key.Scopes)),
+		// The member's role labels. The role itself does not leave identity.
+		"scopes": apikey.WireScopesJSON(h.roles.Grants(memberKey.MemberRole)),
 	})
 }
 
@@ -288,15 +275,6 @@ func (h *Handler) serviceAccount(c fiber.Ctx) (*orgs.ServiceAccount, error) {
 	return sa, nil
 }
 
-// checkActOn is the grant cap on the service account's role (docs/roles.md).
-func (h *Handler) checkActOn(c fiber.Ctx, sa *orgs.ServiceAccount) error {
-	caller, err := httpx.CallerScopes(c)
-	if err != nil {
-		return httpx.MapMintScopes(c.Context(), err)
-	}
-	return h.roles.CheckActOn(caller, sa.Role)
-}
-
 func (h *Handler) invalid(c fiber.Ctx) error {
 	metrics.RecordKeyValidation(metrics.KeyScopeMember, false)
 	return c.JSON(ValidateResponse{Valid: false})
@@ -323,15 +301,7 @@ func toKeyResponse(k *APIKey) KeyResponse {
 		ID:        k.ID,
 		KeyPrefix: k.KeyPrefix,
 		Name:      k.Name,
-		Scopes:    apikey.WireScopes(k.Scopes),
 		CreatedAt: httpx.FormatTime(k.CreatedAt),
 		RevokedAt: httpx.FormatTimePtr(k.RevokedAt),
 	}
-}
-
-func mapScopeError(err error) error {
-	if se, ok := err.(*apikey.ScopeError); ok {
-		return errors.FieldError("scopes", se.Message)
-	}
-	return errors.FieldError("scopes", errors.FallbackValidation)
 }

@@ -29,7 +29,7 @@ use crate::error::{ApiError, ErrorKind};
 use crate::metrics;
 use crate::rate_limit::{RateLimitError, RateLimiter};
 use crate::route_map::{LimitBucket, Route, RouteLimiter, RouteMap, RouteScope};
-use scopes::key_satisfies_required_scopes;
+use scopes::satisfies_required_scopes;
 
 pub use crate::admission::parse_user_id_claim;
 pub use context::GatewayContext;
@@ -206,8 +206,7 @@ impl UserGateway {
             }
         };
 
-        if !key_satisfies_required_scopes(route.required_scopes.as_deref(), admission.key_scopes())
-        {
+        if !satisfies_required_scopes(route.required_scopes.as_deref(), admission.scopes()) {
             return response::write_json_error(
                 &self.cors,
                 session,
@@ -674,7 +673,7 @@ mod tests {
     fn org_admission(org: &str) -> Admission {
         Admission::Organization {
             organization_id: org.into(),
-            key_scopes: None,
+            scopes: None,
         }
     }
 
@@ -692,7 +691,6 @@ mod tests {
             user_id: "user-9".into(),
             auth_type: AuthType::Jwt,
             kid: None,
-            key_scopes: None,
         };
         assert_eq!(
             limit_subject(RouteScope::User, &admission, "1.2.3.4"),
@@ -714,7 +712,7 @@ mod tests {
         let admission = Admission::Member {
             organization_id: "org-1".into(),
             member_id: "mem-9".into(),
-            key_scopes: None,
+            scopes: None,
         };
         assert_eq!(
             limit_subject(RouteScope::Member, &admission, "1.2.3.4"),

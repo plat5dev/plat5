@@ -21,6 +21,7 @@ Read the doc, don’t re-derive:
 | Identity is a function of the URL. Who may call is the proxy. User-subject routes stay on `user` scope | [`docs/identity.md`](docs/identity.md) |
 | Service accounts are members with keys | identity.md |
 | A service account lives in exactly one org | identity.md |
+| A service account is the org's. Its role is its own, not bounded by whoever created it | identity.md, roles.md |
 | User keys and member keys are two products (prefix + table + validate URL) | identity.md |
 | Member sessions are not member keys (own prefix, table, validate URL). Validate does not return `user_id` | identity.md |
 | Add member by known `user_id` (immediate `active`) or invite redeem | identity.md |
@@ -37,7 +38,9 @@ Read the doc, don’t re-derive:
 | Admission cache in-process (positive + negative); singleflight; TTL is revoke/suspend/role-change latency | [`docs/gateway-contract.md`](docs/gateway-contract.md), [`docs/identity.md`](docs/identity.md) |
 | Gateway admits and fills the route subject into `upstream`. Resource authz stays in the service, or a policy engine it calls | identity-boundary |
 | Roles are the deployment's: `ROLES_FILE` on identity, read at boot. Plat5 names no roles. Identity resolves the role at validate. The gateway sees labels only | [`docs/roles.md`](docs/roles.md) |
-| Effective scopes = role labels ∩ credential scopes. A caller cannot assign a role, or act on a member, with labels it lacks | roles.md |
+| A credential carries its principal's permissions. Member keys and sessions carry the member's role labels. User credentials have no labels to check. No key or session scopes | roles.md |
+| No grant cap. Whoever may call a route may assign any role and act on any member. The route's labels are the only check | roles.md |
+| The gateway is the only access check before a service. Services are not told the caller's role or labels | [`docs/gateway-contract.md`](docs/gateway-contract.md) |
 | A member has two addresses: `/members/{member_id}` (itself) and `/organizations/{organization_id}/members/{member_id}` (the org acting on it) | identity.md |
 
 ## Stop conditions
@@ -55,7 +58,9 @@ Do not add these because they would be convenient:
 - Role names or meanings in Plat5 code (`owner` / `admin` / `member`), or getting a user id from `member_id` for org-scope apps
 - Roles in the route registry, etcd, or the gateway
 - More than one role per member, or per-org custom roles (deferred)
-- Renaming `X-Plat5-Scopes`, or a second header for the caller's authority
+- Telling services the caller's role or labels
+- Key or session `scopes`, or any other way to narrow a credential below its principal
+- A grant cap, or any identity check that compares the caller to the role it assigns or the member it acts on
 - Folding member sessions into `member_api_keys`, or returning `user_id` from session validate
 - A service-account key table, prefix, or validate URL (those keys are member keys)
 - Treating omitted identity routes as “feature off” (the process still serves them on the network)

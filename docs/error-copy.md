@@ -35,7 +35,6 @@ Use these only when a more specific sentence does not apply.
 | `VALIDATION_ERROR` | 422 | That doesn't look right. |
 | `UNAUTHORIZED` | 401 | Authentication required. |
 | `FORBIDDEN` | 403 | You don't have permission to do that. |
-| `INSUFFICIENT_SCOPE` | 403 | This credential can't grant that scope. |
 | `NOT_FOUND` | 404 | Resource not found. |
 | `CONFLICT` | 409 | That already exists. |
 | `PAYLOAD_TOO_LARGE` | 413 | Request body is too large. |
@@ -81,10 +80,8 @@ Members, invites, and service accounts.
 | `role` not a slug in the roles file | That role doesn't exist. |
 | `role` sent with no roles file | Roles aren't set up for this deployment. |
 | Demote, remove, or delete the last `creator_role` holder | Keep at least one member with the {creator_role} role. |
-| Assign a role with a label the caller lacks | You can't assign the {role} role. |
-| Act on a member whose role has a label the caller lacks | You can't change a member with the {role} role. |
 
-The last two are **403** `INSUFFICIENT_SCOPE`. The rest are **422** `VALIDATION_ERROR` with `path` `role`, except the last-holder rule on a remove, whose `path` matches the last-member rule (`member_id`, or `service_account_id` on a service-account delete).
+All are **422** `VALIDATION_ERROR` with `path` `role`, except the last-holder rule on a remove, whose `path` matches the last-member rule (`member_id`, or `service_account_id` on a service-account delete).
 
 ### Service accounts
 
@@ -115,11 +112,7 @@ Unknown tokens use the generic **404** `Resource not found.` (existence policy; 
 | When | `message` |
 |------|-----------|
 | Name > 128 | Name is too long. |
-| Scope label not `[a-z0-9:._-]+` | That scope label isn't valid. |
-| Scope label > 64 chars | That scope label is too long. |
-| More than 32 scopes | Too many scopes. |
-| Duplicate scope labels | Scope labels must be unique. |
-| Mint asks for a scope the caller lacks | This credential can't grant {labels}. |
+| `scopes` sent (not `null`) | Keys carry their owner's permissions and can't be narrowed. |
 
 Internal validate (`key` / `token` / `key_id` required) is not product UI. Fallback 422 is enough.
 

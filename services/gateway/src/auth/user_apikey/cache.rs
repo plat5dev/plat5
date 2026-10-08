@@ -5,10 +5,7 @@ use crate::auth::AuthType;
 
 #[derive(Clone, Debug)]
 pub enum CachedUserApiKey {
-    Valid {
-        user_id: String,
-        scopes: Option<Vec<String>>,
-    },
+    Valid { user_id: String },
     Invalid,
 }
 

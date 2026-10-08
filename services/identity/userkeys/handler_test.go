@@ -14,45 +14,61 @@ import (
 	"github.com/plat5dev/plat5/identity/errors"
 )
 
-func TestRestrictedCallerCannotMintWiderUserKey(t *testing.T) {
+func TestUserKeyHasNoScopes(t *testing.T) {
 	keys := &fakeKeys{}
 	h := &Handler{store: keys, prefix: "plat5-sk-1-"}
 	app := fiber.New(fiber.Config{ErrorHandler: errors.FiberErrorHandler})
 	h.MountPublic(app.Group("/users"))
-	caller := map[string]string{"X-Plat5-Scopes": "profile:read"}
+	h.MountInternal(app.Group("/internal"))
 
-	code, body := doJSON(t, app, http.MethodPost, "/users/user1/api-keys", `{}`, caller)
+	code, body := doJSON(t, app, http.MethodPost, "/users/user1/api-keys", `{"name":"ci"}`)
 	if code != http.StatusCreated {
-		t.Fatalf("inherit: %d %s", code, body)
-	}
-	if keys.keys[0].UserID != "user1" || keys.keys[0].Scopes == nil || len(keys.keys[0].Scopes) != 1 || keys.keys[0].Scopes[0] != "profile:read" {
-		t.Fatalf("stored: %+v", keys.keys[0])
+		t.Fatalf("create: %d %s", code, body)
 	}
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {
 		t.Fatal(err)
 	}
-	scopes, ok := raw["scopes"].([]any)
-	if !ok || len(scopes) != 1 || scopes[0] != "profile:read" {
-		t.Fatalf("body scopes: %s", body)
+	if _, ok := raw["scopes"]; ok {
+		t.Fatalf("create must not echo scopes: %s", body)
+	}
+	if len(keys.keys) != 1 || keys.keys[0].UserID != "user1" {
+		t.Fatalf("stored: %+v", keys.keys)
 	}
 
-	code, body = doJSON(t, app, http.MethodPost, "/users/user1/api-keys", `{"scopes":["admin"]}`, caller)
-	if code != http.StatusForbidden || !strings.Contains(string(body), "INSUFFICIENT_SCOPE") || !strings.Contains(string(body), "admin") {
-		t.Fatalf("escalate: %d %s", code, body)
+	code, body = doJSON(t, app, http.MethodPost, "/users/user1/api-keys", `{"scopes":["profile:read"]}`)
+	if code != http.StatusUnprocessableEntity || !strings.Contains(string(body), "can't be narrowed") {
+		t.Fatalf("scopes must be refused: %d %s", code, body)
 	}
 	if len(keys.keys) != 1 {
-		t.Fatalf("rejected key stored")
+		t.Fatalf("refused key stored")
 	}
 
-	code, body = doJSON(t, app, http.MethodPost, "/users/user1/api-keys", `{"scopes":["admin"]}`, nil)
+	code, body = doJSON(t, app, http.MethodPost, "/users/user1/api-keys", `{"scopes":null}`)
 	if code != http.StatusCreated {
-		t.Fatalf("unrestricted: %d %s", code, body)
+		t.Fatalf("null scopes is omitted: %d %s", code, body)
+	}
+
+	keys.validated = keys.keys[0]
+	code, body = doJSON(t, app, http.MethodPost, "/internal/user-keys/validate", `{"key":"plat5-sk-1-abcdefabcdefabcdefabcdefabcdefab"}`)
+	if code != http.StatusOK {
+		t.Fatalf("validate: %d %s", code, body)
+	}
+	raw = map[string]any{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["valid"] != true || raw["user_id"] != "user1" {
+		t.Fatalf("validate: %s", body)
+	}
+	if _, ok := raw["scopes"]; ok {
+		t.Fatalf("a user key carries no scopes: %s", body)
 	}
 }
 
 type fakeKeys struct {
-	keys []*APIKey
+	keys      []*APIKey
+	validated *APIKey
 }
 
 func (f *fakeKeys) Create(_ context.Context, key *APIKey) error {
@@ -61,7 +77,10 @@ func (f *fakeKeys) Create(_ context.Context, key *APIKey) error {
 }
 
 func (f *fakeKeys) GetByHash(context.Context, string) (*APIKey, error) {
-	return nil, ErrNotFound
+	if f.validated == nil {
+		return nil, ErrNotFound
+	}
+	return f.validated, nil
 }
 
 func (f *fakeKeys) List(context.Context, string, int, string) ([]*APIKey, bool, error) {
@@ -72,13 +91,10 @@ func (f *fakeKeys) Revoke(context.Context, string, string) (*APIKey, error) {
 	return nil, ErrNotFound
 }
 
-func doJSON(t *testing.T, app *fiber.App, method, path, body string, headers map[string]string) (int, []byte) {
+func doJSON(t *testing.T, app *fiber.App, method, path, body string) (int, []byte) {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
 	resp, err := app.Test(req)
 	if err != nil {
 		t.Fatal(err)

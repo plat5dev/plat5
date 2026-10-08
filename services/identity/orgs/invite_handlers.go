@@ -113,16 +113,9 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	// Checked and capped here, not at redeem: the invitee is not a member yet.
+	// Checked here, not at redeem: the invitee is not a member yet.
 	role, err := h.roles.Choose(req.Role)
 	if err != nil {
-		return err
-	}
-	caller, err := callerScopes(c)
-	if err != nil {
-		return err
-	}
-	if err := h.roles.CheckAssign(caller, role); err != nil {
 		return err
 	}
 

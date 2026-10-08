@@ -29,11 +29,13 @@ Trusting the rewritten path is a perimeter protocol: [`gateway-contract.md`](gat
 | **Authentication** | Who is this? | Gateway + **IdP (JWT)** / identity keys and sessions (credentials stripped before upstream) |
 | **Scope projection** | Which fields is this route allowed to see? | Gateway. The credential is the proof. The scope drops fields. |
 | **Role resolution** | Which labels does this member's role grant? | Identity, from the deployment's roles file, at member key and session validate ([`roles.md`](roles.md)). The gateway never sees a role. |
-| **Route labels** | Do the caller's effective scopes share a label with `required_scopes`? | Gateway after admission. Effective = the member's role labels intersected with the credential's scopes. Restricted = non-null (`[]` or labels), including a member session minted from a restricted user key. JWTs and `null` skip. Omitted `required_scopes` → any admitted principal. |
+| **Route labels** | Do the caller's labels share one with `required_scopes`? | Gateway after admission, and only the gateway. A credential carries its principal's labels: a member key or session carries the member's role labels. A user has no role, so user credentials skip. Omitted `required_scopes` → any admitted principal. |
 | **Resource authorization** | Can this member do X to project/doc/…? | **Business services** — over the subject in the path, or a policy engine they call |
-| **Who may call identity** | Who may add members, mint keys, delete an org? | Route labels on the identity catalog, at the gateway. Identity refuses illegal states and grants wider than the caller holds. |
+| **Who may call identity** | Who may add members, mint keys, delete an org? | Route labels on the identity catalog, at the gateway. Identity refuses illegal states. It does not compare the caller to what it grants. |
 
-Route `required_scopes` is an intersection: the caller's effective labels and the route's labels must overlap. One shared label is enough.
+Route `required_scopes` is an intersection: the caller's labels and the route's labels must overlap. One shared label is enough.
+
+A credential is not narrower than its principal. There are no key or session scopes. To give a machine less, give it a service account with a smaller role.
 
 ## Route scopes → subject
 
@@ -46,11 +48,13 @@ Route `required_scopes` is an intersection: the caller's effective labels and th
 
 One subject per scope. `organization` does not include `member_id` or `user_id`. `member` does not include `user_id`.
 
-Always: `X-Request-ID`, `traceparent`. When the caller's effective scopes are restricted, the gateway also sets `X-Plat5-Scopes` (absent means unrestricted). The edge may record dropped ids on spans for ops — that is not the app contract.
+Always: `X-Request-ID`, `traceparent`. Services are not told the caller's labels or role. The route check already happened. The edge may record dropped ids on spans for ops — that is not the app contract.
 
 ## Roles
 
-Plat5 ships no role names. A member carries a role slug, and the deployment's roles file says which labels it grants ([`roles.md`](roles.md)). Identity resolves the role at validate. The gateway checks labels and never sees a role. Without a roles file every member is unrestricted.
+Plat5 ships no role names. A member carries a role slug, and the deployment's roles file says which labels it grants ([`roles.md`](roles.md)). Identity resolves the role at validate. The gateway checks labels and never sees a role. Services see neither. Without a roles file every member is unrestricted.
+
+Assigning roles is a privilege like any other. Whoever may call a route that assigns a role, or creates a service account, may assign any role. The deployment decides who gets that label.
 
 A role decides which routes a member may call. It does not decide what a member may do to a resource. Business services on `organization` scope get `organization_id` only. `member` scope gets `organization_id` and `member_id`. Resource permissions are the service's problem, or a policy engine's.
 
@@ -104,15 +108,14 @@ PATCH /organizations/{organization_id}/members/{member_id}
 PATCH /members/{member_id}
 ```
 
-The path names every id the handler reads. The catalog's route labels decide who may call. Identity refuses illegal states: slug uniqueness, one membership row per user per org, last member, last `creator_role` holder, the invite machine, an address that does not exist, a role not in the roles file, and a grant wider than the caller holds (a minted key or session, an assigned role, or an act on a member whose role the caller does not cover).
+The path names every id the handler reads. The catalog's route labels decide who may call. Identity refuses illegal states: slug uniqueness, one membership row per user per org, last member, last `creator_role` holder, the invite machine, an address that does not exist, and a role not in the roles file.
 
 ## Error split (locked)
 
 | Case | HTTP / code |
 |------|-------------|
 | Bad, missing, or wrong credential for the scope | **401** `UNAUTHORIZED` |
-| Caller's effective scopes miss route `required_scopes` | **403** `FORBIDDEN` |
-| Mint asks for a scope the caller does not have; a role assignment or an act on a member needs labels the caller lacks | **403** `INSUFFICIENT_SCOPE` (identity) |
+| Caller's labels miss route `required_scopes` | **403** `FORBIDDEN` |
 | Unknown id (identity handlers) | **404** `NOT_FOUND` |
 | Admitted route or failed-auth IP over limit | **429** `RATE_LIMITED` |
 | Key or session validate down or timeout; Valkey down on a limited request; JWKS unavailable | **503** `SERVICE_UNAVAILABLE` |
@@ -133,6 +136,9 @@ Org invites live in **identity** (`organization_invites`). Create, list, and rev
 - Operator / employee admin planes
 - Role names or meanings in Plat5. The deployment names roles in its roles file.
 - Service accounts as a parallel auth system (they are members with keys)
+- Service accounts tied to the member who created them. A service account is the org's. Its role is its own.
+- Key or session scopes narrower than the principal
+- Telling services the caller's labels or role
 - Multi-org service accounts
 - SMTP in identity (invites return a token; the console sends mail if it wants)
 - Pending member rows. Add-by-`user_id` and invite redeem both insert an **active** member.

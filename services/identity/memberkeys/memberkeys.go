@@ -8,14 +8,13 @@ import (
 )
 
 // APIKey is an org-member credential for organization-scope routes.
+// It carries the member's role labels, resolved at validate. It has none of its own.
 type APIKey struct {
 	ID        string
 	MemberID  string
 	Name      string
 	KeyPrefix string
 	KeyHash   string
-	// Scopes is nil = unrestricted; empty = restricted, no labels (403 on required_scopes routes).
-	Scopes    []string
 	CreatedAt time.Time
 	RevokedAt *time.Time
 }
@@ -24,14 +23,13 @@ func HashKey(key string) string {
 	return apikey.Hash(key)
 }
 
-func New(memberID, name, key, prefix string, scopes []string) *APIKey {
+func New(memberID, name, key, prefix string) *APIKey {
 	return &APIKey{
 		ID:        id.New(),
 		MemberID:  memberID,
 		Name:      name,
 		KeyPrefix: apikey.DisplayPrefix(key, prefix),
 		KeyHash:   apikey.Hash(key),
-		Scopes:    scopes,
 		CreatedAt: time.Now().UTC(),
 	}
 }
