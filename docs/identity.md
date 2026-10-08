@@ -360,6 +360,31 @@ The deployment's roles, from the roles file. Same list for every org today. Shap
 
 Changing brand does not rewrite stored secrets. Old plaintext no longer matches; those rows cannot authenticate.
 
+## Audit details
+
+Identity says what a write changed on `X-Plat5-Audit-Details` ([`audit.md`](audit.md#details)). The gateway puts it on the audit event when the route is audited, and strips it either way. Identity does not know who called or whether the route is audited. It only reports the change.
+
+Changes are `{ "from", "to" }`, for the fields that changed. A write that changed nothing sends no header. A create names what it created, since the new id is not in the path.
+
+| Write | Details |
+|-------|---------|
+| `PATCH /organizations/{organization_id}` | `name`, `slug` as changes |
+| `POST /organizations/{organization_id}/members` | `member_id`, `role` |
+| `PATCH /organizations/{organization_id}/members/{member_id}` | `role`, `status` as changes |
+| `PATCH /members/{member_id}` | `status` as a change |
+| `POST /organizations/{organization_id}/invites` | `invite_id`, `role`. Never the token |
+| `POST /organizations/{organization_id}/service-accounts` | `service_account_id`, `member_id`, `name`, `role` |
+| `PATCH /organizations/{organization_id}/service-accounts/{service_account_id}` | `name` as a change |
+| `POST /members/{member_id}/api-keys`, `POST /organizations/{organization_id}/service-accounts/{service_account_id}/api-keys` | `key_id`, `key_prefix`, `name`. Never the key. `key_prefix` is what later events show as the actor's |
+
+```json
+{ "role": { "from": "developer", "to": "admin" } }
+```
+
+Deletes, revokes, and removals send none: the route and its path params say what happened. `role` is `null` while roles are off. No `user_id`, email, key, or token.
+
+Each old value is read under the lock the write already takes. Reporting it costs no extra query.
+
 ## Status
 
 Status is whether the member is admitted, not what they are allowed to do.
@@ -501,7 +526,7 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - Role names or meanings in identity code. The deployment's roles file names roles and grants their labels.
 - More than one role per member, per-org custom roles, or reloading the roles file without a restart
 - Caller checks of any kind: a grant cap on roles, on acting on a member, or on minting keys and sessions
-- Attribution: who added a member, created an invite, or created a service account
+- Attribution in identity: who added a member, created an invite, or created a service account. Identity reports what changed; the gateway's audit log records who ([`audit.md`](audit.md))
 - Key or session labels, or default-deny on unlabeled routes
 - A service account tied to the member who created it
 - Auto-publishing these public routes — the operator applies a catalog

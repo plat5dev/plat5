@@ -9,6 +9,7 @@ import (
 
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/internal/apikey"
+	"github.com/plat5dev/plat5/identity/internal/auditx"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/metrics"
 	"github.com/plat5dev/plat5/identity/orgs"
@@ -118,6 +119,8 @@ func (h *Handler) create(c fiber.Ctx, memberID string) error {
 
 	logKeyEvent(c, "member api key created", memberID, apiKey.ID, apiKey.KeyPrefix)
 	metrics.RecordKeyCreated(metrics.KeyScopeMember)
+	// The display prefix, never the key: it is what later events show as the actor's key_prefix.
+	auditx.Set(c, auditx.Details{"key_id": apiKey.ID, "key_prefix": apiKey.KeyPrefix, "name": apiKey.Name})
 	return c.Status(fiber.StatusCreated).JSON(CreateResponse{
 		ID:        apiKey.ID,
 		Key:       plaintext,

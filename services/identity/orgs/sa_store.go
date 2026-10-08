@@ -148,7 +148,9 @@ func (s *Store) ListServiceAccounts(ctx context.Context, organizationID string, 
 	return out, hasMore, nil
 }
 
-func (s *Store) UpdateServiceAccount(ctx context.Context, organizationID, serviceAccountID string, name string) (*ServiceAccount, error) {
+// UpdateServiceAccount renames a service account. It also returns the name it
+// had, read under the same lock.
+func (s *Store) UpdateServiceAccount(ctx context.Context, organizationID, serviceAccountID string, name string) (*ServiceAccount, string, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "update_service_account", dbx.DefaultTimeout,
 		attribute.String("service_account.id", serviceAccountID),
 	)
@@ -157,7 +159,7 @@ func (s *Store) UpdateServiceAccount(ctx context.Context, organizationID, servic
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return nil, op.Fail(err)
+		return nil, "", op.Fail(err)
 	}
 	defer tx.Rollback(ctx)
 
@@ -167,11 +169,12 @@ func (s *Store) UpdateServiceAccount(ctx context.Context, organizationID, servic
 	`, serviceAccountID, organizationID))
 	if err != nil {
 		if dbx.IsNoRows(err) {
-			return nil, op.Expected("not found", ErrNotFound)
+			return nil, "", op.Expected("not found", ErrNotFound)
 		}
-		return nil, op.Fail(err)
+		return nil, "", op.Fail(err)
 	}
 
+	priorName := sa.Name
 	now := time.Now().UTC()
 	sa.Name = name
 	sa.UpdatedAt = now
@@ -182,14 +185,14 @@ func (s *Store) UpdateServiceAccount(ctx context.Context, organizationID, servic
 		WHERE id = $1 AND organization_id = $2
 	`, serviceAccountID, organizationID, sa.Name, sa.UpdatedAt)
 	if err != nil {
-		return nil, op.Fail(err)
+		return nil, "", op.Fail(err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return nil, op.Fail(err)
+		return nil, "", op.Fail(err)
 	}
 	op.OK("ok")
-	return sa, nil
+	return sa, priorName, nil
 }
 
 // DeleteServiceAccount soft-removes the SA member (same as DELETE member).

@@ -45,7 +45,7 @@ Read the doc, don’t re-derive:
 | Gateway order: authenticate, rate limit, audit intent, `required_labels`, substitute. A label-denied 403 counts against the rate limit | [`docs/gateway-contract.md`](docs/gateway-contract.md), [`docs/audit.md`](docs/audit.md) |
 | An audit event is one request, recorded by the gateway into the route subject's org log. `organization` and `member` routes only. Writes by default; route `audit` overrides | audit.md, routes.md |
 | Audit intent before forward, awaited. Not written → 503, service not called. Outcome after, in the background, idempotent on `request_id`, `pending` → final once. Pending is unknown, never success | audit.md |
-| Services say what changed on `X-Plat5-Audit-Details`. The gateway stores it as sent and always strips it | audit.md |
+| Services say what changed on `X-Plat5-Audit-Details`. The gateway stores it as sent and always strips it. Identity reports changes as `from`/`to` and creates by id, never a secret or `user_id` | audit.md, identity.md |
 | Audit is on or off for the whole deployment. `AUDIT_URL` required unless `AUDIT_ENABLED=false` | audit.md |
 
 ## Stop conditions

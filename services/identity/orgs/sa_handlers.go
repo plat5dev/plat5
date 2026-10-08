@@ -4,6 +4,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 
 	"github.com/plat5dev/plat5/identity/errors"
+	"github.com/plat5dev/plat5/identity/internal/auditx"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
 )
 
@@ -60,6 +61,12 @@ func (h *Handler) CreateServiceAccount(c fiber.Ctx) error {
 			NotFound: ErrNotFound, Resource: "organization", ResourceID: orgID,
 		})
 	}
+	auditx.Set(c, auditx.Details{
+		"service_account_id": sa.ID,
+		"member_id":          sa.MemberID,
+		"name":               sa.Name,
+		"role":               sa.Role,
+	})
 	return c.Status(fiber.StatusCreated).JSON(h.toServiceAccountResponse(sa))
 }
 
@@ -121,12 +128,15 @@ func (h *Handler) UpdateServiceAccount(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	sa, err := h.store.UpdateServiceAccount(ctx, orgID, saID, name)
+	sa, priorName, err := h.store.UpdateServiceAccount(ctx, orgID, saID, name)
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to update service account", httpx.DBErr{
 			NotFound: ErrNotFound, Resource: "service_account", ResourceID: saID,
 		})
 	}
+	details := auditx.Details{}
+	details.Changed("name", priorName, sa.Name)
+	auditx.Set(c, details)
 	return c.JSON(h.toServiceAccountResponse(sa))
 }
 

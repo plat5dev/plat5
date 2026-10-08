@@ -9,6 +9,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 
 	"github.com/plat5dev/plat5/identity/errors"
+	"github.com/plat5dev/plat5/identity/internal/auditx"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/metrics"
 )
@@ -139,6 +140,8 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 	}
 
 	metrics.RecordInviteOp("create")
+	// Never the token: the log outlives the invite.
+	auditx.Set(c, auditx.Details{"invite_id": inv.ID, "role": inv.Role})
 	return c.Status(fiber.StatusCreated).JSON(h.toInviteResponse(inv, true))
 }
 

@@ -8,6 +8,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 
 	"github.com/plat5dev/plat5/identity/errors"
+	"github.com/plat5dev/plat5/identity/internal/auditx"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/metrics"
 )
@@ -117,6 +118,7 @@ func (h *Handler) CreateMember(c fiber.Ctx) error {
 	}
 
 	metrics.RecordMemberOp("create")
+	auditx.Set(c, auditx.Details{"member_id": m.ID, "role": m.Role})
 	return c.Status(fiber.StatusCreated).JSON(h.toMemberResponse(m))
 }
 
@@ -148,7 +150,9 @@ func (h *Handler) UpdateMember(c fiber.Ctx) error {
 		return err
 	}
 
+	var prior Member
 	m, err := h.store.MutateMember(ctx, "", memberID, func(target *Member, _ []*Member) error {
+		prior = *target
 		target.Status = status
 		return nil
 	})
@@ -159,6 +163,9 @@ func (h *Handler) UpdateMember(c fiber.Ctx) error {
 	}
 
 	metrics.RecordMemberOp("update")
+	details := auditx.Details{}
+	details.Changed("status", string(prior.Status), string(m.Status))
+	auditx.Set(c, details)
 	return c.JSON(h.toMemberResponse(m))
 }
 
@@ -212,8 +219,9 @@ func (h *Handler) UpdateOrgMember(c fiber.Ctx) error {
 		}
 		role = chosen
 	}
+	var prior Member
 	m, err := h.store.MutateMember(ctx, orgID, memberID, func(target *Member, members []*Member) error {
-		prior := *target
+		prior = *target
 		if status != "" {
 			target.Status = status
 		}
@@ -229,6 +237,10 @@ func (h *Handler) UpdateOrgMember(c fiber.Ctx) error {
 	}
 
 	metrics.RecordMemberOp("update")
+	details := auditx.Details{}
+	details.ChangedPtr("role", prior.Role, m.Role)
+	details.Changed("status", string(prior.Status), string(m.Status))
+	auditx.Set(c, details)
 	return c.JSON(h.toMemberResponse(m))
 }
 

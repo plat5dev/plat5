@@ -7,6 +7,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 
 	"github.com/plat5dev/plat5/identity/errors"
+	"github.com/plat5dev/plat5/identity/internal/auditx"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/metrics"
 )
@@ -128,11 +129,13 @@ func (h *Handler) UpdateOrganization(c fiber.Ctx) error {
 		})
 	}
 
+	details := auditx.Details{}
 	if req.Name != nil {
 		name, err := requireName(*req.Name, "name", MaxOrgNameLen)
 		if err != nil {
 			return err
 		}
+		details.Changed("name", org.Name, name)
 		org.Name = name
 	}
 	if req.Slug != nil {
@@ -140,6 +143,7 @@ func (h *Handler) UpdateOrganization(c fiber.Ctx) error {
 		if !ValidSlug(slug) {
 			return errors.FieldError("slug", "Slug can only use lowercase letters, numbers, and dashes.")
 		}
+		details.Changed("slug", org.Slug, slug)
 		org.Slug = slug
 	}
 
@@ -150,6 +154,7 @@ func (h *Handler) UpdateOrganization(c fiber.Ctx) error {
 			Message: "An organization with this slug already exists.",
 		})
 	}
+	auditx.Set(c, details)
 	return c.JSON(toOrgResponse(org))
 }
 

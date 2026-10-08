@@ -193,7 +193,7 @@ A create names what it created, since the new id is not in `params`:
 
 What stays out: secrets (never a key, token, or invite token), and anything the caller could not read from that route.
 
-Each service documents its own shapes. Plat5 does not define a schema for them.
+Each service documents its own shapes. Plat5 does not define a schema for them. Identity's: [`identity.md`](identity.md#audit-details).
 
 ## Reading
 
