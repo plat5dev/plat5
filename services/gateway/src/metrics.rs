@@ -79,6 +79,25 @@ pub static AUTH_CACHE_MISSES_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     .expect("failed to register auth_cache_misses_total")
 });
 
+pub static AUDIT_WRITES_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "audit_writes_total",
+        "Audit writes to the audit service by write (intent, outcome) and result",
+        &["write", "result"]
+    )
+    .expect("failed to register audit_writes_total")
+});
+
+pub static AUDIT_INTENT_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+    let opts = histogram_opts!(
+        "audit_intent_duration_seconds",
+        "Time an audited request waited on its intent write, retries included",
+        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
+    );
+    register_histogram_vec!(opts, &["result"])
+        .expect("failed to register audit_intent_duration_seconds")
+});
+
 // OTEL dual-write instruments. No-op until a MeterProvider is installed.
 struct OtelInstruments {
     http_requests: Counter<u64>,
@@ -87,6 +106,8 @@ struct OtelInstruments {
     auth_validation: Histogram<f64>,
     auth_cache_hits: Counter<u64>,
     auth_cache_misses: Counter<u64>,
+    audit_writes: Counter<u64>,
+    audit_intent_duration: Histogram<f64>,
 }
 
 static OTEL: Lazy<OtelInstruments> = Lazy::new(|| {
@@ -119,6 +140,19 @@ static OTEL: Lazy<OtelInstruments> = Lazy::new(|| {
         auth_cache_misses: meter
             .u64_counter("auth_cache_misses_total")
             .with_description("Authentication cache misses")
+            .build(),
+        audit_writes: meter
+            .u64_counter("audit_writes_total")
+            .with_description(
+                "Audit writes to the audit service by write (intent, outcome) and result",
+            )
+            .build(),
+        audit_intent_duration: meter
+            .f64_histogram("audit_intent_duration_seconds")
+            .with_description(
+                "Time an audited request waited on its intent write, retries included",
+            )
+            .with_boundaries(vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0])
             .build(),
     }
 });
@@ -184,4 +218,27 @@ pub fn record_auth_cache_miss(auth_type: &str) {
         .inc();
     OTEL.auth_cache_misses
         .add(1, &[KeyValue::new("auth_type", auth_type.to_string())]);
+}
+
+/// `write` is `intent` or `outcome`. `result`: `ok`, `failed`, `not_found` (outcome
+/// with no intent), or `dropped` (outcome queue full).
+pub fn record_audit_write(write: &str, result: &str) {
+    AUDIT_WRITES_TOTAL.with_label_values(&[write, result]).inc();
+    OTEL.audit_writes.add(
+        1,
+        &[
+            KeyValue::new("write", write.to_string()),
+            KeyValue::new("result", result.to_string()),
+        ],
+    );
+}
+
+pub fn record_audit_intent_duration(result: &str, duration_secs: f64) {
+    AUDIT_INTENT_DURATION_SECONDS
+        .with_label_values(&[result])
+        .observe(duration_secs);
+    OTEL.audit_intent_duration.record(
+        duration_secs,
+        &[KeyValue::new("result", result.to_string())],
+    );
 }

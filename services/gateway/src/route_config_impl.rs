@@ -103,6 +103,7 @@ fn expand_nested_methods(scope: &mut ScopeConfig) {
                         upstream: route.upstream.clone(),
                         required_labels: spec.required_labels,
                         rate_limit: spec.rate_limit,
+                        audit: spec.audit,
                         methods_form: MethodsForm::List,
                     });
                 }

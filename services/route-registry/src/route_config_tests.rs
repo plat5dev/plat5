@@ -9,6 +9,7 @@ mod tests {
             upstream: None,
             required_labels: None,
             rate_limit: None,
+            audit: None,
             methods_form: MethodsForm::List,
         }
     }
@@ -588,5 +589,56 @@ mod tests {
                 .expect("GET /org");
             assert!(get_org.required_labels.is_none(), "reads stay unlabeled");
         }
+    }
+
+    #[test]
+    fn audit_expands_per_method_on_org_routes() {
+        let r = parse_route(serde_json::from_str(r#"{"path":"/org/invites","methods":{"GET":{"audit":true},"POST":{},"DELETE":{"audit":false}}}"#).unwrap());
+        let prepared = org_service(vec![r])
+            .prepare_for_registry("w")
+            .expect("audit on an organization route");
+        let routes = &prepared.organization.as_ref().unwrap().routes;
+        let audit = |m: &str| routes.iter().find(|rt| rt.methods == [m]).unwrap().audit;
+        assert_eq!(audit("GET"), Some(true));
+        assert_eq!(audit("POST"), None, "omitted stays omitted; the gateway applies the default");
+        assert_eq!(audit("DELETE"), Some(false));
+    }
+
+    #[test]
+    fn audit_flat_list_on_member_route() {
+        let r = parse_route(serde_json::from_str(r#"{"path":"/member/keys","methods":["GET","POST"],"audit":false}"#).unwrap());
+        let mut svc = user_service(Vec::new());
+        svc.user = None;
+        svc.member = Some(ScopeConfig {
+            route_prefix: None,
+            routes: vec![r],
+        });
+        let prepared = svc.prepare_for_registry("w").expect("audit on a member route");
+        assert_eq!(prepared.member.unwrap().routes[0].audit, Some(false));
+    }
+
+    #[test]
+    fn audit_rejected_on_user_and_public_routes() {
+        for r in [
+            parse_route(serde_json::from_str(r#"{"path":"/user/x","methods":["POST"],"audit":true}"#).unwrap()),
+            parse_route(serde_json::from_str(r#"{"path":"/user/x","methods":{"POST":{"audit":false}}}"#).unwrap()),
+        ] {
+            let err = user_service(vec![r]).prepare_for_registry("w").unwrap_err();
+            assert!(err.to_string().contains("audit applies only to organization and member"), "{err}");
+        }
+        let mut svc = user_service(Vec::new());
+        svc.user = None;
+        svc.public = Some(ScopeConfig {
+            route_prefix: None,
+            routes: vec![parse_route(serde_json::from_str(r#"{"path":"/public/x","methods":["POST"],"audit":true}"#).unwrap())],
+        });
+        assert!(svc.prepare_for_registry("w").is_err());
+    }
+
+    #[test]
+    fn audit_must_be_a_bool() {
+        let parsed: Result<RouteConfig, _> =
+            serde_json::from_str(r#"{"path":"/org/x","methods":["POST"],"audit":"yes"}"#);
+        assert!(parsed.is_err());
     }
 }

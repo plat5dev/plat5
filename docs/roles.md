@@ -41,7 +41,7 @@ Resource authorization (this project, this document) is not a role. It stays in 
 ```yaml
 roles:
   owner: ["*"]
-  admin: [org:write, org:members:write, org:service-accounts:write]
+  admin: [org:write, org:members:write, org:service-accounts:write, org:audit:read]
   member: []
 creator_role: owner
 default_role: member
@@ -108,7 +108,7 @@ A write may not take an org's count of non-removed members holding `creator_role
 ```json
 {
   "roles": [
-    { "slug": "admin", "labels": ["org:write", "org:members:write", "org:service-accounts:write"] },
+    { "slug": "admin", "labels": ["org:write", "org:members:write", "org:service-accounts:write", "org:audit:read"] },
     { "slug": "member", "labels": [] },
     { "slug": "owner", "labels": ["*"] }
   ],

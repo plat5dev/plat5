@@ -47,6 +47,28 @@ impl InternalHttpClient {
         }
     }
 
+    /// Send JSON with `method` and a per-call `timeout`. Returns the status, 2xx or not;
+    /// only transport failures are errors. The body is not read.
+    pub async fn send_json<B>(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        body: &B,
+        timeout: Duration,
+    ) -> Result<u16, InternalHttpError>
+    where
+        B: Serialize + ?Sized,
+    {
+        let mut req = self.client.request(method, url).timeout(timeout).json(body);
+        if let Some(token) = &self.internal_token {
+            req = req.header(INTERNAL_TOKEN_HEADER, token);
+        }
+        req.send()
+            .await
+            .map(|response| response.status().as_u16())
+            .map_err(|e| InternalHttpError::Network(e.to_string()))
+    }
+
     /// POST JSON. On 2xx, deserialize body as `R`. Otherwise `HttpStatus` (no body parse).
     pub async fn post_json<B, R>(&self, url: &str, body: &B) -> Result<R, InternalHttpError>
     where

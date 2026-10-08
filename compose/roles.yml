@@ -3,11 +3,12 @@
 # boot (ROLES_FILE); restart identity after editing it.
 #
 # A role grants labels. Routes require labels (required_labels). ["*"] grants
-# every label. The org:* labels match the identity catalog
-# (services/identity/routes.yml); add your own services' labels here.
+# every label. The org:* labels match the identity and audit catalogs
+# (services/identity/routes.yml, services/audit/routes.yml); add your own
+# services' labels here.
 roles:
   owner: ["*"]
-  admin: [org:write, org:members:write, org:service-accounts:write]
+  admin: [org:write, org:members:write, org:service-accounts:write, org:audit:read]
   member: []
 creator_role: owner
 default_role: member

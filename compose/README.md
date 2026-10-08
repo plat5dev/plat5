@@ -1,6 +1,6 @@
 # Plat5 compose
 
-Self-contained Plat5 runtime: gateway, route-registry, identity, postgres, etcd, valkey. Own Docker network.
+Self-contained Plat5 runtime: gateway, route-registry, identity, audit, postgres, etcd, valkey. Own Docker network.
 
 ## Quick start
 
@@ -30,7 +30,9 @@ curl -sS -X POST http://localhost:5002/apply \
   --data-binary @../services/identity/routes.yml
 ```
 
-Dev compose seeds identity routes only when that service has no history yet (does not overwrite). Prod does not seed — apply `services/identity/routes.yml` (or a subset) yourself.
+Dev compose seeds identity and audit routes only when that service has no history yet (does not overwrite). Prod does not seed — apply `services/identity/routes.yml` (or a subset) and `services/audit/routes.yml` yourself.
+
+Audit: the gateway records audited `organization` and `member` requests through the `audit` service (`AUDIT_URL`). It is on by default. `AUDIT_ENABLED=false` turns it off for the deployment; then audit need not run and its catalog is not applied. See [`../docs/audit.md`](../docs/audit.md).
 
 ## JWT / IdP
 

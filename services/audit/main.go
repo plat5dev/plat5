@@ -1,0 +1,165 @@
+package main
+
+import (
+	"context"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/gofiber/contrib/v3/otel"
+	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v3/middleware/adaptor"
+	"github.com/gofiber/fiber/v3/middleware/recover"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/plat5dev/plat5/audit/config"
+	"github.com/plat5dev/plat5/audit/db"
+	apierrors "github.com/plat5dev/plat5/audit/errors"
+	"github.com/plat5dev/plat5/audit/events"
+	"github.com/plat5dev/plat5/audit/metrics"
+	"github.com/plat5dev/plat5/audit/middleware"
+	"github.com/plat5dev/plat5/audit/telemetry"
+)
+
+// How often partitions are checked. They run months ahead, so this only has
+// to happen well inside a month.
+const partitionInterval = time.Hour
+
+func main() {
+	cfg := config.Load()
+	ctx := context.Background()
+
+	// Register prometheus metrics before OTLP bridge so the first export sees them.
+	metrics.Init()
+
+	telem, err := telemetry.Init(ctx)
+	if err != nil {
+		log.Fatalf("failed to initialize telemetry: %v", err)
+	}
+
+	pool, err := db.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("failed to connect to postgres: %v", err)
+	}
+
+	if err := db.Migrate(ctx, pool); err != nil {
+		pool.Close()
+		log.Fatalf("failed to migrate database: %v", err)
+	}
+
+	store := events.NewStore(pool)
+	if err := store.EnsureAround(ctx, time.Now()); err != nil {
+		pool.Close()
+		log.Fatalf("failed to create audit partitions: %v", err)
+	}
+	handler := events.NewHandler(store)
+
+	app := newPublicApp(telem, handler)
+	internalApp := newInternalApp(telem, pool, cfg.InternalAuthToken, handler)
+
+	baseLogger := telem.Logger()
+	baseLogger.Info().
+		Str("port", cfg.Port).
+		Str("internal_port", cfg.InternalPort).
+		Msg("starting audit server")
+
+	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go store.MaintainPartitions(runCtx, partitionInterval, func(err error) {
+		baseLogger.Error().Str("error_kind", apierrors.KindDB.String()).Err(err).Msg("audit partition maintenance failed")
+	})
+
+	errCh := make(chan error, 2)
+	go func() {
+		errCh <- internalApp.Listen(":" + cfg.InternalPort)
+	}()
+	go func() {
+		errCh <- app.Listen(":" + cfg.Port)
+	}()
+
+	select {
+	case <-runCtx.Done():
+		baseLogger.Info().Msg("shutdown signal received")
+	case err := <-errCh:
+		if err != nil {
+			baseLogger.Error().Err(err).Msg("server exited unexpectedly")
+			stop()
+		}
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := app.ShutdownWithContext(shutdownCtx); err != nil {
+		baseLogger.Error().Err(err).Msg("public server shutdown")
+	}
+	if err := internalApp.ShutdownWithContext(shutdownCtx); err != nil {
+		baseLogger.Error().Err(err).Msg("internal server shutdown")
+	}
+	pool.Close()
+	if err := telem.Shutdown(shutdownCtx); err != nil {
+		baseLogger.Error().Err(err).Msg("telemetry shutdown")
+	}
+	baseLogger.Info().Msg("shutdown complete")
+}
+
+func newPublicApp(telem *telemetry.Telemetry, handler *events.Handler) *fiber.App {
+	app := fiber.New(fiber.Config{
+		AppName:      "audit",
+		ErrorHandler: apierrors.FiberErrorHandler,
+	})
+	app.Use(recover.New())
+	app.Use(otel.Middleware(
+		otel.WithTracerProvider(telem.TracerProvider()),
+		otel.WithPropagators(telem.Propagator()),
+		otel.WithoutMetrics(true),
+		otel.WithSpanNameFormatter(middleware.HTTPSpanName),
+	))
+	app.Use(middleware.RequestLogger(telem))
+
+	handler.MountPublic(app)
+	return app
+}
+
+func newInternalApp(
+	telem *telemetry.Telemetry,
+	pool *pgxpool.Pool,
+	internalToken string,
+	handler *events.Handler,
+) *fiber.App {
+	app := fiber.New(fiber.Config{
+		AppName:      "audit-internal",
+		ErrorHandler: apierrors.FiberErrorHandler,
+	})
+	app.Use(recover.New())
+
+	app.Get("/health/live", func(c fiber.Ctx) error {
+		return c.JSON(fiber.Map{"status": "healthy"})
+	})
+	app.Get("/health/ready", func(c fiber.Ctx) error {
+		pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := pool.Ping(pingCtx); err != nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"status": "unhealthy"})
+		}
+		return c.JSON(fiber.Map{"status": "healthy"})
+	})
+	app.Get("/metrics", adaptor.HTTPHandler(metrics.Handler()))
+
+	// Health and /metrics stay off traces and HTTP RED (docs/health-checks.md).
+	internalAPI := app.Group("/internal",
+		otel.Middleware(
+			otel.WithTracerProvider(telem.TracerProvider()),
+			otel.WithPropagators(telem.Propagator()),
+			otel.WithoutMetrics(true),
+			otel.WithSpanNameFormatter(middleware.HTTPSpanName),
+		),
+		middleware.RequestLogger(telem),
+		middleware.RequireInternalToken(internalToken),
+	)
+	handler.MountInternal(internalAPI)
+	return app
+}

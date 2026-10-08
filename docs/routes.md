@@ -121,6 +121,7 @@ Same path, different per-verb `required_labels` / `rate_limit` — nested `metho
 | `methods` | `array<string>` \| `map<string, MethodConfig>` | List form: allowed HTTP methods. Map form: per-verb config (see below). Do not mix list and map on the same route (`422`). |
 | `required_labels` | `string[]?` | Optional. Omitted = any admitted principal. If set, a member credential must hold `*` or share at least one label: any one of the list, not all. User credentials skip. Cannot include `*`. Validated at apply. Route-level value applies only to the flat methods list. |
 | `rate_limit` | `false` \| `{requests, window_seconds}` \| `string` \| omitted | Omitted **inherits** the gateway fallback. `false` opts out (unlimited). Object = this route+method only. String = named policy on **this** service. Limiter subject follows route scope (`public`→ip, `user`→`user_id`, `organization`→`organization_id`, `member`→`member_id`). Route-level value applies only to the flat methods list. |
+| `audit` | `bool?` | `organization` and `member` routes only. Omitted = method default: `POST` / `PUT` / `PATCH` / `DELETE` audited, `GET` / `HEAD` not. `true` / `false` overrides. Route-level value applies only to the flat methods list. See [`audit`](#audit). |
 
 A service must define at least one scope. Multiple scopes may be present.
 
@@ -128,7 +129,7 @@ A service must define at least one scope. Multiple scopes may be present.
 
 Two forms. Do not mix them on the same route (`422`).
 
-**Flat list.** Optional route-level `required_labels` / `rate_limit` apply to every method in the list.
+**Flat list.** Optional route-level `required_labels` / `rate_limit` / `audit` apply to every method in the list.
 
 ```yaml
 - path: /features
@@ -137,7 +138,7 @@ Two forms. Do not mix them on the same route (`422`).
   rate_limit: { requests: 60, window_seconds: 60 }
 ```
 
-**Nested map.** Each key is an uppercase HTTP verb (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`). The body may set `required_labels` and/or `rate_limit` for that verb only. An empty body (`GET:` or `GET: {}`) means that method with no extra constraints. An empty methods map is rejected.
+**Nested map.** Each key is an uppercase HTTP verb (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`). The body may set `required_labels`, `rate_limit`, and/or `audit` for that verb only. An empty body (`GET:` or `GET: {}`) means that method with no extra constraints. An empty methods map is rejected.
 
 ```yaml
 - path: /features
@@ -151,7 +152,7 @@ Two forms. Do not mix them on the same route (`422`).
         window_seconds: 1
 ```
 
-Nested maps are an **apply-time YAML convenience**. Registry `prepare_for_registry` / prefix expand turns each verb into its own `RouteConfig` row (same `path`, `methods: [THAT_VERB]`, `required_labels` / `rate_limit` taken from that method entry). `upstream` stays on the path. After expand, etcd `methods` is always a string array. Duplicate `path`+method after expand → `422`.
+Nested maps are an **apply-time YAML convenience**. Registry `prepare_for_registry` / prefix expand turns each verb into its own `RouteConfig` row (same `path`, `methods: [THAT_VERB]`, `required_labels` / `rate_limit` / `audit` taken from that method entry). `upstream` stays on the path. After expand, etcd `methods` is always a string array. Duplicate `path`+method after expand → `422`.
 
 Labels are opaque. `org:write` does not imply `org:read`.
 
@@ -159,7 +160,7 @@ Labels are opaque. `org:write` does not imply `org:read`.
 
 Labels follow the same hygiene as roles: `[a-z0-9:._-]+`, max 64 chars, max 32, unique, non-empty list if present.
 
-After match + admission: if the route has `required_labels`, a member credential's `labels` must hold `*` or share a label with the route, or the gateway returns **403** `FORBIDDEN`. `[a, b]` means a or b. `labels: ["*"]` (a `["*"]` role, or roles off) passes. `labels: []` cannot intersect — **403** on these routes, still admitted on unlabeled routes.
+After admission and the rate limit: if the route has `required_labels`, a member credential's `labels` must hold `*` or share a label with the route, or the gateway returns **403** `FORBIDDEN`. `[a, b]` means a or b. `labels: ["*"]` (a `["*"]` role, or roles off) passes. `labels: []` cannot intersect — **403** on these routes, still admitted on unlabeled routes.
 
 A credential carries its principal's labels. For a member key or session, validate's list is the member's role labels. Keys and sessions cannot narrow it. A role is how a deployment gives members labels: [`roles.md`](roles.md). User credentials have no role and skip, so a label on a `user` route constrains nothing. Put labels on `organization` and `member` routes. The 403 `details.required_labels` echoes the route's list ([`gateway-contract.md`](gateway-contract.md)).
 
@@ -235,6 +236,22 @@ Limiter subject follows route scope and is not configurable: `public`→ip, `use
 Exceed → **429** `RATE_LIMITED`, `Retry-After`, `details.retry_after_seconds`. Admitted limited routes also set `X-RateLimit-Limit` / `Remaining` / `Reset` (success and 429). See [`api-errors.md`](api-errors.md) and [`gateway-contract.md`](gateway-contract.md).
 
 A separate failed-auth IP limiter (`RATE_LIMIT_AUTH_FAILURE_*`) covers unadmitted 401s and unmatched 404s. It is not per-route.
+
+The limiter runs before `required_labels`. A label-denied **403** counts against the route's limit.
+
+### `audit`
+
+Whether the gateway records this route+method in the org's audit log. Model, delivery, and the event: [`audit.md`](audit.md).
+
+| YAML | Effect |
+|------|--------|
+| omitted | Method default: `POST`, `PUT`, `PATCH`, `DELETE` audited. `GET`, `HEAD` not |
+| `true` | Audited. Use it on a read worth recording, e.g. one that returns secrets |
+| `false` | Not audited. Use it on a high-volume write nobody needs in the log |
+
+`organization` and `member` routes only. On `public` or `user` → **422**: those scopes have no org to log into. `OPTIONS` is answered as a preflight and never audited.
+
+Omitted stays omitted in etcd. The gateway applies the method default. With audit off for the deployment, the gateway ignores the field.
 
 ### `upstream`
 
@@ -371,6 +388,7 @@ Registry validates **before etcd**. Gateway validates again at load (expanded li
 - `rate_limit` if object: `requests` > 0, `window_seconds` > 0. `true` is invalid
 - `rate_limit` if string: names a policy on this service; policy name `[a-z0-9:._-]+`, max 64
 - `rate_limits` keys: same hygiene, unique; values `requests` > 0, `window_seconds` > 0
+- `audit` if present: a boolean, on an `organization` or `member` route or method only
 - Shared policy names: same name across services must agree on `requests`, `window_seconds`, and `shared` (full desired state, apply and PUT)
 - Duplicate service names in merged registry: first wins, warning
 - Malformed JSON values skipped with warning; other routes continue

@@ -22,6 +22,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::admission::{Admissor, RequestCredential};
+use crate::audit::{self, Audit, AuditState};
 use crate::auth::jwt::JwtValidatorState;
 use crate::auth::AuthStack;
 use crate::config::GatewayConfig;
@@ -52,6 +53,7 @@ pub struct UserGateway {
     rate_limit_fallback: RateLimitFallback,
     auth_failure_requests: u64,
     auth_failure_window_seconds: u64,
+    audit: Audit,
 }
 
 impl UserGateway {
@@ -60,6 +62,7 @@ impl UserGateway {
         jwt_validator: JwtValidatorState,
         route_map: Arc<ArcSwap<RouteMap>>,
         limiter: RateLimiter,
+        audit: Audit,
     ) -> Self {
         Self {
             admissor: Admissor::new(AuthStack::from_config(cfg, jwt_validator)),
@@ -74,6 +77,7 @@ impl UserGateway {
             },
             auth_failure_requests: cfg.rate_limit_auth_failure_requests,
             auth_failure_window_seconds: cfg.rate_limit_auth_failure_window_seconds,
+            audit,
         }
     }
 
@@ -212,23 +216,6 @@ impl UserGateway {
             }
         };
 
-        if !satisfies_required_labels(route.required_labels.as_deref(), admission.labels()) {
-            return response::write_json_error(
-                &self.cors,
-                session,
-                ctx,
-                403,
-                ApiError::forbidden(Some(serde_json::json!({
-                    "permission": "required_labels",
-                    "resource": "route",
-                    "resource_id": route.path,
-                    // Any one of these would have admitted the request.
-                    "required_labels": route.required_labels,
-                }))),
-            )
-            .await;
-        }
-
         if let Some((limit, window, bucket)) = limit_plan(
             route,
             &self.rate_limit_fallback,
@@ -261,6 +248,44 @@ impl UserGateway {
                     .await;
                 }
             }
+        }
+
+        // Audited: the intent is written before anything past the limiter can answer,
+        // and nothing reaches the service unless it is (docs/audit.md#delivery).
+        if self.audit.enabled() && route.audited(ctx.method_label()) {
+            ctx.audit = Some(AuditState::default());
+            let written = match audit_intent(session, ctx, route, params, request_id) {
+                Some(intent) => self.audit.write_intent(&intent).await.is_ok(),
+                None => false,
+            };
+            if !written {
+                return response::write_json_error(
+                    &self.cors,
+                    session,
+                    ctx,
+                    503,
+                    ApiError::service_unavailable(),
+                )
+                .await;
+            }
+        }
+
+        // After the limiter, so a label-denied request still spends budget.
+        if !satisfies_required_labels(route.required_labels.as_deref(), admission.labels()) {
+            return response::write_json_error(
+                &self.cors,
+                session,
+                ctx,
+                403,
+                ApiError::forbidden(Some(serde_json::json!({
+                    "permission": "required_labels",
+                    "resource": "route",
+                    "resource_id": route.path,
+                    // Any one of these would have admitted the request.
+                    "required_labels": route.required_labels,
+                }))),
+            )
+            .await;
         }
 
         upstream::record_admission_span(ctx, &admission);
@@ -312,6 +337,50 @@ fn client_ip(session: &Session) -> String {
         },
         None => "unknown".to_string(),
     }
+}
+
+/// The intent for an audited request. The route is `organization` or `member`, so
+/// the credential is an admitted member's. None if it is missing a field.
+fn audit_intent(
+    session: &Session,
+    ctx: &GatewayContext,
+    route: &Route,
+    params: &HashMap<String, String>,
+    request_id: &str,
+) -> Option<audit::Intent> {
+    let cred = &ctx.credential;
+    let (Some(organization_id), Some(member_id), Some(auth_type), Some(key_prefix)) = (
+        cred.organization_id.clone(),
+        cred.member_id.clone(),
+        cred.auth_type,
+        cred.key_prefix.clone(),
+    ) else {
+        warn!(
+            error_kind = ErrorKind::Internal.as_str(),
+            "admitted credential is missing a field the audit intent needs"
+        );
+        return None;
+    };
+    Some(audit::Intent {
+        request_id: request_id.to_string(),
+        occurred_at: audit::rfc3339_millis(ctx.received_at),
+        organization_id,
+        actor: audit::Actor {
+            member_id,
+            auth_type: auth_type.as_str(),
+            key_prefix,
+        },
+        service: route.service.clone(),
+        method: ctx.method_label().to_string(),
+        route: route.path.clone(),
+        params: params.clone(),
+        ip: client_ip(session),
+        user_agent: session
+            .req_header()
+            .headers
+            .get("user-agent")
+            .map(|v| audit::user_agent(v.as_bytes())),
+    })
 }
 
 fn limit_plan(
@@ -587,6 +656,7 @@ impl ProxyHttp for UserGateway {
         let _root_guard = root_span.as_ref().map(|span| span.enter());
 
         if let Some(peer) = ctx.upstream_peer.take() {
+            ctx.forwarded = true;
             return Ok(peer);
         }
 
@@ -613,6 +683,25 @@ impl ProxyHttp for UserGateway {
         }
 
         upstream_response.remove_header("alt-svc");
+
+        // The service's audit details never reach the client, audited route or not.
+        let details = upstream_response
+            .headers
+            .get(audit::DETAILS_HEADER)
+            .map(|v| v.as_bytes().to_vec());
+        upstream_response.remove_header(audit::DETAILS_HEADER);
+        if let Some(state) = ctx.audit.as_mut() {
+            state.upstream_status = Some(upstream_response.status.as_u16());
+            if let Some(raw) = details {
+                state.details = audit::parse_details(&raw);
+                if state.details.is_none() {
+                    warn!(
+                        route = %ctx.route_label(),
+                        "ignoring audit details that are not one ASCII JSON object within 4096 bytes"
+                    );
+                }
+            }
+        }
         self.cors
             .apply(upstream_response, ctx.request_origin.as_deref())?;
 
@@ -665,6 +754,12 @@ impl ProxyHttp for UserGateway {
             },
             e,
         );
+
+        if let Some(state) = ctx.audit.take() {
+            let written = session.response_written().map(|r| r.status.as_u16());
+            let outcome = audit::outcome_for(state, ctx.forwarded, written);
+            self.audit.send_outcome(request_id.to_string(), outcome);
+        }
 
         ctx.finish_root_span();
     }

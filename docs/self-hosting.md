@@ -14,7 +14,7 @@ Internet
   https://auth.example.com  → TLS edge → issuer  :5000   (or any OIDC IdP)
 
 Docker (two stacks, two networks):
-  plat5   postgres, etcd, valkey, gateway, identity, route-registry
+  plat5   postgres, etcd, valkey, gateway, identity, audit, route-registry
   auth    postgres, issuer     (skip if you already have an IdP)
 
 Your app:
@@ -24,7 +24,7 @@ Your app:
 
 | Piece | Image pin | Compose |
 |-------|-----------|---------|
-| Runtime (gateway, identity, route-registry) | `PLAT5_VERSION` | [`compose/docker-compose.prod.yml`](../compose/docker-compose.prod.yml) |
+| Runtime (gateway, identity, audit, route-registry) | `PLAT5_VERSION` | [`compose/docker-compose.prod.yml`](../compose/docker-compose.prod.yml) |
 | Auth (optional IdP) | `AUTH_VERSION` (independent) | [auth `compose/docker-compose.prod.yml`](https://github.com/plat5dev/auth/blob/master/compose/docker-compose.prod.yml) |
 | Your API | your image | your compose; join plat5’s network |
 | TLS | — | Cloudflare tunnel, Caddy, … — **not** in the gateway |
@@ -99,6 +99,8 @@ With `ROLES_FILE`, every member holds one of its roles, and the identity catalog
 
 `ROLES_FILE=` (empty) turns roles off: no member has a role, every member holds every label, and route labels block no one. Use it when something else decides authorization. Identity logs a warning at boot.
 
+Audit is on by default: the gateway records each audited `organization` and `member` request in the org's audit log, through the `audit` service. While audit is down, audited requests are **503**. `AUDIT_ENABLED=false` on the gateway turns it off for the whole deployment; then you may stop the `audit` service and skip its catalog. Model and guarantees: [`audit.md`](audit.md).
+
 `POSTGRES_PASSWORD` is interpolated into `DATABASE_URL`. Use a **URL-safe** value (hex). `+` / `/` from raw base64 break the URL (`invalid port`).
 
 Compose network name is **`plat5_plat5`** (`name: plat5` + network `plat5`). Attach apps to that name.
@@ -149,10 +151,17 @@ curl -sS -X POST http://route-registry:5002/apply \
 curl -sS -X POST http://route-registry:5002/apply \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/yaml" \
+  --data-binary @services/audit/routes.yml   # skip with AUDIT_ENABLED=false
+
+curl -sS -X POST http://route-registry:5002/apply \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/yaml" \
   --data-binary @routes.yml
 ```
 
-Identity public paths are operator-owned. Catalog: [`services/identity/routes.yml`](../services/identity/routes.yml). Omitting a path hides it from the gateway; the identity process still runs.
+Identity public paths are operator-owned. Catalog: [`services/identity/routes.yml`](../services/identity/routes.yml). Omitting a path hides it from the gateway; the identity process still runs. The audit catalog ([`services/audit/routes.yml`](../services/audit/routes.yml)) publishes `GET /org/audit-events`, labeled `org:audit:read`.
+
+Your `organization` and `member` writes are in the org's audit log by default. Set `audit: false` on a write nobody needs there, and `audit: true` on a read worth recording ([`routes.md`](routes.md#audit)).
 
 Apply is **upsert**. Format: [`routes.md`](routes.md), [`route-registry.md`](route-registry.md).
 

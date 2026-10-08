@@ -98,6 +98,7 @@ services:
       - ../services/route-registry/src:/app/src
       - ../services/route-registry/migrations:/app/migrations:ro
       - ../services/identity/routes.yml:/seed/identity.yml:ro
+      - ../services/audit/routes.yml:/seed/audit.yml:ro
     networks:
       - plat5
     depends_on:
@@ -136,6 +137,9 @@ services:
       USER_APIKEY_VALIDATE_URL: http://identity:3001/internal/user-keys/validate
       MEMBER_APIKEY_VALIDATE_URL: http://identity:3001/internal/member-keys/validate
       MEMBER_SESSION_VALIDATE_URL: http://identity:3001/internal/member-sessions/validate
+      # Audit is on unless AUDIT_ENABLED=false (then audit need not run).
+      AUDIT_ENABLED: ${AUDIT_ENABLED:-true}
+      AUDIT_URL: http://audit:3003
       APIKEY_BRAND: ${APIKEY_BRAND:-plat5}
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN:-dev-internal-token}
       RUST_LOG: info
@@ -162,6 +166,8 @@ services:
       route-registry:
         condition: service_healthy
       identity:
+        condition: service_started
+      audit:
         condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health/ready"]
@@ -203,6 +209,38 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  audit:
+    build:
+      context: ../services/audit
+      target: local
+    labels:
+      service.name: audit
+      service.namespace: audit
+      metrics.port: "3003"
+    environment:
+      PORT: 3002
+      INTERNAL_PORT: 3003
+      INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN:-dev-internal-token}
+      DATABASE_URL: postgres://plat5:plat5@postgres:5432/plat5?sslmode=disable
+      OTEL_SERVICE_NAME: audit
+      OTEL_SERVICE_NAMESPACE: audit
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      DEPLOYMENT_ENV: docker
+    volumes:
+      - ../services/audit:/app
+    networks:
+      - plat5
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3003/health/ready"]
       interval: 30s
       timeout: 10s
       retries: 3

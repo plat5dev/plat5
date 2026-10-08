@@ -16,6 +16,8 @@ pub enum RouteScope {
 
 #[derive(Clone)]
 pub struct Route {
+    /// The service name in `routes.yml`.
+    pub service: String,
     pub base_url: String,
     pub path: String,
     pub methods: HashSet<String>,
@@ -25,6 +27,21 @@ pub struct Route {
     pub scope: RouteScope,
     pub required_labels: Option<Vec<String>>,
     pub limiter: RouteLimiter,
+    /// The route's `audit` override. None = method default.
+    pub audit: Option<bool>,
+}
+
+impl Route {
+    /// Whether a request with `method` goes in the org's audit log (docs/audit.md).
+    /// Only `organization` and `member` routes have an org to log into. Writes are
+    /// audited by default; the route's `audit` overrides.
+    pub fn audited(&self, method: &str) -> bool {
+        if !matches!(self.scope, RouteScope::Organization | RouteScope::Member) {
+            return false;
+        }
+        self.audit
+            .unwrap_or(matches!(method, "POST" | "PUT" | "PATCH" | "DELETE"))
+    }
 }
 
 /// Resolved at load from `rate_limit` + service `rate_limits`.
@@ -128,6 +145,7 @@ impl RouteMap {
                     };
 
                     if let Err(e) = route_map.add_route(
+                        service_name,
                         base_url,
                         &route_config.path,
                         &methods,
@@ -135,6 +153,7 @@ impl RouteMap {
                         scope,
                         route_config.required_labels.clone(),
                         limiter,
+                        route_config.audit,
                     ) {
                         warn!(
                             service = %service_name,
@@ -154,6 +173,7 @@ impl RouteMap {
     #[allow(clippy::too_many_arguments)]
     pub fn add_route(
         &mut self,
+        service: &str,
         base_url: &str,
         path: &str,
         methods: &[&str],
@@ -161,11 +181,13 @@ impl RouteMap {
         scope: RouteScope,
         required_labels: Option<Vec<String>>,
         limiter: RouteLimiter,
+        audit: Option<bool>,
     ) -> Result<(), String> {
         let re = path_to_regex(path).map_err(|e| e.to_string())?;
         let (static_segments, param_count) = path_specificity(path);
 
         let route = Route {
+            service: service.to_string(),
             base_url: base_url.to_string(),
             path: path.to_string(),
             methods: methods.iter().map(|m| m.to_string()).collect(),
@@ -173,6 +195,7 @@ impl RouteMap {
             scope,
             required_labels,
             limiter,
+            audit,
         };
 
         self.routes.push(CompiledRoute {
@@ -480,6 +503,7 @@ mod tests {
         let mut map = RouteMap::new();
         assert!(map
             .add_route(
+                "identity",
                 "http://x",
                 "/member/api-keys",
                 &["GET"],
@@ -487,6 +511,7 @@ mod tests {
                 RouteScope::Member,
                 None,
                 RouteLimiter::Inherit,
+                None,
             )
             .is_ok());
         let (route, _) = map.find_route("/member/api-keys", "GET").unwrap();
@@ -495,5 +520,56 @@ mod tests {
             route.upstream.as_deref(),
             Some("/members/{subject.member_id}/api-keys")
         );
+    }
+
+    fn audit_route(scope: RouteScope, audit: Option<bool>) -> Route {
+        let mut map = RouteMap::new();
+        map.add_route(
+            "svc",
+            "http://x",
+            "/r",
+            &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
+            None,
+            scope,
+            None,
+            RouteLimiter::Inherit,
+            audit,
+        )
+        .unwrap();
+        map.find_route("/r", "GET").unwrap().0.clone()
+    }
+
+    #[test]
+    fn writes_are_audited_by_default_on_org_and_member_routes() {
+        for scope in [RouteScope::Organization, RouteScope::Member] {
+            let route = audit_route(scope, None);
+            for m in ["POST", "PUT", "PATCH", "DELETE"] {
+                assert!(route.audited(m), "{scope:?} {m}");
+            }
+            for m in ["GET", "HEAD"] {
+                assert!(!route.audited(m), "{scope:?} {m}");
+            }
+        }
+    }
+
+    #[test]
+    fn audit_override_applies_to_every_method_of_the_route() {
+        let on = audit_route(RouteScope::Organization, Some(true));
+        assert!(on.audited("GET"));
+        let off = audit_route(RouteScope::Organization, Some(false));
+        assert!(!off.audited("POST"));
+    }
+
+    #[test]
+    fn public_and_user_routes_are_never_audited() {
+        for scope in [RouteScope::Public, RouteScope::User] {
+            assert!(!audit_route(scope, None).audited("POST"));
+            assert!(!audit_route(scope, Some(true)).audited("POST"));
+        }
+    }
+
+    #[test]
+    fn route_keeps_its_service_name() {
+        assert_eq!(audit_route(RouteScope::Organization, None).service, "svc");
     }
 }

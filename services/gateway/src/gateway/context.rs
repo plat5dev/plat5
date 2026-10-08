@@ -1,10 +1,12 @@
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use pingora::upstreams::peer::HttpPeer;
 use tracing::Span;
 
 pub struct GatewayContext {
     pub start: Instant,
+    /// Wall clock at arrival: an audit event's `occurred_at`.
+    pub received_at: SystemTime,
     pub route: Option<String>,
     pub method: Option<String>,
     pub request_id: Option<String>,
@@ -15,6 +17,10 @@ pub struct GatewayContext {
     pub rate_limit: Option<crate::rate_limit::RateLimitInfo>,
     /// Who presented the request, for the request log. Never a secret.
     pub credential: crate::admission::RequestCredential,
+    /// Set once an audit intent is attempted. The logging phase turns it into the outcome.
+    pub audit: Option<crate::audit::AuditState>,
+    /// The upstream peer was handed to Pingora: the service may have been called.
+    pub forwarded: bool,
 }
 
 impl Default for GatewayContext {
@@ -27,6 +33,7 @@ impl GatewayContext {
     pub fn new() -> Self {
         Self {
             start: Instant::now(),
+            received_at: SystemTime::now(),
             route: None,
             method: None,
             request_id: None,
@@ -36,6 +43,8 @@ impl GatewayContext {
             body_bytes: 0,
             rate_limit: None,
             credential: Default::default(),
+            audit: None,
+            forwarded: false,
         }
     }
 

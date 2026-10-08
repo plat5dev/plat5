@@ -6,6 +6,10 @@
 # (docs/roles.md); its keys and sessions carry them. Reads stay unlabeled,
 # except the invite list, which returns live tokens. Labels are opaque: edit
 # them here, not in identity.
+#
+# organization and member writes are in the org's audit log by default
+# (docs/audit.md). The invite list is a read worth recording: it returns live
+# tokens, so it sets audit: true.
 services:
   identity:
     url: http://identity:3000
@@ -60,6 +64,7 @@ services:
           upstream: /organizations/{subject.organization_id}/invites
           methods: [GET, POST]
           required_labels: [org:members:write]
+          audit: true
         - path: /org/invites/{invite_id}
           upstream: /organizations/{subject.organization_id}/invites/{path.invite_id}
           methods: [DELETE]

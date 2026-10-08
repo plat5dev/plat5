@@ -33,3 +33,4 @@ Per-service details live in each service's `README.md`.
 | [`route-registry.md`](route-registry.md) | Desired state (Postgres) + etcd projection |
 | [`identity.md`](identity.md) | Identity service: orgs, members, service accounts, API keys, sessions, internal validate |
 | [`roles.md`](roles.md) | Deployment-defined roles: the roles file, what credentials carry, who may assign, catalog labels |
+| [`audit.md`](audit.md) | Org audit log: which requests, intent and outcome delivery, details header, read API, audit service |

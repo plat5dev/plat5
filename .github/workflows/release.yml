@@ -49,6 +49,14 @@ jobs:
             context: services/identity
             platform: linux/arm64
             runner: ubuntu-24.04-arm
+          - name: audit
+            context: services/audit
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - name: audit
+            context: services/audit
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Prepare
         run: |
@@ -104,6 +112,7 @@ jobs:
           - gateway
           - route-registry
           - identity
+          - audit
     steps:
       - name: Prepare
         run: |

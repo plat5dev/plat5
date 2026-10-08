@@ -63,6 +63,8 @@ pub struct MethodConfig {
     pub required_labels: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limit: Option<RouteRateLimit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -91,6 +93,10 @@ pub struct RouteConfig {
     /// Route-level value applies only to the flat methods list form.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limit: Option<RouteRateLimit>,
+    /// Omitted = method default (writes audited). `organization` and `member` only.
+    /// Route-level value applies only to the flat methods list form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit: Option<bool>,
     /// Nested methods map, if the YAML/JSON used the per-verb object form.
     /// Cleared when expanded at apply. Never written to etcd.
     #[serde(skip)]
@@ -117,6 +123,8 @@ struct RawRouteConfig {
     required_labels: Option<Vec<String>>,
     #[serde(default)]
     rate_limit: Option<RouteRateLimit>,
+    #[serde(default)]
+    audit: Option<bool>,
 }
 
 impl<'de> Deserialize<'de> for RouteConfig {
@@ -129,6 +137,7 @@ impl<'de> Deserialize<'de> for RouteConfig {
                 upstream: raw.upstream,
                 required_labels: raw.required_labels,
                 rate_limit: raw.rate_limit,
+                audit: raw.audit,
                 methods_form: MethodsForm::List,
             }),
             RawMethods::Nested(map) => {
@@ -139,6 +148,7 @@ impl<'de> Deserialize<'de> for RouteConfig {
                         upstream: raw.upstream,
                         required_labels: raw.required_labels,
                         rate_limit: raw.rate_limit,
+                        audit: raw.audit,
                         methods_form: MethodsForm::Nested(Vec::new()),
                     });
                 }
@@ -153,6 +163,7 @@ impl<'de> Deserialize<'de> for RouteConfig {
                     upstream: raw.upstream,
                     required_labels: raw.required_labels,
                     rate_limit: raw.rate_limit,
+                    audit: raw.audit,
                     methods_form: MethodsForm::Nested(entries),
                 })
             }
@@ -162,6 +173,7 @@ impl<'de> Deserialize<'de> for RouteConfig {
                 upstream: raw.upstream,
                 required_labels: raw.required_labels,
                 rate_limit: raw.rate_limit,
+                audit: raw.audit,
                 methods_form: MethodsForm::Mixed,
             }),
         }
@@ -176,6 +188,7 @@ impl Default for RouteConfig {
             upstream: None,
             required_labels: None,
             rate_limit: None,
+            audit: None,
             methods_form: MethodsForm::List,
         }
     }

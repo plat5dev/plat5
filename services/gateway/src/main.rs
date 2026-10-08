@@ -53,9 +53,27 @@ fn main() {
         .block_on(gateway::rate_limit::RateLimiter::connect(&cfg.valkey_url))
         .unwrap_or_else(|e| panic!("failed to connect to valkey: {e}"));
 
+    // Outcome writes run on this runtime, off the request path.
+    let audit = gateway::audit::Audit::new(
+        cfg.audit_url.clone(),
+        cfg.internal_auth_token.clone(),
+        rt.handle(),
+    );
+    if let Some(url) = cfg.audit_url.as_deref() {
+        info!(audit_url = %url, "audit on");
+    } else {
+        tracing::warn!("AUDIT_ENABLED=false: audit is off and no org audit log is recorded");
+    }
+
     let mut my_proxy = pingora::proxy::http_proxy_service(
         &my_server.configuration,
-        UserGateway::new(&cfg, jwt_validator.clone(), route_map, limiter.clone()),
+        UserGateway::new(
+            &cfg,
+            jwt_validator.clone(),
+            route_map,
+            limiter.clone(),
+            audit,
+        ),
     );
     my_proxy.add_tcp(&format!("0.0.0.0:{}", cfg.port));
     my_server.add_service(my_proxy);

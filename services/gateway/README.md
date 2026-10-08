@@ -1,6 +1,6 @@
 # Gateway
 
-Rust reverse proxy built on Pingora. Handles request routing, JWT / API key / member session authentication, subject fill into `upstream`, route labels (`required_labels`) against the member's role labels, stripping of `Authorization` / `X-API-Key` before upstream, rate limits (Valkey), trace propagation, CORS, and security headers. TLS is terminated at the edge (not in this process).
+Rust reverse proxy built on Pingora. Handles request routing, JWT / API key / member session authentication, subject fill into `upstream`, route labels (`required_labels`) against the member's role labels, stripping of `Authorization` / `X-API-Key` before upstream, rate limits (Valkey), the org audit log's intent and outcome writes, trace propagation, CORS, and security headers. TLS is terminated at the edge (not in this process).
 
 ## Local Development
 
@@ -31,7 +31,9 @@ cargo test --all-targets
 | `APIKEY_BRAND` | `plat5` | Same value as identity. `[a-z][a-z0-9]*`, max 32. Unset → `plat5`; empty → refuse boot |
 | `MEMBER_SESSION_VALIDATE_URL` | (required) | Member session validate (`…/internal/member-sessions/validate`); tokens `{brand}-ms-1-…` |
 | `APIKEY_CACHE_TTL_SECS` | `300` | User key, member key, and member session cache TTL (hits and invalid credentials) |
-| `INTERNAL_AUTH_TOKEN` | unset | Sent as `X-Plat5-Internal-Token` to validate when set |
+| `INTERNAL_AUTH_TOKEN` | unset | Sent as `X-Plat5-Internal-Token` to validate and audit when set |
+| `AUDIT_ENABLED` | `true` | `false` turns audit off for the deployment. Anything but `true` / `false` refuses boot |
+| `AUDIT_URL` | (required unless audit is off) | Audit's internal base URL, e.g. `http://audit:3003` ([`docs/audit.md`](../../docs/audit.md)) |
 | `RATE_LIMIT_REQUESTS` | `60` | Fallback per-route limit. `0` = unlimited fallback |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Fallback window |
 | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` | `60` | Failed-auth IP limiter. `0` = off |
@@ -52,6 +54,8 @@ cargo test --all-targets
 | `OTEL_TRACES_SAMPLER_RATIO` | `1` | Trace sampling ratio |
 | `OTEL_SDK_DISABLED` | unset | `true` → no OTLP; stdout + `/metrics` remain |
 | `ALLOWED_ORIGINS` | (empty → `*`) | Comma-separated CORS origin allowlist. Empty allows `*`; non-empty reflects matching `Origin` and sets `Vary: Origin` |
+
+Audit: on an audited `organization` or `member` route, the intent is written before forward (up to 3 attempts in 1s) or the request is **503** and not forwarded. The outcome is queued after the response and retried for about five minutes; a full queue drops it and the event stays `pending`. `X-Plat5-Audit-Details` is stripped from every request and response. Audit is not part of `/health/ready`.
 
 Limiter subject follows route scope: `public`→ip, `user`→user, `organization`→org, `member`→member. Valkey error or timeout on a limited request → **503**. The gateway reconnects when Valkey answers again. Admitted limited routes set `X-RateLimit-Limit` / `Remaining` / `Reset`.
 

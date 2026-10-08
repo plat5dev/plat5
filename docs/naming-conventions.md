@@ -7,7 +7,7 @@ Formats and terminology for labels, routes, metrics, and error codes across Plat
 - **Plat5** — Brand and main product: gateway, identity, route registry, contracts (platform runtime).
 - **Plat5 Auth** — Optional reference OIDC IdP (separate product).
 - **Service** — Any unit of code that runs with Plat5 (e.g. `gateway`, `identity`, `widgets`).
-- **Platform service** — Plat5 runtime units: `gateway`, `route-registry`, `identity`.
+- **Platform service** — Plat5 runtime units: `gateway`, `route-registry`, `identity`, `audit`.
 - **Business service** — Use-case service behind Plat5: domain APIs.
 - **IdP** — External identity provider (JWT issuer). Not part of Plat5 (optional Plat5 Auth is a separate product).
 
@@ -47,6 +47,7 @@ Full table and labels: [`container-labels.md`](container-labels.md). Identity ba
 |---------|---------------------|
 | `identity` | `identity` |
 | `gateway`, `route-registry` | `edge` |
+| `audit` | `audit` |
 | Business APIs | `api` (etc.) |
 
 When changing labels: update compose labels and `OTEL_SERVICE_NAMESPACE` together.
@@ -75,6 +76,8 @@ The first path segment is the subject.
 | Organization | `/organizations/{organization_id}/...` |
 | Member | `/members/{member_id}/...` |
 | Internal (not on the gateway) | `/internal/user-keys/validate`, `/internal/member-keys/validate`, `/internal/member-sessions/validate` |
+
+Audit follows the same pattern: `/organizations/{organization_id}/audit-events` public, `/internal/events/{request_id}` internal ([`audit.md`](audit.md)).
 
 Those are identity's own URLs. The gateway edge does not put the subject in the path.
 

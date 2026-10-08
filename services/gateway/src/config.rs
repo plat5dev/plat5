@@ -59,6 +59,9 @@ pub struct GatewayConfig {
     pub rate_limit_window_seconds: u64,
     pub rate_limit_auth_failure_requests: u64,
     pub rate_limit_auth_failure_window_seconds: u64,
+
+    /// Audit's internal base URL. None = audit off (`AUDIT_ENABLED=false`).
+    pub audit_url: Option<String>,
 }
 
 #[derive(Debug)]
@@ -87,6 +90,7 @@ impl GatewayConfig {
         let member_session_validate_url = require_env("MEMBER_SESSION_VALIDATE_URL")?;
         let valkey_url = require_env("VALKEY_URL")?;
         let apikey_brand = apikey_brand_from_env()?;
+        let audit_url = audit_url_from_env()?;
         let rate_limit_requests =
             parse_u64_env("RATE_LIMIT_REQUESTS", DEFAULT_RATE_LIMIT_REQUESTS)?;
         let rate_limit_window_seconds = parse_u64_env(
@@ -158,6 +162,8 @@ impl GatewayConfig {
             rate_limit_window_seconds,
             rate_limit_auth_failure_requests,
             rate_limit_auth_failure_window_seconds,
+
+            audit_url,
         })
     }
 }
@@ -186,6 +192,35 @@ fn parse_u64_env(key: &'static str, default: u64) -> Result<u64, GatewayConfigEr
             message: format!("{e}"),
         }),
         Err(_) => Ok(default),
+    }
+}
+
+/// Audit is on unless `AUDIT_ENABLED=false`. On, `AUDIT_URL` is required: a
+/// forgotten URL fails boot instead of silently turning audit off.
+fn audit_url_from_env() -> Result<Option<String>, GatewayConfigError> {
+    parse_audit(
+        env::var("AUDIT_ENABLED").ok().as_deref(),
+        env::var("AUDIT_URL").ok().as_deref(),
+    )
+}
+
+fn parse_audit(
+    enabled: Option<&str>,
+    url: Option<&str>,
+) -> Result<Option<String>, GatewayConfigError> {
+    match enabled.map(str::trim) {
+        None | Some("") | Some("true") => {}
+        Some("false") => return Ok(None),
+        Some(other) => {
+            return Err(GatewayConfigError::Invalid {
+                key: "AUDIT_ENABLED",
+                message: format!("must be true or false, got {other:?}"),
+            })
+        }
+    }
+    match url.map(str::trim) {
+        Some(u) if !u.is_empty() => Ok(Some(u.trim_end_matches('/').to_string())),
+        _ => Err(GatewayConfigError::Missing("AUDIT_URL")),
     }
 }
 
@@ -258,6 +293,38 @@ mod tests {
         assert!(parse_apikey_brand(&too_long).is_err());
         let max = "a".repeat(MAX_APIKEY_BRAND_LEN);
         assert_eq!(parse_apikey_brand(&max).unwrap(), max);
+    }
+
+    #[test]
+    fn audit_is_on_by_default_and_needs_a_url() {
+        assert_eq!(
+            parse_audit(None, Some("http://audit:3003/"))
+                .unwrap()
+                .as_deref(),
+            Some("http://audit:3003")
+        );
+        assert_eq!(
+            parse_audit(Some("true"), Some("http://audit:3003"))
+                .unwrap()
+                .as_deref(),
+            Some("http://audit:3003")
+        );
+        for url in [None, Some(""), Some("  ")] {
+            assert!(matches!(
+                parse_audit(None, url),
+                Err(GatewayConfigError::Missing("AUDIT_URL"))
+            ));
+        }
+    }
+
+    #[test]
+    fn audit_off_ignores_the_url() {
+        assert_eq!(parse_audit(Some("false"), None).unwrap(), None);
+        assert_eq!(
+            parse_audit(Some("false"), Some("http://audit:3003")).unwrap(),
+            None
+        );
+        assert!(parse_audit(Some("no"), Some("http://audit:3003")).is_err());
     }
 
     #[test]

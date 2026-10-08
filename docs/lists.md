@@ -35,6 +35,10 @@ Always **`id` ascending**. IDs are ULIDs (time-sortable).
 
 When `has_more` is `true`, pass the last item’s `id` as `starting_after` on the following request.
 
+## Audit events
+
+Audit's `GET /organizations/{organization_id}/audit-events` takes the same `limit` and `starting_after`, but runs `id` **descending** (newest first). See [`audit.md`](audit.md#reading).
+
 ## Identity lists
 
 All of: list orgs, memberships, members, invites, service accounts, user API keys, member API keys (member path and service-account path).

@@ -31,6 +31,7 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defau
 | `services/gateway/` | Reverse proxy, auth, routing (Rust / Pingora) |
 | `services/route-registry/` | Route admin API → etcd (Rust) |
 | `services/identity/` | Identity control plane (Go) |
+| `services/audit/` | Org audit log store and read API (Go) |
 | `compose/` | Self-contained Plat5 stack |
 | `docs/` | Contracts |
 
@@ -48,6 +49,7 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defau
 | [`docs/route-registry.md`](docs/route-registry.md) | Apply routes via admin API |
 | [`docs/identity.md`](docs/identity.md) | Identity service API |
 | [`docs/roles.md`](docs/roles.md) | Deployment-defined roles and the labels they grant |
+| [`docs/audit.md`](docs/audit.md) | Org audit log: what the gateway records and how orgs read it |
 | [`docs/api-errors.md`](docs/api-errors.md) | Error envelope |
 | [`docs/telemetry.md`](docs/telemetry.md) | Logs, traces, metrics |
 

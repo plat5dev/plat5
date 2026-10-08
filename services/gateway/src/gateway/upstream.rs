@@ -65,6 +65,10 @@ pub async fn build_and_store_upstream_peer(
     read_timeout: Duration,
 ) -> std::result::Result<(), RewriteError> {
     strip_client_credentials(session.req_header_mut());
+    // Only a service sets audit details, on its response. Never pass a client's on.
+    session
+        .req_header_mut()
+        .remove_header(crate::audit::DETAILS_HEADER);
 
     if let Some(template) = route.upstream.as_deref() {
         let upstream_path = rewrite::substitute(template, params, subject_ref(admission))?;

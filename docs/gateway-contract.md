@@ -2,13 +2,13 @@
 
 Auth delegation, subject fill, and trace propagation from the Plat5 gateway (`services/gateway/`).
 
-Boundary: [`identity-boundary.md`](identity-boundary.md). Routes: [`routes.md`](routes.md). Errors: [`api-errors.md`](api-errors.md). Identity backends: [`identity.md`](identity.md).
+Boundary: [`identity-boundary.md`](identity-boundary.md). Routes: [`routes.md`](routes.md). Errors: [`api-errors.md`](api-errors.md). Identity backends: [`identity.md`](identity.md). Audit: [`audit.md`](audit.md).
 
 ## Responsibilities
 
 | Layer | Responsibility |
 |-------|---------------|
-| **Gateway** | Routing, authentication (JWT, API key, member session), scope projection, route `required_labels`, rate limits, subject fill into `upstream`, CORS, security headers, trace propagation |
+| **Gateway** | Routing, authentication (JWT, API key, member session), scope projection, route `required_labels`, rate limits, audit intent and outcome, subject fill into `upstream`, CORS, security headers, trace propagation |
 | **Edge / Load Balancer** | TLS termination (e.g. Cloudflare Zero Trust tunnels) |
 | **Downstream services** | Business logic, data access, resource authorization |
 
@@ -33,8 +33,15 @@ The gateway removes these request headers before the upstream call.
 |--------|-----|
 | `Authorization` | Consumed for JWT authn; must not leak bearer tokens to apps |
 | `X-API-Key` | Consumed for API-key authn; must not leak raw keys to apps |
+| `X-Plat5-Audit-Details` | A service sets it on responses. A client must not hand one to a service that echoes headers |
 
 Clients still send credential headers **to the gateway**. Services behind the gateway will not receive `Authorization` or `X-API-Key`. CORS may still allow browsers to send them.
+
+### Stripped from responses (all scopes)
+
+| Header | Why |
+|--------|-----|
+| `X-Plat5-Audit-Details` | Audit details from the service ([`audit.md`](audit.md#details)). Stripped on every route, audit on or off |
 
 ### Always (all scopes)
 
@@ -82,7 +89,7 @@ Services publish via the **route-registry** admin API (`POST /apply`). Gateway l
 
 ### Route `required_labels`
 
-After match + admission: if the route has `required_labels`, a member credential's `labels` must hold `*` or share a label with the route, or **403** `FORBIDDEN`. One shared label is enough.
+After admission and the rate limit: if the route has `required_labels`, a member credential's `labels` must hold `*` or share a label with the route, or **403** `FORBIDDEN`. One shared label is enough.
 
 A credential carries its principal's labels. For a member key or member session, validate's list is the member's role labels ([`roles.md`](roles.md)). `labels` is always a list. `["*"]` (a `["*"]` role, or roles off) matches any route label. A route cannot require `*` itself. A valid validate result without a list counts as `[]`. `labels: []` cannot satisfy any `required_labels` and gets **403** there; unlabeled routes still admit it. User credentials (JWT and user API key) have no role and skip, so labels constrain `organization` and `member` routes only.
 
@@ -97,7 +104,7 @@ Counters live in **Valkey**. Replicas share one budget. `VALKEY_URL` is required
 | Fallback | `RATE_LIMIT_REQUESTS` (default 60; `0` = unlimited), `RATE_LIMIT_WINDOW_SECONDS` (default 60) |
 | Per-route | omitted inherits fallback; `{requests, window_seconds}` = this route+method only; policy **name** = service `rate_limits` entry; `false` opts out |
 | Named | `rate_limits` on the service. Name without `shared` → `{service}:{name}:{subject}`. `shared: true` → `{name}:{subject}` (opt-in cross-service; both services declare the same entry) |
-| Who | All admitted routes (JWT, API key, and member session) |
+| Who | All admitted routes (JWT, API key, and member session). Runs before `required_labels`, so a **403** counts |
 | Subject | Derived from route scope: `public`→ip, `user`→`user_id`, `organization`→`organization_id`, `member`→`member_id`. Not configurable. |
 | Exceed | **429** `RATE_LIMITED`, type `api_error`, message `Too many requests. Try again in a moment.`, `details.retry_after_seconds`, `Retry-After` |
 | Admitted headers | On limited admitted routes (2xx and 429): `X-RateLimit-Limit` (policy `requests`), `X-RateLimit-Remaining` (after this request; `0` on 429), `X-RateLimit-Reset` (unix epoch seconds when the window ends). Omitted on unlimited routes (`false` or fallback `0`). |
@@ -116,6 +123,7 @@ The rewritten path is authentic only if the upstream is on a private network the
 2. **Propagate `traceparent`** on downstream calls
 3. **Log with `request_id`** from `X-Request-ID`
 4. **Do not set `X-Request-ID` on responses** — gateway owns it
+5. **To say what changed, set `X-Plat5-Audit-Details`** on the response of an audited route. No secrets. The gateway strips it ([`audit.md`](audit.md#details))
 
 ### Platform integrity (hard limits)
 
@@ -142,9 +150,10 @@ Prefix dispatch happens before the identity call. One member-credential result (
 
 1. Bad, missing, or wrong credential → **401** `UNAUTHORIZED`
 2. Validate unavailable → **503** `SERVICE_UNAVAILABLE`
-3. Admitted → `required_labels` (member credentials; `*` matches any label; users skip) → **403** `FORBIDDEN` on miss
-4. Then per-route rate limit → **429** `RATE_LIMITED`
-5. Then substitute `{subject.*}` and `{path.*}` in `upstream` (bad path param → **400**, bad subject id → **500**)
+3. Admitted → per-route rate limit → **429** `RATE_LIMITED`
+4. Then, on an audited route with audit on, the audit intent → **503** `SERVICE_UNAVAILABLE` if it cannot be written ([`audit.md`](audit.md#request-order))
+5. Then `required_labels` (member credentials; `*` matches any label; users skip) → **403** `FORBIDDEN` on miss
+6. Then substitute `{subject.*}` and `{path.*}` in `upstream` (bad path param → **400**, bad subject id → **500**)
 
 Gateway chooses validate URL by **wire prefix** before calling identity. Prefixes come from `APIKEY_BRAND` (same env as identity; unset → `plat5`). Contract: [`identity.md`](identity.md).
 
@@ -169,6 +178,10 @@ Gateway calls identity backends over HTTP (not published on the edge route map):
 | Member session validate | `MEMBER_SESSION_VALIDATE_URL` | `http://identity:3001/internal/member-sessions/validate` |
 
 All three live on identity’s **`INTERNAL_PORT`**. All three URLs are required to boot. Optional shared `INTERNAL_AUTH_TOKEN` is sent as `X-Plat5-Internal-Token`. Contract: [`identity.md`](identity.md).
+
+## Audit
+
+On an audited `organization` or `member` route, the gateway writes an intent to the audit service before forward and an outcome after. Intent not written → **503**, and the service is not called. Audit is on or off for the deployment: `AUDIT_URL` is required to boot unless `AUDIT_ENABLED=false`. Same `INTERNAL_AUTH_TOKEN`. Contract: [`audit.md`](audit.md).
 
 ## Public Routes
 
@@ -225,7 +238,7 @@ Revoke, suspend, remove, and role changes are visible at the edge when the TTL e
 
 ## Boot / ready
 
-`/health/ready` is **200** when JWKS is loaded **and** Valkey answers PING within 500ms. Otherwise **503**. etcd empty (no routes) is still ready — unmatched paths are **404**.
+`/health/ready` is **200** when JWKS is loaded **and** Valkey answers PING within 500ms. Otherwise **503**. etcd empty (no routes) is still ready — unmatched paths are **404**. Audit is not part of ready: while it is down, audited routes are **503** and the rest keep working.
 
 ## Errors
 
@@ -237,6 +250,7 @@ Revoke, suspend, remove, and role changes are visible at the edge when the TTL e
 | Request body too large | `PAYLOAD_TOO_LARGE` (413) |
 | Rate limit (admitted route or failed-auth IP) | `RATE_LIMITED` (429); `Retry-After`; admitted limited routes also `X-RateLimit-*` |
 | Auth infra down (JWKS, Valkey, key or session validate) | `SERVICE_UNAVAILABLE` (503) |
+| Audit intent not written (audited route) | `SERVICE_UNAVAILABLE` (503) |
 | Upstream unreachable, timed out, or failing mid-proxy | **502** with the `SERVICE_UNAVAILABLE` code |
 | Path param is not one segment | `INVALID_REQUEST` (400) |
 | Subject id is not one segment | `INTERNAL_ERROR` (500) |

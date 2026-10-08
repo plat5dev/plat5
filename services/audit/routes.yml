@@ -1,0 +1,15 @@
+# Catalog of audit public routes. Apply via route-registry.
+# Not auto-published. Internal intent/outcome writes stay on INTERNAL_PORT.
+# Skip this file when audit is off (AUDIT_ENABLED=false on the gateway).
+#
+# The log carries IPs and user agents of every member, so reading it is
+# labeled. Labels are opaque: edit them here, not in audit.
+services:
+  audit:
+    url: http://audit:3002
+    organization:
+      routes:
+        - path: /org/audit-events
+          upstream: /organizations/{subject.organization_id}/audit-events
+          methods: [GET]
+          required_labels: [org:audit:read]

@@ -65,6 +65,7 @@ fn validate_scope_routes(
                         spec.rate_limit.as_ref(),
                         policies,
                     )?;
+                    validate_audit(service, scope_name, &route.path, spec.audit)?;
                 }
             }
             MethodsForm::List => {
@@ -87,6 +88,7 @@ fn validate_scope_routes(
                     route.rate_limit.as_ref(),
                     policies,
                 )?;
+                validate_audit(service, scope_name, &route.path, route.audit)?;
             }
             MethodsForm::Mixed => {}
         }
@@ -278,6 +280,25 @@ fn validate_required_labels(
                 ),
             });
         }
+    }
+    Ok(())
+}
+
+/// `audit` belongs to routes that have an org log: `organization` and `member`.
+fn validate_audit(
+    service: &str,
+    scope_name: &str,
+    path: &str,
+    audit: Option<bool>,
+) -> Result<(), ConfigError> {
+    if audit.is_some() && !matches!(scope_name, "organization" | "member") {
+        return Err(ConfigError::InvalidRoute {
+            service: service.to_string(),
+            reason: format!(
+                "{} route '{}' sets audit; audit applies only to organization and member routes",
+                scope_name, path
+            ),
+        });
     }
     Ok(())
 }

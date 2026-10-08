@@ -239,6 +239,17 @@ When a metrics destination is set and `OTEL_METRICS_EXPORTER` is unset or includ
 | `db_operation_errors_total` | Counter | db_system_name, db_operation_name, db_namespace |
 | `db_operation_duration_seconds` | Histogram | db_system_name, db_operation_name, db_namespace |
 
+Gateway audit writes ([`audit.md`](audit.md)):
+
+| Metric | Type | Labels |
+|--------|------|--------|
+| `audit_writes_total` | Counter | write (`intent`, `outcome`), result (`ok`, `failed`, `not_found`, `dropped`) |
+| `audit_intent_duration_seconds` | Histogram | result (`ok`, `failed`). Time an audited request waited on its intent, retries included |
+
+Audit service: `audit_intents_total` (result `created`, `existing`) and `audit_outcomes_total` (result `applied`, `already_final`, `not_found`).
+
+An outcome `dropped` or `failed` leaves its event `pending`.
+
 **Histogram buckets** (same across all services):
 
 | Metric | Boundaries (seconds) |
