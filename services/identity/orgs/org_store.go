@@ -136,30 +136,58 @@ func (s *Store) ListOrganizations(ctx context.Context, limit int, startingAfter 
 	return out, hasMore, nil
 }
 
-func (s *Store) UpdateOrganization(ctx context.Context, org *Organization) error {
+// UpdateOrganization sets name and slug where non-nil. It also returns the
+// organization as it was, read under the same lock.
+func (s *Store) UpdateOrganization(ctx context.Context, organizationID string, name, slug *string) (*Organization, Organization, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "update_organization", dbx.DefaultTimeout,
-		attribute.String("organization.id", org.ID),
+		attribute.String("organization.id", organizationID),
 	)
 	defer cancel()
 	defer op.End()
 
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, Organization{}, op.Fail(err)
+	}
+	defer tx.Rollback(ctx)
+
+	org, err := scanOrg(tx.QueryRow(ctx, `
+		SELECT id, name, slug, created_at, updated_at
+		FROM organizations WHERE id = $1
+		FOR UPDATE
+	`, organizationID))
+	if err != nil {
+		if dbx.IsNoRows(err) {
+			return nil, Organization{}, op.Expected("not found", ErrNotFound)
+		}
+		return nil, Organization{}, op.Fail(err)
+	}
+
+	prior := *org
+	if name != nil {
+		org.Name = *name
+	}
+	if slug != nil {
+		org.Slug = *slug
+	}
 	org.UpdatedAt = time.Now().UTC()
-	tag, err := s.pool.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		UPDATE organizations
 		SET name = $2, slug = $3, updated_at = $4
 		WHERE id = $1
 	`, org.ID, org.Name, org.Slug, org.UpdatedAt)
 	if err != nil {
 		if dbx.IsUniqueViolation(err) {
-			return op.SoftFail("slug conflict", ErrConflict, ErrConflict)
+			return nil, Organization{}, op.SoftFail("slug conflict", ErrConflict, ErrConflict)
 		}
-		return op.Fail(err)
+		return nil, Organization{}, op.Fail(err)
 	}
-	if tag.RowsAffected() == 0 {
-		return op.Expected("not found", ErrNotFound)
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, Organization{}, op.Fail(err)
 	}
 	op.OK("ok")
-	return nil
+	return org, prior, nil
 }
 
 func (s *Store) DeleteOrganization(ctx context.Context, organizationID string) error {

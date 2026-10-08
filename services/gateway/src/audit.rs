@@ -163,6 +163,10 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (y, m, d)
 }
 
+/// The gateway did not see the intent written. The reason is already logged.
+#[derive(Debug)]
+pub struct IntentNotWritten;
+
 /// The deployment's audit writer. Off = no writes and no waits.
 #[derive(Clone)]
 pub struct Audit {
@@ -210,7 +214,7 @@ impl Audit {
 
     /// Write the intent, retrying within [`INTENT_BUDGET`]. Err = the gateway did not
     /// see it written; the caller answers 503 and does not forward.
-    pub async fn write_intent(&self, intent: &Intent) -> Result<(), ()> {
+    pub async fn write_intent(&self, intent: &Intent) -> Result<(), IntentNotWritten> {
         let Some(inner) = &self.inner else {
             return Ok(());
         };
@@ -253,7 +257,7 @@ impl Audit {
         );
         metrics::record_audit_write("intent", "failed");
         metrics::record_audit_intent_duration("failed", start.elapsed().as_secs_f64());
-        Err(())
+        Err(IntentNotWritten)
     }
 
     /// Queue the outcome. Never waits. A full queue drops it and the event stays pending.

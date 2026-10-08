@@ -122,38 +122,37 @@ func (h *Handler) UpdateOrganization(c fiber.Ctx) error {
 		return err
 	}
 
-	org, err := h.store.GetOrganization(ctx, orgID)
-	if err != nil {
-		return httpx.MapDB(ctx, err, "failed to get organization", httpx.DBErr{
-			NotFound: ErrNotFound, Resource: "organization", ResourceID: orgID,
-		})
-	}
-
-	details := auditx.Details{}
+	var name, slug *string
 	if req.Name != nil {
-		name, err := requireName(*req.Name, "name", MaxOrgNameLen)
+		n, err := requireName(*req.Name, "name", MaxOrgNameLen)
 		if err != nil {
 			return err
 		}
-		details.Changed("name", org.Name, name)
-		org.Name = name
+		name = &n
 	}
 	if req.Slug != nil {
-		slug := strings.TrimSpace(*req.Slug)
-		if !ValidSlug(slug) {
+		s := strings.TrimSpace(*req.Slug)
+		if !ValidSlug(s) {
 			return errors.FieldError("slug", "Slug can only use lowercase letters, numbers, and dashes.")
 		}
-		details.Changed("slug", org.Slug, slug)
-		org.Slug = slug
+		slug = &s
 	}
 
-	if err := h.store.UpdateOrganization(ctx, org); err != nil {
+	org, prior, err := h.store.UpdateOrganization(ctx, orgID, name, slug)
+	if err != nil {
+		var attempted string
+		if slug != nil {
+			attempted = *slug
+		}
 		return httpx.MapDB(ctx, err, "failed to update organization", httpx.DBErr{
 			NotFound: ErrNotFound, Resource: "organization", ResourceID: orgID,
-			Conflict: ErrConflict, Field: "slug", FieldValue: org.Slug,
+			Conflict: ErrConflict, Field: "slug", FieldValue: attempted,
 			Message: "An organization with this slug already exists.",
 		})
 	}
+	details := auditx.Details{}
+	details.Changed("name", prior.Name, org.Name)
+	details.Changed("slug", prior.Slug, org.Slug)
 	auditx.Set(c, details)
 	return c.JSON(toOrgResponse(org))
 }

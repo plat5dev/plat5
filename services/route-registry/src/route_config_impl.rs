@@ -1,6 +1,7 @@
 impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
         for (name, service) in &self.services {
+            validate_service_name(name)?;
             validate_service_url(name, &service.url)?;
             if service.public.is_none()
                 && service.user.is_none()
@@ -188,6 +189,28 @@ pub fn find_route_conflicts(
     let mut out: Vec<String> = out.into_iter().collect();
     out.sort();
     out
+}
+
+/// Audit refuses a longer service name on an event (docs/audit.md).
+const MAX_SERVICE_NAME_LEN: usize = 128;
+
+/// A service name is an etcd key segment, a rate-limit bucket prefix, and the
+/// `service` on every audit event: 1-128 of `[A-Za-z0-9._-]`.
+fn validate_service_name(name: &str) -> Result<(), ConfigError> {
+    let ok = !name.is_empty()
+        && name.len() <= MAX_SERVICE_NAME_LEN
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+    if ok {
+        return Ok(());
+    }
+    Err(ConfigError::InvalidRoute {
+        service: name.to_string(),
+        reason: format!(
+            "service name must be 1-{MAX_SERVICE_NAME_LEN} of letters, digits, '.', '_', or '-'"
+        ),
+    })
 }
 
 const URL_FORM: &str = "expected http://host:port, e.g. http://my-service:3000";

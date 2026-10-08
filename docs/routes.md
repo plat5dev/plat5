@@ -40,7 +40,9 @@ curl -sS -X POST http://localhost:5002/apply \
 Validation is at **apply time**, and the same checks run on `PUT /services/{name}` and on revision restore (a restored revision must pass today's rules). Malformed config → `422 VALIDATION_ERROR`; nothing written.
 
 - Service `url` is required and must be exactly `http://host:port` (explicit port, no path or query), e.g. `http://my-service:3000`. `https://` → `422` saying TLS (https) upstreams aren't supported yet. Bare `host:port`, any other scheme, a missing port, or a path/query → `422 VALIDATION_ERROR` naming that form. Routes already stored with a bare `host:port` keep routing (the gateway strips the scheme) until re-applied. `http://user@host:port` → `422` saying credentials aren't allowed; a port outside 1–65535 → `422` saying it is out of range. A missing `url` → `422` telling you to set `url` (the CLI catches this first and points at `upstreams:` in `plat5.yml`).
+- A service name is 1–128 characters of letters, digits, `.`, `_`, and `-`. It is an etcd key, a rate-limit bucket prefix, and the `service` on every audit event ([`audit.md`](audit.md)). `billing api` or `a/b` → `422`.
 - Paths are canonical and are **rejected, not rewritten**: no trailing `/` (except `/` itself) and no uppercase letters outside `{params}` (param names keep their case). `/user/profile/` and `/USER/profile` → `422` naming the canonical form (`/user/profile`). This applies to the full path after `route_prefix` is joined.
+- A path is what an audit event records as `route`, and what a request can match: visible ASCII (no spaces; percent-encode anything else), at most 1024 bytes. Param names are letters, digits, and `_`, not starting with a digit, at most 64 characters, at most 32 per path. `{project-id}` → `422`; use `{project_id}`.
 - A route may belong to only one service, compared by **shape**: each `{param}` matches any other `{param}`, a literal segment matches only the same literal (a literal never matches a param). If an incoming method + shape is already owned by a **different** service, the whole apply is rejected with `409 ROUTE_CONFLICT`; the message lists each conflicting route and its current owner (and the owner's path when it differs, e.g. `GET /a/{x} (owned by 'a2' as /a/{y})`). Nothing is written.
   - Only the **same method** conflicts: `GET /a/{x}` in one service and `POST /a/{y}` in another are fine.
   - Literal vs param never conflicts: `/a/special` and `/a/{x}` can live in different services.
@@ -374,7 +376,9 @@ The handler reads `organization_id` from the rewritten path. The client path has
 
 Registry validates **before etcd**. Gateway validates again at load (expanded list form):
 
+- Service name: 1–128 of `[A-Za-z0-9._-]` (registry)
 - `path` not empty; must be `/` or start with `/`
+- Expanded `path`: visible ASCII, at most 1024 bytes; at most 32 params, each `[A-Za-z_][A-Za-z0-9_]*`, at most 64 characters (registry)
 - `methods` not empty (list or non-empty map)
 - Nested `methods` map keys: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`
 - Do not mix methods list and map on the same route (`422`)

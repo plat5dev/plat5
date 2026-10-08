@@ -64,6 +64,49 @@ mod tests {
         }
     }
 
+    fn validate_named(name: &str, path: &str) -> Result<(), ConfigError> {
+        Config {
+            services: HashMap::from([(
+                name.to_string(),
+                user_service(vec![route(path, &["GET"])]),
+            )]),
+        }
+        .validate()
+    }
+
+    #[test]
+    fn service_name_fits_an_etcd_key_and_an_audit_event() {
+        for name in ["identity", "route-registry", "my_api", "Api.v2", &"a".repeat(128)] {
+            validate_named(name, "/a").unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
+        for name in ["", "billing api", "a/b", "a:b", "caf\u{e9}", &"a".repeat(129)] {
+            let msg = validate_named(name, "/a").unwrap_err().to_string();
+            assert!(msg.contains("service name must be"), "{name:?}: {msg}");
+        }
+    }
+
+    #[test]
+    fn path_fits_an_audit_event() {
+        validate_named("s", "/a/{thing_id}/{_x}/{Name2}").unwrap();
+        validate_named("s", &format!("/{}", "a".repeat(1023))).unwrap();
+        for (path, why) in [
+            ("/caf\u{e9}", "visible ASCII"),
+            ("/a b", "visible ASCII"),
+            ("/a/{thing-id}", "param {thing-id}"),
+            ("/a/{a.b}", "param {a.b}"),
+            ("/a/{1st}", "param {1st}"),
+        ] {
+            let msg = validate_named("s", path).unwrap_err().to_string();
+            assert!(msg.contains(why), "{path}: {msg}");
+        }
+        let long = format!("/{}", "a".repeat(1024));
+        assert!(validate_named("s", &long).unwrap_err().to_string().contains("longer than 1024"));
+        let long_param = format!("/{{{}}}", "p".repeat(65));
+        assert!(validate_named("s", &long_param).is_err());
+        let many: String = (0..33).map(|i| format!("/{{p{i}}}")).collect();
+        assert!(validate_named("s", &many).unwrap_err().to_string().contains("more than 32"));
+    }
+
     #[test]
     fn missing_url_is_a_validation_error_not_a_parse_error() {
         let cfg: Config = serde_json::from_value(serde_json::json!({

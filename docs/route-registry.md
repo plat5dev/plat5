@@ -94,7 +94,7 @@ Success apply (`200`) — desired state committed:
 }
 ```
 
-Validation / auth / empty body failures use the Plat5 envelope (`api-errors.md`) and write nothing. A bad or missing service `url` is `422 VALIDATION_ERROR`. A non-canonical path (trailing `/`, uppercase outside `{params}`) is `422`. A method + path shape (params match params, literals match only literals) already owned by a **different** service rejects the whole apply with `409 ROUTE_CONFLICT` (message lists each route and its owner). `PUT /services/{name}` and restore run exactly the same checks; see [routes.md](routes.md). Re-applying a service's own routes replaces them and is not a conflict. A Postgres failure rolls the whole batch back (`503`). etcd projection is retried by the reconciler; apply does not fail after a successful commit.
+Validation / auth / empty body failures use the Plat5 envelope (`api-errors.md`) and write nothing. A bad or missing service `url` is `422 VALIDATION_ERROR`. A non-canonical path (trailing `/`, uppercase outside `{params}`) is `422`. So is a service name, path, or path param name that an audit event cannot carry ([routes.md](routes.md)). A method + path shape (params match params, literals match only literals) already owned by a **different** service rejects the whole apply with `409 ROUTE_CONFLICT` (message lists each route and its owner). `PUT /services/{name}` and restore run exactly the same checks; see [routes.md](routes.md). Re-applying a service's own routes replaces them and is not a conflict. A Postgres failure rolls the whole batch back (`503`). etcd projection is retried by the reconciler; apply does not fail after a successful commit.
 
 ## Revisions
 

@@ -331,7 +331,7 @@ fn validate_path_and_upstream(
         service: service.to_string(),
         reason: format!("{scope_name} route '{expanded_path}': {reason}"),
     })?;
-    validate_path_form(service, scope_name, expanded_path)?;
+    validate_path_form(service, scope_name, expanded_path, &params)?;
     let forbidden = scope_subject_fields(scope_name);
     for name in &params {
         if forbidden.contains(&name.as_str()) {
@@ -396,14 +396,44 @@ fn validate_path_and_upstream(
     Ok(())
 }
 
+/// Audit refuses an event whose route or params do not fit (docs/audit.md).
+const MAX_PATH_LEN: usize = 1024;
+const MAX_PATH_PARAMS: usize = 32;
+const MAX_PATH_PARAM_NAME_LEN: usize = 64;
+
 /// Paths are canonical: no trailing `/` (except `/` itself) and no uppercase
 /// letters outside `{params}`. Variants are rejected, not rewritten, so the
-/// stored path is exactly what was sent.
-fn validate_path_form(service: &str, scope_name: &str, path: &str) -> Result<(), ConfigError> {
+/// stored path is exactly what was sent. A path is also what an audit event
+/// records: visible ASCII, at most 1024 bytes, and at most 32 params named
+/// `[A-Za-z_][A-Za-z0-9_]*` (the gateway's matcher accepts no other name).
+fn validate_path_form(
+    service: &str,
+    scope_name: &str,
+    path: &str,
+    params: &[String],
+) -> Result<(), ConfigError> {
     let bad = |reason: String| ConfigError::InvalidRoute {
         service: service.to_string(),
         reason: format!("{scope_name} route '{path}' {reason}"),
     };
+    if path.len() > MAX_PATH_LEN {
+        return Err(bad(format!("is longer than {MAX_PATH_LEN} bytes")));
+    }
+    if !path.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(bad(
+            "must be visible ASCII: no spaces; percent-encode anything else".to_string(),
+        ));
+    }
+    if params.len() > MAX_PATH_PARAMS {
+        return Err(bad(format!("has more than {MAX_PATH_PARAMS} params")));
+    }
+    for name in params {
+        if !valid_path_param_name(name) {
+            return Err(bad(format!(
+                "param {{{name}}} must be 1-{MAX_PATH_PARAM_NAME_LEN} of letters, digits, or '_', not starting with a digit"
+            )));
+        }
+    }
     if path.len() > 1 && path.ends_with('/') {
         return Err(bad(format!(
             "must not end with '/' (use '{}')",
@@ -436,6 +466,15 @@ fn validate_path_form(service: &str, scope_name: &str, path: &str) -> Result<(),
         )));
     }
     Ok(())
+}
+
+fn valid_path_param_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    name.len() <= MAX_PATH_PARAM_NAME_LEN
+        && bytes
+            .next()
+            .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 fn path_param_names(path: &str) -> Result<Vec<String>, String> {
