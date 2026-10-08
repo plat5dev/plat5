@@ -1,7 +1,12 @@
+/// The label that grants every label. A roles file's `["*"]` reaches the gateway as is,
+/// and identity sends it for every member when roles are off.
+pub const EVERY_LABEL: &str = "*";
+
 /// Whether the caller's labels satisfy a route's `required_labels`.
 ///
 /// - No `required_labels` on the route → allow.
-/// - `granted == None` (a user, or a member whose role is unrestricted) → skip / allow.
+/// - `granted == None` (a user: no role, so nothing to check) → allow.
+/// - `granted` holds `*` → allow.
 /// - Otherwise require a nonempty intersection.
 pub fn satisfies_required_labels(required: Option<&[String]>, granted: Option<&[String]>) -> bool {
     let Some(required) = required.filter(|r| !r.is_empty()) else {
@@ -10,6 +15,9 @@ pub fn satisfies_required_labels(required: Option<&[String]>, granted: Option<&[
     let Some(granted) = granted else {
         return true;
     };
+    if granted.iter().any(|have| have == EVERY_LABEL) {
+        return true;
+    }
     required
         .iter()
         .any(|need| granted.iter().any(|have| have == need))
@@ -24,9 +32,13 @@ mod tests {
     }
 
     #[test]
-    fn unrestricted_role_passes_required_labels() {
+    fn every_label_passes_required_labels() {
         let required = s(&["read"]);
-        assert!(satisfies_required_labels(Some(required.as_slice()), None));
+        let granted = s(&["*"]);
+        assert!(satisfies_required_labels(
+            Some(required.as_slice()),
+            Some(granted.as_slice())
+        ));
     }
 
     #[test]

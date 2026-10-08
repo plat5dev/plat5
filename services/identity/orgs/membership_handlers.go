@@ -15,7 +15,7 @@ type MembershipOrgResponse struct {
 type MembershipResponse struct {
 	ID           string                `json:"id"`
 	Organization MembershipOrgResponse `json:"organization"`
-	Role         string                `json:"role"`
+	Role         *string               `json:"role"`
 	Status       string                `json:"status"`
 }
 
@@ -42,12 +42,12 @@ func (h *Handler) ListMemberships(c fiber.Ctx) error {
 		HasMore:     hasMore,
 	}
 	for _, m := range list {
-		out.Memberships = append(out.Memberships, toMembershipResponse(m))
+		out.Memberships = append(out.Memberships, h.toMembershipResponse(m))
 	}
 	return c.JSON(out)
 }
 
-func toMembershipResponse(m *Membership) MembershipResponse {
+func (h *Handler) toMembershipResponse(m *Membership) MembershipResponse {
 	return MembershipResponse{
 		ID: m.ID,
 		Organization: MembershipOrgResponse{
@@ -55,7 +55,7 @@ func toMembershipResponse(m *Membership) MembershipResponse {
 			Name: m.OrganizationName,
 			Slug: m.OrganizationSlug,
 		},
-		Role:   m.Role,
+		Role:   h.roles.Shown(m.Role),
 		Status: string(m.Status),
 	}
 }

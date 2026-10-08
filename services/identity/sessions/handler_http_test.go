@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -13,19 +14,31 @@ import (
 
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/orgs"
+	"github.com/plat5dev/plat5/identity/roles"
 )
 
 func TestSessionForWildcardRoleCarriesEveryLabel(t *testing.T) {
+	testEveryLabel(t, starterSet(t), "owner")
+}
+
+// Roles off: no role on the wire, even one a row kept, and every label.
+func TestSessionWithRolesOffCarriesEveryLabel(t *testing.T) {
+	testEveryLabel(t, nil, "")
+}
+
+func testEveryLabel(t *testing.T, set *roles.Set, wantRole string) {
+	t.Helper()
 	userID := "user1"
+	stored := "owner"
 	org := &fakeOrg{member: &orgs.Member{
 		ID:             "mem1",
 		OrganizationID: "org1",
 		UserID:         &userID,
-		Role:           "owner",
+		Role:           &stored,
 		Status:         orgs.StatusActive,
 	}}
 	store := &fakeSessions{}
-	h := &Handler{store: store, orgStore: org, prefix: "plat5-ms-1-", roles: starterSet(t)}
+	h := &Handler{store: store, orgStore: org, prefix: "plat5-ms-1-", roles: set}
 	app := fiber.New(fiber.Config{ErrorHandler: errors.FiberErrorHandler})
 	h.MountPublic(app.Group("/users"))
 	h.MountInternal(app.Group("/internal"))
@@ -41,8 +54,11 @@ func TestSessionForWildcardRoleCarriesEveryLabel(t *testing.T) {
 	if created.MemberID != "mem1" || created.OrganizationID != "org1" || !strings.HasPrefix(created.Token, "plat5-ms-1-") {
 		t.Fatalf("create: %+v", created)
 	}
-	if labels, ok := mustObject(t, body)["labels"]; !ok || labels != nil {
-		t.Fatalf(`["*"]: labels must be null: %s`, body)
+	if !reflect.DeepEqual(created.Labels, []string{"*"}) {
+		t.Fatalf(`labels must be ["*"]: %s`, body)
+	}
+	if role, ok := mustObject(t, body)["role"]; !ok || (wantRole == "" && role != nil) || (wantRole != "" && role != wantRole) {
+		t.Fatalf("role %q: %s", wantRole, body)
 	}
 	if _, ok := mustObject(t, body)["user_id"]; ok {
 		t.Fatalf("mint must not return user_id: %s", body)
@@ -52,7 +68,7 @@ func TestSessionForWildcardRoleCarriesEveryLabel(t *testing.T) {
 		Session:        store.created,
 		OrganizationID: "org1",
 		MemberStatus:   string(orgs.StatusActive),
-		MemberRole:     "owner",
+		MemberRole:     &stored,
 	}
 	code, body = doSessionJSON(t, app, http.MethodPost, "/internal/member-sessions/validate", `{"token":"`+created.Token+`"}`)
 	if code != http.StatusOK {
@@ -62,8 +78,8 @@ func TestSessionForWildcardRoleCarriesEveryLabel(t *testing.T) {
 	if _, ok := payload["user_id"]; ok {
 		t.Fatalf("validate user_id: %s", body)
 	}
-	if labels, ok := payload["labels"]; !ok || labels != nil {
-		t.Fatalf("validate labels must be null: %s", body)
+	if !reflect.DeepEqual(payload["labels"], []any{"*"}) {
+		t.Fatalf(`validate labels must be ["*"]: %s`, body)
 	}
 }
 

@@ -3,22 +3,22 @@ package orgs
 import (
 	"github.com/gofiber/fiber/v3"
 
-	"github.com/plat5dev/plat5/identity/internal/apikey"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
 )
 
 type RoleResponse struct {
 	Slug string `json:"slug"`
-	// Labels null is every label (["*"] in the file).
-	Labels *[]string `json:"labels"`
+	// Labels is the file's list as written. ["*"] is every label.
+	Labels []string `json:"labels"`
 }
 
 type ListRolesResponse struct {
-	Roles       []RoleResponse `json:"roles"`
-	CreatorRole string         `json:"creator_role"`
-	DefaultRole string         `json:"default_role"`
+	Roles []RoleResponse `json:"roles"`
+	// The three role fields are null when roles are off.
+	CreatorRole *string `json:"creator_role"`
+	DefaultRole *string `json:"default_role"`
 	// ServiceAccountDefaultRole is resolved: default_role when the file leaves it unset.
-	ServiceAccountDefaultRole string `json:"service_account_default_role"`
+	ServiceAccountDefaultRole *string `json:"service_account_default_role"`
 }
 
 // ListRoles is the deployment's roles file. The org is in the path so a later
@@ -41,7 +41,7 @@ func (h *Handler) ListRoles(c fiber.Ctx) error {
 		ServiceAccountDefaultRole: h.roles.ServiceAccountDefault(),
 	}
 	for _, r := range list {
-		out.Roles = append(out.Roles, RoleResponse{Slug: r.Slug, Labels: apikey.WireLabels(r.Labels)})
+		out.Roles = append(out.Roles, RoleResponse{Slug: r.Slug, Labels: r.Labels})
 	}
 	return c.JSON(out)
 }

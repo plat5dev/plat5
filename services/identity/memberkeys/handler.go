@@ -242,7 +242,7 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 		"member_id":       memberKey.Key.MemberID,
 		"organization_id": memberKey.OrganizationID,
 		// The member's role labels. The role itself does not leave identity.
-		"labels": apikey.WireLabelsJSON(h.roles.Grants(memberKey.MemberRole)),
+		"labels": h.roles.Grants(memberKey.MemberRole),
 	})
 }
 

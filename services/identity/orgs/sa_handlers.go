@@ -22,7 +22,7 @@ type ServiceAccountResponse struct {
 	OrganizationID  string  `json:"organization_id"`
 	MemberID        string  `json:"member_id"`
 	Name            string  `json:"name"`
-	Role            string  `json:"role"`
+	Role            *string `json:"role"`
 	Status          string  `json:"status"`
 	CreatedByUserID *string `json:"created_by_user_id"`
 	CreatedAt       string  `json:"created_at"`
@@ -66,7 +66,7 @@ func (h *Handler) CreateServiceAccount(c fiber.Ctx) error {
 			NotFound: ErrNotFound, Resource: "organization", ResourceID: orgID,
 		})
 	}
-	return c.Status(fiber.StatusCreated).JSON(toServiceAccountResponse(sa))
+	return c.Status(fiber.StatusCreated).JSON(h.toServiceAccountResponse(sa))
 }
 
 func (h *Handler) ListServiceAccounts(c fiber.Ctx) error {
@@ -92,7 +92,7 @@ func (h *Handler) ListServiceAccounts(c fiber.Ctx) error {
 		HasMore:         hasMore,
 	}
 	for _, sa := range list {
-		out.ServiceAccounts = append(out.ServiceAccounts, toServiceAccountResponse(sa))
+		out.ServiceAccounts = append(out.ServiceAccounts, h.toServiceAccountResponse(sa))
 	}
 	return c.JSON(out)
 }
@@ -108,7 +108,7 @@ func (h *Handler) GetServiceAccount(c fiber.Ctx) error {
 			NotFound: ErrNotFound, Resource: "service_account", ResourceID: saID,
 		})
 	}
-	return c.JSON(toServiceAccountResponse(sa))
+	return c.JSON(h.toServiceAccountResponse(sa))
 }
 
 func (h *Handler) UpdateServiceAccount(c fiber.Ctx) error {
@@ -133,7 +133,7 @@ func (h *Handler) UpdateServiceAccount(c fiber.Ctx) error {
 			NotFound: ErrNotFound, Resource: "service_account", ResourceID: saID,
 		})
 	}
-	return c.JSON(toServiceAccountResponse(sa))
+	return c.JSON(h.toServiceAccountResponse(sa))
 }
 
 func (h *Handler) DeleteServiceAccount(c fiber.Ctx) error {
@@ -157,13 +157,13 @@ func (h *Handler) DeleteServiceAccount(c fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-func toServiceAccountResponse(sa *ServiceAccount) ServiceAccountResponse {
+func (h *Handler) toServiceAccountResponse(sa *ServiceAccount) ServiceAccountResponse {
 	return ServiceAccountResponse{
 		ID:              sa.ID,
 		OrganizationID:  sa.OrganizationID,
 		MemberID:        sa.MemberID,
 		Name:            sa.Name,
-		Role:            sa.Role,
+		Role:            h.roles.Shown(sa.Role),
 		Status:          string(sa.Status),
 		CreatedByUserID: sa.CreatedByUserID,
 		CreatedAt:       httpx.FormatTime(sa.CreatedAt),

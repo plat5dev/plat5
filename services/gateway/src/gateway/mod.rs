@@ -673,7 +673,7 @@ mod tests {
     fn org_admission(org: &str) -> Admission {
         Admission::Organization {
             organization_id: org.into(),
-            labels: None,
+            labels: Vec::new(),
         }
     }
 
@@ -712,7 +712,7 @@ mod tests {
         let admission = Admission::Member {
             organization_id: "org-1".into(),
             member_id: "mem-9".into(),
-            labels: None,
+            labels: Vec::new(),
         };
         assert_eq!(
             limit_subject(RouteScope::Member, &admission, "1.2.3.4"),

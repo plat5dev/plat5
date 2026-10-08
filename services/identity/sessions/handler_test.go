@@ -7,7 +7,7 @@ import (
 )
 
 func TestValidPayloadOmitsUserID(t *testing.T) {
-	raw, err := json.Marshal(validPayload("mem_1", "org_1", nil))
+	raw, err := json.Marshal(validPayload("mem_1", "org_1", []string{"*"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,8 +24,8 @@ func TestValidPayloadOmitsUserID(t *testing.T) {
 	if body["member_id"] != "mem_1" || body["organization_id"] != "org_1" {
 		t.Fatalf("ids: %s", raw)
 	}
-	if _, ok := body["labels"]; !ok || body["labels"] != nil {
-		t.Fatalf("labels must be present and null: %s", raw)
+	if labels, ok := body["labels"].([]any); !ok || len(labels) != 1 || labels[0] != "*" {
+		t.Fatalf(`labels must be ["*"]: %s`, raw)
 	}
 }
 

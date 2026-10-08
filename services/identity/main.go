@@ -51,10 +51,7 @@ func main() {
 		log.Fatalf("failed to connect to postgres: %v", err)
 	}
 
-	if err := db.Migrate(ctx, pool, db.Settings{
-		"creator_role": roleSet.Creator(),
-		"default_role": roleSet.Default(),
-	}); err != nil {
+	if err := db.Migrate(ctx, pool); err != nil {
 		pool.Close()
 		log.Fatalf("failed to migrate database: %v", err)
 	}
@@ -76,6 +73,9 @@ func main() {
 		Str("roles_file", cfg.RolesFile).
 		Int("roles", len(roleSet.List())).
 		Msg("starting identity server")
+	if !roleSet.Enabled() {
+		baseLogger.Warn().Msg("ROLES_FILE is unset: roles are off and every member holds every label")
+	}
 
 	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

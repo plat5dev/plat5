@@ -82,9 +82,9 @@ Services publish via the **route-registry** admin API (`POST /apply`). Gateway l
 
 ### Route `required_labels`
 
-After match + admission: if the route has `required_labels` **and** validate returned a non-null `labels` list, the lists must have a nonempty intersection or **403** `FORBIDDEN`. One shared label is enough.
+After match + admission: if the route has `required_labels`, a member credential's `labels` must hold `*` or share a label with the route, or **403** `FORBIDDEN`. One shared label is enough.
 
-A credential carries its principal's labels. For a member key or member session, validate's list is the member's role labels ([`roles.md`](roles.md)). `labels: null` (a `["*"]` role) skips. `labels: []` cannot satisfy any `required_labels` and gets **403** there; unlabeled routes still admit it. User credentials (JWT and user API key) have no role and skip, so labels constrain `organization` and `member` routes only.
+A credential carries its principal's labels. For a member key or member session, validate's list is the member's role labels ([`roles.md`](roles.md)). `labels` is always a list. `["*"]` (a `["*"]` role, or roles off) matches any route label. A route cannot require `*` itself. A valid validate result without a list counts as `[]`. `labels: []` cannot satisfy any `required_labels` and gets **403** there; unlabeled routes still admit it. User credentials (JWT and user API key) have no role and skip, so labels constrain `organization` and `member` routes only.
 
 The **403** `details` are `{ "permission": "required_labels", "resource": "route", "resource_id": "<route path>", "required_labels": [...] }`. `required_labels` is the route's list, so a client can tell which labels would have admitted it.
 
@@ -142,7 +142,7 @@ Prefix dispatch happens before the identity call. One member-credential result (
 
 1. Bad, missing, or wrong credential → **401** `UNAUTHORIZED`
 2. Validate unavailable → **503** `SERVICE_UNAVAILABLE`
-3. Admitted → `required_labels` (member credentials whose role has a label list; users and `labels: null` skip) → **403** `FORBIDDEN` on miss
+3. Admitted → `required_labels` (member credentials; `*` matches any label; users skip) → **403** `FORBIDDEN` on miss
 4. Then per-route rate limit → **429** `RATE_LIMITED`
 5. Then substitute `{subject.*}` and `{path.*}` in `upstream` (bad path param → **400**, bad subject id → **500**)
 

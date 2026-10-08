@@ -14,11 +14,11 @@ use super::types::{
 };
 
 /// Member key or member session, before the scope drops fields.
-/// `labels` is the member's role labels.
+/// `labels` is the member's role labels, as the roles file lists them (`["*"]` included).
 struct MemberProof {
     member_id: String,
     organization_id: String,
-    labels: Option<Vec<String>>,
+    labels: Vec<String>,
 }
 
 /// Composes auth domains into route-scope admission decisions.
@@ -153,7 +153,8 @@ impl Admissor {
                         Ok(CachedMemberApiKey::Valid {
                             member_id,
                             organization_id,
-                            labels: v.labels.clone(),
+                            // A valid result without a list grants nothing.
+                            labels: v.labels.clone().unwrap_or_default(),
                         })
                     }
                     Err(MemberApiKeyError::InvalidKey) => Ok(CachedMemberApiKey::Invalid),
@@ -220,7 +221,8 @@ impl Admissor {
                         Ok(CachedMemberSession::Valid {
                             member_id,
                             organization_id,
-                            labels: v.labels.clone(),
+                            // A valid result without a list grants nothing.
+                            labels: v.labels.clone().unwrap_or_default(),
                         })
                     }
                     Err(MemberSessionError::InvalidToken) => Ok(CachedMemberSession::Invalid),

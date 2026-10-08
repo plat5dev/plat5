@@ -39,7 +39,7 @@ type InviteResponse struct {
 	ID             string  `json:"id"`
 	OrganizationID string  `json:"organization_id"`
 	Email          *string `json:"email"`
-	Role           string  `json:"role"`
+	Role           *string `json:"role"`
 	TokenPrefix    string  `json:"token_prefix"`
 	Token          string  `json:"token,omitempty"`
 	Status         string  `json:"status"`
@@ -147,7 +147,7 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 	}
 
 	metrics.RecordInviteOp("create")
-	return c.Status(fiber.StatusCreated).JSON(toInviteResponse(inv, true))
+	return c.Status(fiber.StatusCreated).JSON(h.toInviteResponse(inv, true))
 }
 
 func (h *Handler) ListInvites(c fiber.Ctx) error {
@@ -173,7 +173,7 @@ func (h *Handler) ListInvites(c fiber.Ctx) error {
 		HasMore: hasMore,
 	}
 	for _, inv := range list {
-		out.Invites = append(out.Invites, toInviteResponse(inv, true))
+		out.Invites = append(out.Invites, h.toInviteResponse(inv, true))
 	}
 	return c.JSON(out)
 }
@@ -227,15 +227,15 @@ func (h *Handler) redeem(c fiber.Ctx, token, userID string) error {
 
 	metrics.RecordInviteOp("redeem")
 	metrics.RecordMemberOp("create")
-	return c.JSON(toMemberResponse(member))
+	return c.JSON(h.toMemberResponse(member))
 }
 
-func toInviteResponse(inv *Invite, includeToken bool) InviteResponse {
+func (h *Handler) toInviteResponse(inv *Invite, includeToken bool) InviteResponse {
 	out := InviteResponse{
 		ID:             inv.ID,
 		OrganizationID: inv.OrganizationID,
 		Email:          inv.Email,
-		Role:           inv.Role,
+		Role:           h.roles.Shown(inv.Role),
 		TokenPrefix:    inv.TokenPrefix,
 		Status:         string(inv.Status),
 		MaxUses:        inv.MaxUses,

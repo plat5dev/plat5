@@ -31,11 +31,12 @@ default_role: member
 
 func TestSessionMintReturnsRoleAndItsLabels(t *testing.T) {
 	userID := "user1"
+	admin, member := "admin", "member"
 	org := &fakeOrg{member: &orgs.Member{
 		ID:             "mem1",
 		OrganizationID: "org1",
 		UserID:         &userID,
-		Role:           "admin",
+		Role:           &admin,
 		Status:         orgs.StatusActive,
 	}}
 	store := &fakeSessions{}
@@ -52,10 +53,10 @@ func TestSessionMintReturnsRoleAndItsLabels(t *testing.T) {
 	if err := json.Unmarshal(body, &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.Role != "admin" {
+	if created.Role == nil || *created.Role != "admin" {
 		t.Fatalf("role: %s", body)
 	}
-	if created.Labels == nil || !reflect.DeepEqual(*created.Labels, []string{"org:write", "org:members:write"}) {
+	if !reflect.DeepEqual(created.Labels, []string{"org:write", "org:members:write"}) {
 		t.Fatalf("role labels at mint: %s", body)
 	}
 
@@ -63,11 +64,11 @@ func TestSessionMintReturnsRoleAndItsLabels(t *testing.T) {
 		Session:        store.created,
 		OrganizationID: "org1",
 		MemberStatus:   string(orgs.StatusActive),
-		MemberRole:     "admin",
+		MemberRole:     &admin,
 	}
 	assertValidateLabels(t, app, created.Token, []any{"org:write", "org:members:write"})
 
-	store.validated.MemberRole = "member"
+	store.validated.MemberRole = &member
 	assertValidateLabels(t, app, created.Token, []any{})
 }
 

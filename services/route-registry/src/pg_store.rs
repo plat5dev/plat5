@@ -8,13 +8,7 @@ use tracing::info;
 use crate::route_config::ServiceConfig;
 
 const SCHEMA: &str = "routes";
-const MIGRATIONS: &[(&str, &str)] = &[
-    ("001_init", include_str!("../migrations/001_init.sql")),
-    (
-        "002_required_labels",
-        include_str!("../migrations/002_required_labels.sql"),
-    ),
-];
+const INIT_SQL: &str = include_str!("../migrations/001_init.sql");
 
 #[derive(Clone)]
 pub struct PgStore {
@@ -100,35 +94,32 @@ impl PgStore {
         .await
         .map_err(|e| PgError::Query(e.to_string()))?;
 
-        for (version, sql) in MIGRATIONS {
-            let applied: Option<(String,)> =
-                sqlx::query_as("SELECT version FROM schema_migrations WHERE version = $1")
-                    .bind(version)
-                    .fetch_optional(&self.pool)
-                    .await
-                    .map_err(|e| PgError::Query(e.to_string()))?;
-            if applied.is_some() {
-                continue;
-            }
+        let applied: Option<(String,)> =
+            sqlx::query_as("SELECT version FROM schema_migrations WHERE version = $1")
+                .bind("001_init")
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| PgError::Query(e.to_string()))?;
 
+        if applied.is_none() {
             let mut tx = self
                 .pool
                 .begin()
                 .await
                 .map_err(|e| PgError::Query(e.to_string()))?;
-            sqlx::raw_sql(sql)
+            sqlx::raw_sql(INIT_SQL)
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| PgError::Query(e.to_string()))?;
             sqlx::query("INSERT INTO schema_migrations (version) VALUES ($1)")
-                .bind(version)
+                .bind("001_init")
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| PgError::Query(e.to_string()))?;
             tx.commit()
                 .await
                 .map_err(|e| PgError::Query(e.to_string()))?;
-            info!(version, "applied routes migration");
+            info!("applied routes migration 001_init");
         }
 
         Ok(())

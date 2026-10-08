@@ -37,7 +37,7 @@ Read the doc, don’t re-derive:
 | Rate-limit counters in Valkey; replicas share one budget; Valkey required to boot; fail-closed 503 | [`docs/gateway-contract.md`](docs/gateway-contract.md), [`docs/routes.md`](docs/routes.md) |
 | Admission cache in-process (positive + negative); singleflight; TTL is revoke/suspend/role-change latency | [`docs/gateway-contract.md`](docs/gateway-contract.md), [`docs/identity.md`](docs/identity.md) |
 | Gateway admits and fills the route subject into `upstream`. Resource authz stays in the service, or a policy engine it calls | identity-boundary |
-| Roles are the deployment's: `ROLES_FILE` on identity, required, read at boot. Every member holds one of its roles. Plat5 names no roles. Identity resolves the role at validate. The gateway sees labels only | [`docs/roles.md`](docs/roles.md) |
+| Roles are the deployment's: `ROLES_FILE` on identity, read at boot. On or off for the whole deployment: with a file every member holds one of its roles; without one no member has a role and every member holds every label. Plat5 names no roles. Identity resolves the role at validate. The gateway sees labels only | [`docs/roles.md`](docs/roles.md) |
 | A credential carries its principal's permissions. Member keys and sessions carry the member's role labels. User credentials have no labels to check. Keys and sessions have no labels of their own | roles.md |
 | No grant cap. Whoever may call a route may assign any role and act on any member. The route's labels are the only check | roles.md |
 | The gateway is the only access check before a service. Services are not told the caller's role or labels | [`docs/gateway-contract.md`](docs/gateway-contract.md) |
@@ -60,7 +60,7 @@ Do not add these because they would be convenient:
 - More than one role per member, or per-org custom roles (deferred)
 - Telling services the caller's role or labels
 - Key or session labels, or any other way to narrow a credential below its principal
-- A member with no role, or running identity without a roles file
+- A member with no role while roles are on, or a mix of roles on and off
 - The word `scopes` for labels on the wire. Route `scope` is `public` / `user` / `organization` / `member`; permissions are `labels`
 - A grant cap, or any identity check that compares the caller to the role it assigns or the member it acts on
 - Folding member sessions into `member_api_keys`, or returning `user_id` from session validate

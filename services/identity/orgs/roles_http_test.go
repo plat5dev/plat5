@@ -41,7 +41,7 @@ func TestInviteRoleDefaultsAndRedeemAssignsIt(t *testing.T) {
 	if err := json.Unmarshal(body, &inv); err != nil {
 		t.Fatal(err)
 	}
-	if inv.Role != "member" {
+	if inv.Role == nil || *inv.Role != "member" {
 		t.Fatalf("omitted role is default_role: %s", body)
 	}
 
@@ -53,7 +53,7 @@ func TestInviteRoleDefaultsAndRedeemAssignsIt(t *testing.T) {
 	if err := json.Unmarshal(body, &mem); err != nil {
 		t.Fatal(err)
 	}
-	if mem.Role != "member" {
+	if mem.Role == nil || *mem.Role != "member" {
 		t.Fatalf("redeem assigns the invite's role: %s", body)
 	}
 }
@@ -72,7 +72,7 @@ func TestInviteAssignsAnyRole(t *testing.T) {
 	if err := json.Unmarshal(body, &inv); err != nil {
 		t.Fatal(err)
 	}
-	if inv.Role != "owner" {
+	if inv.Role == nil || *inv.Role != "owner" {
 		t.Fatalf("role: %s", body)
 	}
 }
@@ -84,19 +84,36 @@ func TestInviteRoleValidation(t *testing.T) {
 	app := testInviteApp(&Handler{invites: f, roles: starterSet(t)})
 	code, body := doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{"role":"nope"}`)
 	assertFieldError(t, code, body, "role", "That role doesn't exist.")
+
+	off := testInviteApp(&Handler{invites: f})
+	code, body = doJSON(t, off, http.MethodPost, "/organizations/org1/invites", `{"role":"admin"}`)
+	assertFieldError(t, code, body, "role", "Roles aren't set up for this deployment.")
+
+	code, body = doJSON(t, off, http.MethodPost, "/organizations/org1/invites", `{}`)
+	if code != http.StatusCreated {
+		t.Fatalf("roles off, no role: %d %s", code, body)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := raw["role"]; !ok || v != nil {
+		t.Fatalf("role is null when roles are off: %s", body)
+	}
 }
 
 func TestRejectLastCreator(t *testing.T) {
 	set := starterSet(t)
 	member := func(id, role string, status Status) *Member {
-		return &Member{ID: id, Role: role, Status: status}
+		return &Member{ID: id, Role: &role, Status: status}
 	}
 
 	t.Run("demoting the only owner", func(t *testing.T) {
 		owner := member("m1", "owner", StatusActive)
 		members := []*Member{owner, member("m2", "admin", StatusActive)}
 		prior := *owner
-		owner.Role = "admin"
+		admin := "admin"
+		owner.Role = &admin
 		assertLastCreator(t, rejectLastCreator(set, members, prior, "role"), "role")
 	})
 	t.Run("removing the only owner", func(t *testing.T) {
@@ -123,6 +140,14 @@ func TestRejectLastCreator(t *testing.T) {
 		admin.Status = StatusRemoved
 		if err := rejectLastCreator(set, members, prior, "member_id"); err != nil {
 			t.Fatal(err)
+		}
+	})
+	t.Run("roles off", func(t *testing.T) {
+		owner := member("m1", "owner", StatusActive)
+		prior := *owner
+		owner.Status = StatusRemoved
+		if err := rejectLastCreator(nil, []*Member{owner}, prior, "member_id"); err != nil {
+			t.Fatalf("nothing to keep: %v", err)
 		}
 	})
 	t.Run("org with no owner already", func(t *testing.T) {

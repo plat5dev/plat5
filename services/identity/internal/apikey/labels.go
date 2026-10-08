@@ -15,20 +15,3 @@ const ScopesRefused = "Keys carry their owner's permissions and can't be narrowe
 func ValidLabel(s string) bool {
 	return s != "" && len(s) <= MaxLabelLen && labelRe.MatchString(s)
 }
-
-// WireLabels is nil for every label, so JSON encodes null (not omitted).
-func WireLabels(labels []string) *[]string {
-	if labels == nil {
-		return nil
-	}
-	cp := labels
-	return &cp
-}
-
-// WireLabelsJSON is for fiber.Map so every label is JSON null, not omitted.
-func WireLabelsJSON(labels []string) any {
-	if labels == nil {
-		return nil
-	}
-	return labels
-}

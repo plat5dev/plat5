@@ -35,7 +35,7 @@ type MemberResponse struct {
 	Principal        string  `json:"principal"`
 	UserID           *string `json:"user_id"`
 	ServiceAccountID *string `json:"service_account_id"`
-	Role             string  `json:"role"`
+	Role             *string `json:"role"`
 	Status           string  `json:"status"`
 	AddedBy          *string `json:"added_by"`
 	CreatedAt        string  `json:"created_at"`
@@ -70,7 +70,7 @@ func (h *Handler) ListMembers(c fiber.Ctx) error {
 		HasMore: hasMore,
 	}
 	for _, m := range list {
-		out.Members = append(out.Members, toMemberResponse(m))
+		out.Members = append(out.Members, h.toMemberResponse(m))
 	}
 	return c.JSON(out)
 }
@@ -124,7 +124,7 @@ func (h *Handler) CreateMember(c fiber.Ctx) error {
 	}
 
 	metrics.RecordMemberOp("create")
-	return c.Status(fiber.StatusCreated).JSON(toMemberResponse(m))
+	return c.Status(fiber.StatusCreated).JSON(h.toMemberResponse(m))
 }
 
 func (h *Handler) GetMember(c fiber.Ctx) error {
@@ -135,7 +135,7 @@ func (h *Handler) GetMember(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.JSON(toMemberResponse(m))
+	return c.JSON(h.toMemberResponse(m))
 }
 
 // UpdateMember is the self address: status only.
@@ -166,7 +166,7 @@ func (h *Handler) UpdateMember(c fiber.Ctx) error {
 	}
 
 	metrics.RecordMemberOp("update")
-	return c.JSON(toMemberResponse(m))
+	return c.JSON(h.toMemberResponse(m))
 }
 
 // DeleteMember is the self address: a member leaves.
@@ -187,7 +187,7 @@ func (h *Handler) GetOrgMember(c fiber.Ctx) error {
 	if m.OrganizationID != orgID {
 		return errors.NotFoundError("member", memberID)
 	}
-	return c.JSON(toMemberResponse(m))
+	return c.JSON(h.toMemberResponse(m))
 }
 
 // UpdateOrgMember is the org acting on one of its members: status and role.
@@ -211,7 +211,7 @@ func (h *Handler) UpdateOrgMember(c fiber.Ctx) error {
 		}
 		status = parsed
 	}
-	var role string
+	var role *string
 	if req.Role != nil {
 		chosen, err := h.roles.Choose(req.Role)
 		if err != nil {
@@ -224,7 +224,7 @@ func (h *Handler) UpdateOrgMember(c fiber.Ctx) error {
 		if status != "" {
 			target.Status = status
 		}
-		if role != "" {
+		if role != nil {
 			target.Role = role
 		}
 		return rejectLastCreator(h.roles, members, prior, "role")
@@ -236,7 +236,7 @@ func (h *Handler) UpdateOrgMember(c fiber.Ctx) error {
 	}
 
 	metrics.RecordMemberOp("update")
-	return c.JSON(toMemberResponse(m))
+	return c.JSON(h.toMemberResponse(m))
 }
 
 // DeleteOrgMember is the org removing one of its members.
@@ -281,14 +281,14 @@ func (h *Handler) visibleMember(ctx context.Context, memberID string) (*Member, 
 	return m, nil
 }
 
-func toMemberResponse(m *Member) MemberResponse {
+func (h *Handler) toMemberResponse(m *Member) MemberResponse {
 	return MemberResponse{
 		ID:               m.ID,
 		OrganizationID:   m.OrganizationID,
 		Principal:        m.Principal(),
 		UserID:           m.UserID,
 		ServiceAccountID: m.ServiceAccountID,
-		Role:             m.Role,
+		Role:             h.roles.Shown(m.Role),
 		Status:           string(m.Status),
 		AddedBy:          m.AddedBy,
 		CreatedAt:        httpx.FormatTime(m.CreatedAt),

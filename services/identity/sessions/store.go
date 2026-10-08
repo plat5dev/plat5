@@ -37,7 +37,7 @@ type Validated struct {
 	OrganizationID string
 	MemberStatus   string
 	// MemberRole is resolved against the roles file at validate.
-	MemberRole string
+	MemberRole *string
 }
 
 func (s *Store) Create(ctx context.Context, session *Session) error {
@@ -69,7 +69,7 @@ func (s *Store) GetByHash(ctx context.Context, tokenHash string) (*Validated, er
 
 	var session Session
 	var orgID, status string
-	var role string
+	var role *string
 	err := s.pool.QueryRow(ctx, `
 		SELECT
 			s.id, s.member_id, s.token_prefix, s.token_hash, s.expires_at, s.created_at,

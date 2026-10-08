@@ -42,9 +42,10 @@ type CreateResponse struct {
 	ExpiresAt      string `json:"expires_at"`
 	MemberID       string `json:"member_id"`
 	OrganizationID string `json:"organization_id"`
-	Role           string `json:"role"`
+	// Role is null when roles are off.
+	Role *string `json:"role"`
 	// Labels is the member's role labels at mint: what validate would return now.
-	Labels *[]string `json:"labels"`
+	Labels []string `json:"labels"`
 }
 
 type ValidateRequest struct {
@@ -52,13 +53,13 @@ type ValidateRequest struct {
 }
 
 // validPayload is the validate hit. No user_id.
-// labels is the member's role labels: nil is every label.
+// labels is the member's role labels. ["*"] is every label.
 func validPayload(memberID, organizationID string, labels []string) fiber.Map {
 	return fiber.Map{
 		"valid":           true,
 		"member_id":       memberID,
 		"organization_id": organizationID,
-		"labels":          apikey.WireLabelsJSON(labels),
+		"labels":          labels,
 	}
 }
 
@@ -112,8 +113,8 @@ func (h *Handler) Create(c fiber.Ctx) error {
 		ExpiresAt:      httpx.FormatTime(session.ExpiresAt),
 		MemberID:       member.ID,
 		OrganizationID: member.OrganizationID,
-		Role:           member.Role,
-		Labels:         apikey.WireLabels(h.roles.Grants(member.Role)),
+		Role:           h.roles.Shown(member.Role),
+		Labels:         h.roles.Grants(member.Role),
 	})
 }
 

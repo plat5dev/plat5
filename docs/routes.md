@@ -119,7 +119,7 @@ Same path, different per-verb `required_labels` / `rate_limit` — nested `metho
 | `path` | `string` | Match path (`/` or starts with `/`). Params are resource ids, not the subject. |
 | `upstream` | `string?` | Absolute path template. Omitted means proxy `path` unchanged. Placeholders stay in etcd; the gateway substitutes at request time. Route-level only — not per-method. |
 | `methods` | `array<string>` \| `map<string, MethodConfig>` | List form: allowed HTTP methods. Map form: per-verb config (see below). Do not mix list and map on the same route (`422`). |
-| `required_labels` | `string[]?` | Optional. Omitted = any admitted principal. If set, a member credential whose role has a label list (including `[]`) must share at least one label: any one of the list, not all. User credentials and `["*"]` roles skip. Validated at apply. Route-level value applies only to the flat methods list. |
+| `required_labels` | `string[]?` | Optional. Omitted = any admitted principal. If set, a member credential must hold `*` or share at least one label: any one of the list, not all. User credentials skip. Cannot include `*`. Validated at apply. Route-level value applies only to the flat methods list. |
 | `rate_limit` | `false` \| `{requests, window_seconds}` \| `string` \| omitted | Omitted **inherits** the gateway fallback. `false` opts out (unlimited). Object = this route+method only. String = named policy on **this** service. Limiter subject follows route scope (`public`→ip, `user`→`user_id`, `organization`→`organization_id`, `member`→`member_id`). Route-level value applies only to the flat methods list. |
 
 A service must define at least one scope. Multiple scopes may be present.
@@ -159,7 +159,7 @@ Labels are opaque. `org:write` does not imply `org:read`.
 
 Labels follow the same hygiene as roles: `[a-z0-9:._-]+`, max 64 chars, max 32, unique, non-empty list if present.
 
-After match + admission: if the route has `required_labels` **and** validate returned a non-null `labels` list, the two lists must have a nonempty intersection or the gateway returns **403** `FORBIDDEN`. `[a, b]` means a or b. `labels: null` skips. `labels: []` cannot intersect — **403** on these routes, still admitted on unlabeled routes.
+After match + admission: if the route has `required_labels`, a member credential's `labels` must hold `*` or share a label with the route, or the gateway returns **403** `FORBIDDEN`. `[a, b]` means a or b. `labels: ["*"]` (a `["*"]` role, or roles off) passes. `labels: []` cannot intersect — **403** on these routes, still admitted on unlabeled routes.
 
 A credential carries its principal's labels. For a member key or session, validate's list is the member's role labels. Keys and sessions cannot narrow it. A role is how a deployment gives members labels: [`roles.md`](roles.md). User credentials have no role and skip, so a label on a `user` route constrains nothing. Put labels on `organization` and `member` routes. The 403 `details.required_labels` echoes the route's list ([`gateway-contract.md`](gateway-contract.md)).
 

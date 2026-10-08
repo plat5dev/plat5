@@ -52,7 +52,7 @@ Always: `X-Request-ID`, `traceparent`. Services are not told the caller's labels
 
 ## Roles
 
-Plat5 ships no role names. A member carries a role slug, and the deployment's roles file says which labels it grants ([`roles.md`](roles.md)). Identity resolves the role at validate. The gateway checks labels and never sees a role. Services see neither. The roles file is required, and every member holds one of its roles.
+Plat5 ships no role names. A member carries a role slug, and the deployment's roles file says which labels it grants ([`roles.md`](roles.md)). Identity resolves the role at validate. The gateway checks labels and never sees a role. Services see neither. Roles are on or off for the whole deployment: with a roles file every member holds one of its roles; without one no member has a role and every member holds every label.
 
 Assigning roles is a privilege like any other. Whoever may call a route that assigns a role, or creates a service account, may assign any role. The deployment decides who gets that label.
 

@@ -41,17 +41,20 @@ func LastCreatorError(creator, path string) error {
 
 // rejectLastCreator refuses a write that takes the org's non-removed members
 // holding creator_role from one to zero. The target in members is already
-// changed; prior is the target as it was.
+// changed; prior is the target as it was. Roles off: nothing to keep.
 func rejectLastCreator(set *roles.Set, members []*Member, prior Member, path string) error {
 	creator := set.Creator()
-	if holdsRole(&prior, creator) && countHolders(members, creator) == 0 {
-		return LastCreatorError(creator, path)
+	if creator == nil {
+		return nil
+	}
+	if holdsRole(&prior, *creator) && countHolders(members, *creator) == 0 {
+		return LastCreatorError(*creator, path)
 	}
 	return nil
 }
 
 func holdsRole(m *Member, role string) bool {
-	return m.Status != StatusRemoved && m.Role == role
+	return m.Status != StatusRemoved && m.Role != nil && *m.Role == role
 }
 
 func countHolders(members []*Member, role string) int {

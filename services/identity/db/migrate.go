@@ -15,16 +15,11 @@ import (
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
-// Settings are set transaction-local before each migration, as
-// current_setting('plat5.<key>'). They carry boot config a migration needs,
-// like the roles file's slugs for a backfill.
-type Settings map[string]string
-
-func Migrate(ctx context.Context, pool *pgxpool.Pool, settings Settings) error {
-	return MigrateSchema(ctx, pool, Schema, settings)
+func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
+	return MigrateSchema(ctx, pool, Schema)
 }
 
-func MigrateSchema(ctx context.Context, pool *pgxpool.Pool, schema string, settings Settings) error {
+func MigrateSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error {
 	if !schemaNameRe.MatchString(schema) {
 		return fmt.Errorf("invalid schema name %q", schema)
 	}
@@ -85,13 +80,6 @@ func MigrateSchema(ctx context.Context, pool *pgxpool.Pool, schema string, setti
 		if _, err := tx.Exec(ctx, "SET LOCAL search_path TO "+quoted); err != nil {
 			_ = tx.Rollback(ctx)
 			return fmt.Errorf("set migration search_path %s: %w", version, err)
-		}
-
-		for key, value := range settings {
-			if _, err := tx.Exec(ctx, `SELECT set_config($1, $2, true)`, "plat5."+key, value); err != nil {
-				_ = tx.Rollback(ctx)
-				return fmt.Errorf("set migration setting %s: %w", key, err)
-			}
 		}
 
 		if _, err := tx.Exec(ctx, string(body)); err != nil {

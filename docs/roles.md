@@ -13,7 +13,18 @@ Two things decide what a member credential may call.
 | Route `required_labels` | Which labels the route needs (any one of them) | The service's `routes.yml` |
 | Role | Which labels the member holds | The deployment's roles file, resolved by identity |
 
-Every member holds exactly one role from the file. There is no member without a role.
+Roles are on or off for the whole deployment. There is no mix.
+
+| | Roles on (`ROLES_FILE` set) | Roles off (`ROLES_FILE` unset) |
+|---|---|---|
+| Member `role` | A slug from the file. Writes always set one | Always `null` |
+| Validate and session mint `labels` | The role's list as the file writes it | `["*"]` |
+| Route `required_labels` | Checked | Never blocks a member |
+| `role` in a request body | A slug in the file, or **422** | **422** |
+| [Last creator role](#last-creator-role) | Enforced | Nothing to keep |
+| `GET /organizations/{organization_id}/roles` | The file | `roles: []`, the three role fields `null` |
+
+Roles off is for a deployment where something else decides authorization: a policy engine, or the services themselves. Every member then holds every label, so route labels, including the identity catalog's, stop no one.
 
 A credential belongs to a principal and carries that principal's permissions. A member key or member session carries the member's role labels. Nothing narrows it: keys and sessions have no labels of their own. To give a machine less, give it a service account with a smaller role.
 
@@ -25,7 +36,7 @@ Resource authorization (this project, this document) is not a role. It stays in 
 
 ## File
 
-`ROLES_FILE` on identity is the path to a YAML file. Identity reads it at boot. It is required: unset, or a file that fails validation, refuses boot. To change roles, edit the file and restart identity.
+`ROLES_FILE` on identity is the path to a YAML file. Identity reads it at boot. Unset or empty turns roles off, and identity logs a warning. A file that fails validation refuses boot. To change roles, edit the file and restart identity.
 
 ```yaml
 roles:
@@ -55,15 +66,20 @@ Identity resolves the role at member key validate and member session validate. T
 
 | Member role | Validate `labels` |
 |-------------|-------------------|
-| `["*"]` | `null` |
+| `["*"]` | `["*"]` |
 | a label list | that list |
 | a slug not in the file | `[]` |
+| any, roles off | `["*"]` |
 
-`*` does not leave identity. On the wire, every label is `null`.
-
-`members.role` and `organization_invites.role` are `NOT NULL`. Rows from before the roles file was required were backfilled once (migration `007`): a member with no role got `creator_role`, which kept the access it had, and an invite with no role got `default_role`. To tighten those members, assign them roles.
+`labels` is always a list, and it says what the file says. `*` is every label: the gateway matches it to any route label. A route cannot require `*` itself.
 
 A slug removed from the file grants nothing, so members who still hold it fail closed.
+
+### Turning roles on or off
+
+Off, identity keeps whatever roles rows hold but neither shows nor uses them: every `role` reads `null`, and every member holds every label. Turning roles back on restores them.
+
+On, a row without a role (written while roles were off, or before Plat5 had roles) holds no labels, like one whose slug left the file, and shows `role: null`. Assign it a role.
 
 The gateway caches validate for `APIKEY_CACHE_TTL_SECS`. A role change is visible at the edge when that TTL expires, like a suspend. It applies to existing keys and sessions, because validate resolves the role every time. A key follows its member's role: it gains labels the role gains, and loses labels the role loses.
 
@@ -77,7 +93,7 @@ The gateway caches validate for `APIKEY_CACHE_TTL_SECS`. A role change is visibl
 | `POST /organizations/{organization_id}/service-accounts` | `role` in the body, or `service_account_default_role` (unset → `default_role`) |
 | `PATCH /organizations/{organization_id}/members/{member_id}` | `role` in the body |
 
-A slug not in the file is **422**.
+A slug not in the file is **422**. With roles off, every write above leaves `role` empty, and `role` in a body is **422**.
 
 ## Who may assign
 
@@ -89,7 +105,7 @@ So the labels that reach these routes are as strong as the strongest role. In th
 
 ## Last creator role
 
-A write may not take an org's count of non-removed members holding `creator_role` from one to zero. Every member holds a role, so every member counts. That covers a demotion, a remove at either address, and a service-account delete. **422**. Suspending is allowed, as it is for the last member. Deleting the org is not blocked.
+A write may not take an org's count of non-removed members holding `creator_role` from one to zero. With roles on, every member holds a role, so every member counts. That covers a demotion, a remove at either address, and a service-account delete. **422**. Suspending is allowed, as it is for the last member. Deleting the org is not blocked. With roles off there is no `creator_role`, and only the last-member rule applies.
 
 ## Listing roles
 
@@ -100,7 +116,7 @@ A write may not take an org's count of non-removed members holding `creator_role
   "roles": [
     { "slug": "admin", "labels": ["org:write", "org:members:write", "org:service-accounts:write"] },
     { "slug": "member", "labels": [] },
-    { "slug": "owner", "labels": null }
+    { "slug": "owner", "labels": ["*"] }
   ],
   "creator_role": "owner",
   "default_role": "member",
@@ -108,7 +124,7 @@ A write may not take an org's count of non-removed members holding `creator_role
 }
 ```
 
-`labels: null` is `["*"]`. Sorted by slug. Not paginated: the file is the whole list. Unknown org → **404**. `service_account_default_role` is resolved: `default_role` when the file leaves it unset. The three role fields are always strings.
+`labels` is the file's list as written. Sorted by slug. Not paginated: the file is the whole list. Unknown org → **404**. `service_account_default_role` is resolved: `default_role` when the file leaves it unset. Roles off → `roles: []` and the three role fields `null`.
 
 The org is in the path so that a later per-org role set has an address. Today every org gets the same list.
 
@@ -125,12 +141,12 @@ The catalog ([`services/identity/routes.yml`](../services/identity/routes.yml)) 
 
 Labels are opaque. These names live in the catalog, not in identity code. An operator who edits the catalog edits the labels.
 
-A member whose role lacks these labels gets **403** on these routes, with any of its keys or sessions.
+A member whose role lacks these labels gets **403** on these routes, with any of its keys or sessions. With roles off, these labels stop no one: whoever is a member may manage the org, unless something else decides.
 
 ## Not here
 
 - Key or session labels, or any other way to narrow a credential below its principal
-- A member with no role
+- A member with no role while roles are on, or roles for some orgs and not others
 - A grant cap: comparing the caller to the role it assigns, or to the member it acts on
 - Telling services the caller's role or labels
 - Role names or meanings in Plat5 code

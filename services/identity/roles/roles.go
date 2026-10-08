@@ -1,7 +1,8 @@
 // Package roles is the deployment's roles file: role slug → labels.
 //
-// Plat5 names no roles. The file is required, and every member holds one of
-// its roles. Contract: docs/roles.md.
+// Plat5 names no roles. The file is optional. With one, every member holds one
+// of its roles. Without one (a nil *Set), roles are off: no member has a role,
+// and every member holds every label. Contract: docs/roles.md.
 package roles
 
 import (
@@ -17,14 +18,14 @@ import (
 	"github.com/plat5dev/plat5/identity/internal/apikey"
 )
 
-// Wildcard grants every label. Valid only alone. It does not leave identity:
-// on the wire, every label is a null labels list.
+// Wildcard grants every label. Valid only alone. It goes on the wire as is:
+// ["*"] in the file is ["*"] at validate, and the gateway matches it to any label.
 const Wildcard = "*"
 
 // MaxLabels caps one role's label list.
 const MaxLabels = 64
 
-// Role is one entry of the file. Labels nil is every label.
+// Role is one entry of the file. Labels is never nil; ["*"] is every label.
 type Role struct {
 	Slug   string
 	Labels []string
@@ -46,10 +47,10 @@ type file struct {
 	ServiceAccountDefaultRole string `yaml:"service_account_default_role"`
 }
 
-// Load reads ROLES_FILE. It is required.
+// Load reads ROLES_FILE. An empty path is roles off (nil, nil).
 func Load(path string) (*Set, error) {
 	if path == "" {
-		return nil, stderrors.New("ROLES_FILE is required")
+		return nil, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -104,14 +105,14 @@ func Parse(data []byte) (*Set, error) {
 	return s, nil
 }
 
-// parseLabels maps a file list to a grant. ["*"] is nil (every label).
+// parseLabels validates a file list. ["*"] is kept as is (every label).
 // A missing list is refused so `member:` is not read as "everything" or "nothing".
 func parseLabels(labels []string) ([]string, error) {
 	if labels == nil {
 		return nil, stderrors.New(`labels are missing; use [] for none or ["*"] for every label`)
 	}
 	if len(labels) == 1 && labels[0] == Wildcard {
-		return nil, nil
+		return []string{Wildcard}, nil
 	}
 	if len(labels) > MaxLabels {
 		return nil, fmt.Errorf("more than %d labels", MaxLabels)
@@ -134,35 +135,72 @@ func parseLabels(labels []string) ([]string, error) {
 	return out, nil
 }
 
-// Creator is the role an org's creator gets.
-func (s *Set) Creator() string {
-	return s.creator
+// Enabled is whether there is a roles file.
+func (s *Set) Enabled() bool {
+	return s != nil
 }
 
-// Default is the role a write gets when it omits one.
-func (s *Set) Default() string {
-	return s.def
+// Creator is the role an org's creator gets. Nil when roles are off.
+func (s *Set) Creator() *string {
+	if s == nil {
+		return nil
+	}
+	c := s.creator
+	return &c
+}
+
+// Default is the role a write gets when it omits one. Nil when roles are off.
+func (s *Set) Default() *string {
+	if s == nil {
+		return nil
+	}
+	d := s.def
+	return &d
 }
 
 // ServiceAccountDefault is the role a service-account create gets when it omits
-// one: service_account_default_role, or default_role when that is unset.
-func (s *Set) ServiceAccountDefault() string {
-	return s.saDef
+// one: service_account_default_role, or default_role when that is unset. Nil
+// when roles are off.
+func (s *Set) ServiceAccountDefault() *string {
+	if s == nil {
+		return nil
+	}
+	d := s.saDef
+	return &d
+}
+
+// Shown is a stored role as the API returns it. Roles off: null, whatever a row
+// kept from when they were on.
+func (s *Set) Shown(role *string) *string {
+	if s == nil {
+		return nil
+	}
+	return role
 }
 
 // Grants is what a member's role grants, and so what every key and session of
-// that member carries. Nil is every label. A slug no longer in the file grants
-// nothing.
-func (s *Set) Grants(role string) []string {
-	grant, ok := s.grants[role]
+// that member carries. Never nil. Roles off: ["*"]. With roles on, a slug no
+// longer in the file grants nothing, and so does no role: a row from when roles
+// were off, until the operator gives it one.
+func (s *Set) Grants(role *string) []string {
+	if s == nil {
+		return []string{Wildcard}
+	}
+	if role == nil {
+		return []string{}
+	}
+	grant, ok := s.grants[*role]
 	if !ok {
 		return []string{}
 	}
 	return grant
 }
 
-// List is the file's roles, sorted by slug.
+// List is the file's roles, sorted by slug. Empty when roles are off.
 func (s *Set) List() []Role {
+	if s == nil {
+		return []Role{}
+	}
 	out := make([]Role, 0, len(s.grants))
 	for slug, grant := range s.grants {
 		out = append(out, Role{Slug: slug, Labels: grant})
@@ -172,24 +210,27 @@ func (s *Set) List() []Role {
 }
 
 // Choose validates `role` from a request body. Omitted (or null) is default_role.
-// A slug not in the file is 422.
-func (s *Set) Choose(raw *string) (string, error) {
-	return s.choose(raw, s.def)
+// A slug not in the file is 422. Roles off: omitted is no role, and any role is 422.
+func (s *Set) Choose(raw *string) (*string, error) {
+	return s.choose(raw, s.Default())
 }
 
 // ChooseServiceAccount is Choose for a service-account create: omitted is
 // ServiceAccountDefault.
-func (s *Set) ChooseServiceAccount(raw *string) (string, error) {
-	return s.choose(raw, s.saDef)
+func (s *Set) ChooseServiceAccount(raw *string) (*string, error) {
+	return s.choose(raw, s.ServiceAccountDefault())
 }
 
-func (s *Set) choose(raw *string, omitted string) (string, error) {
+func (s *Set) choose(raw, omitted *string) (*string, error) {
 	if raw == nil {
 		return omitted, nil
 	}
+	if s == nil {
+		return nil, errors.FieldError("role", "Roles aren't set up for this deployment.")
+	}
 	slug := strings.TrimSpace(*raw)
 	if _, ok := s.grants[slug]; !ok {
-		return "", errors.FieldError("role", "That role doesn't exist.")
+		return nil, errors.FieldError("role", "That role doesn't exist.")
 	}
-	return slug, nil
+	return &slug, nil
 }

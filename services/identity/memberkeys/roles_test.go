@@ -28,16 +28,21 @@ func starterSet(t *testing.T) *roles.Set {
 	return s
 }
 
+func rolePtr(s string) *string { return &s }
+
 func TestValidateReturnsRoleLabels(t *testing.T) {
 	cases := []struct {
-		name string
-		role string
-		want any
+		name  string
+		roles *roles.Set
+		role  *string
+		want  any
 	}{
-		{"owner", "owner", nil},
-		{"admin", "admin", []any{"org:write", "org:members:write", "org:service-accounts:write"}},
-		{"member", "member", []any{}},
-		{"role removed from the file", "gone", []any{}},
+		{"owner", starterSet(t), rolePtr("owner"), []any{"*"}},
+		{"admin", starterSet(t), rolePtr("admin"), []any{"org:write", "org:members:write", "org:service-accounts:write"}},
+		{"member", starterSet(t), rolePtr("member"), []any{}},
+		{"role removed from the file", starterSet(t), rolePtr("gone"), []any{}},
+		{"roles off", nil, nil, []any{"*"}},
+		{"roles off, a row kept its role", nil, rolePtr("member"), []any{"*"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -47,7 +52,7 @@ func TestValidateReturnsRoleLabels(t *testing.T) {
 				MemberStatus:   string(orgs.StatusActive),
 				MemberRole:     tc.role,
 			}}
-			h := &Handler{store: keys, orgStore: &fakeOrgs{}, prefix: testPrefix, roles: starterSet(t)}
+			h := &Handler{store: keys, orgStore: &fakeOrgs{}, prefix: testPrefix, roles: tc.roles}
 			app := testKeyApp(h)
 			h.MountInternal(app.Group("/internal"))
 
@@ -78,7 +83,7 @@ func TestServiceAccountKeysForAnyRole(t *testing.T) {
 	keys := &fakeKeys{}
 	org := &fakeOrgs{}
 	ownerSA := saFixture("org1", "sa-owner", "mem-owner", orgs.StatusActive)
-	ownerSA.Role = "owner"
+	ownerSA.Role = rolePtr("owner")
 	org.add(ownerSA)
 	h := &Handler{store: keys, orgStore: org, prefix: testPrefix, roles: starterSet(t)}
 	app := testKeyApp(h)

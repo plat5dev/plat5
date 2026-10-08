@@ -78,7 +78,7 @@ Active **user** memberships only: not service accounts, not `suspended`, not `re
 }
 ```
 
-List body key `memberships`. `id` is the member id. Cursor is that `id`. `role` is a string.
+List body key `memberships`. `id` is the member id. Cursor is that `id`. `role` is `string | null`: `null` when roles are off ([`roles.md`](roles.md#the-model)).
 
 Not a table. A read of `members` joined to `organizations` for this user.
 
@@ -197,7 +197,7 @@ Suspending the last active member is allowed. The org still has a member.
 }
 ```
 
-`principal` is `"user"` or `"service_account"`. Exactly one of `user_id` / `service_account_id` is non-null. `role` is a string. `added_by` is null unless sent.
+`principal` is `"user"` or `"service_account"`. Exactly one of `user_id` / `service_account_id` is non-null. `role` is `string | null`: `null` when roles are off ([`roles.md`](roles.md#the-model)). `added_by` is null unless sent.
 
 ### Invites
 
@@ -281,7 +281,7 @@ Lifecycle and role are the member row. Suspend, re-enable, or change role at the
 }
 ```
 
-`status` and `role` are the joined member's (`status` is `active` or `suspended`; `role` is a string). `removed` members are not listed and are not returned by id.
+`status` and `role` are the joined member's (`status` is `active` or `suspended`; `role` is `string | null`, `null` when roles are off). `removed` members are not listed and are not returned by id.
 
 ### Service account API keys
 
@@ -342,7 +342,7 @@ The session carries the member's role labels. The role is not stored on the sess
 }
 ```
 
-No `user_id`. `role` is a string. `labels` is `string[] | null`: the member's role labels at mint, the same value validate would return now. A console can use it to show or hide actions. Hashing at rest is SHA-256 hex. Plaintext is returned once.
+No `user_id`. `role` is `string | null` (`null` when roles are off). `labels` is a `string[]`: the member's role labels at mint, the same value validate would return now. A console can use it to show or hide actions. Hashing at rest is SHA-256 hex. Plaintext is returned once.
 
 ### Roles
 
@@ -350,7 +350,7 @@ The deployment's roles, from the roles file. Same list for every org today. Shap
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `GET` | `/organizations/{organization_id}/roles` | `{ "roles": [{ "slug", "labels" }], "creator_role", "default_role", "service_account_default_role" }`. Sorted by slug. Not paginated. Unknown org → **404**. |
+| `GET` | `/organizations/{organization_id}/roles` | `{ "roles": [{ "slug", "labels" }], "creator_role", "default_role", "service_account_default_role" }`. Sorted by slug. Not paginated. Unknown org → **404**. Roles off → `roles: []`, the three role fields `null`. |
 
 ### API key brand
 
@@ -418,10 +418,10 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
 | Result | Response |
 |--------|----------|
-| Valid active member key | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "labels": null }` or `"labels": ["org:write"]` or `"labels": []` |
+| Valid active member key | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "labels": ["*"] }` or `"labels": ["org:write"]` or `"labels": []` |
 | Wrong prefix / missing / revoked / inactive member / unknown | **200** `{ "valid": false }` |
 
-`labels` is `string[] | null`: the member's role labels ([`roles.md`](roles.md#resolution)). `null` = every label (`["*"]`; skips `required_labels`). `[]` = no labels (**403** on routes with `required_labels`; unlabeled still admit). Role resolution happens here. The response carries no role.
+`labels` is a `string[]`, never `null`: the member's role labels ([`roles.md`](roles.md#resolution)). `["*"]` = every label (a `["*"]` role, or roles off). `[]` = no labels (**403** on routes with `required_labels`; unlabeled still admit). Role resolution happens here. The response carries no role.
 
 Gateway: prefix `{brand}-mk-1-` → this URL. **`organization` and `member` scopes** (see gateway contract). Same cache as user keys and sessions (`APIKEY_CACHE_TTL_SECS`).
 
@@ -442,7 +442,7 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
 | Result | Response |
 |--------|----------|
-| Unexpired session, member `active` | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "labels": null }` or `"labels": ["profile:read"]` or `"labels": []` |
+| Unexpired session, member `active` | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "labels": ["*"] }` or `"labels": ["profile:read"]` or `"labels": []` |
 | Wrong prefix / missing / expired / member not `active` / unknown | **200** `{ "valid": false }` |
 
 No `user_id`. `labels` is the member's role labels, same as a member key. Gateway: prefix `{brand}-ms-1-` → `MEMBER_SESSION_VALIDATE_URL`. **`organization` and `member` scopes.** Same cache TTL as API keys (`APIKEY_CACHE_TTL_SECS`).
@@ -470,7 +470,7 @@ member_sessions        -- short-lived user-member credential; wire {brand}-ms-1-
   member_id, token_prefix, token_hash, expires_at, …
 ```
 
-Keys and sessions hold no labels of their own. Member key and session validate resolve the member's role. Migration `006` revoked every key, and dropped every session, that had a `scopes` list, rather than widen it to its owner.
+Keys and sessions hold no labels of their own. Member key and session validate resolve the member's role. Migration `006` drops the `scopes` columns.
 
 Independent tables, independent packages (`userkeys` / `memberkeys` / `sessions`), independent validate endpoints. Not one polymorphic credential system.
 
@@ -478,7 +478,7 @@ No IdP user table and no FK to an external directory. `user_id` values are opaqu
 
 `organization_invites.created_by` is nullable. `members.added_by` and `service_accounts.created_by_user_id` are nullable.
 
-`members.role` and `organization_invites.role` are `NOT NULL` `TEXT` slugs. No `CHECK` constraint: the roles file gives them meaning, and identity checks the slug against it on write. Migration `007` backfilled rows from before the roles file was required: members got `creator_role` (they were unrestricted), invites got `default_role`. Boot passes both slugs to the migration.
+`members.role` and `organization_invites.role` are nullable `TEXT` slugs. No `CHECK` constraint: the roles file gives them meaning, and identity checks the slug against it on write. `NULL` is no role: every row while roles are off. With roles on, writes always set a role, and a `NULL` left from before grants nothing ([`roles.md`](roles.md#turning-roles-on-or-off)).
 
 ## Runtime
 
@@ -492,7 +492,7 @@ No IdP user table and no FK to an external directory. `user_id` values are opaqu
 | Database | Plat5 Postgres via `DATABASE_URL` |
 | Schema | **`identity`** (service-owned; tables + `schema_migrations`) |
 | `APIKEY_BRAND` | default `plat5`; same value as gateway |
-| `ROLES_FILE` | required; path to the roles file, read at boot. Unset or invalid → refuse boot. [`roles.md`](roles.md) |
+| `ROLES_FILE` | optional; path to the roles file, read at boot. Unset or empty → roles off (logged as a warning). Invalid → refuse boot. [`roles.md`](roles.md) |
 
 Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 
