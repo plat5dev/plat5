@@ -14,7 +14,7 @@ import (
 	"github.com/plat5dev/plat5/identity/errors"
 )
 
-func TestUserKeyHasNoScopes(t *testing.T) {
+func TestUserKeyHasNoLabels(t *testing.T) {
 	keys := &fakeKeys{}
 	h := &Handler{store: keys, prefix: "plat5-sk-1-"}
 	app := fiber.New(fiber.Config{ErrorHandler: errors.FiberErrorHandler})
@@ -34,19 +34,6 @@ func TestUserKeyHasNoScopes(t *testing.T) {
 	}
 	if len(keys.keys) != 1 || keys.keys[0].UserID != "user1" {
 		t.Fatalf("stored: %+v", keys.keys)
-	}
-
-	code, body = doJSON(t, app, http.MethodPost, "/users/user1/api-keys", `{"scopes":["profile:read"]}`)
-	if code != http.StatusUnprocessableEntity || !strings.Contains(string(body), "can't be narrowed") {
-		t.Fatalf("scopes must be refused: %d %s", code, body)
-	}
-	if len(keys.keys) != 1 {
-		t.Fatalf("refused key stored")
-	}
-
-	code, body = doJSON(t, app, http.MethodPost, "/users/user1/api-keys", `{"scopes":null}`)
-	if code != http.StatusCreated {
-		t.Fatalf("null scopes is omitted: %d %s", code, body)
 	}
 
 	keys.validated = keys.keys[0]

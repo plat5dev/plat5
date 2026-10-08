@@ -55,7 +55,7 @@ func (h *Handler) toMembershipResponse(m *Membership) MembershipResponse {
 			Name: m.OrganizationName,
 			Slug: m.OrganizationSlug,
 		},
-		Role:   h.roles.Shown(m.Role),
+		Role:   m.Role,
 		Status: string(m.Status),
 	}
 }

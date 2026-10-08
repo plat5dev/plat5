@@ -112,7 +112,6 @@ Unknown tokens use the generic **404** `Resource not found.` (existence policy; 
 | When | `message` |
 |------|-----------|
 | Name > 128 | Name is too long. |
-| `scopes` sent (not `null`) | Keys carry their owner's permissions and can't be narrowed. |
 
 Internal validate (`key` / `token` / `key_id` required) is not product UI. Fallback 422 is enough.
 

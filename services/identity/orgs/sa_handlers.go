@@ -163,7 +163,7 @@ func (h *Handler) toServiceAccountResponse(sa *ServiceAccount) ServiceAccountRes
 		OrganizationID:  sa.OrganizationID,
 		MemberID:        sa.MemberID,
 		Name:            sa.Name,
-		Role:            h.roles.Shown(sa.Role),
+		Role:            sa.Role,
 		Status:          string(sa.Status),
 		CreatedByUserID: sa.CreatedByUserID,
 		CreatedAt:       httpx.FormatTime(sa.CreatedAt),

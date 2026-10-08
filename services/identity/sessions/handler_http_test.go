@@ -21,7 +21,7 @@ func TestSessionForWildcardRoleCarriesEveryLabel(t *testing.T) {
 	testEveryLabel(t, starterSet(t), "owner")
 }
 
-// Roles off: no role on the wire, even one a row kept, and every label.
+// Roles off: no role on the wire, and every label.
 func TestSessionWithRolesOffCarriesEveryLabel(t *testing.T) {
 	testEveryLabel(t, nil, "")
 }
@@ -29,12 +29,15 @@ func TestSessionWithRolesOffCarriesEveryLabel(t *testing.T) {
 func testEveryLabel(t *testing.T, set *roles.Set, wantRole string) {
 	t.Helper()
 	userID := "user1"
-	stored := "owner"
+	var stored *string
+	if wantRole != "" {
+		stored = &wantRole
+	}
 	org := &fakeOrg{member: &orgs.Member{
 		ID:             "mem1",
 		OrganizationID: "org1",
 		UserID:         &userID,
-		Role:           &stored,
+		Role:           stored,
 		Status:         orgs.StatusActive,
 	}}
 	store := &fakeSessions{}
@@ -68,7 +71,7 @@ func testEveryLabel(t *testing.T, set *roles.Set, wantRole string) {
 		Session:        store.created,
 		OrganizationID: "org1",
 		MemberStatus:   string(orgs.StatusActive),
-		MemberRole:     &stored,
+		MemberRole:     stored,
 	}
 	code, body = doSessionJSON(t, app, http.MethodPost, "/internal/member-sessions/validate", `{"token":"`+created.Token+`"}`)
 	if code != http.StatusOK {

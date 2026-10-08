@@ -19,7 +19,7 @@ Contract: [`docs/identity.md`](../../docs/identity.md)
 
 List includes `token` while the invite is active. The host sends any email.
 
-A key or session carries its principal's permissions. It has no labels of its own, and a mint that sends the old `scopes` field is **422**. Identity does not know the caller's labels and does not compare the caller to what it grants: whoever the gateway admits to a route may assign any role. Contract: [`docs/identity.md`](../../docs/identity.md).
+A key or session carries its principal's permissions. It has no labels of its own. Identity does not know the caller's labels and does not compare the caller to what it grants: whoever the gateway admits to a route may assign any role. Contract: [`docs/identity.md`](../../docs/identity.md).
 
 `ROLES_FILE` is the deployment's roles file, read at boot. With it, every member holds one of its roles, and member key and session validate return that role's labels. Unset → roles are off: no member has a role, and validate returns `["*"]` (every label). Contract: [`docs/roles.md`](../../docs/roles.md).
 

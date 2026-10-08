@@ -13,7 +13,6 @@ import (
 	"github.com/gofiber/fiber/v3"
 
 	"github.com/plat5dev/plat5/identity/errors"
-	"github.com/plat5dev/plat5/identity/internal/apikey"
 	"github.com/plat5dev/plat5/identity/orgs"
 )
 
@@ -169,11 +168,6 @@ func TestServiceAccountKeyAddress(t *testing.T) {
 		t.Fatalf("suspended member: %+v", keys.keys[len(keys.keys)-1])
 	}
 
-	code, body = doJSON(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa1/api-keys", `{"scopes":["widgets:read"]}`)
-	if code != http.StatusUnprocessableEntity {
-		t.Fatalf("scopes must be refused: %d %s", code, body)
-	}
-
 	code, body = doJSON(t, app, http.MethodGet, "/organizations/org1/service-accounts/sa2/api-keys", "")
 	if code != http.StatusOK {
 		t.Fatalf("empty list: %d %s", code, body)
@@ -220,36 +214,6 @@ func testKeyApp(h *Handler) *fiber.App {
 	return app
 }
 
-func TestMemberKeyRefusesScopes(t *testing.T) {
-	keys := &fakeKeys{}
-	org := &fakeOrgs{}
-	org.add(saFixture("org1", "sa1", "mem-sa", orgs.StatusActive))
-	userID := "user1"
-	org.members["mem-user"] = &orgs.Member{
-		ID:     "mem-user",
-		UserID: &userID,
-		Status: orgs.StatusActive,
-	}
-	h := &Handler{store: keys, orgStore: org, prefix: testPrefix, roles: starterSet(t)}
-	app := testKeyApp(h)
-
-	for _, path := range []string{"/members/mem-user/api-keys", "/organizations/org1/service-accounts/sa1/api-keys"} {
-		for _, req := range []string{`{"scopes":["admin"]}`, `{"scopes":[]}`} {
-			code, body := doJSON(t, app, http.MethodPost, path, req)
-			assertScopesRefused(t, code, body)
-		}
-	}
-	if len(keys.keys) != 0 {
-		t.Fatalf("refused mint was stored: %d", len(keys.keys))
-	}
-
-	code, body := doJSON(t, app, http.MethodPost, "/members/mem-user/api-keys", `{"scopes":null}`)
-	if code != http.StatusCreated {
-		t.Fatalf("null scopes is omitted: %d %s", code, body)
-	}
-	decodeCreate(t, body)
-}
-
 func doJSON(t *testing.T, app *fiber.App, method, path, body string) (int, []byte) {
 	t.Helper()
 	var rdr io.Reader
@@ -279,31 +243,6 @@ func decodeCreate(t *testing.T, body []byte) CreateResponse {
 		t.Fatal(err)
 	}
 	return created
-}
-
-func assertScopesRefused(t *testing.T, code int, body []byte) {
-	t.Helper()
-	if code != http.StatusUnprocessableEntity {
-		t.Fatalf("status=%d body=%s", code, body)
-	}
-	var env struct {
-		Error struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-			Details struct {
-				Fields []struct {
-					Path string `json:"path"`
-				} `json:"fields"`
-			} `json:"details"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &env); err != nil {
-		t.Fatal(err)
-	}
-	if env.Error.Code != "VALIDATION_ERROR" || env.Error.Message != apikey.ScopesRefused ||
-		len(env.Error.Details.Fields) != 1 || env.Error.Details.Fields[0].Path != "scopes" {
-		t.Fatalf("envelope: %s", body)
-	}
 }
 
 func decodeKeys(t *testing.T, body []byte) ListResponse {

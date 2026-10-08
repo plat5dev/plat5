@@ -102,13 +102,8 @@ func TestRolesOff(t *testing.T) {
 	if s.Creator() != nil || s.Default() != nil || s.ServiceAccountDefault() != nil {
 		t.Fatal("roles off has no creator or defaults")
 	}
-	for _, role := range []*string{nil, strp("admin")} {
-		if got := s.Grants(role); !reflect.DeepEqual(got, []string{"*"}) {
-			t.Fatalf("roles off: every member holds every label, got %#v", got)
-		}
-		if s.Shown(role) != nil {
-			t.Fatal("roles off shows no role, even one a row kept")
-		}
+	if got := s.Grants(nil); !reflect.DeepEqual(got, []string{"*"}) {
+		t.Fatalf("roles off: every member holds every label, got %#v", got)
 	}
 	if got := s.List(); got == nil || len(got) != 0 {
 		t.Fatalf("list is empty, got %#v", got)
@@ -131,7 +126,6 @@ func TestGrants(t *testing.T) {
 		{"label role", strp("admin"), []string{"org:write", "org:members:write", "org:service-accounts:write"}},
 		{"empty role", strp("member"), []string{}},
 		{"slug removed from file", strp("gone"), []string{}},
-		{"no role with roles on", nil, []string{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

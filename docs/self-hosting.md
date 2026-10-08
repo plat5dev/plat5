@@ -99,8 +99,6 @@ With `ROLES_FILE`, every member holds one of its roles, and the identity catalog
 
 `ROLES_FILE=` (empty) turns roles off: no member has a role, every member holds every label, and route labels block no one. Use it when something else decides authorization. Identity logs a warning at boot.
 
-Turning roles on where they were off: a member without a role holds no labels until you give it one ([`roles.md`](roles.md#turning-roles-on-or-off)).
-
 `POSTGRES_PASSWORD` is interpolated into `DATABASE_URL`. Use a **URL-safe** value (hex). `+` / `/` from raw base64 break the URL (`invalid port`).
 
 Compose network name is **`plat5_plat5`** (`name: plat5` + network `plat5`). Attach apps to that name.

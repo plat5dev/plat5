@@ -235,7 +235,7 @@ func (h *Handler) toInviteResponse(inv *Invite, includeToken bool) InviteRespons
 		ID:             inv.ID,
 		OrganizationID: inv.OrganizationID,
 		Email:          inv.Email,
-		Role:           h.roles.Shown(inv.Role),
+		Role:           inv.Role,
 		TokenPrefix:    inv.TokenPrefix,
 		Status:         string(inv.Status),
 		MaxUses:        inv.MaxUses,

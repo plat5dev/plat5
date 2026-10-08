@@ -169,19 +169,9 @@ func (s *Set) ServiceAccountDefault() *string {
 	return &d
 }
 
-// Shown is a stored role as the API returns it. Roles off: null, whatever a row
-// kept from when they were on.
-func (s *Set) Shown(role *string) *string {
-	if s == nil {
-		return nil
-	}
-	return role
-}
-
 // Grants is what a member's role grants, and so what every key and session of
-// that member carries. Never nil. Roles off: ["*"]. With roles on, a slug no
-// longer in the file grants nothing, and so does no role: a row from when roles
-// were off, until the operator gives it one.
+// that member carries. Never nil. Roles off: ["*"]. With roles on, a slug not in
+// the file grants nothing.
 func (s *Set) Grants(role *string) []string {
 	if s == nil {
 		return []string{Wildcard}

@@ -150,11 +150,14 @@ impl Admissor {
                                 ));
                             }
                         };
+                        let Some(labels) = v.labels.clone() else {
+                            warn!("member key validate returned valid without labels");
+                            return Err(MemberApiKeyError::ServiceError("missing labels".into()));
+                        };
                         Ok(CachedMemberApiKey::Valid {
                             member_id,
                             organization_id,
-                            // A valid result without a list grants nothing.
-                            labels: v.labels.clone().unwrap_or_default(),
+                            labels,
                         })
                     }
                     Err(MemberApiKeyError::InvalidKey) => Ok(CachedMemberApiKey::Invalid),
@@ -218,11 +221,14 @@ impl Admissor {
                                 ));
                             }
                         };
+                        let Some(labels) = v.labels.clone() else {
+                            warn!("member session validate returned valid without labels");
+                            return Err(MemberSessionError::ServiceError("missing labels".into()));
+                        };
                         Ok(CachedMemberSession::Valid {
                             member_id,
                             organization_id,
-                            // A valid result without a list grants nothing.
-                            labels: v.labels.clone().unwrap_or_default(),
+                            labels,
                         })
                     }
                     Err(MemberSessionError::InvalidToken) => Ok(CachedMemberSession::Invalid),

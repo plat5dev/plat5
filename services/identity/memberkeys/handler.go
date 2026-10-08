@@ -41,8 +41,6 @@ func NewHandler(store *Store, orgStore *orgs.Store, prefix string, roleSet *role
 
 type CreateRequest struct {
 	Name string `json:"name"`
-	// Scopes is refused when present. See apikey.ScopesRefused.
-	Scopes *[]string `json:"scopes"`
 }
 
 type CreateResponse struct {
@@ -105,9 +103,6 @@ func (h *Handler) create(c fiber.Ctx, memberID string) error {
 	name, err := apikey.NormalizeName(req.Name)
 	if err != nil {
 		return errors.FieldError("name", "Name is too long.")
-	}
-	if req.Scopes != nil {
-		return errors.FieldError("scopes", apikey.ScopesRefused)
 	}
 
 	plaintext, err := apikey.Generate(h.prefix)

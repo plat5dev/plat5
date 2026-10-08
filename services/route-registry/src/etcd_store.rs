@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::route_config::{ServiceConfig, ROUTES_PREFIX};
 use etcd_client::{Client, GetOptions};
-use tracing::{info, warn};
+use tracing::info;
 
 #[derive(Clone)]
 pub struct EtcdStore {
@@ -58,9 +58,7 @@ impl EtcdStore {
         Ok(())
     }
 
-    /// The projected services. `None` is a value that no longer parses (written
-    /// by an older registry); the reconciler overwrites or deletes it.
-    pub async fn list(&self) -> Result<HashMap<String, Option<ServiceConfig>>, StoreError> {
+    pub async fn list(&self) -> Result<HashMap<String, ServiceConfig>, StoreError> {
         let resp = self
             .client
             .kv_client()
@@ -76,14 +74,16 @@ impl EtcdStore {
                 continue;
             }
             let value = String::from_utf8_lossy(kv.value());
-            let cfg = match serde_json::from_str::<ServiceConfig>(&value) {
-                Ok(cfg) => Some(cfg),
-                Err(e) => {
-                    warn!(service = %name, error = %e, "projected route config does not parse");
-                    None
+            match serde_json::from_str::<ServiceConfig>(&value) {
+                Ok(cfg) => {
+                    out.insert(name, cfg);
                 }
-            };
-            out.insert(name, cfg);
+                Err(e) => {
+                    return Err(StoreError::Parse(format!(
+                        "invalid JSON for service '{name}': {e}"
+                    )));
+                }
+            }
         }
         Ok(out)
     }

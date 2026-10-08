@@ -113,7 +113,7 @@ func (h *Handler) Create(c fiber.Ctx) error {
 		ExpiresAt:      httpx.FormatTime(session.ExpiresAt),
 		MemberID:       member.ID,
 		OrganizationID: member.OrganizationID,
-		Role:           h.roles.Shown(member.Role),
+		Role:           member.Role,
 		Labels:         h.roles.Grants(member.Role),
 	})
 }

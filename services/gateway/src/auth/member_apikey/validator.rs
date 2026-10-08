@@ -19,7 +19,7 @@ pub struct MemberApiKeyValidation {
     pub member_id: Option<String>,
     pub organization_id: Option<String>,
     /// The member's role labels, as the roles file lists them: `["*"]` is every label,
-    /// `[]` is none. Absent when invalid. A valid result without a list grants nothing.
+    /// `[]` is none. Absent when invalid; required when valid.
     #[serde(default)]
     pub labels: Option<Vec<String>>,
 }

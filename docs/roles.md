@@ -75,12 +75,6 @@ Identity resolves the role at member key validate and member session validate. T
 
 A slug removed from the file grants nothing, so members who still hold it fail closed.
 
-### Turning roles on or off
-
-Off, identity keeps whatever roles rows hold but neither shows nor uses them: every `role` reads `null`, and every member holds every label. Turning roles back on restores them.
-
-On, a row without a role (written while roles were off, or before Plat5 had roles) holds no labels, like one whose slug left the file, and shows `role: null`. Assign it a role.
-
 The gateway caches validate for `APIKEY_CACHE_TTL_SECS`. A role change is visible at the edge when that TTL expires, like a suspend. It applies to existing keys and sessions, because validate resolves the role every time. A key follows its member's role: it gains labels the role gains, and loses labels the role loses.
 
 ## Assigning

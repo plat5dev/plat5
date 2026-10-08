@@ -288,7 +288,7 @@ func (h *Handler) toMemberResponse(m *Member) MemberResponse {
 		Principal:        m.Principal(),
 		UserID:           m.UserID,
 		ServiceAccountID: m.ServiceAccountID,
-		Role:             h.roles.Shown(m.Role),
+		Role:             m.Role,
 		Status:           string(m.Status),
 		AddedBy:          m.AddedBy,
 		CreatedAt:        httpx.FormatTime(m.CreatedAt),

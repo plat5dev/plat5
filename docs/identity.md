@@ -100,7 +100,7 @@ Person credential. Not member keys — those live under the member: `/members/{m
 
 `name` optional (default `Unnamed Key`, max 128).
 
-A key carries its principal's permissions. A user key is the user: on `user` routes it is the same proof as a user JWT. A key has no labels of its own. A body that sends the old `scopes` field, other than `null`, is **422** on `scopes`, so a client cannot believe it got a narrower key than it did. The same holds for member keys and service-account keys.
+A key carries its principal's permissions. A user key is the user: on `user` routes it is the same proof as a user JWT. A key has no labels of its own. The same holds for member keys and service-account keys.
 
 Identity does not enforce route `required_labels`. That check is the gateway's, on routes the operator labeled. Keep redeem unlabeled when it is published — the invitee is not a member yet. Member keys never hit user routes. Gateway: [`gateway-contract.md`](gateway-contract.md), [`routes.md`](routes.md).
 
@@ -470,7 +470,7 @@ member_sessions        -- short-lived user-member credential; wire {brand}-ms-1-
   member_id, token_prefix, token_hash, expires_at, …
 ```
 
-Keys and sessions hold no labels of their own. Member key and session validate resolve the member's role. Migration `006` drops the `scopes` columns.
+Keys and sessions hold no labels of their own. Member key and session validate resolve the member's role.
 
 Independent tables, independent packages (`userkeys` / `memberkeys` / `sessions`), independent validate endpoints. Not one polymorphic credential system.
 
@@ -478,7 +478,7 @@ No IdP user table and no FK to an external directory. `user_id` values are opaqu
 
 `organization_invites.created_by` is nullable. `members.added_by` and `service_accounts.created_by_user_id` are nullable.
 
-`members.role` and `organization_invites.role` are nullable `TEXT` slugs. No `CHECK` constraint: the roles file gives them meaning, and identity checks the slug against it on write. `NULL` is no role: every row while roles are off. With roles on, writes always set a role, and a `NULL` left from before grants nothing ([`roles.md`](roles.md#turning-roles-on-or-off)).
+`members.role` and `organization_invites.role` are nullable `TEXT` slugs. No `CHECK` constraint: the roles file gives them meaning, and identity checks the slug against it on write. `NULL` while roles are off. With roles on, writes always set a role.
 
 ## Runtime
 

@@ -42,7 +42,6 @@ func TestValidateReturnsRoleLabels(t *testing.T) {
 		{"member", starterSet(t), rolePtr("member"), []any{}},
 		{"role removed from the file", starterSet(t), rolePtr("gone"), []any{}},
 		{"roles off", nil, nil, []any{"*"}},
-		{"roles off, a row kept its role", nil, rolePtr("member"), []any{"*"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
