@@ -36,9 +36,9 @@ services:
           methods:
             GET:
             PATCH:
-              required_scopes: [org:write]
+              required_labels: [org:write]
             DELETE:
-              required_scopes: [org:delete]
+              required_labels: [org:delete]
         - path: /org/roles
           upstream: /organizations/{subject.organization_id}/roles
           methods: [GET]
@@ -47,47 +47,47 @@ services:
           methods:
             GET:
             POST:
-              required_scopes: [org:members:write]
+              required_labels: [org:members:write]
         - path: /org/members/{member_id}
           upstream: /organizations/{subject.organization_id}/members/{path.member_id}
           methods:
             GET:
             PATCH:
-              required_scopes: [org:members:write]
+              required_labels: [org:members:write]
             DELETE:
-              required_scopes: [org:members:write]
+              required_labels: [org:members:write]
         - path: /org/invites
           upstream: /organizations/{subject.organization_id}/invites
           methods: [GET, POST]
-          required_scopes: [org:members:write]
+          required_labels: [org:members:write]
         - path: /org/invites/{invite_id}
           upstream: /organizations/{subject.organization_id}/invites/{path.invite_id}
           methods: [DELETE]
-          required_scopes: [org:members:write]
+          required_labels: [org:members:write]
         - path: /org/service-accounts
           upstream: /organizations/{subject.organization_id}/service-accounts
           methods:
             GET:
             POST:
-              required_scopes: [org:service-accounts:write]
+              required_labels: [org:service-accounts:write]
         - path: /org/service-accounts/{service_account_id}
           upstream: /organizations/{subject.organization_id}/service-accounts/{path.service_account_id}
           methods:
             GET:
             PATCH:
-              required_scopes: [org:service-accounts:write]
+              required_labels: [org:service-accounts:write]
             DELETE:
-              required_scopes: [org:service-accounts:write]
+              required_labels: [org:service-accounts:write]
         - path: /org/service-accounts/{service_account_id}/api-keys
           upstream: /organizations/{subject.organization_id}/service-accounts/{path.service_account_id}/api-keys
           methods:
             GET:
             POST:
-              required_scopes: [org:service-accounts:write]
+              required_labels: [org:service-accounts:write]
         - path: /org/service-accounts/{service_account_id}/api-keys/{key_id}
           upstream: /organizations/{subject.organization_id}/service-accounts/{path.service_account_id}/api-keys/{path.key_id}
           methods: [DELETE]
-          required_scopes: [org:service-accounts:write]
+          required_labels: [org:service-accounts:write]
     member:
       routes:
         - path: /member

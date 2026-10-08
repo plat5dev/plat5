@@ -20,7 +20,7 @@ pub struct MemberApiKeyValidation {
     pub organization_id: Option<String>,
     /// The member's role labels. None = unrestricted (JSON null). Some([]) grants nothing.
     #[serde(default)]
-    pub scopes: Option<Vec<String>>,
+    pub labels: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]

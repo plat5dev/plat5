@@ -29,9 +29,9 @@ Public routes are not auto-published. The process still serves them on the publi
 | **user** | Platform person. Opaque `user_id` string. Not a table. |
 | **organization** | Isolation boundary users and service accounts join. |
 | **member** | Org principal. Exactly one of: a **user** or a **service account**. Wire id: `member_id`. |
-| **role** | Slug on a member. The deployment's roles file says which labels it grants. Plat5 defines no role names. `NULL` is unrestricted. [`roles.md`](roles.md) |
+| **role** | Slug on a member. The deployment's roles file says which labels it grants. Plat5 defines no role names. Every member has one. [`roles.md`](roles.md) |
 | **service account** | Non-human identity created **under an organization**. Always has a member row in that org. |
-| **api key** | Bearer secret. Either **user-scoped** or **member-scoped**. Carries its principal's permissions: a member key carries the member's role labels. No scopes of its own. |
+| **api key** | Bearer secret. Either **user-scoped** or **member-scoped**. Carries its principal's permissions: a member key carries the member's role labels. No labels of its own. |
 | **member session** | Short-lived credential for one active user member in one org. Opaque token. Not an API key. Carries the member's role labels. |
 | **membership** | A user's member row in an org, with that org. Not a table. Wire resource for which orgs this person belongs to. |
 | **invite** | Org join token (`active` / `redeemed` / `revoked` / `expired`). Redeem inserts an **active** member. The host sends any email. |
@@ -48,7 +48,7 @@ Illegal states. Not permissions.
 - A key addressed under a user, member, or service account that does not own it is **404**. That is the address, not an access check.
 - A service account or member addressed under the wrong org, or whose member is `removed`, is **404**.
 - Unknown id is **404**. A removed member is **404**. Empty collection is an empty page.
-- A `role` that is not a slug in the roles file, or any `role` when there is no roles file, is **422**.
+- A `role` that is not a slug in the roles file is **422**.
 - A write may not take an org's non-removed members holding `creator_role` from one to zero (**422**).
 
 Validation (**422**) and conflict (**409**) stay where the data is wrong. Identity does not decide who may call, and it does not compare the caller to what it grants. Whoever may call a route may assign any role and act on any member ([`roles.md`](roles.md#who-may-assign)).
@@ -78,7 +78,7 @@ Active **user** memberships only: not service accounts, not `suspended`, not `re
 }
 ```
 
-List body key `memberships`. `id` is the member id. Cursor is that `id`. `role` is `string | null`.
+List body key `memberships`. `id` is the member id. Cursor is that `id`. `role` is a string.
 
 Not a table. A read of `members` joined to `organizations` for this user.
 
@@ -100,9 +100,9 @@ Person credential. Not member keys — those live under the member: `/members/{m
 
 `name` optional (default `Unnamed Key`, max 128).
 
-A key carries its principal's permissions. A user key is the user: on `user` routes it is the same proof as a user JWT. There is no `scopes` field. A body that sends one, other than `null`, is **422** on `scopes`, so a client cannot believe it got a narrower key than it did. The same holds for member keys and service-account keys.
+A key carries its principal's permissions. A user key is the user: on `user` routes it is the same proof as a user JWT. A key has no labels of its own. A body that sends the old `scopes` field, other than `null`, is **422** on `scopes`, so a client cannot believe it got a narrower key than it did. The same holds for member keys and service-account keys.
 
-Identity does not enforce route `required_scopes`. That check is the gateway's, on routes the operator labeled. Keep redeem unlabeled when it is published — the invitee is not a member yet. Member keys never hit user routes. Gateway: [`gateway-contract.md`](gateway-contract.md), [`routes.md`](routes.md).
+Identity does not enforce route `required_labels`. That check is the gateway's, on routes the operator labeled. Keep redeem unlabeled when it is published — the invitee is not a member yet. Member keys never hit user routes. Gateway: [`gateway-contract.md`](gateway-contract.md), [`routes.md`](routes.md).
 
 Never echo the secret except on create (`key`).
 
@@ -112,7 +112,7 @@ Create **201** also includes `"key": "{brand}-sk-1-…"` once.
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/users/{user_id}/organizations` | Create. Body `{ "name", "slug?" }`. Inserts an **active** member for that user with `creator_role` (`NULL` without a roles file). `added_by` is null. |
+| `POST` | `/users/{user_id}/organizations` | Create. Body `{ "name", "slug?" }`. Inserts an **active** member for that user with `creator_role`. `added_by` is null. |
 | `GET` | `/organizations` | Every organization. |
 | `GET` | `/organizations/{organization_id}` | **404** if missing |
 | `PATCH` | `/organizations/{organization_id}` | Name and slug. Slug uniqueness stays. |
@@ -197,7 +197,7 @@ Suspending the last active member is allowed. The org still has a member.
 }
 ```
 
-`principal` is `"user"` or `"service_account"`. Exactly one of `user_id` / `service_account_id` is non-null. `role` is `string | null`. `added_by` is null unless sent.
+`principal` is `"user"` or `"service_account"`. Exactly one of `user_id` / `service_account_id` is non-null. `role` is a string. `added_by` is null unless sent.
 
 ### Invites
 
@@ -224,7 +224,7 @@ List, redeem, and revoke expire lazily: if `expires_at` is in the past and statu
 
 Token prefix `inv_`. `token_hash` is SHA-256 hex. `use_count` increments on successful redeem. When `use_count` reaches `max_uses`, status becomes `redeemed` and `token` is nulled. Unlimited (`max_uses` null) stays `active` with `token`.
 
-Redeem copies `created_by` onto the new or revived member's `added_by`, and the invite's `role` onto its `role`. Null stays null. A slug since removed from the roles file is copied as-is and grants nothing. Already a member: redeem does not change the existing role.
+Redeem copies `created_by` onto the new or revived member's `added_by`, and the invite's `role` onto its `role`. A slug since removed from the roles file is copied as-is and grants nothing. Already a member: redeem does not change the existing role.
 
 #### Create / list row
 
@@ -281,7 +281,7 @@ Lifecycle and role are the member row. Suspend, re-enable, or change role at the
 }
 ```
 
-`status` and `role` are the joined member's (`status` is `active` or `suspended`; `role` is `string | null`). `removed` members are not listed and are not returned by id.
+`status` and `role` are the joined member's (`status` is `active` or `suspended`; `role` is a string). `removed` members are not listed and are not returned by id.
 
 ### Service account API keys
 
@@ -338,11 +338,11 @@ The session carries the member's role labels. The role is not stored on the sess
   "member_id": "...",
   "organization_id": "...",
   "role": "admin",
-  "scopes": ["org:write", "org:members:write", "org:service-accounts:write"]
+  "labels": ["org:write", "org:members:write", "org:service-accounts:write"]
 }
 ```
 
-No `user_id`. `role` is `string | null`. `scopes` is `string[] | null`: the member's role labels at mint, the same value validate would return now. A console can use it to show or hide actions. Hashing at rest is SHA-256 hex. Plaintext is returned once.
+No `user_id`. `role` is a string. `labels` is `string[] | null`: the member's role labels at mint, the same value validate would return now. A console can use it to show or hide actions. Hashing at rest is SHA-256 hex. Plaintext is returned once.
 
 ### Roles
 
@@ -350,7 +350,7 @@ The deployment's roles, from the roles file. Same list for every org today. Shap
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `GET` | `/organizations/{organization_id}/roles` | `{ "roles": [{ "slug", "scopes" }], "creator_role", "default_role", "service_account_default_role" }`. Sorted by slug. Not paginated. Unknown org → **404**. No roles file → `roles: []`, the three fields `null`. |
+| `GET` | `/organizations/{organization_id}/roles` | `{ "roles": [{ "slug", "labels" }], "creator_role", "default_role", "service_account_default_role" }`. Sorted by slug. Not paginated. Unknown org → **404**. |
 
 ### API key brand
 
@@ -402,7 +402,7 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 | Valid user key | **200** `{ "valid": true, "user_id": "…" }` |
 | Wrong prefix / missing / revoked / unknown | **200** `{ "valid": false }` |
 
-No `scopes`. A user has no role, so a user key has no labels to check.
+No `labels`. A user has no role, so a user key has no labels to check.
 
 Gateway: prefix `{brand}-sk-1-` → this URL. Subject = `user_id` (same as a JWT). Gateway caches valid hits and invalid keys (`APIKEY_CACHE_TTL_SECS`, default 300s). Revoke is visible at the edge when the TTL expires. Transport / 503 are not cached. Contract: [`gateway-contract.md`](gateway-contract.md).
 
@@ -418,10 +418,10 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
 | Result | Response |
 |--------|----------|
-| Valid active member key | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "scopes": null }` or `"scopes": ["org:write"]` or `"scopes": []` |
+| Valid active member key | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "labels": null }` or `"labels": ["org:write"]` or `"labels": []` |
 | Wrong prefix / missing / revoked / inactive member / unknown | **200** `{ "valid": false }` |
 
-`scopes` is `string[] | null`: the member's role labels ([`roles.md`](roles.md#resolution)). `null` = unrestricted (skip `required_scopes`). `[]` = no labels (**403** on routes with `required_scopes`; unlabeled still admit). Role resolution happens here. The response carries no role.
+`labels` is `string[] | null`: the member's role labels ([`roles.md`](roles.md#resolution)). `null` = every label (`["*"]`; skips `required_labels`). `[]` = no labels (**403** on routes with `required_labels`; unlabeled still admit). Role resolution happens here. The response carries no role.
 
 Gateway: prefix `{brand}-mk-1-` → this URL. **`organization` and `member` scopes** (see gateway contract). Same cache as user keys and sessions (`APIKEY_CACHE_TTL_SECS`).
 
@@ -442,10 +442,10 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
 | Result | Response |
 |--------|----------|
-| Unexpired session, member `active` | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "scopes": null }` or `"scopes": ["profile:read"]` or `"scopes": []` |
+| Unexpired session, member `active` | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "labels": null }` or `"labels": ["profile:read"]` or `"labels": []` |
 | Wrong prefix / missing / expired / member not `active` / unknown | **200** `{ "valid": false }` |
 
-No `user_id`. `scopes` is the member's role labels, same as a member key. Gateway: prefix `{brand}-ms-1-` → `MEMBER_SESSION_VALIDATE_URL`. **`organization` and `member` scopes.** Same cache TTL as API keys (`APIKEY_CACHE_TTL_SECS`).
+No `user_id`. `labels` is the member's role labels, same as a member key. Gateway: prefix `{brand}-ms-1-` → `MEMBER_SESSION_VALIDATE_URL`. **`organization` and `member` scopes.** Same cache TTL as API keys (`APIKEY_CACHE_TTL_SECS`).
 
 ## Data model (logical)
 
@@ -470,7 +470,7 @@ member_sessions        -- short-lived user-member credential; wire {brand}-ms-1-
   member_id, token_prefix, token_hash, expires_at, …
 ```
 
-Keys and sessions hold no scopes. Member key and session validate resolve the member's role. Migration `006` revoked every key, and dropped every session, that had a `scopes` list, rather than widen it to its owner.
+Keys and sessions hold no labels of their own. Member key and session validate resolve the member's role. Migration `006` revoked every key, and dropped every session, that had a `scopes` list, rather than widen it to its owner.
 
 Independent tables, independent packages (`userkeys` / `memberkeys` / `sessions`), independent validate endpoints. Not one polymorphic credential system.
 
@@ -478,7 +478,7 @@ No IdP user table and no FK to an external directory. `user_id` values are opaqu
 
 `organization_invites.created_by` is nullable. `members.added_by` and `service_accounts.created_by_user_id` are nullable.
 
-`members.role` and `organization_invites.role` are nullable `TEXT` slugs. No `CHECK` constraint: the roles file gives them meaning, and identity checks the slug against it on write. `NULL` is unrestricted. Rows from before roles stay `NULL`.
+`members.role` and `organization_invites.role` are `NOT NULL` `TEXT` slugs. No `CHECK` constraint: the roles file gives them meaning, and identity checks the slug against it on write. Migration `007` backfilled rows from before the roles file was required: members got `creator_role` (they were unrestricted), invites got `default_role`. Boot passes both slugs to the migration.
 
 ## Runtime
 
@@ -492,7 +492,7 @@ No IdP user table and no FK to an external directory. `user_id` values are opaqu
 | Database | Plat5 Postgres via `DATABASE_URL` |
 | Schema | **`identity`** (service-owned; tables + `schema_migrations`) |
 | `APIKEY_BRAND` | default `plat5`; same value as gateway |
-| `ROLES_FILE` | optional; path to the roles file, read at boot. Unset → no roles. Invalid → refuse boot. [`roles.md`](roles.md) |
+| `ROLES_FILE` | required; path to the roles file, read at boot. Unset or invalid → refuse boot. [`roles.md`](roles.md) |
 
 Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 
@@ -511,7 +511,7 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - More than one role per member, per-org custom roles, or reloading the roles file without a restart
 - Caller checks of any kind: a grant cap on roles, on acting on a member, or on minting keys and sessions
 - Inferring `added_by` / `created_by` / `created_by_user_id`
-- Key or session `scopes`, or default-deny on unlabeled routes
+- Key or session labels, or default-deny on unlabeled routes
 - A service account tied to the member who created it
 - Auto-publishing these public routes — the operator applies a catalog
 - Configurable `sk` / `mk` / `ms` / `1`, independent full-prefix env vars, or dual-brand key accept
@@ -520,4 +520,4 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - A service-account key table, prefix, or validate endpoint (those keys are member keys)
 - `/organizations/{organization_id}/members/{member_id}/api-keys` (that is acting on another member; service-account keys use the service-account id)
 - `user_id` on session validate
-- A `scopes` field on session mint (the session carries the member's role)
+- A `labels` field on session mint (the session carries the member's role)

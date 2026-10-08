@@ -45,7 +45,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `INVALID_REQUEST` | 400 | `invalid_request_error` | Malformed request. | — |
 | `VALIDATION_ERROR` | 422 | `invalid_request_error` | That doesn't look right. | `{ fields: [{ path, message }] }` |
 | `UNAUTHORIZED` | 401 | `invalid_request_error` | Authentication required. | `{ reason }` |
-| `FORBIDDEN` | 403 | `invalid_request_error` | You don't have permission to do that. | `{ permission, resource, resource_id, required_scopes }` |
+| `FORBIDDEN` | 403 | `invalid_request_error` | You don't have permission to do that. | `{ permission, resource, resource_id, required_labels }` |
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
 | `ROUTE_CONFLICT` | 409 | `invalid_request_error` | (route-registry apply, put, restore) Message lists each conflicting route (same method, same path shape) and its owner service. | — |
@@ -56,7 +56,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 
 ### `FORBIDDEN`
 
-Returned by the **gateway** when the member's role labels share no label with the route's `required_scopes`. `details.required_scopes` is the route's list. Any one of those labels would have admitted the request.
+Returned by the **gateway** when the member's role labels share no label with the route's `required_labels`. `details.required_labels` is the route's list. Any one of those labels would have admitted the request.
 
 ### `UNAUTHORIZED`
 

@@ -38,8 +38,8 @@ pub async fn reconcile_once(pg: &PgStore, etcd: &EtcdStore) -> Result<(), String
 
     for (name, cfg) in &desired {
         let stale = match live.get(name) {
-            Some(existing) => existing != cfg,
-            None => true,
+            Some(Some(existing)) => existing != cfg,
+            _ => true,
         };
         if stale {
             etcd.put(name, cfg).await.map_err(|e| e.to_string())?;

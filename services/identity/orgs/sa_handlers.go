@@ -22,7 +22,7 @@ type ServiceAccountResponse struct {
 	OrganizationID  string  `json:"organization_id"`
 	MemberID        string  `json:"member_id"`
 	Name            string  `json:"name"`
-	Role            *string `json:"role"`
+	Role            string  `json:"role"`
 	Status          string  `json:"status"`
 	CreatedByUserID *string `json:"created_by_user_id"`
 	CreatedAt       string  `json:"created_at"`

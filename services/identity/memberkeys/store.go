@@ -35,8 +35,8 @@ type Validated struct {
 	Key            *APIKey
 	OrganizationID string
 	MemberStatus   string
-	// MemberRole is resolved against the roles file at validate. Nil is unrestricted.
-	MemberRole *string
+	// MemberRole is resolved against the roles file at validate.
+	MemberRole string
 }
 
 func (s *Store) Create(ctx context.Context, key *APIKey) error {
@@ -67,7 +67,7 @@ func (s *Store) GetByHash(ctx context.Context, keyHash string) (*Validated, erro
 
 	var key APIKey
 	var orgID, status string
-	var role *string
+	var role string
 	err := s.pool.QueryRow(ctx, `
 		SELECT
 			k.id, k.member_id, k.name, k.key_prefix, k.key_hash, k.created_at, k.revoked_at,

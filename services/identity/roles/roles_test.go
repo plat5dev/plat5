@@ -31,18 +31,18 @@ func strp(s string) *string { return &s }
 
 func TestParseStarter(t *testing.T) {
 	s := mustParse(t, starter)
-	if *s.Creator() != "owner" || *s.Default() != "member" {
-		t.Fatalf("creator=%v default=%v", *s.Creator(), *s.Default())
+	if s.Creator() != "owner" || s.Default() != "member" {
+		t.Fatalf("creator=%v default=%v", s.Creator(), s.Default())
 	}
-	if s.Grants(strp("owner")) != nil {
+	if s.Grants("owner") != nil {
 		t.Fatal(`["*"] must grant every label (nil)`)
 	}
-	member := s.Grants(strp("member"))
+	member := s.Grants("member")
 	if member == nil || len(member) != 0 {
 		t.Fatalf("[] must grant nothing, got %#v", member)
 	}
 	want := []string{"org:write", "org:members:write", "org:service-accounts:write"}
-	if got := s.Grants(strp("admin")); !reflect.DeepEqual(got, want) {
+	if got := s.Grants("admin"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("admin=%#v", got)
 	}
 }
@@ -90,23 +90,9 @@ func TestParseTooManyLabels(t *testing.T) {
 	}
 }
 
-func TestLoadEmptyPathIsNoRoles(t *testing.T) {
-	s, err := Load("")
-	if err != nil || s != nil {
-		t.Fatalf("got %v, %v", s, err)
-	}
-}
-
-func TestNilSetIsUnrestricted(t *testing.T) {
-	var s *Set
-	if s.Creator() != nil || s.Default() != nil {
-		t.Fatal("no roles file has no creator or default")
-	}
-	if s.Grants(strp("anything")) != nil {
-		t.Fatal("no roles file grants every label")
-	}
-	if got := s.List(); got == nil || len(got) != 0 {
-		t.Fatalf("list is empty, got %#v", got)
+func TestLoadRequiresPath(t *testing.T) {
+	if s, err := Load(""); err == nil || s != nil {
+		t.Fatalf("ROLES_FILE is required, got %v, %v", s, err)
 	}
 }
 
@@ -114,14 +100,13 @@ func TestGrants(t *testing.T) {
 	s := mustParse(t, starter)
 	cases := []struct {
 		name string
-		role *string
+		role string
 		want []string
 	}{
-		{"wildcard role", strp("owner"), nil},
-		{"null role", nil, nil},
-		{"label role", strp("admin"), []string{"org:write", "org:members:write", "org:service-accounts:write"}},
-		{"empty role", strp("member"), []string{}},
-		{"slug removed from file", strp("gone"), []string{}},
+		{"wildcard role", "owner", nil},
+		{"label role", "admin", []string{"org:write", "org:members:write", "org:service-accounts:write"}},
+		{"empty role", "member", []string{}},
+		{"slug removed from file", "gone", []string{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -138,55 +123,43 @@ func TestList(t *testing.T) {
 	if len(got) != 3 || got[0].Slug != "admin" || got[1].Slug != "member" || got[2].Slug != "owner" {
 		t.Fatalf("sorted by slug: %#v", got)
 	}
-	if got[2].Scopes != nil {
+	if got[2].Labels != nil {
 		t.Fatal("owner lists as every label (nil)")
 	}
 }
 
 func TestServiceAccountDefault(t *testing.T) {
 	s := mustParse(t, starter)
-	if got := *s.ServiceAccountDefault(); got != "member" {
+	if got := s.ServiceAccountDefault(); got != "member" {
 		t.Fatalf("unset falls back to default_role, got %q", got)
 	}
 
 	s = mustParse(t, starter+"service_account_default_role: admin\n")
 	got, err := s.ChooseServiceAccount(nil)
-	if err != nil || got == nil || *got != "admin" {
+	if err != nil || got != "admin" {
 		t.Fatalf("omitted is service_account_default_role, got %v %v", got, err)
 	}
 	got, err = s.ChooseServiceAccount(strp("owner"))
-	if err != nil || *got != "owner" {
+	if err != nil || got != "owner" {
 		t.Fatalf("explicit role wins, got %v %v", got, err)
 	}
-	if got, _ := s.Choose(nil); *got != "member" {
-		t.Fatalf("people still get default_role, got %q", *got)
+	if got, _ := s.Choose(nil); got != "member" {
+		t.Fatalf("people still get default_role, got %q", got)
 	}
 	assertField(t, func() error { _, err := s.ChooseServiceAccount(strp("nope")); return err }(), "That role doesn't exist.")
-
-	var none *Set
-	if none.ServiceAccountDefault() != nil {
-		t.Fatal("no roles file: no service-account default")
-	}
 }
 
 func TestChoose(t *testing.T) {
 	s := mustParse(t, starter)
 	got, err := s.Choose(nil)
-	if err != nil || got == nil || *got != "member" {
+	if err != nil || got != "member" {
 		t.Fatalf("omitted is default_role, got %v %v", got, err)
 	}
 	got, err = s.Choose(strp(" admin "))
-	if err != nil || *got != "admin" {
+	if err != nil || got != "admin" {
 		t.Fatalf("got %v %v", got, err)
 	}
 	assertField(t, func() error { _, err := s.Choose(strp("nope")); return err }(), "That role doesn't exist.")
-
-	var none *Set
-	got, err = none.Choose(nil)
-	if err != nil || got != nil {
-		t.Fatalf("no roles file, omitted: NULL role, got %v %v", got, err)
-	}
-	assertField(t, func() error { _, err := none.Choose(strp("admin")); return err }(), "Roles aren't set up for this deployment.")
 }
 
 func assertField(t *testing.T, err error, message string) {

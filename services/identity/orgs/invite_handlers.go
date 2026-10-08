@@ -39,7 +39,7 @@ type InviteResponse struct {
 	ID             string  `json:"id"`
 	OrganizationID string  `json:"organization_id"`
 	Email          *string `json:"email"`
-	Role           *string `json:"role"`
+	Role           string  `json:"role"`
 	TokenPrefix    string  `json:"token_prefix"`
 	Token          string  `json:"token,omitempty"`
 	Status         string  `json:"status"`

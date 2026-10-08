@@ -29,13 +29,13 @@ Trusting the rewritten path is a perimeter protocol: [`gateway-contract.md`](gat
 | **Authentication** | Who is this? | Gateway + **IdP (JWT)** / identity keys and sessions (credentials stripped before upstream) |
 | **Scope projection** | Which fields is this route allowed to see? | Gateway. The credential is the proof. The scope drops fields. |
 | **Role resolution** | Which labels does this member's role grant? | Identity, from the deployment's roles file, at member key and session validate ([`roles.md`](roles.md)). The gateway never sees a role. |
-| **Route labels** | Do the caller's labels share one with `required_scopes`? | Gateway after admission, and only the gateway. A credential carries its principal's labels: a member key or session carries the member's role labels. A user has no role, so user credentials skip. Omitted `required_scopes` → any admitted principal. |
+| **Route labels** | Do the caller's labels share one with `required_labels`? | Gateway after admission, and only the gateway. A credential carries its principal's labels: a member key or session carries the member's role labels. A user has no role, so user credentials skip. Omitted `required_labels` → any admitted principal. |
 | **Resource authorization** | Can this member do X to project/doc/…? | **Business services** — over the subject in the path, or a policy engine they call |
 | **Who may call identity** | Who may add members, mint keys, delete an org? | Route labels on the identity catalog, at the gateway. Identity refuses illegal states. It does not compare the caller to what it grants. |
 
-Route `required_scopes` is an intersection: the caller's labels and the route's labels must overlap. One shared label is enough.
+Route `required_labels` is an intersection: the caller's labels and the route's labels must overlap. One shared label is enough.
 
-A credential is not narrower than its principal. There are no key or session scopes. To give a machine less, give it a service account with a smaller role.
+A credential is not narrower than its principal. Keys and sessions have no labels of their own. To give a machine less, give it a service account with a smaller role.
 
 ## Route scopes → subject
 
@@ -52,7 +52,7 @@ Always: `X-Request-ID`, `traceparent`. Services are not told the caller's labels
 
 ## Roles
 
-Plat5 ships no role names. A member carries a role slug, and the deployment's roles file says which labels it grants ([`roles.md`](roles.md)). Identity resolves the role at validate. The gateway checks labels and never sees a role. Services see neither. Without a roles file every member is unrestricted.
+Plat5 ships no role names. A member carries a role slug, and the deployment's roles file says which labels it grants ([`roles.md`](roles.md)). Identity resolves the role at validate. The gateway checks labels and never sees a role. Services see neither. The roles file is required, and every member holds one of its roles.
 
 Assigning roles is a privilege like any other. Whoever may call a route that assigns a role, or creates a service account, may assign any role. The deployment decides who gets that label.
 
@@ -115,7 +115,7 @@ The path names every id the handler reads. The catalog's route labels decide who
 | Case | HTTP / code |
 |------|-------------|
 | Bad, missing, or wrong credential for the scope | **401** `UNAUTHORIZED` |
-| Caller's labels miss route `required_scopes` | **403** `FORBIDDEN` |
+| Caller's labels miss route `required_labels` | **403** `FORBIDDEN` |
 | Unknown id (identity handlers) | **404** `NOT_FOUND` |
 | Admitted route or failed-auth IP over limit | **429** `RATE_LIMITED` |
 | Key or session validate down or timeout; Valkey down on a limited request; JWKS unavailable | **503** `SERVICE_UNAVAILABLE` |
@@ -137,7 +137,7 @@ Org invites live in **identity** (`organization_invites`). Create, list, and rev
 - Role names or meanings in Plat5. The deployment names roles in its roles file.
 - Service accounts as a parallel auth system (they are members with keys)
 - Service accounts tied to the member who created them. A service account is the org's. Its role is its own.
-- Key or session scopes narrower than the principal
+- Key or session labels narrower than the principal
 - Telling services the caller's labels or role
 - Multi-org service accounts
 - SMTP in identity (invites return a token; the console sends mail if it wants)

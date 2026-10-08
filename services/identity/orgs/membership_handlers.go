@@ -15,7 +15,7 @@ type MembershipOrgResponse struct {
 type MembershipResponse struct {
 	ID           string                `json:"id"`
 	Organization MembershipOrgResponse `json:"organization"`
-	Role         *string               `json:"role"`
+	Role         string                `json:"role"`
 	Status       string                `json:"status"`
 }
 

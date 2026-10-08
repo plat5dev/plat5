@@ -35,7 +35,7 @@ type MemberResponse struct {
 	Principal        string  `json:"principal"`
 	UserID           *string `json:"user_id"`
 	ServiceAccountID *string `json:"service_account_id"`
-	Role             *string `json:"role"`
+	Role             string  `json:"role"`
 	Status           string  `json:"status"`
 	AddedBy          *string `json:"added_by"`
 	CreatedAt        string  `json:"created_at"`
@@ -211,7 +211,7 @@ func (h *Handler) UpdateOrgMember(c fiber.Ctx) error {
 		}
 		status = parsed
 	}
-	var role *string
+	var role string
 	if req.Role != nil {
 		chosen, err := h.roles.Choose(req.Role)
 		if err != nil {
@@ -224,7 +224,7 @@ func (h *Handler) UpdateOrgMember(c fiber.Ctx) error {
 		if status != "" {
 			target.Status = status
 		}
-		if role != nil {
+		if role != "" {
 			target.Role = role
 		}
 		return rejectLastCreator(h.roles, members, prior, "role")

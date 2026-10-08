@@ -78,7 +78,7 @@ services:
       routes:
         - path: /widgets
           methods: [GET, POST]
-          required_scopes: [widgets:read]
+          required_labels: [widgets:read]
 
         - path: /widgets/{id}
           methods: [GET, DELETE]
@@ -87,15 +87,15 @@ services:
             window_seconds: 60
 ```
 
-Same path, different per-verb `required_scopes` / `rate_limit` — nested `methods` map (expanded at apply into one etcd row per verb):
+Same path, different per-verb `required_labels` / `rate_limit` — nested `methods` map (expanded at apply into one etcd row per verb):
 
 ```yaml
         - path: /features
           methods:
             GET:
-              required_scopes: [org:read]
+              required_labels: [org:read]
             POST:
-              required_scopes: [org:write]
+              required_labels: [org:write]
               rate_limit:
                 requests: 100
                 window_seconds: 1
@@ -119,7 +119,7 @@ Same path, different per-verb `required_scopes` / `rate_limit` — nested `metho
 | `path` | `string` | Match path (`/` or starts with `/`). Params are resource ids, not the subject. |
 | `upstream` | `string?` | Absolute path template. Omitted means proxy `path` unchanged. Placeholders stay in etcd; the gateway substitutes at request time. Route-level only — not per-method. |
 | `methods` | `array<string>` \| `map<string, MethodConfig>` | List form: allowed HTTP methods. Map form: per-verb config (see below). Do not mix list and map on the same route (`422`). |
-| `required_scopes` | `string[]?` | Optional. Omitted = any admitted principal. If set, a member credential whose role has a label list (including `[]`) must share at least one label: any one of the list, not all. User credentials and unrestricted roles skip. Validated at apply. Route-level value applies only to the flat methods list. |
+| `required_labels` | `string[]?` | Optional. Omitted = any admitted principal. If set, a member credential whose role has a label list (including `[]`) must share at least one label: any one of the list, not all. User credentials and `["*"]` roles skip. Validated at apply. Route-level value applies only to the flat methods list. |
 | `rate_limit` | `false` \| `{requests, window_seconds}` \| `string` \| omitted | Omitted **inherits** the gateway fallback. `false` opts out (unlimited). Object = this route+method only. String = named policy on **this** service. Limiter subject follows route scope (`public`→ip, `user`→`user_id`, `organization`→`organization_id`, `member`→`member_id`). Route-level value applies only to the flat methods list. |
 
 A service must define at least one scope. Multiple scopes may be present.
@@ -128,40 +128,40 @@ A service must define at least one scope. Multiple scopes may be present.
 
 Two forms. Do not mix them on the same route (`422`).
 
-**Flat list.** Optional route-level `required_scopes` / `rate_limit` apply to every method in the list.
+**Flat list.** Optional route-level `required_labels` / `rate_limit` apply to every method in the list.
 
 ```yaml
 - path: /features
   methods: [GET, POST]
-  required_scopes: [org:read]
+  required_labels: [org:read]
   rate_limit: { requests: 60, window_seconds: 60 }
 ```
 
-**Nested map.** Each key is an uppercase HTTP verb (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`). The body may set `required_scopes` and/or `rate_limit` for that verb only. An empty body (`GET:` or `GET: {}`) means that method with no extra constraints. An empty methods map is rejected.
+**Nested map.** Each key is an uppercase HTTP verb (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`). The body may set `required_labels` and/or `rate_limit` for that verb only. An empty body (`GET:` or `GET: {}`) means that method with no extra constraints. An empty methods map is rejected.
 
 ```yaml
 - path: /features
   methods:
     GET:
-      required_scopes: [org:read]
+      required_labels: [org:read]
     POST:
-      required_scopes: [org:write]
+      required_labels: [org:write]
       rate_limit:
         requests: 100
         window_seconds: 1
 ```
 
-Nested maps are an **apply-time YAML convenience**. Registry `prepare_for_registry` / prefix expand turns each verb into its own `RouteConfig` row (same `path`, `methods: [THAT_VERB]`, `required_scopes` / `rate_limit` taken from that method entry). `upstream` stays on the path. After expand, etcd `methods` is always a string array. Duplicate `path`+method after expand → `422`.
+Nested maps are an **apply-time YAML convenience**. Registry `prepare_for_registry` / prefix expand turns each verb into its own `RouteConfig` row (same `path`, `methods: [THAT_VERB]`, `required_labels` / `rate_limit` taken from that method entry). `upstream` stays on the path. After expand, etcd `methods` is always a string array. Duplicate `path`+method after expand → `422`.
 
 Labels are opaque. `org:write` does not imply `org:read`.
 
-### `required_scopes`
+### `required_labels`
 
 Labels follow the same hygiene as roles: `[a-z0-9:._-]+`, max 64 chars, max 32, unique, non-empty list if present.
 
-After match + admission: if the route has `required_scopes` **and** validate returned a non-null scopes list, the two lists must have a nonempty intersection or the gateway returns **403** `FORBIDDEN`. `[a, b]` means a or b. `scopes: null` skips. `scopes: []` cannot intersect — **403** on these routes, still admitted on unlabeled routes.
+After match + admission: if the route has `required_labels` **and** validate returned a non-null `labels` list, the two lists must have a nonempty intersection or the gateway returns **403** `FORBIDDEN`. `[a, b]` means a or b. `labels: null` skips. `labels: []` cannot intersect — **403** on these routes, still admitted on unlabeled routes.
 
-A credential carries its principal's labels. For a member key or session, validate's list is the member's role labels. Keys and sessions cannot narrow it. A role is how a deployment gives members labels: [`roles.md`](roles.md). User credentials have no role and skip, so a label on a `user` route constrains nothing. Put labels on `organization` and `member` routes. The 403 `details.required_scopes` echoes the route's list ([`gateway-contract.md`](gateway-contract.md)).
+A credential carries its principal's labels. For a member key or session, validate's list is the member's role labels. Keys and sessions cannot narrow it. A role is how a deployment gives members labels: [`roles.md`](roles.md). User credentials have no role and skip, so a label on a `user` route constrains nothing. Put labels on `organization` and `member` routes. The 403 `details.required_labels` echoes the route's list ([`gateway-contract.md`](gateway-contract.md)).
 
 ### `rate_limit`
 
@@ -345,7 +345,7 @@ services:
         - path: /projects/{project_id}
           upstream: /organizations/{subject.organization_id}/projects/{path.project_id}
           methods: [GET, PATCH, DELETE]
-          required_scopes: [projects:write]
+          required_labels: [projects:write]
           rate_limit:
             requests: 20
             window_seconds: 60
@@ -367,7 +367,7 @@ Registry validates **before etcd**. Gateway validates again at load (expanded li
 - `upstream` if present: absolute path; `subject.*` only a field that scope has; `path.*` names a param of the expanded path; bare `{foo}` rejected
 - Expanded `path` must not contain a subject-field param of that scope
 - `route_prefix` join rules at registry; etcd stores full paths only; `upstream` is not prefixed
-- `required_scopes` if present: non-empty, `[a-z0-9:._-]+`, max 64 chars, max 32, unique
+- `required_labels` if present: non-empty, `[a-z0-9:._-]+`, max 64 chars, max 32, unique
 - `rate_limit` if object: `requests` > 0, `window_seconds` > 0. `true` is invalid
 - `rate_limit` if string: names a policy on this service; policy name `[a-z0-9:._-]+`, max 64
 - `rate_limits` keys: same hygiene, unique; values `requests` > 0, `window_seconds` > 0

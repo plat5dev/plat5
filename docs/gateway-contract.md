@@ -8,7 +8,7 @@ Boundary: [`identity-boundary.md`](identity-boundary.md). Routes: [`routes.md`](
 
 | Layer | Responsibility |
 |-------|---------------|
-| **Gateway** | Routing, authentication (JWT, API key, member session), scope projection, route `required_scopes`, rate limits, subject fill into `upstream`, CORS, security headers, trace propagation |
+| **Gateway** | Routing, authentication (JWT, API key, member session), scope projection, route `required_labels`, rate limits, subject fill into `upstream`, CORS, security headers, trace propagation |
 | **Edge / Load Balancer** | TLS termination (e.g. Cloudflare Zero Trust tunnels) |
 | **Downstream services** | Business logic, data access, resource authorization |
 
@@ -47,7 +47,7 @@ The scope chooses what the route is allowed to see. It is not a second proof. A 
 
 ### Caller labels
 
-Services are not told the caller's role or labels. The gateway decides which routes a caller may reach (`required_scopes`, below), and nothing downstream repeats that check. A service enforces resource authorization over the subject in the path, or asks a policy engine.
+Services are not told the caller's role or labels. The gateway decides which routes a caller may reach (`required_labels`, below), and nothing downstream repeats that check. A service enforces resource authorization over the subject in the path, or asks a policy engine.
 
 ## Route Configuration
 
@@ -66,27 +66,27 @@ services:
         - path: /org/widgets
           upstream: /organizations/{subject.organization_id}/widgets
           methods: [GET, POST]
-          required_scopes: [widgets:read]
+          required_labels: [widgets:read]
         - path: /org/features
           upstream: /organizations/{subject.organization_id}/features
           methods:
             GET:
-              required_scopes: [org:read]
+              required_labels: [org:read]
             POST:
-              required_scopes: [org:write]
+              required_labels: [org:write]
 ```
 
-`methods` may be a list (route-level `required_scopes` / `rate_limit` apply to every verb) or a nested map (per-verb). Nested maps are expanded at apply into one etcd row per verb; the gateway always sees `methods` as a string array. Full schema: [`routes.md`](routes.md).
+`methods` may be a list (route-level `required_labels` / `rate_limit` apply to every verb) or a nested map (per-verb). Nested maps are expanded at apply into one etcd row per verb; the gateway always sees `methods` as a string array. Full schema: [`routes.md`](routes.md).
 
 Services publish via the **route-registry** admin API (`POST /apply`). Gateway loads at startup and watches etcd. Route existence is decoupled from service health — a downed service returns 502 `SERVICE_UNAVAILABLE`, not 404.
 
-### Route `required_scopes`
+### Route `required_labels`
 
-After match + admission: if the route has `required_scopes` **and** validate returned a non-null scopes list, the lists must have a nonempty intersection or **403** `FORBIDDEN`. One shared label is enough.
+After match + admission: if the route has `required_labels` **and** validate returned a non-null `labels` list, the lists must have a nonempty intersection or **403** `FORBIDDEN`. One shared label is enough.
 
-A credential carries its principal's labels. For a member key or member session, validate's list is the member's role labels ([`roles.md`](roles.md)). `scopes: null` (an unrestricted role) skips. `scopes: []` cannot satisfy any `required_scopes` and gets **403** there; unlabeled routes still admit it. User credentials (JWT and user API key) have no role and skip, so labels constrain `organization` and `member` routes only.
+A credential carries its principal's labels. For a member key or member session, validate's list is the member's role labels ([`roles.md`](roles.md)). `labels: null` (a `["*"]` role) skips. `labels: []` cannot satisfy any `required_labels` and gets **403** there; unlabeled routes still admit it. User credentials (JWT and user API key) have no role and skip, so labels constrain `organization` and `member` routes only.
 
-The **403** `details` are `{ "permission": "required_scopes", "resource": "route", "resource_id": "<route path>", "required_scopes": [...] }`. `required_scopes` is the route's list, so a client can tell which labels would have admitted it.
+The **403** `details` are `{ "permission": "required_labels", "resource": "route", "resource_id": "<route path>", "required_labels": [...] }`. `required_labels` is the route's list, so a client can tell which labels would have admitted it.
 
 ### Rate limits
 
@@ -138,11 +138,11 @@ Wrong credential for the scope is **401**. There is nothing to compare, so this 
 | `user` | `Authorization: Bearer` JWT, or `X-API-Key` `{brand}-sk-1-` | member key, session |
 | `organization`, `member` | `X-API-Key` `{brand}-mk-1-` or `{brand}-ms-1-` | user JWT, user API key |
 
-Prefix dispatch happens before the identity call. One member-credential result (`member_id`, `organization_id`, and the role's labels as `scopes`) feeds both `organization` and `member`. The scope picks the fields `upstream` may fill.
+Prefix dispatch happens before the identity call. One member-credential result (`member_id`, `organization_id`, and the role's `labels`) feeds both `organization` and `member`. The scope picks the fields `upstream` may fill.
 
 1. Bad, missing, or wrong credential → **401** `UNAUTHORIZED`
 2. Validate unavailable → **503** `SERVICE_UNAVAILABLE`
-3. Admitted → `required_scopes` (member credentials whose role has a label list; users and `scopes: null` skip) → **403** `FORBIDDEN` on miss
+3. Admitted → `required_labels` (member credentials whose role has a label list; users and `labels: null` skip) → **403** `FORBIDDEN` on miss
 4. Then per-route rate limit → **429** `RATE_LIMITED`
 5. Then substitute `{subject.*}` and `{path.*}` in `upstream` (bad path param → **400**, bad subject id → **500**)
 
@@ -214,8 +214,8 @@ In-process per replica.
 |-------|----------|----------|-----|
 | JWT claims | Validated token (TTL from `exp`) | — | token `exp` |
 | User API key | Valid key → `user_id` | Invalid key | `APIKEY_CACHE_TTL_SECS` (default 300) |
-| Member API key | Valid key → `member_id` + `organization_id` + `scopes` | Invalid key | same |
-| Member session | Valid token → `member_id` + `organization_id` + `scopes` | Invalid token | same |
+| Member API key | Valid key → `member_id` + `organization_id` + `labels` | Invalid key | same |
+| Member session | Valid token → `member_id` + `organization_id` + `labels` | Invalid token | same |
 
 `APIKEY_CACHE_TTL_SECS` covers user keys, member keys, and sessions. Do not rename it for sessions.
 
@@ -232,7 +232,7 @@ Revoke, suspend, remove, and role changes are visible at the edge when the TTL e
 | Case | Code |
 |------|------|
 | Auth failure (bad/missing credential) | `UNAUTHORIZED` (401) — gateway only |
-| Member's role labels miss route `required_scopes` | `FORBIDDEN` (403) |
+| Member's role labels miss route `required_labels` | `FORBIDDEN` (403) |
 | Route not registered | `NOT_FOUND` (404) |
 | Request body too large | `PAYLOAD_TOO_LARGE` (413) |
 | Rate limit (admitted route or failed-auth IP) | `RATE_LIMITED` (429); `Retry-After`; admitted limited routes also `X-RateLimit-*` |

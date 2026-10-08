@@ -38,13 +38,13 @@ func NewHandler(store *Store, orgStore *orgs.Store, prefix string, roleSet *role
 }
 
 type CreateResponse struct {
-	Token          string  `json:"token"`
-	ExpiresAt      string  `json:"expires_at"`
-	MemberID       string  `json:"member_id"`
-	OrganizationID string  `json:"organization_id"`
-	Role           *string `json:"role"`
-	// Scopes is the member's role labels at mint: what validate would return now.
-	Scopes *[]string `json:"scopes"`
+	Token          string `json:"token"`
+	ExpiresAt      string `json:"expires_at"`
+	MemberID       string `json:"member_id"`
+	OrganizationID string `json:"organization_id"`
+	Role           string `json:"role"`
+	// Labels is the member's role labels at mint: what validate would return now.
+	Labels *[]string `json:"labels"`
 }
 
 type ValidateRequest struct {
@@ -52,13 +52,13 @@ type ValidateRequest struct {
 }
 
 // validPayload is the validate hit. No user_id.
-// scopes is the member's role labels: nil is unrestricted; a non-nil list is restricted.
-func validPayload(memberID, organizationID string, scopes []string) fiber.Map {
+// labels is the member's role labels: nil is every label.
+func validPayload(memberID, organizationID string, labels []string) fiber.Map {
 	return fiber.Map{
 		"valid":           true,
 		"member_id":       memberID,
 		"organization_id": organizationID,
-		"scopes":          apikey.WireScopesJSON(scopes),
+		"labels":          apikey.WireLabelsJSON(labels),
 	}
 }
 
@@ -113,7 +113,7 @@ func (h *Handler) Create(c fiber.Ctx) error {
 		MemberID:       member.ID,
 		OrganizationID: member.OrganizationID,
 		Role:           member.Role,
-		Scopes:         apikey.WireScopes(h.roles.Grants(member.Role)),
+		Labels:         apikey.WireLabels(h.roles.Grants(member.Role)),
 	})
 }
 
@@ -144,8 +144,8 @@ func (h *Handler) Validate(c fiber.Ctx) error {
 	}
 
 	metrics.RecordSessionValidation(true)
-	scopes := h.roles.Grants(found.MemberRole)
-	return c.JSON(validPayload(found.Session.MemberID, found.OrganizationID, scopes))
+	labels := h.roles.Grants(found.MemberRole)
+	return c.JSON(validPayload(found.Session.MemberID, found.OrganizationID, labels))
 }
 
 func (h *Handler) invalid(c fiber.Ctx) error {

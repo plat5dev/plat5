@@ -50,11 +50,11 @@ fn validate_scope_routes(
                             ),
                         });
                     }
-                    validate_required_scopes(
+                    validate_required_labels(
                         service,
                         scope_name,
                         &route.path,
-                        spec.required_scopes.as_deref(),
+                        spec.required_labels.as_deref(),
                     )?;
                     validate_rate_limit(
                         service,
@@ -72,11 +72,11 @@ fn validate_scope_routes(
                         reason: format!("{} route '{}' has no methods", scope_name, route.path),
                     });
                 }
-                validate_required_scopes(
+                validate_required_labels(
                     service,
                     scope_name,
                     &route.path,
-                    route.required_scopes.as_deref(),
+                    route.required_labels.as_deref(),
                 )?;
                 validate_rate_limit(
                     service,
@@ -92,7 +92,7 @@ fn validate_scope_routes(
     Ok(())
 }
 
-fn validate_required_scopes(
+fn validate_required_labels(
     service: &str,
     scope_name: &str,
     path: &str,
@@ -105,17 +105,17 @@ fn validate_required_scopes(
         return Err(ConfigError::InvalidRoute {
             service: service.to_string(),
             reason: format!(
-                "{} route '{}' required_scopes must be omitted or a non-empty list",
+                "{} route '{}' required_labels must be omitted or a non-empty list",
                 scope_name, path
             ),
         });
     }
-    if labels.len() > MAX_SCOPE_COUNT {
+    if labels.len() > MAX_LABEL_COUNT {
         return Err(ConfigError::InvalidRoute {
             service: service.to_string(),
             reason: format!(
-                "{} route '{}' required_scopes has more than {} labels",
-                scope_name, path, MAX_SCOPE_COUNT
+                "{} route '{}' required_labels has more than {} labels",
+                scope_name, path, MAX_LABEL_COUNT
             ),
         });
     }
@@ -125,8 +125,8 @@ fn validate_required_scopes(
             return Err(ConfigError::InvalidRoute {
                 service: service.to_string(),
                 reason: format!(
-                    "{} route '{}' required_scopes label '{}' is invalid (expected [a-z0-9:._-]+, max {})",
-                    scope_name, path, label, MAX_SCOPE_LEN
+                    "{} route '{}' required_labels label '{}' is invalid (expected [a-z0-9:._-]+, max {})",
+                    scope_name, path, label, MAX_LABEL_LEN
                 ),
             });
         }
@@ -134,7 +134,7 @@ fn validate_required_scopes(
             return Err(ConfigError::InvalidRoute {
                 service: service.to_string(),
                 reason: format!(
-                    "{} route '{}' required_scopes has duplicate label '{}'",
+                    "{} route '{}' required_labels has duplicate label '{}'",
                     scope_name, path, label
                 ),
             });
@@ -182,7 +182,7 @@ fn validate_rate_limit(
                     service: service.to_string(),
                     reason: format!(
                         "{} route '{}' rate_limit policy name '{}' is invalid (expected [a-z0-9:._-]+, max {})",
-                        scope_name, path, name, MAX_SCOPE_LEN
+                        scope_name, path, name, MAX_LABEL_LEN
                     ),
                 });
             }
@@ -213,7 +213,7 @@ fn validate_rate_limit_policies(
                 service: service.to_string(),
                 reason: format!(
                     "rate_limits key '{}' is invalid (expected [a-z0-9:._-]+, max {})",
-                    name, MAX_SCOPE_LEN
+                    name, MAX_LABEL_LEN
                 ),
             });
         }
@@ -468,7 +468,7 @@ fn upstream_placeholders(template: &str) -> Result<Vec<(String, String)>, String
 }
 
 pub fn valid_scope_label(s: &str) -> bool {
-    if s.is_empty() || s.len() > MAX_SCOPE_LEN {
+    if s.is_empty() || s.len() > MAX_LABEL_LEN {
         return false;
     }
     s.chars()
@@ -476,7 +476,7 @@ pub fn valid_scope_label(s: &str) -> bool {
 }
 
 #[allow(dead_code)] // used by gateway; kept on both route_config copies
-pub fn scopes_intersect(required: &[String], granted: &[String]) -> bool {
+pub fn labels_intersect(required: &[String], granted: &[String]) -> bool {
     granted.iter().any(|g| required.iter().any(|r| r == g))
 }
 

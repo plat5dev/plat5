@@ -12,7 +12,7 @@ import (
 func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 	f := newFakeInvites()
 	seedOwner(f, "org1", "owner1")
-	h := &Handler{invites: f}
+	h := &Handler{invites: f, roles: starterSet(t)}
 	app := testInviteApp(h)
 
 	code, body := doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{"email":"a@b.com","created_by":"owner1"}`)
@@ -95,7 +95,7 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 func TestInviteListIncludesTokenWhileActive(t *testing.T) {
 	f := newFakeInvites()
 	seedOwner(f, "org1", "owner1")
-	h := &Handler{invites: f}
+	h := &Handler{invites: f, roles: starterSet(t)}
 	app := testInviteApp(h)
 	_, body := doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{}`)
 	var created InviteResponse
@@ -119,7 +119,7 @@ func TestInviteListIncludesTokenWhileActive(t *testing.T) {
 func TestInviteMaxUsesUnlimitedStaysActive(t *testing.T) {
 	f := newFakeInvites()
 	seedOwner(f, "org1", "owner1")
-	h := &Handler{invites: f}
+	h := &Handler{invites: f, roles: starterSet(t)}
 	app := testInviteApp(h)
 
 	code, body := doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{"max_uses":null}`)
@@ -160,7 +160,7 @@ func TestInviteMaxUsesUnlimitedStaysActive(t *testing.T) {
 func TestInviteMaxUsesZeroRejected(t *testing.T) {
 	f := newFakeInvites()
 	seedOwner(f, "org1", "owner1")
-	h := &Handler{invites: f}
+	h := &Handler{invites: f, roles: starterSet(t)}
 	app := testInviteApp(h)
 	for _, payload := range []string{`{"max_uses":0}`, `{"max_uses":-1}`} {
 		code, resp := doJSON(t, app, http.MethodPost, "/organizations/org1/invites", payload)
@@ -173,7 +173,7 @@ func TestInviteMaxUsesZeroRejected(t *testing.T) {
 func TestInviteExpireRevokeAndUnknown(t *testing.T) {
 	f := newFakeInvites()
 	seedOwner(f, "org1", "owner1")
-	h := &Handler{invites: f}
+	h := &Handler{invites: f, roles: starterSet(t)}
 	app := testInviteApp(h)
 
 	now := time.Now().UTC()
@@ -249,7 +249,7 @@ func TestInviteRedeemDuplicateMemberIdempotent(t *testing.T) {
 		UserID:         &uid,
 		Status:         StatusActive,
 	}
-	h := &Handler{invites: f}
+	h := &Handler{invites: f, roles: starterSet(t)}
 	app := testInviteApp(h)
 
 	_, body := doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{}`)
@@ -280,7 +280,7 @@ func TestInviteCreateDoesNotCheckCaller(t *testing.T) {
 		UserID:         &uid,
 		Status:         StatusActive,
 	}
-	h := &Handler{invites: f}
+	h := &Handler{invites: f, roles: starterSet(t)}
 	app := testInviteApp(h)
 	code, body := doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{}`)
 	if code != http.StatusCreated {
@@ -291,7 +291,7 @@ func TestInviteCreateDoesNotCheckCaller(t *testing.T) {
 func TestInviteNoPendingMemberOnCreate(t *testing.T) {
 	f := newFakeInvites()
 	seedOwner(f, "org1", "owner1")
-	h := &Handler{invites: f}
+	h := &Handler{invites: f, roles: starterSet(t)}
 	app := testInviteApp(h)
 	doJSON(t, app, http.MethodPost, "/organizations/org1/invites", `{}`)
 	if len(f.members) != 1 {

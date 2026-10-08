@@ -169,8 +169,8 @@ services:
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
       APIKEY_BRAND: ${APIKEY_BRAND:-plat5}
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-plat5}?sslmode=disable
-      # Unset: no roles, every member unrestricted. /etc/plat5/roles.yml enables roles.yml.
-      ROLES_FILE: ${ROLES_FILE:-}
+      # Required. roles.yml is mounted here; edit it, then restart identity.
+      ROLES_FILE: ${ROLES_FILE:-/etc/plat5/roles.yml}
       OTEL_SERVICE_NAME: identity
       OTEL_SERVICE_NAMESPACE: identity
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}

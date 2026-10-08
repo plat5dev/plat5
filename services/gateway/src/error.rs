@@ -221,7 +221,7 @@ mod tests {
     #[test]
     fn test_forbidden_serialization() {
         let err = ApiError::forbidden(Some(serde_json::json!({
-            "permission": "required_scopes",
+            "permission": "required_labels",
             "resource": "route",
             "resource_id": "/api/widgets"
         })));

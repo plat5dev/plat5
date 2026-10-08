@@ -95,7 +95,7 @@ fn expand_nested_methods(scope: &mut ScopeConfig) {
                         path: route.path.clone(),
                         methods: vec![method],
                         upstream: route.upstream.clone(),
-                        required_scopes: spec.required_scopes,
+                        required_labels: spec.required_labels,
                         rate_limit: spec.rate_limit,
                         methods_form: MethodsForm::List,
                     });

@@ -26,7 +26,7 @@ type Config struct {
 	UserKeyPrefix     string
 	MemberKeyPrefix   string
 	SessionPrefix     string
-	// RolesFile is ROLES_FILE: the deployment's roles, read at boot. Empty = no roles.
+	// RolesFile is ROLES_FILE: the deployment's roles, read at boot. Required.
 	RolesFile string
 }
 

@@ -2,7 +2,7 @@
 # these are yours to rename, add to, or replace. Identity reads this file at
 # boot (ROLES_FILE); restart identity after editing it.
 #
-# A role grants labels. Routes require labels (required_scopes). ["*"] grants
+# A role grants labels. Routes require labels (required_labels). ["*"] grants
 # every label. The org:* labels match the identity catalog
 # (services/identity/routes.yml); add your own services' labels here.
 roles:

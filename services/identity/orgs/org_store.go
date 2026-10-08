@@ -11,7 +11,7 @@ import (
 )
 
 // CreateOrganization inserts the org and its creator as an active member with role.
-func (s *Store) CreateOrganization(ctx context.Context, org *Organization, userID string, role *string) (*Member, error) {
+func (s *Store) CreateOrganization(ctx context.Context, org *Organization, userID string, role string) (*Member, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_organization", dbx.DefaultTimeout,
 		attribute.String("organization.id", org.ID),
 	)

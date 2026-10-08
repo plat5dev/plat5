@@ -18,10 +18,10 @@ pub struct MemberSessionValidation {
     pub valid: bool,
     pub member_id: Option<String>,
     pub organization_id: Option<String>,
-    /// The member's role labels. None = unrestricted (skip `required_scopes`).
+    /// The member's role labels. None = unrestricted (skip `required_labels`).
     /// Some = restricted, including empty.
     #[serde(default)]
-    pub scopes: Option<Vec<String>>,
+    pub labels: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]

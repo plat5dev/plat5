@@ -31,7 +31,7 @@ func TestServiceAccountKeysAreMemberKeys(t *testing.T) {
 		UserID: &userID,
 		Status: orgs.StatusActive,
 	}
-	h := &Handler{store: keys, orgStore: org, prefix: testPrefix}
+	h := &Handler{store: keys, orgStore: org, prefix: testPrefix, roles: starterSet(t)}
 	app := testKeyApp(h)
 
 	code, body := doJSON(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa1/api-keys", `{"name":"ci"}`)
@@ -52,8 +52,8 @@ func TestServiceAccountKeysAreMemberKeys(t *testing.T) {
 	if _, ok := raw["member_id"]; ok {
 		t.Fatalf("create must not echo member_id: %s", body)
 	}
-	if _, ok := raw["scopes"]; ok {
-		t.Fatalf("create must not echo scopes: %s", body)
+	if _, ok := raw["labels"]; ok {
+		t.Fatalf("create must not echo labels: %s", body)
 	}
 	if _, ok := raw["key"]; !ok {
 		t.Fatalf("plaintext missing: %s", body)
@@ -134,7 +134,7 @@ func TestServiceAccountKeyAddress(t *testing.T) {
 	org.add(saFixture("org1", "sa2", "mem-other", orgs.StatusActive))
 	org.add(saFixture("org1", "sa-suspended", "mem-suspended", orgs.StatusSuspended))
 	org.add(saFixture("org1", "sa-removed", "mem-removed", orgs.StatusRemoved))
-	h := &Handler{store: keys, orgStore: org, prefix: testPrefix}
+	h := &Handler{store: keys, orgStore: org, prefix: testPrefix, roles: starterSet(t)}
 	app := testKeyApp(h)
 
 	code, body := doJSON(t, app, http.MethodPost, "/organizations/org1/service-accounts/sa1/api-keys", `{}`)
@@ -230,7 +230,7 @@ func TestMemberKeyRefusesScopes(t *testing.T) {
 		UserID: &userID,
 		Status: orgs.StatusActive,
 	}
-	h := &Handler{store: keys, orgStore: org, prefix: testPrefix}
+	h := &Handler{store: keys, orgStore: org, prefix: testPrefix, roles: starterSet(t)}
 	app := testKeyApp(h)
 
 	for _, path := range []string{"/members/mem-user/api-keys", "/organizations/org1/service-accounts/sa1/api-keys"} {

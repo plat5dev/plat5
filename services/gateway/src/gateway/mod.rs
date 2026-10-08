@@ -1,8 +1,8 @@
 mod context;
 mod cors;
+mod labels;
 mod response;
 mod rewrite;
-mod scopes;
 mod upstream;
 
 use std::collections::HashMap;
@@ -29,7 +29,7 @@ use crate::error::{ApiError, ErrorKind};
 use crate::metrics;
 use crate::rate_limit::{RateLimitError, RateLimiter};
 use crate::route_map::{LimitBucket, Route, RouteLimiter, RouteMap, RouteScope};
-use scopes::satisfies_required_scopes;
+use labels::satisfies_required_labels;
 
 pub use crate::admission::parse_user_id_claim;
 pub use context::GatewayContext;
@@ -206,18 +206,18 @@ impl UserGateway {
             }
         };
 
-        if !satisfies_required_scopes(route.required_scopes.as_deref(), admission.scopes()) {
+        if !satisfies_required_labels(route.required_labels.as_deref(), admission.labels()) {
             return response::write_json_error(
                 &self.cors,
                 session,
                 ctx,
                 403,
                 ApiError::forbidden(Some(serde_json::json!({
-                    "permission": "required_scopes",
+                    "permission": "required_labels",
                     "resource": "route",
                     "resource_id": route.path,
                     // Any one of these would have admitted the request.
-                    "required_scopes": route.required_scopes,
+                    "required_labels": route.required_labels,
                 }))),
             )
             .await;
@@ -673,7 +673,7 @@ mod tests {
     fn org_admission(org: &str) -> Admission {
         Admission::Organization {
             organization_id: org.into(),
-            scopes: None,
+            labels: None,
         }
     }
 
@@ -712,7 +712,7 @@ mod tests {
         let admission = Admission::Member {
             organization_id: "org-1".into(),
             member_id: "mem-9".into(),
-            scopes: None,
+            labels: None,
         };
         assert_eq!(
             limit_subject(RouteScope::Member, &admission, "1.2.3.4"),

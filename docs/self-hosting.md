@@ -92,10 +92,12 @@ AUTH_JWKS_URI=https://auth.example.com/.well-known/jwks.json
 AUTH_ALLOWED_AUDIENCES=<same as AUTH_ALLOWED_CLIENTS>
 AUTH_USER_ID_CLAIM=properties.user_id   # Plat5 Auth; use sub for many OIDC IdPs
 # APIKEY_BRAND=plat5                    # optional; {brand}-sk-1- / {brand}-mk-1- / {brand}-ms-1-
-# ROLES_FILE=/etc/plat5/roles.yml       # optional; identity; compose/roles.yml is mounted there
+# ROLES_FILE=/etc/plat5/roles.yml       # required (the default); identity; compose/roles.yml is mounted there
 ```
 
-Without `ROLES_FILE` every member is unrestricted. With it, members get the roles it defines, and the identity catalog's labels decide who manages the org. Prod compose mounts [`compose/roles.yml`](../compose/roles.yml) at `/etc/plat5/roles.yml`; edit it before you turn it on. Format and rules: [`roles.md`](roles.md). Identity reads it at boot; restart identity after editing it.
+Identity refuses to boot without `ROLES_FILE`. Every member holds one of its roles, and the identity catalog's labels decide who manages the org. Compose mounts [`compose/roles.yml`](../compose/roles.yml) at `/etc/plat5/roles.yml` and points `ROLES_FILE` there; edit it before first boot. Format and rules: [`roles.md`](roles.md). Identity reads it at boot; restart identity after editing it.
+
+Upgrading from a version where roles were optional: members with no role get `creator_role`, and invites with no role get `default_role` (migration `007`). That keeps everyone's access as it was. Assign narrower roles afterwards.
 
 `POSTGRES_PASSWORD` is interpolated into `DATABASE_URL`. Use a **URL-safe** value (hex). `+` / `/` from raw base64 break the URL (`invalid port`).
 

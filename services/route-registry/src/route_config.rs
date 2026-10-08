@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub const ROUTES_PREFIX: &str = "edge/gateway/routes/";
-pub const MAX_SCOPE_COUNT: usize = 32;
-pub const MAX_SCOPE_LEN: usize = 64;
+pub const MAX_LABEL_COUNT: usize = 32;
+pub const MAX_LABEL_LEN: usize = 64;
 const HTTP_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -56,7 +56,7 @@ pub struct ScopeConfig {
 #[serde(deny_unknown_fields)]
 pub struct MethodConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub required_scopes: Option<Vec<String>>,
+    pub required_labels: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limit: Option<RouteRateLimit>,
 }
@@ -78,7 +78,7 @@ pub struct RouteConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub required_scopes: Option<Vec<String>>,
+    pub required_labels: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limit: Option<RouteRateLimit>,
     #[serde(skip)]
@@ -102,7 +102,7 @@ struct RawRouteConfig {
     #[serde(default)]
     upstream: Option<String>,
     #[serde(default)]
-    required_scopes: Option<Vec<String>>,
+    required_labels: Option<Vec<String>>,
     #[serde(default)]
     rate_limit: Option<RouteRateLimit>,
 }
@@ -115,7 +115,7 @@ impl<'de> Deserialize<'de> for RouteConfig {
                 path: raw.path,
                 methods,
                 upstream: raw.upstream,
-                required_scopes: raw.required_scopes,
+                required_labels: raw.required_labels,
                 rate_limit: raw.rate_limit,
                 methods_form: MethodsForm::List,
             }),
@@ -129,7 +129,7 @@ impl<'de> Deserialize<'de> for RouteConfig {
                     path: raw.path,
                     methods,
                     upstream: raw.upstream,
-                    required_scopes: raw.required_scopes,
+                    required_labels: raw.required_labels,
                     rate_limit: raw.rate_limit,
                     methods_form: MethodsForm::Nested(entries),
                 })
@@ -138,7 +138,7 @@ impl<'de> Deserialize<'de> for RouteConfig {
                 path: raw.path,
                 methods: Vec::new(),
                 upstream: raw.upstream,
-                required_scopes: raw.required_scopes,
+                required_labels: raw.required_labels,
                 rate_limit: raw.rate_limit,
                 methods_form: MethodsForm::Mixed,
             }),
@@ -152,7 +152,7 @@ impl Default for RouteConfig {
             path: String::new(),
             methods: Vec::new(),
             upstream: None,
-            required_scopes: None,
+            required_labels: None,
             rate_limit: None,
             methods_form: MethodsForm::List,
         }

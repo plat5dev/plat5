@@ -14,11 +14,11 @@ use super::types::{
 };
 
 /// Member key or member session, before the scope drops fields.
-/// `scopes` is the member's role labels.
+/// `labels` is the member's role labels.
 struct MemberProof {
     member_id: String,
     organization_id: String,
-    scopes: Option<Vec<String>>,
+    labels: Option<Vec<String>>,
 }
 
 /// Composes auth domains into route-scope admission decisions.
@@ -112,12 +112,12 @@ impl Admissor {
         match scope {
             RouteScope::Organization => Ok(Admission::Organization {
                 organization_id: proof.organization_id,
-                scopes: proof.scopes,
+                labels: proof.labels,
             }),
             RouteScope::Member => Ok(Admission::Member {
                 organization_id: proof.organization_id,
                 member_id: proof.member_id,
-                scopes: proof.scopes,
+                labels: proof.labels,
             }),
             RouteScope::Public | RouteScope::User => Err(AdmitError::Internal(
                 "member credential on a user subject route",
@@ -153,7 +153,7 @@ impl Admissor {
                         Ok(CachedMemberApiKey::Valid {
                             member_id,
                             organization_id,
-                            scopes: v.scopes.clone(),
+                            labels: v.labels.clone(),
                         })
                     }
                     Err(MemberApiKeyError::InvalidKey) => Ok(CachedMemberApiKey::Invalid),
@@ -181,11 +181,11 @@ impl Admissor {
             CachedMemberApiKey::Valid {
                 member_id,
                 organization_id,
-                scopes,
+                labels,
             } => Ok(MemberProof {
                 member_id,
                 organization_id,
-                scopes,
+                labels,
             }),
         }
     }
@@ -220,7 +220,7 @@ impl Admissor {
                         Ok(CachedMemberSession::Valid {
                             member_id,
                             organization_id,
-                            scopes: v.scopes.clone(),
+                            labels: v.labels.clone(),
                         })
                     }
                     Err(MemberSessionError::InvalidToken) => Ok(CachedMemberSession::Invalid),
@@ -248,11 +248,11 @@ impl Admissor {
             CachedMemberSession::Valid {
                 member_id,
                 organization_id,
-                scopes,
+                labels,
             } => Ok(MemberProof {
                 member_id,
                 organization_id,
-                scopes,
+                labels,
             }),
         }
     }

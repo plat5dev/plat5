@@ -46,7 +46,7 @@ type Organization struct {
 // Not a table. Active user memberships only.
 type Membership struct {
 	ID               string
-	Role             *string
+	Role             string
 	Status           Status
 	OrganizationID   string
 	OrganizationName string
@@ -59,8 +59,8 @@ type Member struct {
 	OrganizationID   string
 	UserID           *string
 	ServiceAccountID *string
-	// Role is a slug from the roles file. Nil is unrestricted (docs/roles.md).
-	Role      *string
+	// Role is a slug from the roles file (docs/roles.md).
+	Role      string
 	Status    Status
 	AddedBy   *string
 	CreatedAt time.Time
@@ -75,8 +75,8 @@ type ServiceAccount struct {
 	OrganizationID  string
 	MemberID        string // filled on read via join
 	Name            string
-	Role            *string // filled on read via join
-	Status          Status  // filled on read via join
+	Role            string // filled on read via join
+	Status          Status // filled on read via join
 	CreatedByUserID *string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time

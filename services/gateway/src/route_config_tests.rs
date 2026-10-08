@@ -7,7 +7,7 @@ mod tests {
             path: path.to_string(),
             methods: methods.iter().map(|m| m.to_string()).collect(),
             upstream: None,
-            required_scopes: None,
+            required_labels: None,
             rate_limit: None,
             methods_form: MethodsForm::List,
         }
@@ -69,16 +69,16 @@ mod tests {
     }
 
     #[test]
-    fn required_scopes_ok() {
+    fn required_labels_ok() {
         let mut r = route("/api/widgets", &["GET"]);
-        r.required_scopes = Some(vec!["widgets:read".into(), "invoices.write".into()]);
+        r.required_labels = Some(vec!["widgets:read".into(), "invoices.write".into()]);
         let mut services = HashMap::new();
         services.insert("w".into(), user_service(vec![r]));
         Config { services }.validate().unwrap();
     }
 
     #[test]
-    fn required_scopes_reject_empty_and_bad() {
+    fn required_labels_reject_empty_and_bad() {
         for labels in [
             vec![],
             vec!["Widgets:read".into()],
@@ -86,7 +86,7 @@ mod tests {
             vec!["ok".into(), "ok".into()],
         ] {
             let mut r = route("/api/widgets", &["GET"]);
-            r.required_scopes = Some(labels.clone());
+            r.required_labels = Some(labels.clone());
             let mut services = HashMap::new();
             services.insert("w".into(), user_service(vec![r]));
             assert!(
@@ -127,23 +127,23 @@ mod tests {
     }
 
     #[test]
-    fn scopes_intersect_nonempty() {
-        assert!(scopes_intersect(
+    fn labels_intersect_nonempty() {
+        assert!(labels_intersect(
             &["a".into(), "b".into()],
             &["b".into(), "c".into()]
         ));
-        assert!(!scopes_intersect(&["a".into()], &[]));
-        assert!(!scopes_intersect(&["a".into()], &["b".into()]));
+        assert!(!labels_intersect(&["a".into()], &[]));
+        assert!(!labels_intersect(&["a".into()], &["b".into()]));
     }
 
     #[test]
     fn flat_methods_list_still_validates() {
         let r = parse_route(
-            r#"{"path":"/features","methods":["GET","POST"],"required_scopes":["org:read"]}"#,
+            r#"{"path":"/features","methods":["GET","POST"],"required_labels":["org:read"]}"#,
         );
         assert_eq!(r.methods, vec!["GET", "POST"]);
         assert_eq!(
-            r.required_scopes.as_deref(),
+            r.required_labels.as_deref(),
             Some(["org:read".to_string()].as_slice())
         );
         assert!(matches!(r.methods_form, MethodsForm::List));
@@ -153,14 +153,14 @@ mod tests {
     }
 
     #[test]
-    fn nested_get_post_different_scopes_expands_to_two_routes() {
+    fn nested_get_post_different_labels_expands_to_two_routes() {
         let r = parse_route(
             r#"{
                 "path": "/features",
                 "methods": {
-                    "GET": {"required_scopes": ["org:read"]},
+                    "GET": {"required_labels": ["org:read"]},
                     "POST": {
-                        "required_scopes": ["org:write"],
+                        "required_labels": ["org:write"],
                         "rate_limit": {"requests": 100, "window_seconds": 1}
                     }
                 }
@@ -178,7 +178,7 @@ mod tests {
             .expect("GET row");
         assert_eq!(get.path, "/features");
         assert_eq!(
-            get.required_scopes.as_deref(),
+            get.required_labels.as_deref(),
             Some(["org:read".to_string()].as_slice())
         );
         assert!(get.rate_limit.is_none());
@@ -189,7 +189,7 @@ mod tests {
             .find(|rt| rt.methods == ["POST"])
             .expect("POST row");
         assert_eq!(
-            post.required_scopes.as_deref(),
+            post.required_labels.as_deref(),
             Some(["org:write".to_string()].as_slice())
         );
         match &post.rate_limit {
@@ -237,7 +237,7 @@ mod tests {
         let routes = &prepared.user.as_ref().unwrap().routes;
         assert_eq!(routes.len(), 2);
         for rt in routes {
-            assert!(rt.required_scopes.is_none());
+            assert!(rt.required_labels.is_none());
             assert!(rt.rate_limit.is_none());
             assert_eq!(rt.methods.len(), 1);
         }
@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn duplicate_path_method_after_expand_fails() {
         let nested = parse_route(
-            r#"{"path":"/features","methods":{"GET":{"required_scopes":["org:read"]}}}"#,
+            r#"{"path":"/features","methods":{"GET":{"required_labels":["org:read"]}}}"#,
         );
         let flat = parse_route(r#"{"path":"/features","methods":["GET"]}"#);
         let err = user_service(vec![nested, flat])

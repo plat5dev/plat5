@@ -45,7 +45,7 @@ Set env (or defaults) for any IdP reachable from the gateway container:
 
 Gateway uses `host.docker.internal` so a host-published IdP does not need a shared Docker network. API keys are an alternative to JWT; the IdP is still required.
 
-Roles: identity reads [`roles.yml`](roles.yml) (`ROLES_FILE`). Dev compose turns it on; set `ROLES_FILE=` (empty) to run without roles. Prod compose mounts the same file and leaves it off until you set `ROLES_FILE=/etc/plat5/roles.yml`. Restart identity after editing it. See [`../docs/roles.md`](../docs/roles.md).
+Roles: identity reads [`roles.yml`](roles.yml) (`ROLES_FILE`). It is required: dev and prod compose both mount it and point `ROLES_FILE` at it. Restart identity after editing it. See [`../docs/roles.md`](../docs/roles.md).
 
 `APIKEY_BRAND` (default `plat5`) is the same value on gateway and identity. Identity wire prefixes are `{brand}-sk-1-` / `{brand}-mk-1-` / `{brand}-ms-1-`. The gateway accepts all three on `X-API-Key` (`-sk-` on `user` routes; `-mk-` / `-ms-` on `organization` and `member` routes). See [`../docs/identity.md`](../docs/identity.md).
 

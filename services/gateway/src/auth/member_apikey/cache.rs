@@ -8,7 +8,7 @@ pub enum CachedMemberApiKey {
     Valid {
         member_id: String,
         organization_id: String,
-        scopes: Option<Vec<String>>,
+        labels: Option<Vec<String>>,
     },
     Invalid,
 }

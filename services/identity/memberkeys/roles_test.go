@@ -28,19 +28,16 @@ func starterSet(t *testing.T) *roles.Set {
 	return s
 }
 
-func rolePtr(s string) *string { return &s }
-
 func TestValidateReturnsRoleLabels(t *testing.T) {
 	cases := []struct {
 		name string
-		role *string
+		role string
 		want any
 	}{
-		{"owner", rolePtr("owner"), nil},
-		{"admin", rolePtr("admin"), []any{"org:write", "org:members:write", "org:service-accounts:write"}},
-		{"member", rolePtr("member"), []any{}},
-		{"role removed from the file", rolePtr("gone"), []any{}},
-		{"null role", nil, nil},
+		{"owner", "owner", nil},
+		{"admin", "admin", []any{"org:write", "org:members:write", "org:service-accounts:write"}},
+		{"member", "member", []any{}},
+		{"role removed from the file", "gone", []any{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -68,8 +65,8 @@ func TestValidateReturnsRoleLabels(t *testing.T) {
 			if _, ok := raw["role"]; ok {
 				t.Fatalf("validate must not return the role: %s", body)
 			}
-			if !reflect.DeepEqual(raw["scopes"], tc.want) {
-				t.Fatalf("scopes %#v, want %#v", raw["scopes"], tc.want)
+			if !reflect.DeepEqual(raw["labels"], tc.want) {
+				t.Fatalf("labels %#v, want %#v", raw["labels"], tc.want)
 			}
 		})
 	}
@@ -81,7 +78,7 @@ func TestServiceAccountKeysForAnyRole(t *testing.T) {
 	keys := &fakeKeys{}
 	org := &fakeOrgs{}
 	ownerSA := saFixture("org1", "sa-owner", "mem-owner", orgs.StatusActive)
-	ownerSA.Role = rolePtr("owner")
+	ownerSA.Role = "owner"
 	org.add(ownerSA)
 	h := &Handler{store: keys, orgStore: org, prefix: testPrefix, roles: starterSet(t)}
 	app := testKeyApp(h)

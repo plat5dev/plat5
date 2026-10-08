@@ -23,25 +23,25 @@ pub enum Admission {
     },
     Organization {
         organization_id: String,
-        scopes: Option<Vec<String>>,
+        labels: Option<Vec<String>>,
     },
     Member {
         organization_id: String,
         member_id: String,
-        scopes: Option<Vec<String>>,
+        labels: Option<Vec<String>>,
     },
 }
 
 impl Admission {
     /// The member's labels when its role is restricted (non-null list, including empty).
-    /// None = unrestricted role, a user, or public — skip required_scopes.
-    pub fn scopes(&self) -> Option<&[String]> {
+    /// None = unrestricted role, a user, or public — skip required_labels.
+    pub fn labels(&self) -> Option<&[String]> {
         match self {
             Admission::Organization {
-                scopes: Some(s), ..
+                labels: Some(s), ..
             }
             | Admission::Member {
-                scopes: Some(s), ..
+                labels: Some(s), ..
             } => Some(s.as_slice()),
             _ => None,
         }

@@ -78,7 +78,6 @@ Members, invites, and service accounts.
 | When | `message` |
 |------|-----------|
 | `role` not a slug in the roles file | That role doesn't exist. |
-| `role` sent with no roles file | Roles aren't set up for this deployment. |
 | Demote, remove, or delete the last `creator_role` holder | Keep at least one member with the {creator_role} role. |
 
 All are **422** `VALIDATION_ERROR` with `path` `role`, except the last-holder rule on a remove, whose `path` matches the last-member rule (`member_id`, or `service_account_id` on a service-account delete).

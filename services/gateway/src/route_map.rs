@@ -23,7 +23,7 @@ pub struct Route {
     pub upstream: Option<String>,
     /// The auth scope for this route
     pub scope: RouteScope,
-    pub required_scopes: Option<Vec<String>>,
+    pub required_labels: Option<Vec<String>>,
     pub limiter: RouteLimiter,
 }
 
@@ -133,7 +133,7 @@ impl RouteMap {
                         &methods,
                         route_config.upstream.clone(),
                         scope,
-                        route_config.required_scopes.clone(),
+                        route_config.required_labels.clone(),
                         limiter,
                     ) {
                         warn!(
@@ -159,7 +159,7 @@ impl RouteMap {
         methods: &[&str],
         upstream: Option<String>,
         scope: RouteScope,
-        required_scopes: Option<Vec<String>>,
+        required_labels: Option<Vec<String>>,
         limiter: RouteLimiter,
     ) -> Result<(), String> {
         let re = path_to_regex(path).map_err(|e| e.to_string())?;
@@ -171,7 +171,7 @@ impl RouteMap {
             methods: methods.iter().map(|m| m.to_string()).collect(),
             upstream,
             scope,
-            required_scopes,
+            required_labels,
             limiter,
         };
 
@@ -340,7 +340,7 @@ mod tests {
             path: path.to_string(),
             methods: methods.iter().map(|m| m.to_string()).collect(),
             upstream: None,
-            required_scopes: None,
+            required_labels: None,
             rate_limit: None,
             ..Default::default()
         }

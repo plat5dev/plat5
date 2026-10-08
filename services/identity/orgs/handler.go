@@ -12,7 +12,7 @@ import (
 type Handler struct {
 	store   *Store
 	invites inviteStore
-	// roles is the deployment's roles file. Nil: no roles, every member unrestricted.
+	// roles is the deployment's roles file.
 	roles *roles.Set
 }
 

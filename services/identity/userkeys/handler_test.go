@@ -29,8 +29,8 @@ func TestUserKeyHasNoScopes(t *testing.T) {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := raw["scopes"]; ok {
-		t.Fatalf("create must not echo scopes: %s", body)
+	if _, ok := raw["labels"]; ok {
+		t.Fatalf("create must not echo labels: %s", body)
 	}
 	if len(keys.keys) != 1 || keys.keys[0].UserID != "user1" {
 		t.Fatalf("stored: %+v", keys.keys)
@@ -61,8 +61,8 @@ func TestUserKeyHasNoScopes(t *testing.T) {
 	if raw["valid"] != true || raw["user_id"] != "user1" {
 		t.Fatalf("validate: %s", body)
 	}
-	if _, ok := raw["scopes"]; ok {
-		t.Fatalf("a user key carries no scopes: %s", body)
+	if _, ok := raw["labels"]; ok {
+		t.Fatalf("a user key carries no labels: %s", body)
 	}
 }
 

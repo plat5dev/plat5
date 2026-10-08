@@ -51,7 +51,10 @@ func main() {
 		log.Fatalf("failed to connect to postgres: %v", err)
 	}
 
-	if err := db.Migrate(ctx, pool); err != nil {
+	if err := db.Migrate(ctx, pool, db.Settings{
+		"creator_role": roleSet.Creator(),
+		"default_role": roleSet.Default(),
+	}); err != nil {
 		pool.Close()
 		log.Fatalf("failed to migrate database: %v", err)
 	}

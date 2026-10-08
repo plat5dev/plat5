@@ -186,8 +186,8 @@ services:
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN:-dev-internal-token}
       APIKEY_BRAND: ${APIKEY_BRAND:-plat5}
       DATABASE_URL: postgres://plat5:plat5@postgres:5432/plat5?sslmode=disable
-      # Starter roles (roles.yml). Set ROLES_FILE= (empty) to run without roles.
-      ROLES_FILE: ${ROLES_FILE-/etc/plat5/roles.yml}
+      # Required. Starter roles (roles.yml); edit it, then restart identity.
+      ROLES_FILE: ${ROLES_FILE:-/etc/plat5/roles.yml}
       OTEL_SERVICE_NAME: identity
       OTEL_SERVICE_NAMESPACE: identity
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
