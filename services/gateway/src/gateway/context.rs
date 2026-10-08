@@ -13,6 +13,8 @@ pub struct GatewayContext {
     pub upstream_peer: Option<Box<HttpPeer>>,
     pub body_bytes: u64,
     pub rate_limit: Option<crate::rate_limit::RateLimitInfo>,
+    /// Who presented the request, for the request log. Never a secret.
+    pub credential: crate::admission::RequestCredential,
 }
 
 impl Default for GatewayContext {
@@ -33,6 +35,7 @@ impl GatewayContext {
             upstream_peer: None,
             body_bytes: 0,
             rate_limit: None,
+            credential: Default::default(),
         }
     }
 

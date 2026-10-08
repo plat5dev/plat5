@@ -10,7 +10,8 @@ use crate::error::ErrorKind;
 use crate::route_map::{Route, RouteScope};
 
 use super::types::{
-    extract_claim_path, jwt_error_reason, Admission, AdmitError, AuthContext, AuthError, AuthType,
+    extract_claim_path, jwt_error_reason, key_display_prefix, Admission, AdmitError, AuthContext,
+    AuthError, AuthType, RequestCredential,
 };
 
 /// Member key or member session, before the scope drops fields.
@@ -31,20 +32,59 @@ impl Admissor {
         Self { stack }
     }
 
+    /// Admit `req` for `route`. Fills `cred` for the request log as far as it gets:
+    /// the presented key's display prefix before validation, the principal after.
     pub async fn admit(
         &self,
         req: &RequestHeader,
         route: &Route,
         span: Option<&tracing::Span>,
+        cred: &mut RequestCredential,
     ) -> Result<Admission, AdmitError> {
         match route.scope {
             RouteScope::Public => {
                 debug!(path = %route.path, "skipping auth for public route");
                 Ok(Admission::Public)
             }
-            RouteScope::User => self.admit_user(req).await,
+            RouteScope::User => {
+                self.note_presented_key(req, cred);
+                let admission = self.admit_user(req).await?;
+                if let Admission::User {
+                    user_id, auth_type, ..
+                } = &admission
+                {
+                    cred.auth_type = Some(*auth_type);
+                    cred.user_id = Some(user_id.clone());
+                }
+                Ok(admission)
+            }
             RouteScope::Organization | RouteScope::Member => {
-                self.admit_member_credential(req, route.scope, span).await
+                self.note_presented_key(req, cred);
+                self.admit_member_credential(req, route.scope, span, cred)
+                    .await
+            }
+        }
+    }
+
+    /// Record the kind and display prefix of an `X-API-Key` credential. Only a value
+    /// with one of this gateway's wire prefixes is recorded; anything else is omitted.
+    fn note_presented_key(&self, req: &RequestHeader, cred: &mut RequestCredential) {
+        let Some(key) = req.headers.get("X-API-Key").and_then(|v| v.to_str().ok()) else {
+            return;
+        };
+        let kinds = [
+            (self.stack.user_key_prefix.as_str(), AuthType::UserApiKey),
+            (
+                self.stack.member_key_prefix.as_str(),
+                AuthType::MemberApiKey,
+            ),
+            (self.stack.session_prefix.as_str(), AuthType::MemberSession),
+        ];
+        for (wire_prefix, auth_type) in kinds {
+            if !wire_prefix.is_empty() && key.starts_with(wire_prefix) {
+                cred.auth_type = Some(auth_type);
+                cred.key_prefix = key_display_prefix(key, wire_prefix);
+                return;
             }
         }
     }
@@ -85,6 +125,7 @@ impl Admissor {
         req: &RequestHeader,
         scope: RouteScope,
         span: Option<&tracing::Span>,
+        cred: &mut RequestCredential,
     ) -> Result<Admission, AdmitError> {
         let Some(key) = api_key(req)? else {
             return Err(AdmitError::WrongCredential);
@@ -102,6 +143,8 @@ impl Admissor {
             span.record("organization.id", proof.organization_id.as_str());
             span.record("member.id", proof.member_id.as_str());
         }
+        cred.organization_id = Some(proof.organization_id.clone());
+        cred.member_id = Some(proof.member_id.clone());
 
         debug!(
             organization_id = %proof.organization_id,

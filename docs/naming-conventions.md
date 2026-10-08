@@ -105,6 +105,7 @@ Always (all scopes): `X-Request-ID`, `traceparent`. Services are not told the ca
 
 - Format: `snake_case`
 - Common: `request_id`, `user_id`, `organization_id`, `member_id`, `duration_ms`, `error_kind`
+- Credential (gateway request line): `auth_type`, `key_prefix` (display prefix, never the key). See [`telemetry.md`](telemetry.md#gateway-request-line)
 - Service-specific fields should be namespaced: `auth_provider`, `db_operation`
 
 ## Metric Names

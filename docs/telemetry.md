@@ -152,6 +152,23 @@ Write **JSON** to stdout always (including when OTLP is enabled). No OTLP log ex
 
 Field names: [`naming-conventions.md`](naming-conventions.md).
 
+### Gateway request line
+
+The gateway writes one `request completed` (or `request failed`) line per request. On top of the common fields it says who presented the request. Each field is present only when known:
+
+| Field | When | Value |
+|-------|------|-------|
+| `auth_type` | A credential was recognized | `jwt`, `user_apikey`, `member_apikey`, `member_session` |
+| `key_prefix` | An `X-API-Key` with a known wire prefix was presented, valid or not | Identity's display prefix: the wire prefix plus the first 4 characters after it, e.g. `plat5-mk-1-AbC9`. Same value as `key_prefix` on identity's key list (or a session's `token_prefix`), so a line can be matched to a key |
+| `user_id` | Admitted on a `user` route (JWT or user key) | |
+| `organization_id`, `member_id` | Admitted on an `organization` or `member` route (member key or session) | |
+
+`key_prefix` is set before validation, so 401 and 403 lines carry it. A value without a known wire prefix, or with nothing after the preview, is not logged. The key or token itself, and a JWT, are never logged. The line has no labels or role.
+
+```json
+{"timestamp":"2026-10-08T18:30:00Z","level":"info","message":"request completed","request_id":"…","route":"/widgets","method":"GET","status":403,"duration_ms":3.1,"auth_type":"member_apikey","key_prefix":"plat5-mk-1-AbC9","organization_id":"01J…","member_id":"01J…"}
+```
+
 ### Error fields (5xx only)
 
 | Field | Description |

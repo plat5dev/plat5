@@ -21,7 +21,7 @@ use tracing::{debug, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
-use crate::admission::Admissor;
+use crate::admission::{Admissor, RequestCredential};
 use crate::auth::jwt::JwtValidatorState;
 use crate::auth::AuthStack;
 use crate::config::GatewayConfig;
@@ -190,9 +190,15 @@ impl UserGateway {
             .await;
         }
 
+        let root_span = ctx.root_span();
         let admission = match self
             .admissor
-            .admit(session.req_header(), route, ctx.root_span().as_ref())
+            .admit(
+                session.req_header(),
+                route,
+                root_span.as_ref(),
+                &mut ctx.credential,
+            )
             .await
         {
             Ok(a) => a,
@@ -385,8 +391,12 @@ struct RequestLog<'a> {
     duration_ms: f64,
     trace_id: Option<&'a str>,
     span_id: Option<&'a str>,
+    credential: &'a RequestCredential,
 }
 
+/// One line per request. Credential fields are present only when known: `key_prefix`
+/// as soon as an `X-API-Key` with a known wire prefix is presented (so 401 and 403
+/// carry it), the principal ids once admitted. Never the key or token itself.
 fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
     let RequestLog {
         request_id,
@@ -396,10 +406,16 @@ fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
         duration_ms,
         trace_id,
         span_id,
+        credential,
     } = log;
+    let auth_type = credential.auth_type.map(|t| t.as_str());
+    let key_prefix = credential.key_prefix.as_deref();
+    let user_id = credential.user_id.as_deref();
+    let organization_id = credential.organization_id.as_deref();
+    let member_id = credential.member_id.as_deref();
 
-    match (error, trace_id, span_id) {
-        (Some(err), Some(trace_id), Some(span_id)) => {
+    match error {
+        Some(err) => {
             warn!(
                 trace_id,
                 span_id,
@@ -408,22 +424,16 @@ fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
                 method = %method,
                 status,
                 duration_ms,
+                auth_type,
+                key_prefix,
+                user_id,
+                organization_id,
+                member_id,
                 error = %err,
                 "request failed"
             );
         }
-        (Some(err), _, _) => {
-            warn!(
-                request_id,
-                route = %route,
-                method = %method,
-                status,
-                duration_ms,
-                error = %err,
-                "request failed"
-            );
-        }
-        (None, Some(trace_id), Some(span_id)) => {
+        None => {
             info!(
                 trace_id,
                 span_id,
@@ -432,16 +442,11 @@ fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
                 method = %method,
                 status,
                 duration_ms,
-                "request completed"
-            );
-        }
-        (None, _, _) => {
-            info!(
-                request_id,
-                route = %route,
-                method = %method,
-                status,
-                duration_ms,
+                auth_type,
+                key_prefix,
+                user_id,
+                organization_id,
+                member_id,
                 "request completed"
             );
         }
@@ -656,6 +661,7 @@ impl ProxyHttp for UserGateway {
                 duration_ms: duration * 1000.0,
                 trace_id: trace_id.as_deref(),
                 span_id: span_id.as_deref(),
+                credential: &ctx.credential,
             },
             e,
         );

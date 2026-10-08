@@ -44,6 +44,40 @@ impl Admission {
     }
 }
 
+/// Who presented the request, for the gateway's request log. Never a secret.
+///
+/// `key_prefix` is identity's display prefix for an `X-API-Key` credential: the wire
+/// prefix (`{brand}-sk-1-`, `{brand}-mk-1-`, `{brand}-ms-1-`) plus the first
+/// [`KEY_DISPLAY_LEN`] characters after it. It equals the `key_prefix` (keys) or
+/// `token_prefix` (sessions) identity stores and lists, so a log line can be matched
+/// to a key. It is set before validation, so 401s carry it too. A value without a
+/// known wire prefix, or too short to have a preview, is never logged.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct RequestCredential {
+    pub auth_type: Option<AuthType>,
+    pub key_prefix: Option<String>,
+    pub user_id: Option<String>,
+    pub organization_id: Option<String>,
+    pub member_id: Option<String>,
+}
+
+/// Characters of the secret kept after the wire prefix. Same as identity's
+/// `apikey.PrefixDisplayLen`.
+pub const KEY_DISPLAY_LEN: usize = 4;
+
+/// Identity's display prefix for `key`, if it starts with `wire_prefix` and is long
+/// enough to have a preview. Never returns the whole key.
+pub fn key_display_prefix(key: &str, wire_prefix: &str) -> Option<String> {
+    if wire_prefix.is_empty() || !key.starts_with(wire_prefix) {
+        return None;
+    }
+    let n = wire_prefix.len() + KEY_DISPLAY_LEN;
+    if key.len() <= n {
+        return None;
+    }
+    key.get(..n).map(str::to_string)
+}
+
 /// Denial from the admission pipeline (mapped to HTTP by the proxy layer).
 #[derive(Debug)]
 pub enum AdmitError {
@@ -176,6 +210,22 @@ pub fn parse_user_id_claim(raw: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn display_prefix_keeps_four_chars_after_wire_prefix() {
+        assert_eq!(
+            key_display_prefix("plat5-mk-1-abcdSECRETSECRET", "plat5-mk-1-").as_deref(),
+            Some("plat5-mk-1-abcd")
+        );
+    }
+
+    #[test]
+    fn display_prefix_never_returns_whole_or_unknown_key() {
+        assert_eq!(key_display_prefix("plat5-mk-1-abcd", "plat5-mk-1-"), None);
+        assert_eq!(key_display_prefix("plat5-mk-1-ab", "plat5-mk-1-"), None);
+        assert_eq!(key_display_prefix("sk_live_abcdefgh", "plat5-mk-1-"), None);
+        assert_eq!(key_display_prefix("anything", ""), None);
+    }
 
     #[test]
     fn parse_default_and_sub() {
