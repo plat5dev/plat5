@@ -10,7 +10,7 @@ The model, and the reason behind each decision: [`docs/model.md`](docs/model.md)
 
 A thin platform runtime: auth-delegating gateway, a private directory of people, org/member plane, audit, route publish.
 
-Not an IdP, not FGA, not a hosted multi-tenant control plane. The directory holds ids, display names, and links to IdP subjects; it is not a list anyone can read.
+Not an IdP, not FGA, not a hosted multi-tenant control plane. The directory holds ids, display names, and links to IdP subjects; customers cannot list it; staff can.
 
 ## Locked
 
@@ -66,7 +66,7 @@ Do not add these because they would be convenient:
 - Nodes, bindings, or a hierarchy inside an organization. Projects are resources, not Plat5 concepts
 - A policy engine (Topaz, OPA, …) in the default stack
 - User-subject identity routes on `organization` or `member` scope
-- A list or search of people (`GET /users`), or SMTP in identity
+- A customer route that lists or searches people, or SMTP in identity
 - Global / platform admin service accounts
 - Multi-org service accounts (`home_organization_id`, SA member in a second org)
 - Org `settings` / platform config bag

@@ -12,6 +12,7 @@ import (
 )
 
 type userStore interface {
+	List(ctx context.Context, limit int, startingAfter string) ([]*User, bool, error)
 	Get(ctx context.Context, userID string) (*User, error)
 	Update(ctx context.Context, userID string, u Update) (*User, User, error)
 }
@@ -35,6 +36,30 @@ type UserResponse struct {
 	Status      string  `json:"status"`
 	CreatedAt   string  `json:"created_at"`
 	UpdatedAt   string  `json:"updated_at"`
+}
+
+type ListResponse struct {
+	Users   []UserResponse `json:"users"`
+	HasMore bool           `json:"has_more"`
+}
+
+// List is every person. Not in the customer catalog: staff list people through
+// the operator gateway.
+func (h *Handler) List(c fiber.Ctx) error {
+	ctx := c.Context()
+	limit, startingAfter, err := httpx.ParseListParams(c)
+	if err != nil {
+		return err
+	}
+	list, hasMore, err := h.store.List(ctx, limit, startingAfter)
+	if err != nil {
+		return httpx.MapDB(ctx, err, "failed to list users", httpx.DBErr{})
+	}
+	out := ListResponse{Users: make([]UserResponse, 0, len(list)), HasMore: hasMore}
+	for _, u := range list {
+		out.Users = append(out.Users, toUserResponse(u))
+	}
+	return c.JSON(out)
 }
 
 func (h *Handler) Get(c fiber.Ctx) error {
@@ -118,6 +143,7 @@ func toUserResponse(u *User) UserResponse {
 // Mount registers person routes. Mount under /users. DELETE is account
 // deletion, which is the orgs package's: it removes the person's members.
 func (h *Handler) Mount(router fiber.Router) {
+	router.Get("/", h.List)
 	router.Get("/:user_id", h.Get)
 	router.Patch("/:user_id", h.Update)
 }

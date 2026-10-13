@@ -414,3 +414,20 @@ func (h *Handler) toMemberResponse(m *Member) MemberResponse {
 		UpdatedAt:        httpx.FormatTime(m.UpdatedAt),
 	}
 }
+
+// GetMemberUser names the person a member is. Not in the customer catalog: an
+// org sees its members, not the directory. Staff use it to reach the person.
+func (h *Handler) GetMemberUser(c fiber.Ctx) error {
+	ctx := c.Context()
+	memberID := httpx.PathParam(c, "member_id")
+	m, err := h.store.GetMember(ctx, memberID)
+	if err != nil {
+		return httpx.MapDB(ctx, err, "failed to get member", httpx.DBErr{
+			NotFound: ErrNotFound, Resource: "member", ResourceID: memberID,
+		})
+	}
+	if m.UserID == nil {
+		return errors.NotFoundError("user", nil)
+	}
+	return c.JSON(fiber.Map{"user_id": *m.UserID})
+}

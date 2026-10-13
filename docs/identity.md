@@ -29,7 +29,7 @@ Public routes are not auto-published. The process still serves them on the publi
 | Term | Meaning |
 |------|---------|
 | **realm** | A context that holds memberships: the **directory** or an **organization**. Credentials belong to a membership in one. |
-| **directory** | The one realm every person belongs to. Private: there is no list or search of people. No roles, admins, invites, or sessions; the IdP's JWT does the session's job. |
+| **directory** | The one realm every person belongs to. Private: customers cannot list or search people; staff can. No roles, admins, invites, or sessions; the IdP's JWT does the session's job. |
 | **user** | A person. Lives in the directory. Wire id `user_id`, assigned by identity and linked to one or more IdP subjects (issuer + subject). |
 | **organization** | The isolation boundary. A realm that users join and service accounts are born in. |
 | **member** | A membership in an org. Exactly one of: a **user** or a **service account**. Wire id: `member_id`. |
@@ -72,8 +72,9 @@ A person in the directory. First sign-in creates them: admission resolves the Id
 | `GET` | `/users/{user_id}` | The person. **404** if missing |
 | `PATCH` | `/users/{user_id}` | Body `{ "display_name?", "status?" }`, at least one. `status` is `active` or `suspended`. `display_name` `null` clears it |
 | `DELETE` | `/users/{user_id}` | Delete the account. See below |
+| `GET` | `/users` | Every person, as [user responses](#user-response). Body key `users`. Not in the customer catalog; the operator gateway publishes it for staff |
 
-There is no `GET /users`. The directory is private: no one lists or searches people.
+The directory is private to customers: no customer route lists or searches people. Staff list them through the operator gateway.
 
 #### User response
 
@@ -205,6 +206,10 @@ Self address:
 | `DELETE` | `/members/{member_id}` | Remove. Already `removed` → **404**. Last non-removed member → **422**. Last `creator_role` holder → **422**. |
 
 The self address does not change `role`. A member may suspend or remove itself.
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `GET` | `/members/{member_id}/user` | `{ "user_id" }`: the person this member is. Removed members too. **404** for a service account, or once the person's account is deleted. Not in the customer catalog; the operator gateway publishes it, so staff can get from a member to the person |
 
 Org address:
 
@@ -610,7 +615,7 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - Global `/service-accounts` (SAs are org-scoped)
 - Multi-org service accounts (one SA, one org, one member)
 - Org `settings` / config bag
-- A list or search of people (`GET /users`). The directory is private. A person id is a path parameter, not a collection.
+- A list or search of people for customers. `GET /users` is for staff and is not in the customer catalog.
 - `user_id` in an org's view of a member, or as the way to add one. Members are added by IdP subject.
 - A self-service API to link a second IdP subject (deferred, [`../TODO.md`](../TODO.md))
 - SMTP / sending invite email (identity returns a token; the console may send mail)

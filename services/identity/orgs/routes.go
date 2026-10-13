@@ -41,4 +41,5 @@ func (h *Handler) MountMembers(router fiber.Router) {
 	router.Get("/:member_id", h.GetMember)
 	router.Patch("/:member_id", h.UpdateMember)
 	router.Delete("/:member_id", h.DeleteMember)
+	router.Get("/:member_id/user", h.GetMemberUser)
 }

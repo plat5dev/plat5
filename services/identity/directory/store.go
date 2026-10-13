@@ -1,7 +1,7 @@
 // Package directory is the realm every person belongs to (docs/model.md). A
 // person is an identity with a directory membership of the same id, which
-// holds their global display name and their own keys. Private: there is no
-// list or search of people.
+// holds their global display name and their own keys. Private to customers:
+// only staff list people.
 package directory
 
 import (
@@ -176,6 +176,46 @@ func (s *Store) Get(ctx context.Context, userID string) (*User, error) {
 	}
 	op.OK("ok")
 	return u, nil
+}
+
+// List is one page of every person, by id. For staff only.
+func (s *Store) List(ctx context.Context, limit int, startingAfter string) ([]*User, bool, error) {
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_users", dbx.DefaultTimeout)
+	defer cancel()
+	defer op.End()
+
+	var after any
+	if startingAfter != "" {
+		after = startingAfter
+	}
+	rows, err := s.pool.Query(ctx, userSelect+`
+		WHERE i.kind = 'user' AND ($1::text IS NULL OR i.id > $1)
+		ORDER BY i.id ASC
+		LIMIT $2
+	`, after, limit+1)
+	if err != nil {
+		return nil, false, op.Fail(err)
+	}
+	defer rows.Close()
+
+	var out []*User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, false, op.Fail(err)
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, op.Fail(err)
+	}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	op.Attr(attribute.Int("users.count", len(out)))
+	op.OK("ok")
+	return out, hasMore, nil
 }
 
 // Update is a patch. Nil leaves a field as it is. ClearName sets the display

@@ -20,7 +20,7 @@ Plat5 owns the directory of people (ids linked to IdP subjects, display names), 
 | Concept | Formal name | Notes |
 |---------|-------------|--------|
 | Context that holds memberships | **Realm** | The **directory** or an **organization** |
-| Where every person lives | **Directory** | One. Private: no list or search of people |
+| Where every person lives | **Directory** | One. Private: customers cannot list or search people |
 | Global person | **User** | `user_id`, Plat5's id, linked to one or more IdP subjects |
 | Isolation boundary | **Organization** | Do not call it tenant. |
 | An identity's standing in a realm | **Membership** | A person's in the directory, or a member in an org |

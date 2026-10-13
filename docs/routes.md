@@ -347,7 +347,7 @@ Joined with each route `path` so configs stay short.
 
 #### identity catalog
 
-Apply [`services/identity/routes.yml`](../services/identity/routes.yml) or a subset. Edge paths are `/user`, `/org`, and `/member`. `upstream` fills the identity URL. `GET /organizations` is not in the catalog.
+Apply [`services/identity/routes.yml`](../services/identity/routes.yml) or a subset. Edge paths are `/user`, `/org`, and `/member`. `upstream` fills the identity URL. `GET /organizations`, `GET /users`, and `GET /members/{member_id}/user` are not in the catalog: they are for staff.
 
 #### Business service
 
