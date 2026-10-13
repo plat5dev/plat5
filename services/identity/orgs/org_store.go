@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/plat5dev/plat5/identity/internal/dbx"
+	"github.com/plat5dev/plat5/identity/lifecycle"
 )
 
 // CreateOrganization inserts the org and its creator as an active member with role.
@@ -197,12 +198,30 @@ func (s *Store) DeleteOrganization(ctx context.Context, organizationID string) e
 	defer cancel()
 	defer op.End()
 
-	tag, err := s.pool.Exec(ctx, `DELETE FROM organizations WHERE id = $1`, organizationID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return op.Fail(err)
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx, `DELETE FROM organizations WHERE id = $1`, organizationID)
 	if err != nil {
 		return op.Fail(err)
 	}
 	if tag.RowsAffected() == 0 {
 		return op.Expected("not found", ErrNotFound)
+	}
+	// The delete cascades. After commit this event is the only record that
+	// the org existed.
+	if err := lifecycle.Record(ctx, tx, lifecycle.Event{
+		Type:           lifecycle.TypeOrganizationDeleted,
+		OrganizationID: organizationID,
+	}); err != nil {
+		return op.Fail(err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return op.Fail(err)
 	}
 	op.OK("ok")
 	return nil

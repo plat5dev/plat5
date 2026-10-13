@@ -195,7 +195,7 @@ func (s *Store) UpdateServiceAccount(ctx context.Context, organizationID, servic
 	return sa, priorName, nil
 }
 
-// DeleteServiceAccount soft-removes the SA member (same as DELETE member).
+// DeleteServiceAccount removes the SA member (same as DELETE member).
 // change sees the SA's member and every member of the org, locked.
 func (s *Store) DeleteServiceAccount(ctx context.Context, organizationID, serviceAccountID string, change MemberChange) error {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "delete_service_account", dbx.DefaultTimeout,
@@ -240,13 +240,17 @@ func (s *Store) DeleteServiceAccount(ctx context.Context, organizationID, servic
 		return op.Expected("rejected", err)
 	}
 
-	now := time.Now().UTC()
+	target.Status = StatusRemoved
+	target.UpdatedAt = time.Now().UTC()
 	_, err = tx.Exec(ctx, `
 		UPDATE members
 		SET status = 'removed', updated_at = $3
 		WHERE id = $1 AND organization_id = $2
-	`, target.ID, organizationID, now)
+	`, target.ID, organizationID, target.UpdatedAt)
 	if err != nil {
+		return op.Fail(err)
+	}
+	if err := finishRemove(ctx, tx, target); err != nil {
 		return op.Fail(err)
 	}
 

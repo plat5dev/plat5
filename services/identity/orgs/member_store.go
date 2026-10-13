@@ -9,6 +9,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/plat5dev/plat5/identity/internal/dbx"
+	"github.com/plat5dev/plat5/identity/lifecycle"
 )
 
 func (s *Store) GetMember(ctx context.Context, memberID string) (*Member, error) {
@@ -152,8 +153,8 @@ func (s *Store) ListMemberships(ctx context.Context, userID string, limit int, s
 	return out, hasMore, nil
 }
 
-// CreateUserMember inserts a new user member, or reactivates a removed one.
-// Reactivation keeps the existing member id and created_at.
+// CreateUserMember inserts a new user member. A removed member for the same
+// person stays removed: removed is final, and adding again is a new member id.
 func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 	if m.UserID == nil || m.ServiceAccountID != nil {
 		return fmt.Errorf("create_user_member: user_id required")
@@ -166,47 +167,7 @@ func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 	defer cancel()
 	defer op.End()
 
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return op.Fail(err)
-	}
-	defer tx.Rollback(ctx)
-
-	existing, err := scanMember(tx.QueryRow(ctx, `
-		SELECT `+memberCols+`
-		FROM members
-		WHERE organization_id = $1 AND user_id = $2
-		FOR UPDATE
-	`, m.OrganizationID, *m.UserID))
-	if err != nil && !dbx.IsNoRows(err) {
-		return op.Fail(err)
-	}
-
-	if err == nil {
-		if existing.Status != StatusRemoved {
-			return op.SoftFail("conflict", ErrConflict, ErrConflict)
-		}
-		now := time.Now().UTC()
-		_, err = tx.Exec(ctx, `
-			UPDATE members
-			SET role = $3, status = $4, updated_at = $5
-			WHERE organization_id = $1 AND user_id = $2 AND status = 'removed'
-		`, m.OrganizationID, *m.UserID, m.Role, m.Status, now)
-		if err != nil {
-			return op.Fail(err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return op.Fail(err)
-		}
-		m.ID = existing.ID
-		m.CreatedAt = existing.CreatedAt
-		m.UpdatedAt = now
-		op.Attr(attribute.String("member.id", m.ID))
-		op.OK("reactivated")
-		return nil
-	}
-
-	_, err = tx.Exec(ctx, `
+	_, err := s.pool.Exec(ctx, `
 		INSERT INTO members
 			(id, organization_id, user_id, service_account_id, role, status, created_at, updated_at)
 		VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)
@@ -215,10 +176,6 @@ func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 		if dbx.IsUniqueViolation(err) {
 			return op.SoftFail("conflict", ErrConflict, ErrConflict)
 		}
-		return op.Fail(err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
 		return op.Fail(err)
 	}
 	op.OK("ok")
@@ -274,6 +231,8 @@ func (s *Store) MutateMember(ctx context.Context, organizationID, memberID strin
 		return nil, op.Expected("not found", ErrNotFound)
 	}
 
+	// target.Status is never removed here (checked above), so any change to
+	// removed is a remove.
 	if err := change(target, members); err != nil {
 		return nil, op.Expected("rejected", err)
 	}
@@ -290,12 +249,40 @@ func (s *Store) MutateMember(ctx context.Context, organizationID, memberID strin
 	if tag.RowsAffected() == 0 {
 		return nil, op.Expected("not found", ErrNotFound)
 	}
+	if target.Status == StatusRemoved {
+		if err := finishRemove(ctx, tx, target); err != nil {
+			return nil, op.Fail(err)
+		}
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, op.Fail(err)
 	}
 	op.OK("ok")
 	return target, nil
+}
+
+// finishRemove is the rest of a remove, after the status write and in its
+// transaction: revoke the member's keys, delete its sessions, and record
+// member.removed. Nothing of a removed member stays usable (docs/identity.md#status).
+func finishRemove(ctx context.Context, tx pgx.Tx, m *Member) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE member_api_keys
+		SET revoked_at = $2
+		WHERE member_id = $1 AND revoked_at IS NULL
+	`, m.ID, m.UpdatedAt); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM member_sessions WHERE member_id = $1`, m.ID); err != nil {
+		return err
+	}
+	principal := m.Principal()
+	return lifecycle.Record(ctx, tx, lifecycle.Event{
+		Type:           lifecycle.TypeMemberRemoved,
+		OrganizationID: m.OrganizationID,
+		MemberID:       &m.ID,
+		Principal:      &principal,
+	})
 }
 
 func lockOrgMembers(ctx context.Context, tx pgx.Tx, organizationID string) ([]*Member, error) {

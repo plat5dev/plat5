@@ -14,9 +14,21 @@ Ready: before an audit event's `ip` is used as evidence, or before `public` rate
 
 ## Audit retention
 
-Audit events are kept, including after an org is deleted. Partitions are monthly, so retention is dropping old partitions.
+Audit events are kept, including after an org is deleted. Partitions are monthly, so retention is dropping old partitions. Identity's `organization.deleted` ([`docs/identity.md`](docs/identity.md#lifecycle-events)) is the signal for erasing a deleted org's events.
 
-Ready: org lifecycle events, or storage growth that hurts.
+Ready: storage growth that hurts, or an org whose events must be erased on delete.
+
+## Lifecycle event retention
+
+Identity's lifecycle events are kept. A consumer can always read from the first event.
+
+Ready: storage growth that hurts. Then prune by age, and answer a `starting_after` older than the oldest kept event with **410**, so the consumer knows to reconcile.
+
+## Organization existence check
+
+A batch internal lookup (`organization_id`s in, the missing ones out) for work a service does outside a request, such as a digest or an outbound webhook. It answers whether the org still exists when the work runs, without waiting on the feed.
+
+Ready: a service that does work outside a request for an org that may be gone.
 
 ## Audit events for `user` routes
 

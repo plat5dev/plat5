@@ -25,11 +25,13 @@ Read the doc, don’t re-derive:
 | User keys and member keys are two products (prefix + table + validate URL) | identity.md |
 | Member sessions are not member keys (own prefix, table, validate URL). Validate does not return `user_id` | identity.md |
 | Add member by known `user_id` (immediate `active`) or invite redeem | identity.md |
+| `removed` is final: a remove revokes the member's keys and deletes its sessions. Adding the person again is a new member id. `suspended` is the reversible state | identity.md |
 | Unknown id is **404**. Wrong credential for the scope is **401**, not 404 | identity-boundary |
 | Subject id is not one segment → **500**. Path param is not one segment → **400** | identity-boundary |
 | JWT / IdP required to boot. API keys are an alternative credential | [`docs/idp-contract.md`](docs/idp-contract.md) |
 | Identity **public** routes are operator-owned. Apply the catalog (or a subset) | [`docs/routes.md`](docs/routes.md), [`services/identity/routes.yml`](services/identity/routes.yml) |
 | Internal validate stays on `INTERNAL_PORT`. Gateway boots with the three validate URLs | identity.md |
+| Lifecycle events: identity writes `organization.deleted` and `member.removed` in the same transaction as the change. Always recorded; services opt in by reading the internal feed. Event writes are serialized, so `id` order is commit order | identity.md |
 | Route-registry: Postgres desired state + revisions; etcd is the gateway projection | [`docs/route-registry.md`](docs/route-registry.md) |
 | Apply is **upsert** of services in the file. Services not in the file are left alone | route-registry.md |
 | etcd prefix: `edge/gateway/routes/` | routes.md |
@@ -68,6 +70,7 @@ Do not add these because they would be convenient:
 - A member with no role while roles are on, or a mix of roles on and off
 - The word `scopes` for labels on the wire. Route `scope` is `public` / `user` / `organization` / `member`; permissions are `labels`
 - A grant cap, or any identity check that compares the caller to the role it assigns or the member it acts on
+- Reviving a `removed` member, or keys or sessions that outlive a remove
 - Folding member sessions into `member_api_keys`, or returning `user_id` from session validate
 - A service-account key table, prefix, or validate URL (those keys are member keys)
 - Treating omitted identity routes as “feature off” (the process still serves them on the network)
@@ -88,6 +91,9 @@ Do not add these because they would be convenient:
 - Changing an audit event after its outcome, deleting events through an API, or turning `pending` into anything else after the fact
 - Audit on for some orgs or services and off for others
 - Audit events in Valkey or etcd
+- A queue, broker, or push delivery in identity for lifecycle events. Push is a relay that reads the feed
+- Lifecycle events that are not written in the same transaction as the change, or that carry `user_id`
+- Deriving lifecycle events from the audit log
 
 ## Siblings
 

@@ -249,7 +249,7 @@ func (h *Handler) DeleteOrgMember(c fiber.Ctx) error {
 	return h.removeMember(c, httpx.PathParam(c, "organization_id"))
 }
 
-// removeMember soft-removes at either address. orgID "" is the self address.
+// removeMember removes at either address. orgID "" is the self address.
 // Both keep the last member and the last creator_role holder.
 func (h *Handler) removeMember(c fiber.Ctx, orgID string) error {
 	ctx := c.Context()

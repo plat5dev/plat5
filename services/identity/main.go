@@ -17,6 +17,7 @@ import (
 	"github.com/plat5dev/plat5/identity/config"
 	"github.com/plat5dev/plat5/identity/db"
 	apierrors "github.com/plat5dev/plat5/identity/errors"
+	"github.com/plat5dev/plat5/identity/lifecycle"
 	"github.com/plat5dev/plat5/identity/memberkeys"
 	"github.com/plat5dev/plat5/identity/metrics"
 	"github.com/plat5dev/plat5/identity/middleware"
@@ -61,9 +62,10 @@ func main() {
 	userKeyHandler := userkeys.NewHandler(userkeys.NewStore(pool), cfg.UserKeyPrefix)
 	memberKeyHandler := memberkeys.NewHandler(memberkeys.NewStore(pool), orgStore, cfg.MemberKeyPrefix, roleSet)
 	sessionHandler := sessions.NewHandler(sessions.NewStore(pool), orgStore, cfg.SessionPrefix, roleSet)
+	lifecycleHandler := lifecycle.NewHandler(lifecycle.NewStore(pool))
 
 	app := newPublicApp(telem, orgHandler, userKeyHandler, memberKeyHandler, sessionHandler)
-	internalApp := newInternalApp(telem, pool, cfg.InternalAuthToken, orgHandler, userKeyHandler, memberKeyHandler, sessionHandler)
+	internalApp := newInternalApp(telem, pool, cfg.InternalAuthToken, orgHandler, userKeyHandler, memberKeyHandler, sessionHandler, lifecycleHandler)
 
 	baseLogger := telem.Logger()
 	baseLogger.Info().
@@ -156,6 +158,7 @@ func newInternalApp(
 	userKeyHandler *userkeys.Handler,
 	memberKeyHandler *memberkeys.Handler,
 	sessionHandler *sessions.Handler,
+	lifecycleHandler *lifecycle.Handler,
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName:      "identity-internal",
@@ -190,5 +193,6 @@ func newInternalApp(
 	userKeyHandler.MountInternal(internalAPI)
 	memberKeyHandler.MountInternal(internalAPI)
 	sessionHandler.MountInternal(internalAPI)
+	lifecycleHandler.MountInternal(internalAPI)
 	return app
 }

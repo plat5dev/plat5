@@ -29,22 +29,31 @@ func PathParam(c fiber.Ctx, name string) string {
 }
 
 func ParseListParams(c fiber.Ctx) (limit int, startingAfter string, err error) {
-	limit = DefaultListLimit
-	if v := strings.TrimSpace(c.Query("limit")); v != "" {
-		n, parseErr := strconv.Atoi(v)
-		if parseErr != nil || n < 1 {
-			return 0, "", errors.FieldError("limit", errors.FallbackValidation)
-		}
-		limit = n
-	}
-	if limit > MaxListLimit {
-		limit = MaxListLimit
+	limit, err = ParseLimit(c)
+	if err != nil {
+		return 0, "", err
 	}
 	startingAfter = strings.TrimSpace(c.Query("starting_after"))
 	if startingAfter != "" && !id.Valid(startingAfter) {
 		return 0, "", errors.FieldError("starting_after", errors.FallbackValidation)
 	}
 	return limit, startingAfter, nil
+}
+
+// ParseLimit reads limit: default DefaultListLimit, over MaxListLimit clamped.
+func ParseLimit(c fiber.Ctx) (int, error) {
+	limit := DefaultListLimit
+	if v := strings.TrimSpace(c.Query("limit")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return 0, errors.FieldError("limit", errors.FallbackValidation)
+		}
+		limit = n
+	}
+	if limit > MaxListLimit {
+		limit = MaxListLimit
+	}
+	return limit, nil
 }
 
 func FormatTime(t time.Time) string {

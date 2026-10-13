@@ -42,7 +42,7 @@ Illegal states. Not permissions.
 
 - Slug is globally unique.
 - A member is exactly one of user or service account.
-- One member row per `(organization_id, user_id)`, including `removed`. One member row per service account. A service account lives in exactly one org.
+- One non-removed member row per `(organization_id, user_id)`. One member row per service account. A service account lives in exactly one org.
 - A remove must leave at least one non-removed member. `active` and `suspended` both count. Service accounts count.
 - Invite expiry, use limits, and the conflict on a dead token.
 - A key addressed under a user, member, or service account that does not own it is **404**. That is the address, not an access check.
@@ -156,7 +156,7 @@ Self address:
 |--------|------|--------|
 | `GET` | `/members/{member_id}` | **404** if missing or `removed` |
 | `PATCH` | `/members/{member_id}` | Body `{ "status" }`. `active` or `suspended` only. `removed` → **422**. Already `removed` → **404**. |
-| `DELETE` | `/members/{member_id}` | Soft-remove. Already `removed` → **404**. Last non-removed member → **422**. Last `creator_role` holder → **422**. |
+| `DELETE` | `/members/{member_id}` | Remove. Already `removed` → **404**. Last non-removed member → **422**. Last `creator_role` holder → **422**. |
 
 The self address does not change `role`. A member may suspend or remove itself.
 
@@ -166,11 +166,11 @@ Org address:
 |--------|------|--------|
 | `GET` | `/organizations/{organization_id}/members/{member_id}` | **404** if missing, in another org, or `removed` |
 | `PATCH` | `/organizations/{organization_id}/members/{member_id}` | Body `{ "status?", "role?" }`, at least one. `status` as on the self address. Same **404** as get. Last `creator_role` holder → **422**. |
-| `DELETE` | `/organizations/{organization_id}/members/{member_id}` | Soft-remove. Same **404** as get. Last non-removed member → **422**. Last `creator_role` holder → **422**. |
+| `DELETE` | `/organizations/{organization_id}/members/{member_id}` | Remove. Same **404** as get. Last non-removed member → **422**. Last `creator_role` holder → **422**. |
 
 Who may assign a role, and the last `creator_role` holder: [`roles.md`](roles.md).
 
-`POST` adds a **user** member (immediately `active`). A non-removed duplicate is **409** `CONFLICT` (`field` is `user_id`). A `removed` row for that user is revived: same member id, `active`, `role` from the body (omitted → `default_role`). Member keys are not revoked on remove, so a revive re-admits those keys.
+`POST` adds a **user** member (immediately `active`). A non-removed duplicate is **409** `CONFLICT` (`field` is `user_id`). A person who was removed gets a new member row with a new member id. The removed row stays removed.
 
 Service accounts are created via the service-accounts API (member row included). Invites are a separate resource, below.
 
@@ -209,7 +209,7 @@ List, redeem, and revoke expire lazily: if `expires_at` is in the past and statu
 | `POST` | `/organizations/{organization_id}/invites` | Body `{ "email?", "role?", "expires_in_seconds?", "max_uses?" }`. Returns `token`. Unknown org → **404**. `role` omitted → `default_role`. |
 | `GET` | `/organizations/{organization_id}/invites` | `token` included while `active`. Unknown org → **404**. |
 | `DELETE` | `/organizations/{organization_id}/invites/{invite_id}` | Revoke. Idempotent. Status `revoked`, `token` null. Hash stays. |
-| `POST` | `/users/{user_id}/invites/redeem` | Body `{ "token" }`. Inserts an **active** member for that user. Already a member on a still-`active` token → **200** idempotent (counts as a use). A `removed` row is revived (same member id). Unknown token → **404** `NOT_FOUND` (no org leak). Redeemed / revoked / expired → **409** `CONFLICT` (`field` is `status`, `value` is the terminal status). |
+| `POST` | `/users/{user_id}/invites/redeem` | Body `{ "token" }`. Inserts an **active** member for that user. Already a member on a still-`active` token → **200** idempotent (counts as a use). A person who was removed gets a new member row. Unknown token → **404** `NOT_FOUND` (no org leak). Redeemed / revoked / expired → **409** `CONFLICT` (`field` is `status`, `value` is the terminal status). |
 
 #### Create body
 
@@ -221,7 +221,7 @@ List, redeem, and revoke expire lazily: if `expires_at` is in the past and statu
 
 Token prefix `inv_`. `token_hash` is SHA-256 hex. `use_count` increments on successful redeem. When `use_count` reaches `max_uses`, status becomes `redeemed` and `token` is nulled. Unlimited (`max_uses` null) stays `active` with `token`.
 
-Redeem copies the invite's `role` onto the new or revived member's `role`. A slug since removed from the roles file is copied as-is and grants nothing. Already a member: redeem does not change the existing role.
+Redeem copies the invite's `role` onto the new member's `role`. A slug since removed from the roles file is copied as-is and grants nothing. Already a member: redeem does not change the existing role.
 
 #### Create / list row
 
@@ -255,9 +255,9 @@ A service account is the org's. It is not tied to the member who created it: its
 | `GET` | `/organizations/{organization_id}/service-accounts` | Non-removed. Unknown org → **404**. |
 | `GET` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | **404** if missing, wrong org, or member `removed` |
 | `PATCH` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | Body `{ "name" }`. Same **404** as get. |
-| `DELETE` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | Soft-removes the member. Same **404** as get. Last non-removed member → **422**. Last `creator_role` holder → **422**. |
+| `DELETE` | `/organizations/{organization_id}/service-accounts/{service_account_id}` | Removes the member. Same **404** as get. Last non-removed member → **422**. Last `creator_role` holder → **422**. |
 
-Lifecycle and role are the member row. Suspend, re-enable, or change role at the org address, `PATCH /organizations/{organization_id}/members/{member_id}`, with the service account's `member_id`. A removed service account is not addressable here. Re-entry is not a service-account create; the row remains.
+Lifecycle and role are the member row. Suspend, re-enable, or change role at the org address, `PATCH /organizations/{organization_id}/members/{member_id}`, with the service account's `member_id`. A removed service account is not addressable here, and its removal is final.
 
 #### Service account response
 
@@ -393,13 +393,21 @@ Status is whether the member is admitted, not what they are allowed to do.
 |--------|--|
 | `active` | Admitted |
 | `suspended` | Not admitted |
-| `removed` | Soft-deleted; not listed; not addressable |
+| `removed` | Final. Not listed, not addressable, never made `active` again |
 
 `PATCH` accepts `active` or `suspended` only. `removed` is `DELETE`.
 
+`suspended` is the reversible state. `removed` is not. A remove, at either address or by the service-account delete, does all of this in one transaction:
+
+- Status → `removed`.
+- Every member key is revoked (`revoked_at` set). Every member session is deleted.
+- A `member.removed` lifecycle event is written ([Lifecycle events](#lifecycle-events)).
+
+The row stays as a record that the member existed. Adding the same person again, by `POST` or invite redeem, inserts a new member with a new `member_id`. Nothing of the removed member carries over: no keys, no sessions, no role.
+
 ## Internal APIs
 
-Not published on the gateway. Served only on **`INTERNAL_PORT`**. Optional `INTERNAL_AUTH_TOKEN` → header `X-Plat5-Internal-Token` (constant-time compare). Unset = network-trust only (dev). These are lookups for a proxy, not checks on the resource handlers. Do not fold them into the resource URLs.
+Not published on the gateway. Served only on **`INTERNAL_PORT`**. Optional `INTERNAL_AUTH_TOKEN` → header `X-Plat5-Internal-Token` (constant-time compare). Unset = network-trust only (dev). The validate endpoints are lookups for a proxy, and lifecycle events are a feed for services. Neither is a check on the resource handlers. Do not fold them into the resource URLs.
 
 Gateway env: `USER_APIKEY_VALIDATE_URL`, `MEMBER_APIKEY_VALIDATE_URL`, `MEMBER_SESSION_VALIDATE_URL`, same `INTERNAL_AUTH_TOKEN`, same `APIKEY_BRAND`. All three URLs are required to boot. `APIKEY_CACHE_TTL_SECS` covers user keys, member keys, and sessions.
 
@@ -465,6 +473,46 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
 No `user_id`. `labels` is the member's role labels, same as a member key. Gateway: prefix `{brand}-ms-1-` → `MEMBER_SESSION_VALIDATE_URL`. **`organization` and `member` scopes.** Same cache TTL as API keys (`APIKEY_CACHE_TTL_SECS`).
 
+### Lifecycle events
+
+A feed of facts other services may act on, such as cleaning up an org's data after it is deleted. Every change is recorded. Reading is opt-in: a service that does not read the feed is not affected by it. Plat5 names no queue or broker. Anyone who wants push delivery runs a relay that reads this feed.
+
+```
+GET /internal/lifecycle-events?starting_after=<id>&limit=<n>
+X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
+```
+
+```json
+{
+  "lifecycle_events": [
+    { "id": "1041", "type": "organization.deleted", "occurred_at": "…", "organization_id": "…" },
+    { "id": "1042", "type": "member.removed", "occurred_at": "…", "organization_id": "…", "member_id": "…", "principal": "service_account" }
+  ],
+  "has_more": false
+}
+```
+
+| Type | Written by | Fields |
+|------|------------|--------|
+| `organization.deleted` | `DELETE /organizations/{organization_id}` | `organization_id` |
+| `member.removed` | `DELETE` at either member address, and the service-account delete | `organization_id`, `member_id`, `principal` |
+
+`principal` is `user` or `service_account`. No `user_id`, name, role, or anything else from the row.
+
+`member.removed` is final. A person added again is a new `member_id`, so a service never has to undo what it did on a remove.
+
+An org delete writes one `organization.deleted`, not a `member.removed` per member. It covers everything in the org.
+
+Not events: suspend, role changes, org rename, keys, sessions, and invites. A suspend or role change is not an end, and anything that depends on it is decided when the work runs. Services hold nothing keyed by keys, sessions, or invites.
+
+**Delivery.** The event is written in the same transaction as the change. A change that commits has its event. A change that rolls back has none. The org delete is a hard cascade, so after it commits the event is the only record that the org existed.
+
+**Order.** Pagination is as in [`lists.md`](lists.md), `id` ascending, with one exception: `id` is not a ULID. It is a decimal string from a sequence, and `starting_after` takes that form. Pass it back as given; do not do arithmetic on it. Writes of events are serialized (a transaction-level advisory lock taken before the insert), so `id` order is commit order. A reader that has seen an `id` will never later see a smaller one.
+
+**Reading.** A consumer keeps the last `id` it processed and passes it as `starting_after`. Omit it to read from the first event. Delivery is at least once from the consumer's side: if it crashes after acting but before saving the `id`, it reads the event again. Acting on an event must be idempotent.
+
+Events are kept. There is no retention yet ([`../TODO.md`](../TODO.md)).
+
 ## Data model (logical)
 
 ```
@@ -486,6 +534,9 @@ member_api_keys        -- member credentials; wire {brand}-mk-1-
   member_id, name, key_prefix, key_hash, revoked_at, …
 member_sessions        -- short-lived user-member credential; wire {brand}-ms-1-
   member_id, token_prefix, token_hash, expires_at, …
+
+lifecycle_events       -- append-only; no FK, outlives the org it names
+  id (bigint sequence), type, occurred_at, organization_id, member_id?, principal?
 ```
 
 Keys and sessions hold no labels of their own. Member key and session validate resolve the member's role.
@@ -504,7 +555,7 @@ No IdP user table and no FK to an external directory. `user_id` values are opaqu
 | `service.name` | `identity` |
 | `service.namespace` | `identity` |
 | Public port | `3000` |
-| Internal port | `3001` (`/health/*`, `/metrics`, validate) |
+| Internal port | `3001` (`/health/*`, `/metrics`, validate, lifecycle events) |
 | Database | Plat5 Postgres via `DATABASE_URL` |
 | Schema | **`identity`** (service-owned; tables + `schema_migrations`) |
 | `APIKEY_BRAND` | default `plat5`; same value as gateway |

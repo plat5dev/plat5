@@ -1,6 +1,6 @@
 # identity
 
-Plat5 **identity** service: organizations, members, invites, service accounts, user API keys, member API keys, member sessions, and internal validate for the gateway.
+Plat5 **identity** service: organizations, members, invites, service accounts, user API keys, member API keys, member sessions, internal validate for the gateway, and the internal lifecycle-events feed for services.
 
 Contract: [`docs/identity.md`](../../docs/identity.md)
 
@@ -14,6 +14,7 @@ Contract: [`docs/identity.md`](../../docs/identity.md)
 | `userkeys/` | User API keys (`{brand}-sk-1-`) |
 | `memberkeys/` | Member API keys (`{brand}-mk-1-`). The service-account path is the org address for the same rows. |
 | `sessions/` | Member sessions (`{brand}-ms-1-`). Mint is in `routes.yml`. Validate stays internal. |
+| `lifecycle/` | Lifecycle events (`organization.deleted`, `member.removed`). Written in the change's transaction; read on the internal port. |
 
 `APIKEY_BRAND` (default `plat5`) must match the gateway.
 

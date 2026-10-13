@@ -172,28 +172,16 @@ func (s *Store) RedeemInvite(ctx context.Context, tokenHash, userID string) (*Me
 	existing, err := scanMember(tx.QueryRow(ctx, `
 		SELECT `+memberCols+`
 		FROM members
-		WHERE organization_id = $1 AND user_id = $2
+		WHERE organization_id = $1 AND user_id = $2 AND status <> 'removed'
 		FOR UPDATE
 	`, inv.OrganizationID, userID))
 	if err != nil && !dbx.IsNoRows(err) {
 		return nil, op.Fail(err)
 	}
 
+	// A removed member stays removed. Redeem by the same person inserts a new one.
 	var member *Member
-	if err == nil && existing.Status != StatusRemoved {
-		member = existing
-	} else if err == nil {
-		_, err = tx.Exec(ctx, `
-			UPDATE members
-			SET role = $3, status = $4, updated_at = $5
-			WHERE organization_id = $1 AND user_id = $2 AND status = 'removed'
-		`, inv.OrganizationID, userID, inv.Role, StatusActive, now)
-		if err != nil {
-			return nil, op.Fail(err)
-		}
-		existing.Role = inv.Role
-		existing.Status = StatusActive
-		existing.UpdatedAt = now
+	if err == nil {
 		member = existing
 	} else {
 		m := &Member{
