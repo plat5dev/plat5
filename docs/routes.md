@@ -113,8 +113,8 @@ Same path, different per-verb `required_labels` / `rate_limit` — nested `metho
 | `url` | `string` | Upstream, exactly `http://host:port` (e.g. `http://my-service:3000`). |
 | `rate_limits` | `map<string, RateLimitPolicy>?` | Optional on the **service**. Named policies this service’s routes may reference. |
 | `public` | `ScopeConfig?` | No authentication. |
-| `user` | `ScopeConfig?` | User JWT or **user** API key. |
-| `organization` | `ScopeConfig?` | **Member** API key or **member** session. Subject field: `organization_id`. |
+| `user` | `ScopeConfig?` | A person's credential: user JWT or **user** API key. Subject field: `user_id`. |
+| `organization` | `ScopeConfig?` | A member's credential: **member** API key or **session**. Subject field: `organization_id`. |
 | `member` | `ScopeConfig?` | Same credential as `organization`. Subject fields: `organization_id`, `member_id`. |
 | `route_prefix` | `string?` | Optional on any scope. Registry expands into each `path` before etcd. Not applied to `upstream`. |
 | `routes` | `array<RouteConfig>` | HTTP routes for this scope. |
@@ -123,7 +123,7 @@ Same path, different per-verb `required_labels` / `rate_limit` — nested `metho
 | `methods` | `array<string>` \| `map<string, MethodConfig>` | List form: allowed HTTP methods. Map form: per-verb config (see below). Do not mix list and map on the same route (`422`). |
 | `required_labels` | `string[]?` | Optional. Omitted = any admitted principal. If set, a member credential must hold `*` or share at least one label: any one of the list, not all. User credentials skip. Cannot include `*`. Validated at apply. Route-level value applies only to the flat methods list. |
 | `rate_limit` | `false` \| `{requests, window_seconds}` \| `string` \| omitted | Omitted **inherits** the gateway fallback. `false` opts out (unlimited). Object = this route+method only. String = named policy on **this** service. Limiter subject follows route scope (`public`→ip, `user`→`user_id`, `organization`→`organization_id`, `member`→`member_id`). Route-level value applies only to the flat methods list. |
-| `audit` | `bool?` | `organization` and `member` routes only. Omitted = method default: `POST` / `PUT` / `PATCH` / `DELETE` audited, `GET` / `HEAD` not. `true` / `false` overrides. Route-level value applies only to the flat methods list. See [`audit`](#audit). |
+| `audit` | `bool?` | `user`, `organization`, and `member` routes. Omitted = method default: `POST` / `PUT` / `PATCH` / `DELETE` audited, `GET` / `HEAD` not. `true` / `false` overrides. Route-level value applies only to the flat methods list. See [`audit`](#audit). |
 
 A service must define at least one scope. Multiple scopes may be present.
 
@@ -168,7 +168,7 @@ A credential carries its principal's labels. For a member key or session, valida
 
 ### `rate_limit`
 
-Applies to **all admitted** routes (JWT, API key, and member session). Counters live in **Valkey** — replicas share one budget. `VALKEY_URL` is required to boot. Valkey error or timeout on a limited request → **503** `SERVICE_UNAVAILABLE`. The gateway opens a new connection when Valkey answers again.
+Applies to **all admitted** routes (JWT, API key, and session). Counters live in **Valkey** — replicas share one budget. `VALKEY_URL` is required to boot. Valkey error or timeout on a limited request → **503** `SERVICE_UNAVAILABLE`. The gateway opens a new connection when Valkey answers again.
 
 Fixed window: the first increment opens the window; key TTL is `window_seconds`. Restarting Valkey resets open windows.
 
@@ -225,7 +225,7 @@ services:
 | name, not shared | `{service}:{name}:{subject}` |
 | name, `shared: true` | `{name}:{subject}` |
 
-Limiter subject follows route scope and is not configurable: `public`→ip, `user`→`user_id`, `organization`→`organization_id`, `member`→`member_id`.
+Limiter subject follows route scope and is not configurable: `public`→ip, `user`→`user_id`, `organization`→`organization_id`, `member`→`member_id`. Every `organization` route shares one bucket per org, so a runaway service account can throttle the people in its org. Give a heavy caller's routes their own named policy.
 
 **`shared: true`** — opt-in cross-service join. Every service that uses the name declares the same table entry (`requests`, `window_seconds`, `shared: true`). Apply and `PUT /services/{name}` validate against **all** current services in Postgres, not only the payload.
 
@@ -243,7 +243,7 @@ The limiter runs before `required_labels`. A label-denied **403** counts against
 
 ### `audit`
 
-Whether the gateway records this route+method in the org's audit log. Model, delivery, and the event: [`audit.md`](audit.md).
+Whether the gateway records this route+method in the audit log of the realm that owns what it changes: the org's, or on a `user` route the person's. Model, delivery, and the event: [`audit.md`](audit.md).
 
 | YAML | Effect |
 |------|--------|
@@ -251,7 +251,7 @@ Whether the gateway records this route+method in the org's audit log. Model, del
 | `true` | Audited. Use it on a read worth recording, e.g. one that returns secrets |
 | `false` | Not audited. Use it on a high-volume write nobody needs in the log |
 
-`organization` and `member` routes only. On `public` or `user` → **422**: those scopes have no org to log into. `OPTIONS` is answered as a preflight and never audited.
+`user`, `organization`, and `member` routes. On `public` → **422**: that scope has no realm to log into. `OPTIONS` is answered as a preflight and never audited.
 
 Omitted stays omitted in etcd. The gateway applies the method default. With audit off for the deployment, the gateway ignores the field.
 
@@ -301,7 +301,7 @@ Unknown fields on the route schema are **422**.
 |-------|------|----------------|
 | `public` | No | none |
 | `user` | User JWT or user API key | `user_id` |
-| `organization` | Member API key or member session | `organization_id` |
+| `organization` | Member API key or session | `organization_id` |
 | `member` | Same credential as `organization` | `organization_id`, `member_id` |
 
 Subject fill and service rules: [`gateway-contract.md`](gateway-contract.md). Layer boundary and admission errors: [`identity-boundary.md`](identity-boundary.md).
@@ -392,7 +392,7 @@ Registry validates **before etcd**. Gateway validates again at load (expanded li
 - `rate_limit` if object: `requests` > 0, `window_seconds` > 0. `true` is invalid
 - `rate_limit` if string: names a policy on this service; policy name `[a-z0-9:._-]+`, max 64
 - `rate_limits` keys: same hygiene, unique; values `requests` > 0, `window_seconds` > 0
-- `audit` if present: a boolean, on an `organization` or `member` route or method only
+- `audit` if present: a boolean, on a `user`, `organization`, or `member` route or method only
 - Shared policy names: same name across services must agree on `requests`, `window_seconds`, and `shared` (full desired state, apply and PUT)
 - Duplicate service names in merged registry: first wins, warning
 - Malformed JSON values skipped with warning; other routes continue

@@ -1,10 +1,10 @@
 # Plat5
 
-Open-source **platform runtime**. Every route declares which subject exists — none, the person, or the member-in-org. Those do not mix. The gateway authenticates and admits; services get exactly that subject and own resource permissions.
+Open-source **platform runtime**. Every route declares which subject exists — none, the person, or the member-in-org. Those do not mix. The gateway authenticates and admits; services get exactly that subject, never who called. Access to individual resources belongs to an optional policy engine.
 
 Point the gateway at any OIDC IdP ([`docs/idp-contract.md`](docs/idp-contract.md)), including Plat5 Auth if you run it separately. User-scope APIs (memberships, user keys, identity itself) are `user` scope.
 
-The model: [`docs/identity-boundary.md`](docs/identity-boundary.md).
+The model: [`docs/model.md`](docs/model.md). Subjects and layers: [`docs/identity-boundary.md`](docs/identity-boundary.md).
 
 ## Try it
 

@@ -1,6 +1,6 @@
 # Audit
 
-Who did what in an org. The gateway records each audited request on an `organization` or `member` route into that org's log. The **audit** service stores it and serves it back to the org.
+Who did what. Each realm owns its log: every org has one, and every person has one in the directory. The gateway records each audited request into the log of the realm that owns what it changed. The **audit** service stores it and serves it back to that org, or to that person.
 
 Boundary: [`identity-boundary.md`](identity-boundary.md). Gateway: [`gateway-contract.md`](gateway-contract.md). Route field: [`routes.md`](routes.md). Lists: [`lists.md`](lists.md).
 
@@ -10,11 +10,12 @@ An audit event is one request, not one change. It says who called which route, o
 
 | Piece | Says | Owner |
 |-------|------|-------|
-| Actor | The member whose credential was admitted, and which credential | Gateway (admission) |
+| Actor | The membership whose credential was admitted, and which credential | Gateway (admission) |
 | Action | Service, method, route template, path params | Gateway (route match) |
 | Origin | IP, user agent | Gateway |
 | Outcome | How the request ended | Gateway |
-| Details | What changed | The service, on `X-Plat5-Audit-Details` |
+| Details | What changed | The service, on `X-Plat5-Audit-Details` ([what a service adds](#what-a-service-adds)) |
+| Created | The id a create produced | The service, on `X-Plat5-Audit-Created` |
 | Store and read API | | `audit` service |
 
 The gateway is the only process that knows the actor and the route together. Services are not told the actor, and audit does not change that. Details flow from the service to the gateway, never the other way.
@@ -28,24 +29,28 @@ Audit is on or off for the whole deployment. There is no mix.
 | Audited request | Intent written before forward. **503** if it cannot be | Forwarded like any other |
 | Route `audit` fields | Applied | Accepted at apply, ignored |
 | `X-Plat5-Audit-Details` | Read, stored, stripped | Stripped |
-| `GET /org/audit-events` | Apply the audit catalog | Do not apply it |
+| `GET /org/audit-events`, `GET /user/audit-events` | Apply the audit catalog | Do not apply it |
 
-The gateway logs the mode at boot. Turning audit on does not backfill. An org's log starts when audit is first on.
+The gateway logs the mode at boot. Turning audit on does not backfill. A log starts when audit is first on.
 
-## Which requests
+Audit is for reporting and compliance. A product feature never reads it: audit can be off, it is behind a label, and it may get retention. A feature that needs to know who did something needs an owner or a relationship ([`model.md`](model.md#who-did-it)).
 
-Scope decides where an event goes. It is not configurable.
+## Which log
 
-| Scope | Event | Org log | Actor |
-|-------|-------|---------|-------|
+An event goes in the log of the realm that owns what it changed. Scope decides it. It is not configurable.
+
+| Scope | Event | Log | Actor |
+|-------|-------|-----|-------|
 | `public` | Never | — | — |
-| `user` | Never | — | — |
-| `organization` | When audited | `subject.organization_id` | The credential's `member_id` |
-| `member` | When audited | `subject.organization_id` | The credential's `member_id` (also the subject) |
+| `user` | When audited | The person's (`subject.user_id`). Also the org the service names, on a success | The person's credential. In the org's log, the member the service names |
+| `organization` | When audited | The org's (`subject.organization_id`) | The credential's `member_id` |
+| `member` | When audited | The org's (`subject.organization_id`) | The credential's `member_id` (also the subject) |
 
 Service accounts are members. Their keys are member keys. Nothing special.
 
-A `user` route has no verified org. An `organization_id` in a user path is a param, not a subject, and routing an event by it would let any caller write into any org's log. So creating an org, redeeming an invite, and minting a session are in no org log. Everything done with the minted session is.
+**The person's log** holds what they did to their own account: user keys, profile, status, account deletion. Only the person and staff read it.
+
+**A `user` route that changes something an org owns** (creating an org, redeeming an invite, minting a session) is in that org's log too. The org is not taken from the path: an `organization_id` in a user path is a param, not a subject, and routing an event by it would let any caller write into any org's log. The service names the org and the member on `X-Plat5-Audit-Organization` and `X-Plat5-Audit-Member` instead. The service is trusted; the caller is not. The intent is written to the person's log before forward, as on any audited route. The outcome adds the org. Everything done with a minted session is in the org's log as usual.
 
 Method decides the default:
 
@@ -73,7 +78,7 @@ An event exists once the gateway knows the actor, and the request got past the r
 
 | Gateway result | Event |
 |----------------|-------|
-| **401** | None. There is no trusted actor. Recording it would let anyone write into an org's log |
+| **401** | None. There is no trusted actor. Recording it would let anyone write into a log |
 | **429** | None. Nothing ran. Recording it would turn the limiter into a write amplifier |
 | **503**, intent not written | None, or `rejected` if the intent landed unseen ([delivery](#delivery)) |
 | **403** `required_labels` | `rejected` |
@@ -123,7 +128,7 @@ Audit is not part of the gateway's `/health/ready`. While audit is down, audited
   "actor": {
     "member_id": "01J9ZX5B8C1D4E7F0G3H6J9K2M",
     "auth_type": "member_session",
-    "key_prefix": "plat5-ms-1-x9Qa"
+    "key_prefix": "plat5-s-2-x9Qa"
   },
   "service": "identity",
   "method": "PATCH",
@@ -133,7 +138,8 @@ Audit is not part of the gateway's `/health/ready`. While audit is down, audited
   "user_agent": "Mozilla/5.0 …",
   "outcome": "responded",
   "status": 200,
-  "details": { "role": { "from": "developer", "to": "admin" } }
+  "details": { "role": { "from": "developer", "to": "admin" } },
+  "created_id": null
 }
 ```
 
@@ -142,10 +148,11 @@ Audit is not part of the gateway's `/health/ready`. While audit is down, audited
 | `id` | ULID, assigned by audit when the intent is written |
 | `occurred_at` | When the gateway received the request. UTC, milliseconds |
 | `request_id` | `X-Request-ID`. Gateway-generated, unique per request. Joins to every service log line |
-| `organization_id` | The route subject's org. Whose log this is |
-| `actor.member_id` | The admitted credential's member |
-| `actor.auth_type` | `member_apikey` or `member_session` |
-| `actor.key_prefix` | The credential's display prefix. Same value as `key_prefix` on identity's key list, or a session's `token_prefix` ([`telemetry.md`](telemetry.md#gateway-request-line)) |
+| `organization_id` | The org whose log this is in: the route subject's org, or on a `user` route the org the service named. `null` when none |
+| `user_id` | On a `user` route, the person whose log this is in. Never in an org's read |
+| `actor.member_id` | The admitted credential's member, or on a `user` route the member the service named. `null` when none |
+| `actor.auth_type` | `jwt`, `user_apikey`, `member_apikey`, or `member_session` |
+| `actor.key_prefix` | The credential's display prefix. Same value as `key_prefix` on identity's key list, or a session's `token_prefix` ([`telemetry.md`](telemetry.md#gateway-request-line)). `null` for a JWT |
 | `service` | The service name in `routes.yml` |
 | `method` | HTTP method |
 | `route` | The matched path template, after `route_prefix`. Not the raw path, not `upstream` |
@@ -155,6 +162,7 @@ Audit is not part of the gateway's `/health/ready`. While audit is down, audited
 | `outcome` | See below |
 | `status` | The HTTP status the gateway answered with. `null` while `pending`, or when the client was gone before an answer |
 | `details` | The service's object, or `null` |
+| `created_id` | The id a create produced, from `X-Plat5-Audit-Created`, or `null`. Lets "who created X" be looked up by X |
 
 | `outcome` | Means | The change |
 |-----------|-------|------------|
@@ -163,21 +171,27 @@ Audit is not part of the gateway's `/health/ready`. While audit is down, audited
 | `responded` | The service answered. `status` is its status | Per `status` |
 | `no_response` | The gateway called the service and got no answer (**502**) | Unknown |
 
-Not in an event: request or response bodies, the query string, headers other than `User-Agent`, the actor's role or labels, a `user_id`.
+Not in an event: request or response bodies, the query string, headers other than `User-Agent`, the actor's role or labels. A `user_id` only as the owner of a person's log, never in what an org reads.
 
-## Details
+## What a service adds
 
-`X-Plat5-Audit-Details` on the upstream response.
+Headers on the upstream response. The gateway reads them only on audited routes, and strips them always, on every route, audit on or off: from the response before the client, and from the request before upstream.
+
+| Header | Says | Read on |
+|--------|------|---------|
+| `X-Plat5-Audit-Details` | What changed | Any audited route |
+| `X-Plat5-Audit-Created` | The id a create produced | Any audited route |
+| `X-Plat5-Audit-Organization`, `X-Plat5-Audit-Member` | The org a `user` route changed, and the member in it | Audited `user` routes, 2xx responses, both or neither |
+
+None of them can create an event, or change its outcome, status, or the credential that acted. Only the org pair adds a log, and only on a `user` route.
+
+### Details
 
 | | |
 |--|--|
-| Set by | The service, on its response |
 | Format | One JSON object. Visible ASCII only: escape the rest as `\u`. At most 4096 bytes |
-| Read | Only on audited routes, only from the upstream response |
 | Invalid or over the cap | The event is recorded with `details: null`. The gateway logs a warning |
-| Stripped | Always, on every route, audit on or off. From the response before the client, and from the request before upstream |
 | Meaning | The service's. The gateway stores it as sent and never reads inside it |
-| Cannot | Create an event, or change its outcome, status, actor, or org |
 
 What goes in: what changed, with old and new values where the service has them. The old value is usually already in hand: a write reads and locks the row it changes.
 
@@ -195,19 +209,30 @@ What stays out: secrets (never a key, token, or invite token), and anything the 
 
 Each service documents its own shapes. Plat5 does not define a schema for them. Identity's: [`identity.md`](identity.md#audit-details).
 
+### Created
+
+`X-Plat5-Audit-Created` is one id: visible ASCII, one path segment, at most 128 bytes. It becomes the event's `created_id`, and the read API can filter by it. Invalid → ignored, with a warning.
+
+### Organization and member
+
+`X-Plat5-Audit-Organization` and `X-Plat5-Audit-Member` are ids, with the same rules as `Created`. On a 2xx response to an audited `user` route, they put the event in that org's log too, with that member as the actor. Anywhere else, or one without the other, they are ignored, with a warning.
+
 ## Reading
 
 ```
 GET /organizations/{organization_id}/audit-events
+GET /users/{user_id}/audit-events
 ```
 
-On audit's public port. The audit catalog ([`services/audit/routes.yml`](../services/audit/routes.yml)) publishes it as `GET /org/audit-events`, `organization` scope, `required_labels: [org:audit:read]`. Like identity's catalog, the operator applies it.
+On audit's public port. The audit catalog ([`services/audit/routes.yml`](../services/audit/routes.yml)) publishes them as `GET /org/audit-events` (`organization` scope, `required_labels: [org:audit:read]`) and `GET /user/audit-events` (`user` scope: the person's own log). Like identity's catalog, the operator applies it. Staff read either through the operator gateway.
+
+An org's read never returns `user_id`. A person's read returns `organization_id` and `actor.member_id` where a service named them.
 
 | Query | |
 |-------|--|
 | `limit`, `starting_after` | As [`lists.md`](lists.md) |
 | `actor_member_id` | The acting member |
-| `service`, `method`, `outcome`, `request_id` | Exact match |
+| `service`, `method`, `outcome`, `request_id`, `created_id` | Exact match |
 | `route` | Exact template, e.g. `/org/members/{member_id}` |
 | `params[<name>]` | A path param's value, e.g. `params[member_id]=01J…`. One per name; several names AND |
 | `occurred_after`, `occurred_before` | RFC 3339. After is inclusive, before is exclusive |
@@ -223,7 +248,7 @@ Filters AND. An unknown query param or a malformed value → **422** `VALIDATION
 
 Order is `id` **descending**: newest first. `starting_after` is the last `id` of the previous page, and the walk continues to older events. This is the one Plat5 list that runs newest first.
 
-Audit does not know which orgs exist. An org with no events gets an empty list, not **404**. Through the gateway the org always exists: the caller was admitted to it.
+Audit does not know which orgs or people exist. A log with no events is an empty list, not **404**. Through the gateway the owner always exists: the caller was admitted to it.
 
 Reading is a `GET`, so it is not audited unless the catalog says `audit: true`.
 
@@ -239,7 +264,7 @@ Content-Type: application/json
 X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
 {
-  "occurred_at": "…", "organization_id": "…",
+  "occurred_at": "…", "organization_id": "…", "user_id": null,
   "actor": { "member_id": "…", "auth_type": "…", "key_prefix": "…" },
   "service": "…", "method": "…", "route": "…", "params": { … },
   "ip": "…", "user_agent": "…"
@@ -260,8 +285,10 @@ Create if absent. A retry sends the same body. Unknown fields are ignored, so a 
 ```
 PATCH /internal/events/{request_id}
 
-{ "outcome": "responded", "status": 200, "details": { … } }
+{ "outcome": "responded", "status": 200, "details": { … }, "created_id": "…", "organization_id": "…", "member_id": "…" }
 ```
+
+`organization_id` and `member_id` only for a `user`-route event, from the service's pair.
 
 | Result | Response |
 |--------|----------|
@@ -270,7 +297,7 @@ PATCH /internal/events/{request_id}
 | Malformed, or `outcome: pending` | **422** |
 | Postgres unavailable | **503**. The gateway retries |
 
-`status` may be `null` only when the client was gone before an answer, so never with `responded`. `details` may be set only with `responded`.
+`status` may be `null` only when the client was gone before an answer, so never with `responded`. `details`, `created_id`, `organization_id`, and `member_id` may be set only with `responded`.
 
 ### Gateway env
 
@@ -293,7 +320,7 @@ Append-only, except the one `pending` → final transition. A trigger enforces i
 | Directory | `services/audit/` |
 | `service.name` | `audit` |
 | `service.namespace` | `audit` |
-| Public port | `3002` (`GET /organizations/{organization_id}/audit-events`) |
+| Public port | `3002` (`GET /organizations/{organization_id}/audit-events`, `GET /users/{user_id}/audit-events`) |
 | Internal port | `3003` (`/health/*`, `/metrics`, `/internal/events`) |
 | Database | Plat5 Postgres via `DATABASE_URL`, schema **`audit`** |
 
@@ -301,14 +328,14 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 
 ## Not here
 
-- Request or response bodies, query strings, labels, role, or `user_id` in an event
-- Events from `public` or `user` routes, or an org log chosen by a path param
+- Request or response bodies, query strings, labels, or role in an event. `user_id` in an org's read
+- Events from `public` routes, or an org log chosen by a path param
 - 401s or 429s in the log
-- The gateway reading inside details, or details creating, moving, or re-outcoming an event
+- The gateway reading inside details, or any service header creating or re-outcoming an event, or changing who acted
+- A product feature that reads audit
 - An actor header, or any other way a service learns who called
 - Changing an event after its outcome, or deleting events through an API
 - Turning `pending` into anything else after the fact
 - Audit for some orgs or services and not others
 - Audit in Valkey or etcd
 - Retention and purge (deferred, [`../TODO.md`](../TODO.md))
-- `user`-route events through a service-asserted org (deferred, [`../TODO.md`](../TODO.md))

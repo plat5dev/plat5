@@ -24,15 +24,15 @@ Roles are on or off for the whole deployment. There is no mix.
 | [Last creator role](#last-creator-role) | Enforced | Nothing to keep |
 | `GET /organizations/{organization_id}/roles` | The file | `roles: []`, the three role fields `null` |
 
-Roles off is for a deployment where something else decides authorization: a policy engine, or the services themselves. Every member then holds every label, so route labels, including the identity catalog's, stop no one.
+Roles off is for a deployment where something else decides which routes a member may call, such as a policy engine. Every member then holds every label, so route labels, including the identity catalog's, stop no one.
 
-A credential belongs to a principal and carries that principal's permissions. A member key or member session carries the member's role labels. Nothing narrows it: keys and sessions have no labels of their own. To give a machine less, give it a service account with a smaller role.
+A credential belongs to a membership and carries that membership's permissions. A member key or session carries the member's role labels. Nothing narrows it: keys and sessions have no labels of their own. To give a machine less, give it a service account with a smaller role.
 
 The gateway checks the member's labels against the route. It does not see roles. Services see neither: the gateway is the only place this level of access is decided.
 
-User credentials on `user` routes have no role. Roles are org membership.
+User credentials on `user` routes have no role. A person's membership in the directory has none; roles are org membership.
 
-Resource authorization (this project, this document) is not a role. It stays in the service, or in a policy engine the service calls.
+Resource authorization (this project, this document) is not a role. It is the optional policy engine's: the gateway asks it about one resource, and a service asks it which resources its subject can reach ([`model.md`](model.md#what-i-can-reach)).
 
 ## File
 
@@ -62,7 +62,7 @@ Unknown keys refuse boot.
 
 ## Resolution
 
-Identity resolves the role at member key validate and member session validate. The validate `labels` is the role's labels. The gateway never gets the role, only its labels.
+Identity resolves the role at credential validate, for a member key or session. The validate `labels` is the role's labels. The gateway never gets the role, only its labels.
 
 | Member role | Validate `labels` |
 |-------------|-------------------|
@@ -148,4 +148,4 @@ A member whose role lacks these labels gets **403** on these routes, with any of
 - More than one role per member
 - Per-org custom roles (deferred)
 - Reloading the file without a restart, or a roles admin API (deferred)
-- Resource authorization (the service, or a policy engine it calls)
+- Resource authorization (the optional policy engine, [`model.md`](model.md))

@@ -13,20 +13,23 @@ Formats and terminology for labels, routes, metrics, and error codes across Plat
 
 ### Scope of Plat5
 
-Plat5 owns **opaque user ids** (as strings from the gateway), API keys, member sessions, organizations, members, service accounts, route registry, and the user-facing gateway. Login and the user directory are the IdP. Resource permissions are the service behind the gateway. See [`identity-boundary.md`](identity-boundary.md).
+Plat5 owns the directory of people (ids linked to IdP subjects, display names), organizations, members, service accounts, credentials (API keys and sessions), audit, the route registry, and the user-facing gateway. Login is the IdP. Access to individual resources is an optional policy engine's. See [`model.md`](model.md).
 
 ### Identity domain nouns
 
 | Concept | Formal name | Notes |
 |---------|-------------|--------|
-| Global person | **User** | `user_id` (opaque string from IdP via gateway) |
+| Context that holds memberships | **Realm** | The **directory** or an **organization** |
+| Where every person lives | **Directory** | One. Private: no list or search of people |
+| Global person | **User** | `user_id`, Plat5's id, linked to one or more IdP subjects |
 | Isolation boundary | **Organization** | Do not call it tenant. |
+| An identity's standing in a realm | **Membership** | A person's in the directory, or a member in an org |
 | Org principal | **Member** | User *or* service account in an org; wire id `member_id` |
 | What a member holds | **Role** | Deployment-defined slug on a member; its labels come from the roles file ([`roles.md`](roles.md)). Plat5 names no roles. |
 | Route requirement | **Label** | Opaque `[a-z0-9:._-]+`. Routes require them (`required_labels`); roles grant them. Keys and sessions carry their member's. Not `scope`: route `scope` is `public` / `user` / `organization` / `member`. |
 | Non-human org identity | **Service account** | Created under an organization; always has a member row |
-| Credential | **API key** | User-scoped or member-scoped |
-| Short-lived org credential | **Member session** | One active user member, one org. Not an API key. |
+| Credential | **API key** | A user key (the person's own) or a member key. One credential table with sessions |
+| Short-lived org credential | **Session** | One active user member, one org. Kind `session` of the same credential |
 
 **Rejected service names:** `org-service`, `orgs`, `tenants`, `tenancy`, `memberships` (alone), `rbac`, `authz`, `accounts`, `api-keys` (as a standalone platform service).
 
@@ -75,9 +78,9 @@ The first path segment is the subject.
 | User | `/users/{user_id}/...` |
 | Organization | `/organizations/{organization_id}/...` |
 | Member | `/members/{member_id}/...` |
-| Internal (not on the gateway) | `/internal/user-keys/validate`, `/internal/member-keys/validate`, `/internal/member-sessions/validate` |
+| Internal (not on the gateway) | `/internal/credentials/validate`, `/internal/lifecycle-events` |
 
-Audit follows the same pattern: `/organizations/{organization_id}/audit-events` public, `/internal/events/{request_id}` internal ([`audit.md`](audit.md)).
+Audit follows the same pattern: `/organizations/{organization_id}/audit-events` and `/users/{user_id}/audit-events` public, `/internal/events/{request_id}` internal ([`audit.md`](audit.md)).
 
 Those are identity's own URLs. The gateway edge does not put the subject in the path.
 
@@ -130,10 +133,10 @@ Always (all scopes): `X-Request-ID`, `traceparent`. Services are not told the ca
 
 ## Database
 
-- Table names: `snake_case`, plural: `user_api_keys`, `member_api_keys`, `organizations`, `members`, `service_accounts`
+- Table names: `snake_case`, plural: `identities`, `memberships`, `credentials`, `organizations`
 - Column names: `snake_case`: `created_at`, `updated_at`, `user_id`, `organization_id`, `member_id`, `service_account_id`
 - Foreign key columns: `<entity>_id`
-- New identity row IDs: **ULID** strings (`organization_id`, `member_id`, `service_account_id`, key ids)
+- New identity row IDs: **ULID** strings (`user_id`, `organization_id`, `member_id`, `service_account_id`, key ids)
 
 ## Related
 

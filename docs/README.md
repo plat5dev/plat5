@@ -1,8 +1,8 @@
 # Plat5 contracts
 
-**Start here:** [`identity-boundary.md`](identity-boundary.md) — which subject exists on a request, why the layers do not mix, what you own vs what Plat5 owns.
+**Start here:** [`model.md`](model.md) — Plat5's concepts, where each decision lives, and why. Then [`identity-boundary.md`](identity-boundary.md) — which subject exists on a request, why the layers do not mix, what you own vs what Plat5 owns.
 
-The rest of this directory is the wire: subject, routes, errors, identity APIs. The boundary is the model; the other pages are how it shows up on the network. They should agree.
+The rest of this directory is the wire: subject, routes, errors, identity APIs. `model.md` is the model; the other pages are how it shows up on the network. They should agree.
 
 Locked product invariants (what not to grow into): [`../AGENTS.md`](../AGENTS.md).
 
@@ -26,7 +26,8 @@ Per-service details live in each service's `README.md`.
 
 | Document | Purpose |
 |----------|---------|
-| [`identity-boundary.md`](identity-boundary.md) | **Start here.** Subjects, layers, what not to mix |
+| [`model.md`](model.md) | **Start here.** Concepts, principles, where each decision lives |
+| [`identity-boundary.md`](identity-boundary.md) | Subjects, layers, what not to mix |
 | [`gateway-contract.md`](gateway-contract.md) | Auth delegation, subject fill, perimeter, TLS, service rules |
 | [`idp-contract.md`](idp-contract.md) | BYO IdP, JWKS, user-id claim mapping |
 | [`routes.md`](routes.md) | Route publishing, scopes, `route_prefix`, rate-limit policies |

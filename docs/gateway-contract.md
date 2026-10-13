@@ -8,9 +8,10 @@ Boundary: [`identity-boundary.md`](identity-boundary.md). Routes: [`routes.md`](
 
 | Layer | Responsibility |
 |-------|---------------|
-| **Gateway** | Routing, authentication (JWT, API key, member session), scope projection, route `required_labels`, rate limits, audit intent and outcome, subject fill into `upstream`, CORS, security headers, trace propagation |
+| **Gateway** | Routing, authentication (JWT, API key, session), scope projection, route `required_labels`, rate limits, audit intent and outcome, subject fill into `upstream`, CORS, security headers, trace propagation |
 | **Edge / Load Balancer** | TLS termination (e.g. Cloudflare Zero Trust tunnels) |
-| **Downstream services** | Business logic, data access, resource authorization |
+| **Policy engine** (optional) | Access to individual resources. The gateway asks it about one resource; a service asks it which resources its subject can reach ([`model.md`](model.md#what-i-can-reach)) |
+| **Downstream services** | Business logic, data access, and rules that hold whoever asks: state rules, and scoping every lookup by the subject |
 
 Services behind the gateway **must not** re-validate JWTs or parse `Authorization`. The gateway handles authentication entirely.
 
@@ -21,8 +22,8 @@ The route scope names the subject. `upstream` fills it. The client path does not
 | Scope | Credential | Subject fields |
 |-------|------------|----------------|
 | `public` | none | none |
-| `user` | user JWT or **user** API key | `user_id` |
-| `organization` | **member** API key or **member** session | `organization_id` |
+| `user` | a person's credential: IdP JWT or **user** API key | `user_id` |
+| `organization` | a member's credential: **member** API key or **session** | `organization_id` |
 | `member` | same credential as `organization` | `organization_id`, `member_id` |
 
 ### Stripped before upstream (all scopes)
@@ -33,7 +34,7 @@ The gateway removes these request headers before the upstream call.
 |--------|-----|
 | `Authorization` | Consumed for JWT authn; must not leak bearer tokens to apps |
 | `X-API-Key` | Consumed for API-key authn; must not leak raw keys to apps |
-| `X-Plat5-Audit-Details` | A service sets it on responses. A client must not hand one to a service that echoes headers |
+| `X-Plat5-Audit-Details`, `X-Plat5-Audit-Created`, `X-Plat5-Audit-Organization`, `X-Plat5-Audit-Member` | A service sets them on responses. A client must not hand one to a service that echoes headers |
 
 Clients still send credential headers **to the gateway**. Services behind the gateway will not receive `Authorization` or `X-API-Key`. CORS may still allow browsers to send them.
 
@@ -41,7 +42,7 @@ Clients still send credential headers **to the gateway**. Services behind the ga
 
 | Header | Why |
 |--------|-----|
-| `X-Plat5-Audit-Details` | Audit details from the service ([`audit.md`](audit.md#details)). Stripped on every route, audit on or off |
+| `X-Plat5-Audit-Details`, `X-Plat5-Audit-Created`, `X-Plat5-Audit-Organization`, `X-Plat5-Audit-Member` | What the service tells audit ([`audit.md`](audit.md#what-a-service-adds)). Stripped on every route, audit on or off |
 
 ### Always (all scopes)
 
@@ -50,11 +51,11 @@ Clients still send credential headers **to the gateway**. Services behind the ga
 | `X-Request-ID` | Correlation ID (gateway-generated; also on response) |
 | `traceparent` | W3C trace context (OTel propagation) |
 
-The scope chooses what the route is allowed to see. It is not a second proof. A user JWT and a user API key are the same proof. `organization` and `member` share one credential. That credential always carries `member_id` and `organization_id`. The scope drops fields before `upstream` substitution. Spans may still record the dropped ids. The app contract does not.
+The scope names who owns what the route addresses: the person (`user`), the org (`organization`), or the member's own membership (`member`). It never names who called, and it is not a second proof. A user JWT and a user API key are the same proof. `organization` and `member` share one credential. That credential always carries `member_id` and `organization_id`. The scope drops fields before `upstream` substitution. Spans may still record the dropped ids. The app contract does not.
 
 ### Caller labels
 
-Services are not told the caller's role or labels. The gateway decides which routes a caller may reach (`required_labels`, below), and nothing downstream repeats that check. A service enforces resource authorization over the subject in the path, or asks a policy engine.
+Services are not told the caller's role or labels. The gateway decides which routes a caller may reach (`required_labels`, below), and nothing downstream repeats that check. Access to individual resources is the optional policy engine's: the gateway asks it about one resource, and a service asks it which resources its subject can reach ([`model.md`](model.md#what-i-can-reach)). A service enforces only what holds whoever asks.
 
 ## Route Configuration
 
@@ -105,7 +106,7 @@ Counters live in **Valkey**. Replicas share one budget. `VALKEY_URL` is required
 | Per-route | omitted inherits fallback; `{requests, window_seconds}` = this route+method only; policy **name** = service `rate_limits` entry; `false` opts out |
 | Named | `rate_limits` on the service. Name without `shared` → `{service}:{name}:{subject}`. `shared: true` → `{name}:{subject}` (opt-in cross-service; both services declare the same entry) |
 | Who | All admitted routes (JWT, API key, and member session). Runs before `required_labels`, so a **403** counts |
-| Subject | Derived from route scope: `public`→ip, `user`→`user_id`, `organization`→`organization_id`, `member`→`member_id`. Not configurable. |
+| Subject | Derived from route scope: `public`→ip, `user`→`user_id`, `organization`→`organization_id`, `member`→`member_id`. Not configurable. Every `organization` route shares one bucket per org, so a runaway service account can throttle the people in its org: give its routes a named policy, or its work a `member` route. |
 | Exceed | **429** `RATE_LIMITED`, type `api_error`, message `Too many requests. Try again in a moment.`, `details.retry_after_seconds`, `Retry-After` |
 | Admitted headers | On limited admitted routes (2xx and 429): `X-RateLimit-Limit` (policy `requests`), `X-RateLimit-Remaining` (after this request; `0` on 429), `X-RateLimit-Reset` (unix epoch seconds when the window ends). Omitted on unlimited routes (`false` or fallback `0`). |
 | Failed-auth IP | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). Unadmitted 401s and unmatched 404s. Not per-route. **429** still sets `Retry-After`; no `X-RateLimit-*` (do not advertise this budget). |
@@ -123,7 +124,7 @@ The rewritten path is authentic only if the upstream is on a private network the
 2. **Propagate `traceparent`** on downstream calls
 3. **Log with `request_id`** from `X-Request-ID`
 4. **Do not set `X-Request-ID` on responses** — gateway owns it
-5. **To say what changed, set `X-Plat5-Audit-Details`** on the response of an audited route. No secrets. The gateway strips it ([`audit.md`](audit.md#details))
+5. **To say what changed, set `X-Plat5-Audit-Details`** on the response of an audited route, and `X-Plat5-Audit-Created` on a create. No secrets. The gateway strips them ([`audit.md`](audit.md#what-a-service-adds))
 
 ### Platform integrity (hard limits)
 
@@ -137,16 +138,20 @@ These protect the shared auth model for the entire platform.
 
 ## Credentials
 
-`Authorization` is the IdP JWT only. Plat5 secrets stay on `X-API-Key`. If `X-API-Key` is present, it is the credential. Do not fall through to the other header. Do not try the other validator.
+`Authorization` is the IdP JWT only. Plat5 credentials (API keys and sessions) stay on `X-API-Key`. If `X-API-Key` is present, it is the credential. Do not fall through to the other header.
 
-Wrong credential for the scope is **401**. There is nothing to compare, so this is not **404**.
+Every credential belongs to a membership in a realm: the directory (a person's own) or an organization (a member's). The scope decides which realm a route accepts. Wrong realm for the scope is **401**. There is nothing to compare, so this is not **404**.
 
 | Scope | Accepts | Rejects |
 |-------|---------|---------|
-| `user` | `Authorization: Bearer` JWT, or `X-API-Key` `{brand}-sk-1-` | member key, session |
-| `organization`, `member` | `X-API-Key` `{brand}-mk-1-` or `{brand}-ms-1-` | user JWT, user API key |
+| `user` | `Authorization: Bearer` JWT, or an `X-API-Key` whose validate realm is `directory` (a user key) | a member key or session |
+| `organization`, `member` | An `X-API-Key` whose validate realm is `organization` (a member key or session) | a user JWT or user key |
 
-Prefix dispatch happens before the identity call. One member-credential result (`member_id`, `organization_id`, and the role's `labels`) feeds both `organization` and `member`. The scope picks the fields `upstream` may fill.
+**JWT.** The gateway verifies it against JWKS ([`idp-contract.md`](idp-contract.md)), reads the issuer and the subject claim, and resolves them with validate `{ "idp": { "issuer", "subject" } }` to the person's `user_id`. A new subject creates the person.
+
+**`X-API-Key`.** The gateway checks the shape first: `{brand}-{k|s}-{version}-{secret}`, with a brand of `[a-z][a-z0-9]*` up to 32 characters and a 43-character base64url secret, or a version 1 form. A value of any other shape is **401** without an identity call, and counts against the failed-auth limiter. The gateway does not know the brand. Validate decides the rest ([`identity.md`](identity.md#credential-validate)).
+
+One organization result (`member_id`, `organization_id`, and the role's `labels`) feeds both `organization` and `member`. The scope picks the fields `upstream` may fill.
 
 1. Bad, missing, or wrong credential → **401** `UNAUTHORIZED`
 2. Validate unavailable → **503** `SERVICE_UNAVAILABLE`
@@ -155,33 +160,23 @@ Prefix dispatch happens before the identity call. One member-credential result (
 5. Then `required_labels` (member credentials; `*` matches any label; users skip) → **403** `FORBIDDEN` on miss
 6. Then substitute `{subject.*}` and `{path.*}` in `upstream` (bad path param → **400**, bad subject id → **500**)
 
-Gateway chooses validate URL by **wire prefix** before calling identity. Prefixes come from `APIKEY_BRAND` (same env as identity; unset → `plat5`). Contract: [`identity.md`](identity.md).
-
-| Prefix | Endpoint env | Scopes |
-|--------|--------------|--------|
-| `{brand}-sk-1-` | `USER_APIKEY_VALIDATE_URL` | `user` |
-| `{brand}-mk-1-` | `MEMBER_APIKEY_VALIDATE_URL` | `organization`, `member` |
-| `{brand}-ms-1-` | `MEMBER_SESSION_VALIDATE_URL` | `organization`, `member` |
-
 An active service account can call `organization` and `member` routes. It uses a member key. It does not mint a session.
 
-Identity's own HTTP paths name the subject. The catalog publishes only routes whose subject the template can fill. See [`identity.md`](identity.md) and [`routes.md`](routes.md).
+Identity's own HTTP paths name the subject. See [`identity.md`](identity.md) and [`routes.md`](routes.md).
 
 ## Internal identity control plane
 
-Gateway calls identity backends over HTTP (not published on the edge route map):
+Gateway calls identity over HTTP (not published on the edge route map):
 
 | Call | Env | Typical URL |
 |------|-----|-------------|
-| User API key validate | `USER_APIKEY_VALIDATE_URL` | `http://identity:3001/internal/user-keys/validate` |
-| Member API key validate | `MEMBER_APIKEY_VALIDATE_URL` | `http://identity:3001/internal/member-keys/validate` |
-| Member session validate | `MEMBER_SESSION_VALIDATE_URL` | `http://identity:3001/internal/member-sessions/validate` |
+| Credential validate | `CREDENTIAL_VALIDATE_URL` | `http://identity:3001/internal/credentials/validate` |
 
-All three live on identity’s **`INTERNAL_PORT`**. All three URLs are required to boot. Optional shared `INTERNAL_AUTH_TOKEN` is sent as `X-Plat5-Internal-Token`. Contract: [`identity.md`](identity.md).
+It lives on identity’s **`INTERNAL_PORT`** and is required to boot. Optional shared `INTERNAL_AUTH_TOKEN` is sent as `X-Plat5-Internal-Token`. Contract: [`identity.md`](identity.md#credential-validate).
 
 ## Audit
 
-On an audited `organization` or `member` route, the gateway writes an intent to the audit service before forward and an outcome after. Intent not written → **503**, and the service is not called. Audit is on or off for the deployment: `AUDIT_URL` is required to boot unless `AUDIT_ENABLED=false`. Same `INTERNAL_AUTH_TOKEN`. Contract: [`audit.md`](audit.md).
+On an audited `user`, `organization`, or `member` route, the gateway writes an intent to the audit service before forward and an outcome after. Intent not written → **503**, and the service is not called. Audit is on or off for the deployment: `AUDIT_URL` is required to boot unless `AUDIT_ENABLED=false`. Same `INTERNAL_AUTH_TOKEN`. Contract: [`audit.md`](audit.md).
 
 ## Public Routes
 
@@ -226,15 +221,14 @@ In-process per replica.
 | Cache | Positive | Negative | TTL |
 |-------|----------|----------|-----|
 | JWT claims | Validated token (TTL from `exp`) | — | token `exp` |
-| User API key | Valid key → `user_id` | Invalid key | `APIKEY_CACHE_TTL_SECS` (default 300) |
-| Member API key | Valid key → `member_id` + `organization_id` + `labels` | Invalid key | same |
-| Member session | Valid token → `member_id` + `organization_id` + `labels` | Invalid token | same |
+| IdP subject | Issuer + subject → `user_id` | Suspended person | `APIKEY_CACHE_TTL_SECS` (default 300) |
+| Credential | Valid credential → the validate result (`user_id`, or `member_id` + `organization_id` + `labels`) | Invalid credential | same |
 
-`APIKEY_CACHE_TTL_SECS` covers user keys, member keys, and sessions. Do not rename it for sessions.
+`APIKEY_CACHE_TTL_SECS` covers every credential and subject resolve. Do not rename it.
 
 Do not cache identity **503** / transport failures. Concurrent misses for the same cache key share **one** identity call (singleflight). Raw API keys and JWTs are hashed before use as cache keys.
 
-Revoke, suspend, remove, and role changes are visible at the edge when the TTL expires.
+Revoke, suspend (of a member or a person), remove, and role changes are visible at the edge when the TTL expires.
 
 ## Boot / ready
 
@@ -249,7 +243,7 @@ Revoke, suspend, remove, and role changes are visible at the edge when the TTL e
 | Route not registered | `NOT_FOUND` (404) |
 | Request body too large | `PAYLOAD_TOO_LARGE` (413) |
 | Rate limit (admitted route or failed-auth IP) | `RATE_LIMITED` (429); `Retry-After`; admitted limited routes also `X-RateLimit-*` |
-| Auth infra down (JWKS, Valkey, key or session validate) | `SERVICE_UNAVAILABLE` (503) |
+| Auth infra down (JWKS, Valkey, credential validate) | `SERVICE_UNAVAILABLE` (503) |
 | Audit intent not written (audited route) | `SERVICE_UNAVAILABLE` (503) |
 | Upstream unreachable, timed out, or failing mid-proxy | **502** with the `SERVICE_UNAVAILABLE` code |
 | Path param is not one segment | `INVALID_REQUEST` (400) |

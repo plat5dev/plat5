@@ -9,13 +9,13 @@ Plat5’s gateway validates JWTs from **any** OIDC-compatible issuer.
 | Issuer URL (`iss`) | `AUTH_ISSUER` |
 | JWKS | `AUTH_JWKS_URI` |
 | Allowed audiences | `AUTH_ALLOWED_AUDIENCES` (comma-separated; empty = skip `aud` check) |
-| User id claim path | `AUTH_USER_ID_CLAIM` (dotted JSON path) |
+| Subject claim path | `AUTH_USER_ID_CLAIM` (dotted JSON path) |
 
 Also required on tokens: signature via JWKS, `exp`, and a `kid` in the JWT header.
 
-## User id claim
+## Subject claim
 
-Plat5 uses an **opaque string** user id. The gateway reads it from the JWT via `AUTH_USER_ID_CLAIM`. A `user` route fills it as `{subject.user_id}`.
+`AUTH_USER_ID_CLAIM` names the claim that holds the person's subject at the IdP. The gateway reads it and the token's issuer (`iss`), and identity resolves the pair to the person's `user_id` in the directory ([`identity.md`](identity.md#credential-validate)). A new subject creates the person. A `user` route fills `{subject.user_id}`, Plat5's own id, never the IdP's subject.
 
 | `AUTH_USER_ID_CLAIM` | Typical IdP |
 |----------------------|-------------|
@@ -27,7 +27,7 @@ Local compose defaults use `properties.user_id` and a host-published JWKS URL on
 
 Missing or empty claim → **401** (same as invalid token).
 
-Downstream services trust the path the gateway wrote. Identity stores the opaque user id string. Switching IdPs is an operator concern.
+Downstream services trust the path the gateway wrote. Identity links a person to one or more IdP subjects, so services never store an IdP's id. Switching IdPs, or linking a second one, changes the links, not the `user_id` services hold.
 
 ## Bring your own IdP
 

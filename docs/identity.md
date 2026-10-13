@@ -1,6 +1,8 @@
 # Identity service
 
-Plat5 **identity** service: organizations, members, invites, service accounts, API keys, member sessions, and internal auth helpers for the gateway.
+Plat5 **identity** service: the directory of people, organizations, members, invites, service accounts, credentials (API keys and sessions), and internal auth helpers for the gateway.
+
+The model behind it: [`model.md`](model.md).
 
 Boundary: [`identity-boundary.md`](identity-boundary.md). Errors: [`api-errors.md`](api-errors.md), [`error-copy.md`](error-copy.md). Lists: [`lists.md`](lists.md).
 
@@ -14,7 +16,7 @@ There is no `/api` prefix. The first path segment is the subject.
 
 | Scope | Path | The call is about |
 |-------|------|-------------------|
-| user | `/users/{user_id}/...` | that person |
+| user | `/users/{user_id}/...` | that person, in the directory |
 | org | `/organizations/{organization_id}/...` | that org |
 | member | `/members/{member_id}/...` | that member |
 
@@ -26,14 +28,18 @@ Public routes are not auto-published. The process still serves them on the publi
 
 | Term | Meaning |
 |------|---------|
-| **user** | Platform person. Opaque `user_id` string. Not a table. |
-| **organization** | Isolation boundary users and service accounts join. |
-| **member** | Org principal. Exactly one of: a **user** or a **service account**. Wire id: `member_id`. |
+| **realm** | A context that holds memberships: the **directory** or an **organization**. Credentials belong to a membership in one. |
+| **directory** | The one realm every person belongs to. Private: there is no list or search of people. No roles, admins, invites, or sessions; the IdP's JWT does the session's job. |
+| **user** | A person. Lives in the directory. Wire id `user_id`, assigned by identity and linked to one or more IdP subjects (issuer + subject). |
+| **organization** | The isolation boundary. A realm that users join and service accounts are born in. |
+| **member** | A membership in an org. Exactly one of: a **user** or a **service account**. Wire id: `member_id`. |
+| **membership** | An identity's standing in a realm. A person has one in the directory (their anchor: it holds their own keys, and has no status or role) and one per org they belong to (a member). On the wire, `/users/{user_id}/memberships` lists a person's org memberships. |
 | **role** | Slug on a member. The deployment's roles file says which labels it grants. Plat5 defines no role names. Every member has one. [`roles.md`](roles.md) |
-| **service account** | Non-human identity created **under an organization**. Always has a member row in that org. |
-| **api key** | Bearer secret. Either **user-scoped** or **member-scoped**. Carries its principal's permissions: a member key carries the member's role labels. No labels of its own. |
-| **member session** | Short-lived credential for one active user member in one org. Opaque token. Not an API key. Carries the member's role labels. |
-| **membership** | A user's member row in an org, with that org. Not a table. Wire resource for which orgs this person belongs to. |
+| **service account** | Non-human identity, born in an organization. Exactly one member, in that org. |
+| **credential** | An API key or a session. Belongs to one membership and carries exactly its permissions: a member's credential carries the member's role labels. No labels of its own. |
+| **api key** | Long-lived named credential. A **user key** belongs to the person's directory membership; a **member key** to a member. Same table, format, and validate. |
+| **session** | Short-lived credential for one active user member in one org. No name, list, or revoke. Carries the member's role labels. |
+| **display name** | A person's global name, set by the person. A member may override it for one org. A service account's display name is its name. |
 | **invite** | Org join token (`active` / `redeemed` / `revoked` / `expired`). Redeem inserts an **active** member. The host sends any email. |
 
 ## What the service refuses
@@ -47,15 +53,57 @@ Illegal states. Not permissions.
 - Invite expiry, use limits, and the conflict on a dead token.
 - A key addressed under a user, member, or service account that does not own it is **404**. That is the address, not an access check.
 - A service account or member addressed under the wrong org, or whose member is `removed`, is **404**.
-- Unknown id is **404**. A removed member is **404**. Empty collection is an empty page.
+- Unknown id is **404**. A removed member is **404**, except a read at the org address, which returns what is left of it ([Former members](#former-members)). Empty collection is an empty page.
 - A `role` that is not a slug in the roles file is **422**.
 - A write may not take an org's non-removed members holding `creator_role` from one to zero (**422**).
+- An account may not be deleted while its person is the last non-removed member, or the last `creator_role` holder, of an org (**409** `ORGANIZATION_HANDOFF_REQUIRED`).
 
 Validation (**422**) and conflict (**409**) stay where the data is wrong. Identity does not decide who may call, and it does not compare the caller to what it grants. Whoever may call a route may assign any role and act on any member ([`roles.md`](roles.md#who-may-assign)).
 
 ## Public API
 
 Pagination: [`lists.md`](lists.md). `limit`, `starting_after`, `has_more`, sort `id` ascending.
+
+### Users
+
+A person in the directory. First sign-in creates them: admission resolves the IdP issuer and subject to a `user_id`, creating the person when the subject is new ([validate](#credential-validate)). Adding a member by IdP subject does the same.
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `GET` | `/users/{user_id}` | The person. **404** if missing |
+| `PATCH` | `/users/{user_id}` | Body `{ "display_name?", "status?" }`, at least one. `status` is `active` or `suspended`. `display_name` `null` clears it |
+| `DELETE` | `/users/{user_id}` | Delete the account. See below |
+
+There is no `GET /users`. The directory is private: no one lists or searches people.
+
+#### User response
+
+```json
+{
+  "id": "...",
+  "display_name": "Alice",
+  "status": "active",
+  "created_at": "...",
+  "updated_at": "..."
+}
+```
+
+`display_name` is `string | null`, max 128.
+
+#### Person status
+
+A person's `status` holds in every realm. `suspended` stops every credential the person has: their JWT, user keys, and every member key and session of theirs in any org. It is reversible. A person may suspend themselves; re-enabling is whoever may call the route, typically staff through the operator gateway.
+
+#### Account deletion
+
+`DELETE /users/{user_id}`, in one transaction:
+
+- Every non-removed member of the person is removed, as a member remove does ([Status](#status)): keys revoked, sessions deleted, a `member.removed` lifecycle event per org.
+- The person's user keys and IdP links are deleted, and the person is deleted.
+
+Removed member rows stay, keeping their `member_id`. Their display name is gone ([Former members](#former-members)).
+
+Refused with **409** `ORGANIZATION_HANDOFF_REQUIRED` while the person is the last non-removed member, or the last `creator_role` holder, of any org. `details.organizations` lists them as `{ id, name }`. The person hands those orgs to someone else, or deletes them, first.
 
 ### Memberships
 
@@ -78,15 +126,15 @@ Active **user** memberships only: not service accounts, not `suspended`, not `re
 
 List body key `memberships`. `id` is the member id. Cursor is that `id`. `role` is `string | null`: `null` when roles are off ([`roles.md`](roles.md#the-model)).
 
-Not a table. A read of `members` joined to `organizations` for this user.
+A read of the person's org memberships, joined to their organizations.
 
 ### User API keys
 
-Person credential. Not member keys — those live under the member: `/members/{member_id}/api-keys`.
+The person's own keys. They belong to the person's directory membership. Member keys live under the member: `/members/{member_id}/api-keys`. Both are the same credential: one table, one [format](#credential-format), one [validate](#credential-validate).
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/users/{user_id}/api-keys` | Create; plaintext once — prefix **`{brand}-sk-1-`**. |
+| `POST` | `/users/{user_id}/api-keys` | Create; plaintext once. |
 | `GET` | `/users/{user_id}/api-keys` | List (no hashes / no secret) |
 | `DELETE` | `/users/{user_id}/api-keys/{key_id}` | Soft-revoke; idempotent. Other user's key → **404** |
 
@@ -98,13 +146,13 @@ Person credential. Not member keys — those live under the member: `/members/{m
 
 `name` optional (default `Unnamed Key`, max 128).
 
-A key carries its principal's permissions. A user key is the user: on `user` routes it is the same proof as a user JWT. A key has no labels of its own. The same holds for member keys and service-account keys.
+A key carries its membership's permissions. A user key is the user: on `user` routes it is the same proof as a user JWT. A key has no labels of its own. The same holds for member keys and service-account keys.
 
-Identity does not enforce route `required_labels`. That check is the gateway's, on routes the operator labeled. Keep redeem unlabeled when it is published — the invitee is not a member yet. Member keys never hit user routes. Gateway: [`gateway-contract.md`](gateway-contract.md), [`routes.md`](routes.md).
+Identity does not enforce route `required_labels`. That check is the gateway's, on routes the operator labeled. Keep redeem unlabeled when it is published — the invitee is not a member yet. A member's credential never passes on user routes, and a user's never on org routes. Gateway: [`gateway-contract.md`](gateway-contract.md), [`routes.md`](routes.md).
 
 Never echo the secret except on create (`key`).
 
-Create **201** also includes `"key": "{brand}-sk-1-…"` once.
+Create **201** also includes `"key": "{brand}-k-2-…"` once.
 
 ### Organizations
 
@@ -141,7 +189,7 @@ Create **201** also includes `"key": "{brand}-sk-1-…"` once.
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/organizations/{organization_id}/members` | Non-removed members. Unknown org → **404**. Empty org → empty page. |
-| `POST` | `/organizations/{organization_id}/members` | Body `{ "user_id", "role?" }`. Immediate `active`. `role` omitted → `default_role`. |
+| `POST` | `/organizations/{organization_id}/members` | Body `{ "idp": { "issuer", "subject" }, "role?" }`. Immediate `active`. `role` omitted → `default_role`. |
 
 A member has two addresses, like a service account. Both read and write the same row.
 
@@ -155,7 +203,7 @@ Self address:
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/members/{member_id}` | **404** if missing or `removed` |
-| `PATCH` | `/members/{member_id}` | Body `{ "status" }`. `active` or `suspended` only. `removed` → **422**. Already `removed` → **404**. |
+| `PATCH` | `/members/{member_id}` | Body `{ "status?", "display_name?" }`, at least one. `status`: `active` or `suspended` only; `removed` → **422**. `display_name`: this org's override; `null` clears it. Already `removed` → **404**. |
 | `DELETE` | `/members/{member_id}` | Remove. Already `removed` → **404**. Last non-removed member → **422**. Last `creator_role` holder → **422**. |
 
 The self address does not change `role`. A member may suspend or remove itself.
@@ -164,13 +212,13 @@ Org address:
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `GET` | `/organizations/{organization_id}/members/{member_id}` | **404** if missing, in another org, or `removed` |
-| `PATCH` | `/organizations/{organization_id}/members/{member_id}` | Body `{ "status?", "role?" }`, at least one. `status` as on the self address. Same **404** as get. Last `creator_role` holder → **422**. |
-| `DELETE` | `/organizations/{organization_id}/members/{member_id}` | Remove. Same **404** as get. Last non-removed member → **422**. Last `creator_role` holder → **422**. |
+| `GET` | `/organizations/{organization_id}/members/{member_id}` | **404** if missing or in another org. `removed` → the [former member](#former-members) shape |
+| `PATCH` | `/organizations/{organization_id}/members/{member_id}` | Body `{ "status?", "role?", "display_name?" }`, at least one. `status` and `display_name` as on the self address. **404** if missing, in another org, or `removed`. Last `creator_role` holder → **422**. |
+| `DELETE` | `/organizations/{organization_id}/members/{member_id}` | Remove. Same **404** as patch. Last non-removed member → **422**. Last `creator_role` holder → **422**. |
 
 Who may assign a role, and the last `creator_role` holder: [`roles.md`](roles.md).
 
-`POST` adds a **user** member (immediately `active`). A non-removed duplicate is **409** `CONFLICT` (`field` is `user_id`). A person who was removed gets a new member row with a new member id. The removed row stays removed.
+`POST` adds a **user** member (immediately `active`). Identity resolves the person by the IdP issuer and subject, creating them in the directory if the subject is new. `user_id` stays internal: an admin never needs to know it. A non-removed duplicate is **409** `CONFLICT` (`field` is `idp`). A person who was removed gets a new member row with a new member id. The removed row stays removed.
 
 Service accounts are created via the service-accounts API (member row included). Invites are a separate resource, below.
 
@@ -185,8 +233,8 @@ Suspending the last active member is allowed. The org still has a member.
   "id": "...",
   "organization_id": "...",
   "principal": "user",
-  "user_id": "...",
   "service_account_id": null,
+  "display_name": "Alice",
   "role": "member",
   "status": "active",
   "created_at": "...",
@@ -194,7 +242,17 @@ Suspending the last active member is allowed. The org still has a member.
 }
 ```
 
-`principal` is `"user"` or `"service_account"`. Exactly one of `user_id` / `service_account_id` is non-null. `role` is `string | null`: `null` when roles are off ([`roles.md`](roles.md#the-model)).
+`principal` is `"user"` or `"service_account"`. `service_account_id` is set for a service account, else `null`. No `user_id`: an org sees its members, not the directory. `display_name` is the member's override for this org, else the person's global name, else `null`; for a service account, its name. `role` is `string | null`: `null` when roles are off ([`roles.md`](roles.md#the-model)).
+
+#### Former members
+
+A removed member's contributions can outlive it: comments, approvals, revisions. So a read by id at the org address still answers for a removed member, with only what a client needs to show its name:
+
+```json
+{ "id": "...", "organization_id": "...", "principal": "user", "display_name": "Alice", "status": "removed" }
+```
+
+`display_name` is `null` once the person's account is deleted. Lists never include removed members, and nothing else of the row is returned. A removed member is not writable at any address.
 
 ### Invites
 
@@ -278,13 +336,13 @@ Lifecycle and role are the member row. Suspend, re-enable, or change role at the
 
 ### Service account API keys
 
-Org address for that service account's member keys. Not a separate credential. Same table (`member_api_keys`), same plaintext prefix (`{brand}-mk-1-`), same validate endpoint. `/members/{member_id}/api-keys` is the self address. A key created on either path is listed and revoked on both.
+Org address for that service account's member keys. Not a separate credential: the same keys as `/members/{member_id}/api-keys`, the self address. A key created on either path is listed and revoked on both.
 
 Who may call is the proxy, same as creating the service account. The key carries the service account's role, not the caller's.
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/organizations/{organization_id}/service-accounts/{service_account_id}/api-keys` | Create; plaintext once — prefix **`{brand}-mk-1-`**. Body same as member keys (`name`). |
+| `POST` | `/organizations/{organization_id}/service-accounts/{service_account_id}/api-keys` | Create; plaintext once. Body same as member keys (`name`). |
 | `GET` | `/organizations/{organization_id}/service-accounts/{service_account_id}/api-keys` | List. Collection key `keys`. Never the secret. |
 | `DELETE` | `/organizations/{organization_id}/service-accounts/{service_account_id}/api-keys/{key_id}` | Soft-revoke. Idempotent. Key not under this service account → **404**. |
 
@@ -294,21 +352,21 @@ Published on `organization` scope as `/org/service-accounts/{service_account_id}
 
 ### Member API keys
 
-Keys that authenticate **as a member**. Different product from `/users/{user_id}/api-keys`: the parent path is the member. When the member is a service account, the service-account path reads and writes these same rows.
+Keys that authenticate **as a member**. The parent path is the member, so the key belongs to that membership. When the member is a service account, the service-account path reads and writes these same rows.
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/members/{member_id}/api-keys` | Create; plaintext once — prefix **`{brand}-mk-1-`**. Body `{ "name" }`, as for user keys. |
+| `POST` | `/members/{member_id}/api-keys` | Create; plaintext once. Body `{ "name" }`, as for user keys. |
 | `GET` | `/members/{member_id}/api-keys` | List (never the secret) |
 | `DELETE` | `/members/{member_id}/api-keys/{key_id}` | Soft-revoke. Idempotent. Other member's key → **404** |
 
 Missing or `removed` member → **404**. A `suspended` member is addressable. Validate still rejects a key whose member is not `active`.
 
-Member keys are a **separate product surface** from user keys: different table (`member_api_keys`), different plaintext prefix (`{brand}-mk-1-` vs `{brand}-sk-1-`), different validate endpoint. Both use the `X-API-Key` header. Hashing at rest is SHA-256 hex. List may include revoked keys (`revoked_at` set).
+User keys and member keys are one credential: one table, one [format](#credential-format), one [validate](#credential-validate). The address a key is created under decides which membership it belongs to, and validate says which. Both use the `X-API-Key` header. Hashing at rest is SHA-256 hex. List may include revoked keys (`revoked_at` set).
 
 ### Member sessions
 
-Short-lived credential for one **active user member** in one org. Not a member API key: different table (`member_sessions`), different plaintext prefix (`{brand}-ms-1-`), different validate endpoint. No name, no list, no revoke. Minting another session does not invalidate older ones. They expire.
+Short-lived credential for one **active user member** in one org. The same credential table and validate as keys, with kind `session` and its own [prefix](#credential-format). No name, no list, no revoke. Minting another session does not invalidate older ones. They expire.
 
 TTL is **1 hour**. Not boot config.
 
@@ -326,7 +384,7 @@ The session carries the member's role labels. The role is not stored on the sess
 
 ```json
 {
-  "token": "{brand}-ms-1-…",
+  "token": "{brand}-s-2-…",
   "expires_at": "...",
   "member_id": "...",
   "organization_id": "...",
@@ -345,18 +403,24 @@ The deployment's roles, from the roles file. Same list for every org today. Shap
 |--------|------|--------|
 | `GET` | `/organizations/{organization_id}/roles` | `{ "roles": [{ "slug", "labels" }], "creator_role", "default_role", "service_account_default_role" }`. Sorted by slug. Not paginated. Unknown org → **404**. Roles off → `roles: []`, the three role fields `null`. |
 
-### API key brand
+### Credential format
 
-`APIKEY_BRAND` is boot config on **identity and the gateway**. Same value on both. Unset → `plat5`. Empty-but-set → refuse boot.
+```
+{brand}-{kind}-{version}-{secret}
+```
 
-| | |
-|--|--|
-| Brand | `[a-z][a-z0-9]*`, max 32. Lowercase only — no folding. |
-| User wire prefix | `{brand}-sk-1-` |
-| Member wire prefix | `{brand}-mk-1-` |
-| Member session wire prefix | `{brand}-ms-1-` |
+| Part | |
+|------|--|
+| `brand` | `APIKEY_BRAND`. `[a-z][a-z0-9]*`, max 32. Lowercase only — no folding |
+| `kind` | `k` for an API key, `s` for a session |
+| `version` | `2` |
+| `secret` | 32 random bytes, base64url without padding (43 characters) |
 
-`sk`, `mk`, `ms`, and `1` are fixed. One brand for the process, read at boot.
+The prefix says what a leaked string is and how to respond: a key is revoked; a session expires. It does not say whose it is. Validate returns the realm and the membership.
+
+The brand is the deployment's, because the keys belong to its product: its customers hold them, and it registers the pattern with secret scanners. `APIKEY_BRAND` is identity's config alone; identity mints keys. Unset → `plat5`. Empty-but-set → refuse boot. One brand for the process, read at boot.
+
+Version 1 credentials (`{brand}-sk-1-`, `{brand}-mk-1-`, `{brand}-ms-1-`) still validate.
 
 Changing brand does not rewrite stored secrets. Old plaintext no longer matches; those rows cannot authenticate.
 
@@ -364,14 +428,24 @@ Changing brand does not rewrite stored secrets. Old plaintext no longer matches;
 
 Identity says what a write changed on `X-Plat5-Audit-Details` ([`audit.md`](audit.md#details)). The gateway puts it on the audit event when the route is audited, and strips it either way. Identity does not know who called or whether the route is audited. It only reports the change.
 
-Changes are `{ "from", "to" }`, for the fields that changed. A write that changed nothing sends no header. A create names what it created, since the new id is not in the path.
+Changes are `{ "from", "to" }`, for the fields that changed. A write that changed nothing sends no header. A create names what it created, since the new id is not in the path, and sets `X-Plat5-Audit-Created` to the new id ([`audit.md`](audit.md#created)).
+
+A `user` route that changes something an org owns names that org and member on `X-Plat5-Audit-Organization` and `X-Plat5-Audit-Member`, so the event is in the org's log too ([`audit.md`](audit.md#which-log)):
+
+| Write | Org and member named |
+|-------|----------------------|
+| `POST /users/{user_id}/organizations` | The new org, and its creator member |
+| `POST /users/{user_id}/invites/redeem` | The org, and the new (or existing) member |
+| `POST /users/{user_id}/organizations/{organization_id}/session` | The org, and the member the session is for |
 
 | Write | Details |
 |-------|---------|
 | `PATCH /organizations/{organization_id}` | `name`, `slug` as changes |
 | `POST /organizations/{organization_id}/members` | `member_id`, `role` |
-| `PATCH /organizations/{organization_id}/members/{member_id}` | `role`, `status` as changes |
-| `PATCH /members/{member_id}` | `status` as a change |
+| `PATCH /organizations/{organization_id}/members/{member_id}` | `role`, `status`, `display_name` as changes |
+| `PATCH /members/{member_id}` | `status`, `display_name` as changes |
+| `PATCH /users/{user_id}` | `status`, `display_name` as changes |
+| `POST /users/{user_id}/api-keys` | `key_id`, `key_prefix`, `name`. Never the key |
 | `POST /organizations/{organization_id}/invites` | `invite_id`, `role`. Never the token |
 | `POST /organizations/{organization_id}/service-accounts` | `service_account_id`, `member_id`, `name`, `role` |
 | `PATCH /organizations/{organization_id}/service-accounts/{service_account_id}` | `name` as a change |
@@ -387,7 +461,7 @@ Each old value is read under the lock the write already takes. Reporting it cost
 
 ## Status
 
-Status is whether the member is admitted, not what they are allowed to do.
+Status is whether the member is admitted, not what they are allowed to do. A person's own [status](#person-status) stops all of their members at once.
 
 | Status | |
 |--------|--|
@@ -407,71 +481,41 @@ The row stays as a record that the member existed. Adding the same person again,
 
 ## Internal APIs
 
-Not published on the gateway. Served only on **`INTERNAL_PORT`**. Optional `INTERNAL_AUTH_TOKEN` → header `X-Plat5-Internal-Token` (constant-time compare). Unset = network-trust only (dev). The validate endpoints are lookups for a proxy, and lifecycle events are a feed for services. Neither is a check on the resource handlers. Do not fold them into the resource URLs.
+Not published on the gateway. Served only on **`INTERNAL_PORT`**. Optional `INTERNAL_AUTH_TOKEN` → header `X-Plat5-Internal-Token` (constant-time compare). Unset = network-trust only (dev). Validate is a lookup for a proxy, and lifecycle events are a feed for services. Neither is a check on the resource handlers. Do not fold them into the resource URLs.
 
-Gateway env: `USER_APIKEY_VALIDATE_URL`, `MEMBER_APIKEY_VALIDATE_URL`, `MEMBER_SESSION_VALIDATE_URL`, same `INTERNAL_AUTH_TOKEN`, same `APIKEY_BRAND`. All three URLs are required to boot. `APIKEY_CACHE_TTL_SECS` covers user keys, member keys, and sessions.
+Gateway env: `CREDENTIAL_VALIDATE_URL`, same `INTERNAL_AUTH_TOKEN`. Required to boot. `APIKEY_CACHE_TTL_SECS` covers every credential and every IdP subject resolve.
 
-There is **no** combined key validate and **no** `key_type`. Gateway picks the endpoint from the credential’s wire prefix before calling identity.
+### Credential validate
 
-### User API key validate
+One endpoint for every credential. The gateway sends either the `X-API-Key` value, or a verified JWT's issuer and subject.
 
 ```
-POST /internal/user-keys/validate
+POST /internal/credentials/validate
 Content-Type: application/json
 X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
-{ "key": "{brand}-sk-1-…" }
+{ "credential": "{brand}-k-2-…" }
+{ "idp": { "issuer": "https://auth.example.com", "subject": "…" } }
 ```
 
 | Result | Response |
 |--------|----------|
-| Valid user key | **200** `{ "valid": true, "user_id": "…" }` |
-| Wrong prefix / missing / revoked / unknown | **200** `{ "valid": false }` |
+| A user key, or an IdP subject | **200** `{ "valid": true, "realm": "directory", "kind": "key" \| "idp", "user_id": "…" }` |
+| A member key or session | **200** `{ "valid": true, "realm": "organization", "kind": "key" \| "session", "member_id": "…", "organization_id": "…", "labels": ["*"] }` or `"labels": ["org:write"]` or `"labels": []` |
+| Malformed, missing, revoked, expired, unknown; member not `active`; person `suspended` | **200** `{ "valid": false }` |
 
-No `labels`. A user has no role, so a user key has no labels to check.
+An IdP subject resolves to its person, and a new subject creates one, with its directory membership. The person's `status` applies to every result: a suspended person's JWT, user keys, and member credentials are all `valid: false`.
 
-Gateway: prefix `{brand}-sk-1-` → this URL. Subject = `user_id` (same as a JWT). Gateway caches valid hits and invalid keys (`APIKEY_CACHE_TTL_SECS`, default 300s). Revoke is visible at the edge when the TTL expires. Transport / 503 are not cached. Contract: [`gateway-contract.md`](gateway-contract.md).
+`labels` is a `string[]`, never `null`: the member's role labels ([`roles.md`](roles.md#resolution)). `["*"]` = every label (a `["*"]` role, or roles off). `[]` = no labels (**403** on routes with `required_labels`; unlabeled still admit). Role resolution happens here. The response carries no role. A directory result has no `labels`: a person has no role.
 
-### Member API key validate
+An organization result has no `user_id`.
 
-```
-POST /internal/member-keys/validate
-Content-Type: application/json
-X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
+Gateway: [`gateway-contract.md`](gateway-contract.md#credentials). It caches valid and invalid results (`APIKEY_CACHE_TTL_SECS`, default 300s). Revoke, suspend, and role changes are visible at the edge when the TTL expires. Transport / 503 are not cached.
 
-{ "key": "{brand}-mk-1-…" }
-```
-
-| Result | Response |
-|--------|----------|
-| Valid active member key | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "labels": ["*"] }` or `"labels": ["org:write"]` or `"labels": []` |
-| Wrong prefix / missing / revoked / inactive member / unknown | **200** `{ "valid": false }` |
-
-`labels` is a `string[]`, never `null`: the member's role labels ([`roles.md`](roles.md#resolution)). `["*"]` = every label (a `["*"]` role, or roles off). `[]` = no labels (**403** on routes with `required_labels`; unlabeled still admit). Role resolution happens here. The response carries no role.
-
-Gateway: prefix `{brand}-mk-1-` → this URL. **`organization` and `member` scopes** (see gateway contract). Same cache as user keys and sessions (`APIKEY_CACHE_TTL_SECS`).
-
-| Validate outcome (any endpoint) | Client |
-|------------------------------------|--------|
-| `valid: false` or unknown prefix | **401** `UNAUTHORIZED` |
+| Validate outcome | Client |
+|------------------|--------|
+| `valid: false`, or the wrong realm for the route's scope | **401** `UNAUTHORIZED` |
 | transport / non-2xx / `valid: true` missing required fields | **503** `SERVICE_UNAVAILABLE` |
-
-### Member session validate
-
-```
-POST /internal/member-sessions/validate
-Content-Type: application/json
-X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
-
-{ "token": "{brand}-ms-1-…" }
-```
-
-| Result | Response |
-|--------|----------|
-| Unexpired session, member `active` | **200** `{ "valid": true, "member_id": "…", "organization_id": "…", "labels": ["*"] }` or `"labels": ["profile:read"]` or `"labels": []` |
-| Wrong prefix / missing / expired / member not `active` / unknown | **200** `{ "valid": false }` |
-
-No `user_id`. `labels` is the member's role labels, same as a member key. Gateway: prefix `{brand}-ms-1-` → `MEMBER_SESSION_VALIDATE_URL`. **`organization` and `member` scopes.** Same cache TTL as API keys (`APIKEY_CACHE_TTL_SECS`).
 
 ### Lifecycle events
 
@@ -495,7 +539,7 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 | Type | Written by | Fields |
 |------|------------|--------|
 | `organization.deleted` | `DELETE /organizations/{organization_id}` | `organization_id` |
-| `member.removed` | `DELETE` at either member address, and the service-account delete | `organization_id`, `member_id`, `principal` |
+| `member.removed` | `DELETE` at either member address, the service-account delete, and account deletion (one per org) | `organization_id`, `member_id`, `principal` |
 
 `principal` is `user` or `service_account`. No `user_id`, name, role, or anything else from the row.
 
@@ -503,7 +547,7 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
 An org delete writes one `organization.deleted`, not a `member.removed` per member. It covers everything in the org.
 
-Not events: suspend, role changes, org rename, keys, sessions, and invites. A suspend or role change is not an end, and anything that depends on it is decided when the work runs. Services hold nothing keyed by keys, sessions, or invites.
+Not events: suspend (of a member or a person), role changes, org rename, display names, keys, sessions, and invites. The directory has no events: an account deletion is the `member.removed` events it causes. A suspend or role change is not an end, and anything that depends on it is decided when the work runs. Services hold nothing keyed by keys, sessions, or invites.
 
 **Delivery.** The event is written in the same transaction as the change. A change that commits has its event. A change that rolls back has none. The org delete is a hard cascade, so after it commits the event is the only record that the org existed.
 
@@ -516,36 +560,35 @@ Events are kept. There is no retention yet ([`../TODO.md`](../TODO.md)).
 ## Data model (logical)
 
 ```
+identities             -- persons and service accounts
+  id, kind (user | service_account), status, …
+  service_account: organization_id, name
+idp_links              -- a person's IdP subjects
+  identity_id, issuer, subject
+  unique (issuer, subject)
 organizations
-members
-  user_id XOR service_account_id
-  role?, status, …
-  unique (organization_id, user_id) where user_id is not null
-  unique (service_account_id) where service_account_id is not null
-service_accounts
-  organization_id
-  name, …
+memberships            -- an identity's standing in a realm
+  identity_id, organization_id?          -- null = the directory
+  display_name?                          -- directory: global name; org: override
+  role?, status                          -- org memberships only
+  unique (identity_id) where organization_id is null
+  unique (organization_id, identity_id) where status <> 'removed'
+credentials            -- every API key and session
+  membership_id, kind (key | session), name?, key_prefix, key_hash, expires_at?, revoked_at?, …
 organization_invites   -- token while active; token_hash always
   organization_id, email?, role?, token?, token_hash, status, max_uses, use_count, expires_at, …
-
-user_api_keys          -- person credentials; wire {brand}-sk-1-
-  user_id, name, key_prefix, key_hash, revoked_at, …
-member_api_keys        -- member credentials; wire {brand}-mk-1-
-  member_id, name, key_prefix, key_hash, revoked_at, …
-member_sessions        -- short-lived user-member credential; wire {brand}-ms-1-
-  member_id, token_prefix, token_hash, expires_at, …
 
 lifecycle_events       -- append-only; no FK, outlives the org it names
   id (bigint sequence), type, occurred_at, organization_id, member_id?, principal?
 ```
 
-Keys and sessions hold no labels of their own. Member key and session validate resolve the member's role.
+Wire ids: `user_id` is a person's identity id. `service_account_id` is a service account's. `member_id` is an org membership's. A person's directory membership has no wire id: `/users/{user_id}` addresses it.
 
-Independent tables, independent packages (`userkeys` / `memberkeys` / `sessions`), independent validate endpoints. Not one polymorphic credential system.
+A service account has exactly one membership, in its org. A person has exactly one in the directory and at most one non-removed per org.
 
-No IdP user table and no FK to an external directory. `user_id` values are opaque strings.
+Credentials hold no labels of their own. Validate resolves the member's role every time.
 
-`members.role` and `organization_invites.role` are nullable `TEXT` slugs. No `CHECK` constraint: the roles file gives them meaning, and identity checks the slug against it on write. `NULL` while roles are off. With roles on, writes always set a role.
+`memberships.role` and `organization_invites.role` are nullable `TEXT` slugs. No `CHECK` constraint: the roles file gives them meaning, and identity checks the slug against it on write. `NULL` while roles are off, and on directory memberships. With roles on, an org membership's writes always set a role.
 
 ## Runtime
 
@@ -555,10 +598,10 @@ No IdP user table and no FK to an external directory. `user_id` values are opaqu
 | `service.name` | `identity` |
 | `service.namespace` | `identity` |
 | Public port | `3000` |
-| Internal port | `3001` (`/health/*`, `/metrics`, validate, lifecycle events) |
+| Internal port | `3001` (`/health/*`, `/metrics`, credential validate, lifecycle events) |
 | Database | Plat5 Postgres via `DATABASE_URL` |
 | Schema | **`identity`** (service-owned; tables + `schema_migrations`) |
-| `APIKEY_BRAND` | default `plat5`; same value as gateway |
+| `APIKEY_BRAND` | default `plat5`. Identity only ([format](#credential-format)) |
 | `ROLES_FILE` | optional; path to the roles file, read at boot. Unset or empty → roles off (logged as a warning). Invalid → refuse boot. [`roles.md`](roles.md) |
 
 Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
@@ -569,10 +612,11 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - Global `/service-accounts` (SAs are org-scoped)
 - Multi-org service accounts (one SA, one org, one member)
 - Org `settings` / config bag
-- A user directory (`GET /users`). Person id is a path parameter, not a collection.
-- Platform-owned user rows / IdP account linking (opaque `user_id` only)
+- A list or search of people (`GET /users`). The directory is private. A person id is a path parameter, not a collection.
+- `user_id` in an org's view of a member, or as the way to add one. Members are added by IdP subject.
+- A self-service API to link a second IdP subject (deferred, [`../TODO.md`](../TODO.md))
 - SMTP / sending invite email (identity returns a token; the console may send mail)
-- Pending member rows. Add-by-`user_id` and invite redeem both insert an **active** member.
+- Pending member rows. Add by IdP subject and invite redeem both insert an **active** member.
 - Resource ACL, FGA, project permissions
 - Role names or meanings in identity code. The deployment's roles file names roles and grants their labels.
 - More than one role per member, per-org custom roles, or reloading the roles file without a restart
@@ -581,10 +625,10 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - Key or session labels, or default-deny on unlabeled routes
 - A service account tied to the member who created it
 - Auto-publishing these public routes — the operator applies a catalog
-- Configurable `sk` / `mk` / `ms` / `1`, independent full-prefix env vars, or dual-brand key accept
+- Configurable kinds or version, independent full-prefix env vars, or dual-brand key accept
+- The realm or the kind of principal in a credential's prefix (validate returns them)
 - Member session refresh, list, revoke, or a TTL env
-- Putting a member session in `member_api_keys`
-- A service-account key table, prefix, or validate endpoint (those keys are member keys)
+- A credential table, prefix, or validate endpoint per kind of principal (service-account keys are member keys; user keys, member keys, and sessions are one credential)
 - `/organizations/{organization_id}/members/{member_id}/api-keys` (that is acting on another member; service-account keys use the service-account id)
-- `user_id` on session validate
+- `user_id` in an organization credential's validate result
 - A `labels` field in the session mint body to narrow a session (the session carries the member's role)

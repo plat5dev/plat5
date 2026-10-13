@@ -91,7 +91,7 @@ AUTH_ISSUER=https://auth.example.com
 AUTH_JWKS_URI=https://auth.example.com/.well-known/jwks.json
 AUTH_ALLOWED_AUDIENCES=<same as AUTH_ALLOWED_CLIENTS>
 AUTH_USER_ID_CLAIM=properties.user_id   # Plat5 Auth; use sub for many OIDC IdPs
-# APIKEY_BRAND=plat5                    # optional; {brand}-sk-1- / {brand}-mk-1- / {brand}-ms-1-
+# APIKEY_BRAND=plat5                    # optional; identity only; keys {brand}-k-2-…, sessions {brand}-s-2-…
 # ROLES_FILE=/etc/plat5/roles.yml       # the default; identity; compose/roles.yml is mounted there. Empty = roles off
 ```
 
@@ -176,8 +176,9 @@ VITE_GATEWAY_URL=https://api.example.com
 VITE_AUTH_ISSUER=https://auth.example.com
 VITE_AUTH_CLIENT_ID=<AUTH_ALLOWED_CLIENTS>
 VITE_AUTH_REDIRECT_URI=https://app.example.com/callback
-VITE_APIKEY_BRAND=<APIKEY_BRAND>
 ```
+
+The SPA does not need the brand. A credential's kind comes back in the API response that issued it.
 
 SPA fallback so `/callback` serves `index.html` (Pages `_redirects`: `/* /index.html 200`).
 
@@ -201,11 +202,11 @@ Gateway ready requires JWKS loaded and Valkey reachable (`/health/ready` on inte
 
 ## Footguns
 
-- Do not set `AUTH_USER_ID_CLAIM=sub` with Plat5 Auth (`sub` is `user:<sha1 prefix>`, not the ULID). Template default is `properties.user_id`; use `sub` for generic OIDC IdPs.
+- Choose `AUTH_USER_ID_CLAIM` before the first sign-in. Identity links each person by issuer and that claim's value, so changing the claim later signs everyone in as a new person. With Plat5 Auth use `properties.user_id` (the template default); use `sub` for generic OIDC IdPs.
 - `plat5.yml` / `plat5 start` do not operate this stack.
 - `docker compose down -v` wipes identity orgs/keys and Auth users.
 - Recreating etcd without Postgres is ok (projection rebuilds). Wiping Postgres loses desired routes — re-apply.
-- Brand / audience / SPA client id are one string if you customize them.
+- Audience and SPA client id are one string if you customize them. The brand is identity's alone.
 
 ## Pins
 

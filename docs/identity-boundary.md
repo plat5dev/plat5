@@ -2,7 +2,7 @@
 
 Authn, scope projection, and resource authz are separate layers. Mixing them breaks the platform model.
 
-Every route declares which subject exists: none, the person, the org, or the member in that org. Those do not mix. Resource permissions are the service’s problem over that subject.
+Every route declares which subject exists: none, the person, the org, or the member in that org. Those do not mix. The subject is who owns what the route addresses, never who called. Access to individual resources belongs to an optional policy engine, not to Plat5 and not to the service. The model and its reasons: [`model.md`](model.md).
 
 Subject fill and service rules: [`gateway-contract.md`](gateway-contract.md). Routes: [`routes.md`](routes.md). Errors: [`api-errors.md`](api-errors.md). Identity APIs: [`identity.md`](identity.md).
 
@@ -12,9 +12,9 @@ The route is a type. A handler does not get extra identity. Plat5 authenticates 
 
 **One subject.** Billing, ACL, and admin checks that each key off a different id diverge. One subject per scope is the cut.
 
-**Person-centric policy on an org route.** `organization` has `organization_id`. `member` has `organization_id` and `member_id`. Neither has `user_id`. If the graph is `user:U` on `doc:D`, those routes cannot feed it without a lookup you own. Person-centric policy belongs on `user` routes. Policy that needs the member belongs on `member` scope.
+**What a member can reach.** `organization` has `organization_id`. `member` has `organization_id` and `member_id`. Neither has `user_id`: an org sees its members, not the directory. A check on one resource ("may this member touch doc D?") is the gateway's, through the policy-engine hook. A list of what a member can reach is a `member` route: the service gets `member_id` as its subject and asks the engine which resources it can reach ([`model.md`](model.md#what-i-can-reach)). The subject is what the answer is about, not who called.
 
-**Roles are the deployment's, and they are not product ACL.** Plat5 names no roles. The deployment's roles file says which labels a role grants, and the gateway checks those labels against the route. Whether this member may touch this project is still the service's, over the subject the scope defined, or a policy engine's. Plat5 does not ship an owner / admin / member.
+**Roles are the deployment's, and they are not product ACL.** Plat5 names no roles. The deployment's roles file says which labels a role grants, and the gateway checks those labels against the route. Whether this member may touch this project is the optional policy engine's. Plat5 does not ship an owner / admin / member.
 
 **User-subject routes stay on `user` scope.** `organization` and `member` do not have `user_id`. Identity's organization and member routes are published on those scopes because the template fills the subject from the credential. The handler reads the path. Who may call is the proxy.
 
@@ -26,11 +26,12 @@ Trusting the rewritten path is a perimeter protocol: [`gateway-contract.md`](gat
 
 | Layer | Question | Owner |
 |-------|----------|--------|
-| **Authentication** | Who is this? | Gateway + **IdP (JWT)** / identity keys and sessions (credentials stripped before upstream) |
+| **Authentication** | Who is this? | Gateway + **IdP (JWT)** / identity credentials: keys and sessions (stripped before upstream). Identity resolves a JWT's subject to the person |
 | **Scope projection** | Which fields is this route allowed to see? | Gateway. The credential is the proof. The scope drops fields. |
-| **Role resolution** | Which labels does this member's role grant? | Identity, from the deployment's roles file, at member key and session validate ([`roles.md`](roles.md)). The gateway never sees a role. |
+| **Role resolution** | Which labels does this member's role grant? | Identity, from the deployment's roles file, at credential validate ([`roles.md`](roles.md)). The gateway never sees a role. |
 | **Route labels** | Do the caller's labels share one with `required_labels`? | Gateway after admission, and only the gateway. A credential carries its principal's labels: a member key or session carries the member's role labels. A user has no role, so user credentials skip. Omitted `required_labels` → any admitted principal. |
-| **Resource authorization** | Can this member do X to project/doc/…? | **Business services** — over the subject in the path, or a policy engine they call |
+| **Resource authorization** | Can this member do X to project/doc/…? Which projects can it reach? | The optional **policy engine**. The gateway asks it about one resource; a service asks it which resources its subject can reach. Neither Plat5 nor the service decides |
+| **State rules** | Is this valid for the resource's current state? | **Business services**, over the subject in the path. Rules that hold whoever asks |
 | **Who may call identity** | Who may add members, mint keys, delete an org? | Route labels on the identity catalog, at the gateway. Identity refuses illegal states. It does not compare the caller to what it grants. |
 
 Route `required_labels` is an intersection: the caller's labels and the route's labels must overlap. One shared label is enough.
@@ -56,7 +57,7 @@ Plat5 ships no role names. A member carries a role slug, and the deployment's ro
 
 Assigning roles is a privilege like any other. Whoever may call a route that assigns a role, or creates a service account, may assign any role. The deployment decides who gets that label.
 
-A role decides which routes a member may call. It does not decide what a member may do to a resource. Business services on `organization` scope get `organization_id` only. `member` scope gets `organization_id` and `member_id`. Resource permissions are the service's problem, or a policy engine's.
+A role decides which routes a member may call. It does not decide what a member may do to a resource. Business services on `organization` scope get `organization_id` only. `member` scope gets `organization_id` and `member_id`. Access to individual resources is the policy engine's.
 
 ## Who uses which scope
 
@@ -66,14 +67,14 @@ A role decides which routes a member may call. It does not decide what a member 
 | Org-scoped business APIs, and identity routes whose subject is the org | **`organization`** | Credential is a member of that org. Handler sees `organization_id`. |
 | Routes whose subject is the member | **`member`** | Same credential. Handler sees `organization_id` and `member_id`. |
 
-**Default:** trust gateway admission. Do not re-check “is this member in the org?” Enforce **resource** authz in the service.
+**Default:** trust gateway admission. Do not re-check “is this member in the org?” A service enforces what holds whoever asks: state rules, and scoping every lookup by the subject.
 
 ### Credentials
 
 | Scope | Credential |
 |-------|------------|
 | `user` | User JWT or user API key |
-| `organization`, `member` | Member API key or member session |
+| `organization`, `member` | Member API key or session |
 
 Wrong credential for the scope is **401**. A user JWT does not become an org subject.
 
@@ -84,10 +85,10 @@ GET /org/projects
 X-API-Key: member key or member session
 
 Gateway: admit → fill `{subject.organization_id}` into `upstream` → proxy
-Service: the path is the subject; enforce resource authz as needed
+Service: the path is the subject; scope every lookup by it
 ```
 
-If the handler needs `member_id`, the route is `member` scope.
+If what the route addresses is the member's own (its keys, its comments, what it can reach), the route is `member` scope. Never to learn who called.
 
 ### User-scoped API
 
@@ -118,7 +119,7 @@ The path names every id the handler reads. The catalog's route labels decide who
 | Caller's labels miss route `required_labels` | **403** `FORBIDDEN` |
 | Unknown id (identity handlers) | **404** `NOT_FOUND` |
 | Admitted route or failed-auth IP over limit | **429** `RATE_LIMITED` |
-| Key or session validate down or timeout; Valkey down on a limited request; JWKS unavailable | **503** `SERVICE_UNAVAILABLE` |
+| Credential validate down or timeout; Valkey down on a limited request; JWKS unavailable | **503** `SERVICE_UNAVAILABLE` |
 | Path param is not one segment | **400** `INVALID_REQUEST` |
 | Subject id is not one segment | **500** `INTERNAL_ERROR` |
 
@@ -131,7 +132,7 @@ Org invites live in **identity** (`organization_invites`). Create, list, and rev
 ## What is not Plat5 identity (here)
 
 - Project / document / generic resource ACL in the gateway
-- FGA / ReBAC engines
+- FGA / ReBAC engines inside Plat5. One plugs in behind the policy-engine hook
 - Tenant as a name for an organization
 - Operator / employee admin planes
 - Role names or meanings in Plat5. The deployment names roles in its roles file.
@@ -141,4 +142,4 @@ Org invites live in **identity** (`organization_invites`). Create, list, and rev
 - Telling services the caller's labels or role
 - Multi-org service accounts
 - SMTP in identity (invites return a token; the console sends mail if it wants)
-- Pending member rows. Add-by-`user_id` and invite redeem both insert an **active** member.
+- Pending member rows. Add by IdP subject and invite redeem both insert an **active** member.

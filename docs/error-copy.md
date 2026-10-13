@@ -37,6 +37,7 @@ Use these only when a more specific sentence does not apply.
 | `FORBIDDEN` | 403 | You don't have permission to do that. |
 | `NOT_FOUND` | 404 | Resource not found. |
 | `CONFLICT` | 409 | That already exists. |
+| `ORGANIZATION_HANDOFF_REQUIRED` | 409 | Hand off or delete your organizations first. |
 | `PAYLOAD_TOO_LARGE` | 413 | Request body is too large. |
 | `RATE_LIMITED` | 429 | Too many requests. Try again in a moment. |
 | `INTERNAL_ERROR` | 500 | An unexpected error occurred. |
@@ -111,7 +112,7 @@ Unknown tokens use the generic **404** `Resource not found.` (existence policy; 
 |------|-----------|
 | Name > 128 | Name is too long. |
 
-Internal validate (`key` / `token` / `key_id` required) is not product UI. Fallback 422 is enough.
+Internal validate (`credential` or `idp` required) is not product UI. Fallback 422 is enough.
 
 ### Pagination (`limit` / `starting_after`)
 

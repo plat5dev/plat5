@@ -48,6 +48,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `FORBIDDEN` | 403 | `invalid_request_error` | You don't have permission to do that. | `{ permission, resource, resource_id, required_labels }` |
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
+| `ORGANIZATION_HANDOFF_REQUIRED` | 409 | `invalid_request_error` | Hand off or delete your organizations first. | `{ organizations: [{ id, name }] }` |
 | `ROUTE_CONFLICT` | 409 | `invalid_request_error` | (route-registry apply, put, restore) Message lists each conflicting route (same method, same path shape) and its owner service. | — |
 | `PAYLOAD_TOO_LARGE` | 413 | `invalid_request_error` | Request body is too large. | `{ max_size_bytes }` |
 | `RATE_LIMITED` | 429 | `api_error` | Too many requests. Try again in a moment. | `{ retry_after_seconds }` |
@@ -58,6 +59,10 @@ The **Fallback message** column is used only when nothing more specific applies.
 
 Returned by the **gateway** when the member's role labels share no label with the route's `required_labels`. `details.required_labels` is the route's list. Any one of those labels would have admitted the request.
 
+### `ORGANIZATION_HANDOFF_REQUIRED`
+
+Returned by **identity** on account deletion while the person is the last member, or the last `creator_role` holder, of an org. `details.organizations` lists those orgs. The person hands them to someone else, or deletes them, first ([`identity.md`](identity.md#account-deletion)).
+
 ### `UNAUTHORIZED`
 
 Returned by the **gateway**, not downstream services. See [`gateway-contract.md`](gateway-contract.md) and [`identity-boundary.md`](identity-boundary.md).
@@ -66,7 +71,7 @@ Returned by the **gateway**, not downstream services. See [`gateway-contract.md`
 
 Canonical policy: [`identity-boundary.md`](identity-boundary.md).
 
-Wrong credential for the scope, or an invalid key or session, is **`UNAUTHORIZED` (401)**. Key or session validate unavailable → **`SERVICE_UNAVAILABLE` (503)**. A path param that is not one segment is **`INVALID_REQUEST` (400)**. The gateway does not **404** a wrong credential.
+Wrong credential for the scope, or an invalid key or session, is **`UNAUTHORIZED` (401)**. Credential validate unavailable → **`SERVICE_UNAVAILABLE` (503)**. A path param that is not one segment is **`INVALID_REQUEST` (400)**. The gateway does not **404** a wrong credential.
 
 ### `RATE_LIMITED`
 
@@ -76,7 +81,7 @@ Two independent Valkey limiters (replicas share one budget). `VALKEY_URL` is req
 
 | Limiter | When | Key |
 |---------|------|-----|
-| Admitted route | After match + admission (JWT, API key, and member session). Omitted `rate_limit` inherits `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS`. `false` opts out. Inline object = this route+method. Policy name = service `rate_limits` entry (`shared: true` is opt-in cross-service). | Subject from route scope (`public`→ip, `user`→user, `organization`→org, `member`→member), plus method+path or policy name. |
+| Admitted route | After match + admission (JWT, API key, and session). Omitted `rate_limit` inherits `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS`. `false` opts out. Inline object = this route+method. Policy name = service `rate_limits` entry (`shared: true` is opt-in cross-service). | Subject from route scope (`public`→ip, `user`→user, `organization`→org, `member`→member), plus method+path or policy name. |
 | Failed-auth IP | Unadmitted **401**s and unmatched **404**s. Not per-route. | Client IP. `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). `0` requests = off |
 
 ## Principles

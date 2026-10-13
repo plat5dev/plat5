@@ -2,7 +2,10 @@
 
 ## Gateway policy-engine hook (AuthZEN)
 
-An optional AuthZEN 1.0 evaluation call from the gateway, after the label check, for decisions that need more than route labels. Subject is the member (`member_id` and `organization_id`, no `user_id`). Action is the route label. Resource is the service, the route, and its path params. Cached on the admission TTL. Engine unreachable → **503**.
+Two calls to an optional policy engine ([`docs/model.md`](docs/model.md#what-i-can-reach)):
+
+- **One resource, from the gateway.** An AuthZEN 1.0 evaluation after the label check. Subject is the member (`member_id` and `organization_id`, no `user_id`). Action is the route label. Resource is the service, the route, and its path params. Cached on the admission TTL. Engine unreachable → **503**.
+- **A list, from a service.** On a `member` route, the service asks which resources its subject can reach (an AuthZEN search, or the engine's lookup). The subject is the route's `member_id`, never the caller. Without an engine, the answer is everything in the org.
 
 Ready: a deployment that needs a resource-level decision its service cannot make. Until then, resource authz stays in the service. No policy engine in the default stack.
 
@@ -30,11 +33,9 @@ A batch internal lookup (`organization_id`s in, the missing ones out) for work a
 
 Ready: a service that does work outside a request for an org that may be gone.
 
-## Audit events for `user` routes
+## Linking a second IdP subject
 
-Creating an org, redeeming an invite, and minting a session are in no org log, because a `user` route has no verified org. A service could name the org on `X-Plat5-Audit-Details` (it is trusted, the caller is not), and the gateway could log into it.
-
-Ready: an org that needs join or session-mint events in its log.
+A person has one or more IdP links, and first sign-in creates the first. There is no API to add another. Ready: a person who signs in through a second IdP, or a deployment moving IdPs, and must stay one person.
 
 ## Roles without a restart
 
