@@ -9,13 +9,15 @@ import (
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 )
 
+// saSelect reads a service account identity joined to its non-removed member.
+// Alias sa is the identity.
 const saSelect = `
 	SELECT
 		sa.id, sa.organization_id, m.id, sa.name,
 		m.role, m.status, sa.created_at, sa.updated_at
-	FROM service_accounts sa
-	INNER JOIN members m
-		ON m.service_account_id = sa.id
+	FROM identities sa
+	INNER JOIN memberships m
+		ON m.identity_id = sa.id
 		AND m.organization_id = sa.organization_id
 		AND m.status <> 'removed'
 `
@@ -49,9 +51,9 @@ func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount) (*
 	}
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO service_accounts
-			(id, organization_id, name, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO identities
+			(id, kind, organization_id, name, created_at, updated_at)
+		VALUES ($1, 'service_account', $2, $3, $4, $5)
 	`, sa.ID, sa.OrganizationID, sa.Name, sa.CreatedAt, sa.UpdatedAt)
 	if err != nil {
 		return nil, op.Fail(err)
@@ -66,12 +68,7 @@ func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount) (*
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
-	_, err = tx.Exec(ctx, `
-		INSERT INTO members
-			(id, organization_id, user_id, service_account_id, role, status, created_at, updated_at)
-		VALUES ($1, $2, NULL, $3, $4, $5, $6, $7)
-	`, m.ID, m.OrganizationID, sa.ID, m.Role, m.Status, m.CreatedAt, m.UpdatedAt)
-	if err != nil {
+	if err := insertMember(ctx, tx, m); err != nil {
 		return nil, op.Fail(err)
 	}
 
@@ -93,7 +90,7 @@ func (s *Store) GetServiceAccount(ctx context.Context, organizationID, serviceAc
 	defer op.End()
 
 	sa, err := scanServiceAccount(s.pool.QueryRow(ctx, saSelect+`
-		WHERE sa.id = $1 AND sa.organization_id = $2
+		WHERE sa.kind = 'service_account' AND sa.id = $1 AND sa.organization_id = $2
 	`, serviceAccountID, organizationID))
 	if err != nil {
 		if dbx.IsNoRows(err) {
@@ -117,7 +114,7 @@ func (s *Store) ListServiceAccounts(ctx context.Context, organizationID string, 
 		after = startingAfter
 	}
 	rows, err := s.pool.Query(ctx, saSelect+`
-		WHERE sa.organization_id = $1
+		WHERE sa.kind = 'service_account' AND sa.organization_id = $1
 		AND ($2::text IS NULL OR sa.id > $2)
 		ORDER BY sa.id ASC
 		LIMIT $3
@@ -164,7 +161,7 @@ func (s *Store) UpdateServiceAccount(ctx context.Context, organizationID, servic
 	defer tx.Rollback(ctx)
 
 	sa, err := scanServiceAccount(tx.QueryRow(ctx, saSelect+`
-		WHERE sa.id = $1 AND sa.organization_id = $2
+		WHERE sa.kind = 'service_account' AND sa.id = $1 AND sa.organization_id = $2
 		FOR UPDATE OF sa, m
 	`, serviceAccountID, organizationID))
 	if err != nil {
@@ -180,9 +177,9 @@ func (s *Store) UpdateServiceAccount(ctx context.Context, organizationID, servic
 	sa.UpdatedAt = now
 
 	_, err = tx.Exec(ctx, `
-		UPDATE service_accounts
+		UPDATE identities
 		SET name = $3, updated_at = $4
-		WHERE id = $1 AND organization_id = $2
+		WHERE id = $1 AND organization_id = $2 AND kind = 'service_account'
 	`, serviceAccountID, organizationID, sa.Name, sa.UpdatedAt)
 	if err != nil {
 		return nil, "", op.Fail(err)
@@ -212,8 +209,8 @@ func (s *Store) DeleteServiceAccount(ctx context.Context, organizationID, servic
 
 	var exists string
 	err = tx.QueryRow(ctx, `
-		SELECT id FROM service_accounts
-		WHERE id = $1 AND organization_id = $2
+		SELECT id FROM identities
+		WHERE id = $1 AND organization_id = $2 AND kind = 'service_account'
 	`, serviceAccountID, organizationID).Scan(&exists)
 	if err != nil {
 		if dbx.IsNoRows(err) {
@@ -243,7 +240,7 @@ func (s *Store) DeleteServiceAccount(ctx context.Context, organizationID, servic
 	target.Status = StatusRemoved
 	target.UpdatedAt = time.Now().UTC()
 	_, err = tx.Exec(ctx, `
-		UPDATE members
+		UPDATE memberships
 		SET status = 'removed', updated_at = $3
 		WHERE id = $1 AND organization_id = $2
 	`, target.ID, organizationID, target.UpdatedAt)

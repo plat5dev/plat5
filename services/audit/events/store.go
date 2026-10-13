@@ -35,15 +35,14 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	}
 }
 
-const eventColumns = `id, occurred_at, request_id, organization_id, actor_member_id, actor_auth_type,
-	actor_key_prefix, service, method, route, params, ip, user_agent, outcome, status, details`
+const eventColumns = `id, occurred_at, request_id, organization_id, user_id, actor_member_id, actor_auth_type,
+	actor_key_prefix, service, method, route, params, ip, user_agent, outcome, status, details, created_id`
 
 // CreateIntent writes a pending event unless one exists for the request id.
 // created is false for a retry. The intent the caller holds is not updated.
 func (s *Store) CreateIntent(ctx context.Context, in *Intent) (created bool, err error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_intent", dbx.DefaultTimeout,
 		attribute.String("request_id", in.RequestID),
-		attribute.String("organization.id", in.OrganizationID),
 	)
 	defer cancel()
 	defer op.End()
@@ -57,13 +56,13 @@ func (s *Store) CreateIntent(ctx context.Context, in *Intent) (created bool, err
 		// too (the partition key), so check request_id here and let the
 		// index catch two identical intents racing.
 		return s.pool.Exec(ctx, `
-			INSERT INTO audit_events (id, occurred_at, request_id, organization_id, actor_member_id,
+			INSERT INTO audit_events (id, occurred_at, request_id, organization_id, user_id, actor_member_id,
 				actor_auth_type, actor_key_prefix, service, method, route, params, ip, user_agent)
-			SELECT $1::text, $2::timestamptz, $3::text, $4::text, $5::text, $6::text, $7::text,
-				$8::text, $9::text, $10::text, $11::jsonb, $12::text, $13::text
+			SELECT $1::text, $2::timestamptz, $3::text, $4::text, $5::text, $6::text, $7::text, $8::text,
+				$9::text, $10::text, $11::text, $12::jsonb, $13::text, $14::text
 			WHERE NOT EXISTS (SELECT 1 FROM audit_events WHERE request_id = $3::text)
 			ON CONFLICT DO NOTHING
-		`, id.NewAt(in.OccurredAt), in.OccurredAt, in.RequestID, in.OrganizationID, in.Actor.MemberID,
+		`, id.NewAt(in.OccurredAt), in.OccurredAt, in.RequestID, in.OrganizationID, in.UserID, in.Actor.MemberID,
 			in.Actor.AuthType, in.Actor.KeyPrefix, in.Service, in.Method, in.Route, string(params), in.IP, in.UserAgent)
 	}
 
@@ -96,11 +95,21 @@ func (s *Store) ApplyOutcome(ctx context.Context, requestID string, out *Outcome
 	if out.Details != nil {
 		details = string(out.Details)
 	}
+	var namedOrg, namedMember any
+	if out.Named != nil {
+		namedOrg, namedMember = out.Named.OrganizationID, out.Named.MemberID
+	}
+	// The named org and member only add to a person's event. An org's event
+	// keeps the org and member its credential had.
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE audit_events
-		SET outcome = $2, status = $3, details = $4::jsonb
+		SET outcome = $2, status = $3, details = $4::jsonb, created_id = $5,
+			organization_id = CASE WHEN user_id IS NOT NULL AND organization_id IS NULL
+				THEN $6::text ELSE organization_id END,
+			actor_member_id = CASE WHEN user_id IS NOT NULL AND organization_id IS NULL
+				THEN $7::text ELSE actor_member_id END
 		WHERE request_id = $1 AND outcome = 'pending'
-	`, requestID, out.Outcome, out.Status, details)
+	`, requestID, out.Outcome, out.Status, details, out.CreatedID, namedOrg, namedMember)
 	if err != nil {
 		return "", op.Fail(err)
 	}
@@ -122,16 +131,19 @@ func (s *Store) ApplyOutcome(ctx context.Context, requestID string, out *Outcome
 	return metrics.OutcomeFinal, nil
 }
 
-// List returns one page of an org's events, newest first.
+// List returns one page of a log, newest first: the org's when
+// f.OrganizationID is set, else the person's.
 func (s *Store) List(ctx context.Context, f Filter) ([]*Event, bool, error) {
-	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_events", dbx.DefaultTimeout,
-		attribute.String("organization.id", f.OrganizationID),
-	)
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_events", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
 	where := []string{"organization_id = $1"}
 	args := []any{f.OrganizationID}
+	if f.OrganizationID == "" {
+		where = []string{"user_id = $1"}
+		args = []any{f.UserID}
+	}
 	add := func(cond string, v any) {
 		args = append(args, v)
 		where = append(where, strings.ReplaceAll(cond, "?", "$"+strconv.Itoa(len(args))))
@@ -159,6 +171,9 @@ func (s *Store) List(ctx context.Context, f Filter) ([]*Event, bool, error) {
 	}
 	if f.RequestID != "" {
 		add("request_id = ?", f.RequestID)
+	}
+	if f.CreatedID != "" {
+		add("created_id = ?", f.CreatedID)
 	}
 	if len(f.Params) > 0 {
 		p, err := json.Marshal(f.Params)
@@ -207,9 +222,9 @@ func scanEvent(row dbx.Scannable) (*Event, error) {
 	var e Event
 	var params []byte
 	var details []byte
-	if err := row.Scan(&e.ID, &e.OccurredAt, &e.RequestID, &e.OrganizationID, &e.Actor.MemberID,
+	if err := row.Scan(&e.ID, &e.OccurredAt, &e.RequestID, &e.OrganizationID, &e.UserID, &e.Actor.MemberID,
 		&e.Actor.AuthType, &e.Actor.KeyPrefix, &e.Service, &e.Method, &e.Route, &params, &e.IP,
-		&e.UserAgent, &e.Outcome.Outcome, &e.Status, &details); err != nil {
+		&e.UserAgent, &e.Outcome.Outcome, &e.Status, &details, &e.CreatedID); err != nil {
 		return nil, err
 	}
 	e.OccurredAt = e.OccurredAt.UTC()

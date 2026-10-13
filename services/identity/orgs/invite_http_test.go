@@ -50,7 +50,7 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 		t.Fatalf("list must include token: %+v", listed)
 	}
 
-	code, body = doJSON(t, app, http.MethodPost, "/users/invitee1/invites/redeem", `{"token":"`+token+`"}`)
+	code, body, hdr := doJSONHeaders(t, app, http.MethodPost, "/users/invitee1/invites/redeem", `{"token":"`+token+`"}`)
 	if code != http.StatusOK {
 		t.Fatalf("redeem status=%d body=%s", code, body)
 	}
@@ -58,8 +58,17 @@ func TestInviteCreateListRevokeAndRedeem(t *testing.T) {
 	if err := json.Unmarshal(body, &mem); err != nil {
 		t.Fatal(err)
 	}
-	if mem.Status != string(StatusActive) || mem.UserID == nil || *mem.UserID != "invitee1" {
+	if mem.Status != string(StatusActive) || mem.Principal != PrincipalUser {
 		t.Fatalf("member: %+v", mem)
+	}
+	if strings.Contains(string(body), `"user_id"`) {
+		t.Fatalf("redeem must not echo user_id: %s", body)
+	}
+	if got := hdr.Get("X-Plat5-Audit-Organization"); got != "org1" {
+		t.Fatalf("audit organization header: %q", got)
+	}
+	if got := hdr.Get("X-Plat5-Audit-Member"); got != mem.ID {
+		t.Fatalf("audit member header: %q, member %q", got, mem.ID)
 	}
 
 	code, body = doJSON(t, app, http.MethodGet, "/organizations/org1/invites", "")

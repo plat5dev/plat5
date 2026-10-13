@@ -22,10 +22,8 @@ type Config struct {
 	InternalPort      string
 	DatabaseURL       string
 	InternalAuthToken string
-	APIKeyBrand       string
-	UserKeyPrefix     string
-	MemberKeyPrefix   string
-	SessionPrefix     string
+	// APIKeyBrand starts every credential identity mints (docs/identity.md#credential-format).
+	APIKeyBrand string
 	// RolesFile is ROLES_FILE: the deployment's roles, read at boot. Empty = roles off.
 	RolesFile string
 }
@@ -41,9 +39,6 @@ func Load() (Config, error) {
 		DatabaseURL:       envOr("DATABASE_URL", defaultDatabaseURL),
 		InternalAuthToken: strings.TrimSpace(os.Getenv("INTERNAL_AUTH_TOKEN")),
 		APIKeyBrand:       brand,
-		UserKeyPrefix:     userAPIKeyPrefix(brand),
-		MemberKeyPrefix:   memberAPIKeyPrefix(brand),
-		SessionPrefix:     memberSessionPrefix(brand),
 		RolesFile:         strings.TrimSpace(os.Getenv("ROLES_FILE")),
 	}, nil
 }
@@ -72,18 +67,6 @@ func parseAPIKeyBrand(raw string) (string, error) {
 		}
 	}
 	return s, nil
-}
-
-func userAPIKeyPrefix(brand string) string {
-	return brand + "-sk-1-"
-}
-
-func memberAPIKeyPrefix(brand string) string {
-	return brand + "-mk-1-"
-}
-
-func memberSessionPrefix(brand string) string {
-	return brand + "-ms-1-"
 }
 
 func envOr(key, fallback string) string {

@@ -1,10 +1,8 @@
 use pingora::http::RequestHeader;
 use tracing::{debug, warn};
 
+use crate::auth::credential::{parse_shape, Kind, Validated};
 use crate::auth::jwt::validate_token;
-use crate::auth::member_apikey::{CachedMemberApiKey, MemberApiKeyError};
-use crate::auth::member_session::{CachedMemberSession, MemberSessionError};
-use crate::auth::user_apikey::{CachedUserApiKey, UserApiKeyError};
 use crate::auth::AuthStack;
 use crate::error::ErrorKind;
 use crate::route_map::{Route, RouteScope};
@@ -14,15 +12,12 @@ use super::types::{
     AuthError, AuthType, RequestCredential,
 };
 
-/// Member key or member session, before the scope drops fields.
-/// `labels` is the member's role labels, as the roles file lists them (`["*"]` included).
-struct MemberProof {
-    member_id: String,
-    organization_id: String,
-    labels: Vec<String>,
-}
-
 /// Composes auth domains into route-scope admission decisions.
+///
+/// Every credential belongs to a membership in a realm (docs/gateway-contract.md#credentials).
+/// A `user` route accepts the directory's: a JWT, or a user key. `organization` and
+/// `member` routes accept an organization's: a member key or session. Another realm's
+/// credential is 401.
 pub struct Admissor {
     stack: AuthStack,
 }
@@ -47,267 +42,115 @@ impl Admissor {
                 Ok(Admission::Public)
             }
             RouteScope::User => {
-                self.note_presented_key(req, cred);
-                let admission = self.admit_user(req).await?;
-                if let Admission::User {
-                    user_id, auth_type, ..
-                } = &admission
-                {
-                    cred.auth_type = Some(*auth_type);
-                    cred.user_id = Some(user_id.clone());
-                }
-                Ok(admission)
+                let auth = match api_key(req)? {
+                    Some(key) => match self.load_credential(&key, cred).await? {
+                        Validated::Directory { user_id } => AuthContext {
+                            user_id,
+                            auth_type: AuthType::UserApiKey,
+                            kid: None,
+                        },
+                        _ => return Err(AdmitError::WrongCredential),
+                    },
+                    None => self.check_jwt(req).await.map_err(AdmitError::Auth)?,
+                };
+                debug!(
+                    auth_type = auth.auth_type.as_str(),
+                    user_id = %auth.user_id,
+                    "authentication successful"
+                );
+                cred.auth_type = Some(auth.auth_type);
+                cred.user_id = Some(auth.user_id.clone());
+                Ok(Admission::User {
+                    user_id: auth.user_id,
+                    auth_type: auth.auth_type,
+                    kid: auth.kid,
+                })
             }
             RouteScope::Organization | RouteScope::Member => {
-                self.note_presented_key(req, cred);
-                self.admit_member_credential(req, route.scope, span, cred)
-                    .await
+                let Some(key) = api_key(req)? else {
+                    return Err(AdmitError::WrongCredential);
+                };
+                let Validated::Organization {
+                    member_id,
+                    organization_id,
+                    labels,
+                    ..
+                } = self.load_credential(&key, cred).await?
+                else {
+                    return Err(AdmitError::WrongCredential);
+                };
+
+                if let Some(span) = span {
+                    span.record("organization.id", organization_id.as_str());
+                    span.record("member.id", member_id.as_str());
+                }
+                cred.organization_id = Some(organization_id.clone());
+                cred.member_id = Some(member_id.clone());
+                debug!(
+                    organization_id = %organization_id,
+                    member_id = %member_id,
+                    "member credential admitted"
+                );
+
+                // One organization result feeds both scopes. The scope picks the fields.
+                Ok(match route.scope {
+                    RouteScope::Organization => Admission::Organization {
+                        organization_id,
+                        labels,
+                    },
+                    _ => Admission::Member {
+                        organization_id,
+                        member_id,
+                        labels,
+                    },
+                })
             }
         }
     }
 
-    /// Record the kind and display prefix of an `X-API-Key` credential. Only a value
-    /// with one of this gateway's wire prefixes is recorded; anything else is omitted.
-    fn note_presented_key(&self, req: &RequestHeader, cred: &mut RequestCredential) {
-        let Some(key) = req.headers.get("X-API-Key").and_then(|v| v.to_str().ok()) else {
-            return;
-        };
-        let kinds = [
-            (self.stack.user_key_prefix.as_str(), AuthType::UserApiKey),
-            (
-                self.stack.member_key_prefix.as_str(),
-                AuthType::MemberApiKey,
-            ),
-            (self.stack.session_prefix.as_str(), AuthType::MemberSession),
-        ];
-        for (wire_prefix, auth_type) in kinds {
-            if !wire_prefix.is_empty() && key.starts_with(wire_prefix) {
-                cred.auth_type = Some(auth_type);
-                cred.key_prefix = key_display_prefix(key, wire_prefix);
-                return;
-            }
-        }
-    }
-
-    async fn admit_user(&self, req: &RequestHeader) -> Result<Admission, AdmitError> {
-        if let Some(key) = api_key(req)? {
-            if !key.starts_with(self.stack.user_key_prefix.as_str()) {
-                return Err(AdmitError::WrongCredential);
-            }
-            let auth = self.check_user_api_key(&key).await?;
-            debug!(
-                auth_type = auth.auth_type.as_str(),
-                user_id = %auth.user_id,
-                "authentication successful"
-            );
-            return Ok(Admission::User {
-                user_id: auth.user_id,
-                auth_type: auth.auth_type,
-                kid: auth.kid,
-            });
-        }
-
-        let auth = self.check_jwt(req).await.map_err(AdmitError::Auth)?;
-        debug!(
-            auth_type = auth.auth_type.as_str(),
-            user_id = %auth.user_id,
-            "authentication successful"
-        );
-        Ok(Admission::User {
-            user_id: auth.user_id,
-            auth_type: auth.auth_type,
-            kid: auth.kid,
-        })
-    }
-
-    async fn admit_member_credential(
+    /// Shape-check an `X-API-Key`, then validate it (cached). A value of any other
+    /// shape is never sent to identity. Valid and invalid results are cached alike.
+    async fn load_credential(
         &self,
-        req: &RequestHeader,
-        scope: RouteScope,
-        span: Option<&tracing::Span>,
+        key: &str,
         cred: &mut RequestCredential,
-    ) -> Result<Admission, AdmitError> {
-        let Some(key) = api_key(req)? else {
-            return Err(AdmitError::WrongCredential);
+    ) -> Result<Validated, AdmitError> {
+        let Some(shape) = parse_shape(key) else {
+            return Err(AdmitError::CredentialInvalid);
+        };
+        cred.key_prefix = key_display_prefix(key, shape.wire_prefix_len);
+        let metric = match shape.kind {
+            Kind::Session => {
+                cred.auth_type = Some(AuthType::MemberSession);
+                AuthType::MemberSession.as_str()
+            }
+            Kind::Key => "apikey",
         };
 
-        let proof = if key.starts_with(self.stack.member_key_prefix.as_str()) {
-            self.load_member_key(&key).await?
-        } else if key.starts_with(self.stack.session_prefix.as_str()) {
-            self.load_member_session(&key).await?
-        } else {
-            return Err(AdmitError::WrongCredential);
-        };
-
-        if let Some(span) = span {
-            span.record("organization.id", proof.organization_id.as_str());
-            span.record("member.id", proof.member_id.as_str());
-        }
-        cred.organization_id = Some(proof.organization_id.clone());
-        cred.member_id = Some(proof.member_id.clone());
-
-        debug!(
-            organization_id = %proof.organization_id,
-            member_id = %proof.member_id,
-            "member credential admitted"
-        );
-
-        match scope {
-            RouteScope::Organization => Ok(Admission::Organization {
-                organization_id: proof.organization_id,
-                labels: proof.labels,
-            }),
-            RouteScope::Member => Ok(Admission::Member {
-                organization_id: proof.organization_id,
-                member_id: proof.member_id,
-                labels: proof.labels,
-            }),
-            RouteScope::Public | RouteScope::User => Err(AdmitError::Internal(
-                "member credential on a user subject route",
-            )),
-        }
-    }
-
-    async fn load_member_key(&self, key: &str) -> Result<MemberProof, AdmitError> {
-        let cached = match self
+        let validated = self
             .stack
-            .member_apikey_cache
-            .get_or_load(key, async {
-                match self.stack.member_apikey_validator.validate(key).await {
-                    Ok(v) => {
-                        let member_id = match v.member_id.clone() {
-                            Some(id) if !id.is_empty() => id,
-                            _ => {
-                                warn!("member key validate returned valid without member_id");
-                                return Err(MemberApiKeyError::ServiceError(
-                                    "missing member_id".into(),
-                                ));
-                            }
-                        };
-                        let organization_id = match v.organization_id.clone() {
-                            Some(id) if !id.is_empty() => id,
-                            _ => {
-                                warn!("member key validate returned valid without organization_id");
-                                return Err(MemberApiKeyError::ServiceError(
-                                    "missing organization_id".into(),
-                                ));
-                            }
-                        };
-                        let Some(labels) = v.labels.clone() else {
-                            warn!("member key validate returned valid without labels");
-                            return Err(MemberApiKeyError::ServiceError("missing labels".into()));
-                        };
-                        Ok(CachedMemberApiKey::Valid {
-                            member_id,
-                            organization_id,
-                            labels,
-                        })
-                    }
-                    Err(MemberApiKeyError::InvalidKey) => Ok(CachedMemberApiKey::Invalid),
-                    Err(e) => Err(e),
-                }
-            })
+            .credential_cache
+            .get_or_load(key, self.stack.validator.credential(key, metric))
             .await
-        {
-            Ok(v) => v,
-            Err(err) => match err.as_ref() {
-                MemberApiKeyError::InvalidKey => return Err(AdmitError::MemberApiKeyInvalid),
-                MemberApiKeyError::ServiceError(msg) => {
-                    warn!(
-                        error_kind = ErrorKind::Network.as_str(),
-                        error_message = %msg,
-                        "member key validate error"
-                    );
-                    return Err(AdmitError::Unavailable);
-                }
-            },
-        };
+            .map_err(|err| {
+                warn!(
+                    error_kind = ErrorKind::Network.as_str(),
+                    error_message = %err.0,
+                    "credential validate error"
+                );
+                AdmitError::Unavailable
+            })?;
 
-        match cached {
-            CachedMemberApiKey::Invalid => Err(AdmitError::MemberApiKeyInvalid),
-            CachedMemberApiKey::Valid {
-                member_id,
-                organization_id,
-                labels,
-            } => Ok(MemberProof {
-                member_id,
-                organization_id,
-                labels,
-            }),
-        }
+        cred.auth_type = match &validated {
+            Validated::Directory { .. } => Some(AuthType::UserApiKey),
+            Validated::Organization { session: true, .. } => Some(AuthType::MemberSession),
+            Validated::Organization { .. } => Some(AuthType::MemberApiKey),
+            Validated::Invalid => return Err(AdmitError::CredentialInvalid),
+        };
+        Ok(validated)
     }
 
-    async fn load_member_session(&self, token: &str) -> Result<MemberProof, AdmitError> {
-        let cached = match self
-            .stack
-            .member_session_cache
-            .get_or_load(token, async {
-                match self.stack.member_session_validator.validate(token).await {
-                    Ok(v) => {
-                        let member_id = match v.member_id.clone() {
-                            Some(id) if !id.is_empty() => id,
-                            _ => {
-                                warn!("member session validate returned valid without member_id");
-                                return Err(MemberSessionError::ServiceError(
-                                    "missing member_id".into(),
-                                ));
-                            }
-                        };
-                        let organization_id = match v.organization_id.clone() {
-                            Some(id) if !id.is_empty() => id,
-                            _ => {
-                                warn!(
-                                    "member session validate returned valid without organization_id"
-                                );
-                                return Err(MemberSessionError::ServiceError(
-                                    "missing organization_id".into(),
-                                ));
-                            }
-                        };
-                        let Some(labels) = v.labels.clone() else {
-                            warn!("member session validate returned valid without labels");
-                            return Err(MemberSessionError::ServiceError("missing labels".into()));
-                        };
-                        Ok(CachedMemberSession::Valid {
-                            member_id,
-                            organization_id,
-                            labels,
-                        })
-                    }
-                    Err(MemberSessionError::InvalidToken) => Ok(CachedMemberSession::Invalid),
-                    Err(e) => Err(e),
-                }
-            })
-            .await
-        {
-            Ok(v) => v,
-            Err(err) => match err.as_ref() {
-                MemberSessionError::InvalidToken => return Err(AdmitError::MemberSessionInvalid),
-                MemberSessionError::ServiceError(msg) => {
-                    warn!(
-                        error_kind = ErrorKind::Network.as_str(),
-                        error_message = %msg,
-                        "member session validate error"
-                    );
-                    return Err(AdmitError::Unavailable);
-                }
-            },
-        };
-
-        match cached {
-            CachedMemberSession::Invalid => Err(AdmitError::MemberSessionInvalid),
-            CachedMemberSession::Valid {
-                member_id,
-                organization_id,
-                labels,
-            } => Ok(MemberProof {
-                member_id,
-                organization_id,
-                labels,
-            }),
-        }
-    }
-
+    /// Verify the JWT, then resolve its issuer and subject to the person (cached).
     async fn check_jwt(&self, req: &RequestHeader) -> Result<AuthContext, AuthError> {
         let authorization = req
             .headers
@@ -318,26 +161,24 @@ impl Admissor {
             .to_str()
             .map_err(|_| AuthError::InvalidAuthorizationHeader)?;
         let mut parts = auth_value.split_whitespace();
-        match (parts.next(), parts.next()) {
-            (Some("Bearer"), Some(token)) => {
-                if let Some(cached_claims) = self.stack.jwt_cache.get(token).await {
-                    let user_id =
-                        extract_claim_path(&cached_claims.claims, &self.stack.user_id_claim)
-                            .ok_or(AuthError::MissingUserId)?;
-                    return Ok(AuthContext {
-                        user_id,
-                        auth_type: AuthType::Jwt,
-                        kid: cached_claims.header.kid.clone(),
-                    });
-                }
+        let token = match (parts.next(), parts.next()) {
+            (Some("Bearer"), Some(token)) => token,
+            _ => return Err(AuthError::InvalidAuthorizationHeader),
+        };
 
+        let (claims, kid) = match self.stack.jwt_cache.get(token).await {
+            Some(cached) => {
+                let kid = cached.header.kid.clone();
+                (cached.claims, kid)
+            }
+            None => {
                 let jwks = self
                     .stack
                     .jwt_validator
                     .get_jwks()
                     .await
                     .map_err(|_| AuthError::JwtValidationUnavailable)?;
-                let (claims, kid) = validate_token(
+                let (data, kid) = validate_token(
                     token,
                     self.stack.jwt_validator.get_issuer(),
                     jwks,
@@ -347,68 +188,40 @@ impl Admissor {
                 .map_err(|e| AuthError::InvalidToken {
                     reason: jwt_error_reason(&e),
                 })?;
-
-                self.stack.jwt_cache.put(token, claims.clone()).await;
-
-                let user_id = extract_claim_path(&claims.claims, &self.stack.user_id_claim)
-                    .ok_or(AuthError::MissingUserId)?;
-                Ok(AuthContext {
-                    user_id,
-                    auth_type: AuthType::Jwt,
-                    kid: Some(kid),
-                })
-            }
-            _ => Err(AuthError::InvalidAuthorizationHeader),
-        }
-    }
-
-    async fn check_user_api_key(&self, key: &str) -> Result<AuthContext, AdmitError> {
-        let cached = match self
-            .stack
-            .user_apikey_cache
-            .get_or_load(key, async {
-                match self.stack.user_apikey_validator.validate(key).await {
-                    Ok(v) => {
-                        let user_id = match v.user_id.clone() {
-                            Some(id) if !id.is_empty() => id,
-                            _ => {
-                                warn!("user key validate returned valid without user_id");
-                                return Err(UserApiKeyError::ServiceError(
-                                    "missing user_id".into(),
-                                ));
-                            }
-                        };
-                        Ok(CachedUserApiKey::Valid { user_id })
-                    }
-                    Err(UserApiKeyError::InvalidKey) => Ok(CachedUserApiKey::Invalid),
-                    Err(e) => Err(e),
-                }
-            })
-            .await
-        {
-            Ok(v) => v,
-            Err(err) => {
-                return Err(match err.as_ref() {
-                    UserApiKeyError::InvalidKey => AdmitError::Auth(AuthError::InvalidUserApiKey),
-                    UserApiKeyError::ServiceError(msg) => {
-                        warn!(
-                            error_kind = ErrorKind::Network.as_str(),
-                            error_message = %msg,
-                            "user key validate error"
-                        );
-                        AdmitError::Auth(AuthError::UserApiKeyValidationUnavailable)
-                    }
-                });
+                self.stack.jwt_cache.put(token, data.clone()).await;
+                (data.claims, Some(kid))
             }
         };
 
-        match cached {
-            CachedUserApiKey::Invalid => Err(AdmitError::Auth(AuthError::InvalidUserApiKey)),
-            CachedUserApiKey::Valid { user_id } => Ok(AuthContext {
+        let subject = extract_claim_path(&claims, &self.stack.user_id_claim)
+            .ok_or(AuthError::MissingUserId)?;
+        // Validation checked `iss` against the configured issuer.
+        let issuer = self.stack.jwt_validator.get_issuer();
+        let resolved = self
+            .stack
+            .subject_cache
+            .get_or_load(
+                &issuer,
+                &subject,
+                self.stack.validator.idp(&issuer, &subject),
+            )
+            .await
+            .map_err(|err| {
+                warn!(
+                    error_kind = ErrorKind::Network.as_str(),
+                    error_message = %err.0,
+                    "idp subject resolve error"
+                );
+                AuthError::SubjectResolveUnavailable
+            })?;
+
+        match resolved {
+            Validated::Directory { user_id } => Ok(AuthContext {
                 user_id,
-                auth_type: AuthType::UserApiKey,
-                kid: None,
+                auth_type: AuthType::Jwt,
+                kid,
             }),
+            _ => Err(AuthError::InactiveUser),
         }
     }
 }
@@ -419,7 +232,7 @@ fn api_key(req: &RequestHeader) -> Result<Option<String>, AdmitError> {
     match req.headers.get("X-API-Key") {
         None => Ok(None),
         Some(value) => {
-            let key = value.to_str().map_err(|_| AdmitError::WrongCredential)?;
+            let key = value.to_str().map_err(|_| AdmitError::CredentialInvalid)?;
             Ok(Some(key.to_string()))
         }
     }

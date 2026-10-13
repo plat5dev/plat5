@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::admission::{Admissor, RequestCredential};
 use crate::audit::{self, Audit, AuditState};
 use crate::auth::jwt::JwtValidatorState;
-use crate::auth::AuthStack;
+use crate::auth::{AuthStack, AuthType};
 use crate::config::GatewayConfig;
 use crate::error::{ApiError, ErrorKind};
 use crate::metrics;
@@ -256,8 +256,15 @@ impl UserGateway {
             ctx.audit = Some(AuditState::default());
             let written = match audit_intent(session, ctx, route, params, request_id) {
                 Some(intent) => self.audit.write_intent(&intent).await.is_ok(),
-                None => false,
+                None => {
+                    warn!(
+                        error_kind = ErrorKind::Internal.as_str(),
+                        "admitted credential is missing a field the audit intent needs"
+                    );
+                    false
+                }
             };
+            ctx.audit_user_route = route.scope == RouteScope::User;
             if !written {
                 return response::write_json_error(
                     &self.cors,
@@ -339,8 +346,9 @@ fn client_ip(session: &Session) -> String {
     }
 }
 
-/// The intent for an audited request. The route is `organization` or `member`, so
-/// the credential is an admitted member's. None if it is missing a field.
+/// The intent for an audited request, in the log of the realm the route's subject
+/// is in: the org's on `organization` and `member` routes, the person's on `user`
+/// routes. None if the admitted credential is missing a field it needs.
 fn audit_intent(
     session: &Session,
     ctx: &GatewayContext,
@@ -349,22 +357,25 @@ fn audit_intent(
     request_id: &str,
 ) -> Option<audit::Intent> {
     let cred = &ctx.credential;
-    let (Some(organization_id), Some(member_id), Some(auth_type), Some(key_prefix)) = (
-        cred.organization_id.clone(),
-        cred.member_id.clone(),
-        cred.auth_type,
-        cred.key_prefix.clone(),
-    ) else {
-        warn!(
-            error_kind = ErrorKind::Internal.as_str(),
-            "admitted credential is missing a field the audit intent needs"
-        );
-        return None;
+    let auth_type = cred.auth_type?;
+    let (organization_id, user_id, member_id) = match route.scope {
+        RouteScope::User => (None, Some(cred.user_id.clone()?), None),
+        _ => (
+            Some(cred.organization_id.clone()?),
+            None,
+            Some(cred.member_id.clone()?),
+        ),
     };
+    // A key has a prefix; a JWT does not.
+    let key_prefix = cred.key_prefix.clone();
+    if auth_type != AuthType::Jwt && key_prefix.is_none() {
+        return None;
+    }
     Some(audit::Intent {
         request_id: request_id.to_string(),
         occurred_at: audit::rfc3339_millis(ctx.received_at),
         organization_id,
+        user_id,
         actor: audit::Actor {
             member_id,
             auth_type: auth_type.as_str(),
@@ -684,20 +695,53 @@ impl ProxyHttp for UserGateway {
 
         upstream_response.remove_header("alt-svc");
 
-        // The service's audit details never reach the client, audited route or not.
-        let details = upstream_response
-            .headers
-            .get(audit::DETAILS_HEADER)
-            .map(|v| v.as_bytes().to_vec());
-        upstream_response.remove_header(audit::DETAILS_HEADER);
+        // A service's audit headers never reach the client, audited route or not.
+        let header = |name: &str| {
+            upstream_response
+                .headers
+                .get(name)
+                .map(|v| v.as_bytes().to_vec())
+        };
+        let details = header(audit::DETAILS_HEADER);
+        let created = header(audit::CREATED_HEADER);
+        let named_org = header(audit::ORGANIZATION_HEADER);
+        let named_member = header(audit::MEMBER_HEADER);
+        for name in audit::SERVICE_HEADERS {
+            upstream_response.remove_header(*name);
+        }
+        let route_label = ctx.route_label().to_string();
+        let user_route = ctx.audit_user_route;
         if let Some(state) = ctx.audit.as_mut() {
-            state.upstream_status = Some(upstream_response.status.as_u16());
+            let status = upstream_response.status.as_u16();
+            state.upstream_status = Some(status);
             if let Some(raw) = details {
                 state.details = audit::parse_details(&raw);
                 if state.details.is_none() {
                     warn!(
-                        route = %ctx.route_label(),
+                        route = %route_label,
                         "ignoring audit details that are not one ASCII JSON object within 4096 bytes"
+                    );
+                }
+            }
+            if let Some(raw) = created {
+                state.created_id = audit::parse_id(&raw);
+                if state.created_id.is_none() {
+                    warn!(route = %route_label, "ignoring an invalid audit created id");
+                }
+            }
+            // The org pair adds a log only on a user route's success, and only as a pair.
+            if named_org.is_some() || named_member.is_some() {
+                let pair = named_org
+                    .as_deref()
+                    .and_then(audit::parse_id)
+                    .zip(named_member.as_deref().and_then(audit::parse_id));
+                if user_route && (200..300).contains(&status) && pair.is_some() {
+                    state.named = pair;
+                } else {
+                    warn!(
+                        route = %route_label,
+                        status,
+                        "ignoring audit organization and member: not a pair on a user route's success"
                     );
                 }
             }

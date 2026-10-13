@@ -1,6 +1,6 @@
 # identity
 
-Plat5 **identity** service: organizations, members, invites, service accounts, user API keys, member API keys, member sessions, internal validate for the gateway, and the internal lifecycle-events feed for services.
+Plat5 **identity** service: the directory of people, organizations, members, invites, service accounts, credentials (API keys and sessions), internal credential validate for the gateway, and the internal lifecycle-events feed for services.
 
 Contract: [`docs/identity.md`](../../docs/identity.md)
 
@@ -10,19 +10,18 @@ Contract: [`docs/identity.md`](../../docs/identity.md)
 
 | Package | Role |
 |---------|------|
-| `orgs/` | Organizations, members, invites, service accounts |
-| `userkeys/` | User API keys (`{brand}-sk-1-`) |
-| `memberkeys/` | Member API keys (`{brand}-mk-1-`). The service-account path is the org address for the same rows. |
-| `sessions/` | Member sessions (`{brand}-ms-1-`). Mint is in `routes.yml`. Validate stays internal. |
+| `directory/` | People: IdP subject resolve (first sign-in creates the person), `GET` / `PATCH /users/{user_id}` |
+| `orgs/` | Organizations, members, invites, service accounts, account deletion |
+| `credentials/` | Every API key and session (`{brand}-k-2-`, `{brand}-s-2-`): user keys, member keys, the service-account address for the same rows, session mint, and the one internal validate |
 | `lifecycle/` | Lifecycle events (`organization.deleted`, `member.removed`). Written in the change's transaction; read on the internal port. |
 
-`APIKEY_BRAND` (default `plat5`) must match the gateway.
+`APIKEY_BRAND` (default `plat5`) is identity's alone. The gateway checks a key's shape, not its brand.
 
 List includes `token` while the invite is active. The host sends any email.
 
 A key or session carries its principal's permissions. It has no labels of its own. Identity does not know the caller's labels and does not compare the caller to what it grants: whoever the gateway admits to a route may assign any role. Contract: [`docs/identity.md`](../../docs/identity.md).
 
-`ROLES_FILE` is the deployment's roles file, read at boot. With it, every member holds one of its roles, and member key and session validate return that role's labels. Unset → roles are off: no member has a role, and validate returns `["*"]` (every label). Contract: [`docs/roles.md`](../../docs/roles.md).
+`ROLES_FILE` is the deployment's roles file, read at boot. With it, every member holds one of its roles, and validate returns that role's labels for a member's key or session. Unset → roles are off: no member has a role, and validate returns `["*"]` (every label). Contract: [`docs/roles.md`](../../docs/roles.md).
 
 ## Local
 

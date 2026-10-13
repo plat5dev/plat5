@@ -48,8 +48,8 @@ func testIntent(requestID string, at time.Time) *Intent {
 	return &Intent{
 		RequestID:      requestID,
 		OccurredAt:     at.UTC().Truncate(time.Millisecond),
-		OrganizationID: "org-1",
-		Actor:          Actor{MemberID: "m-1", AuthType: AuthMemberAPIKey, KeyPrefix: "plat5-mk-1-AbC9"},
+		OrganizationID: strPtr("org-1"),
+		Actor:          Actor{MemberID: strPtr("m-1"), AuthType: AuthMemberAPIKey, KeyPrefix: strPtr("plat5-k-2-AbC9")},
 		Service:        "identity",
 		Method:         "PATCH",
 		Route:          "/org/members/{member_id}",
@@ -59,6 +59,8 @@ func testIntent(requestID string, at time.Time) *Intent {
 }
 
 func intPtr(i int) *int { return &i }
+
+func strPtr(s string) *string { return &s }
 
 func TestIntentIsIdempotentOnRequestID(t *testing.T) {
 	s, _ := newTestStore(t)
@@ -151,7 +153,7 @@ func TestListNewestFirstWithFilters(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		in := testIntent(fmt.Sprintf("req-%d", i), base.Add(time.Duration(i)*time.Minute))
 		if i == 3 {
-			in.Actor.MemberID = "m-other"
+			in.Actor.MemberID = strPtr("m-other")
 			in.Params = map[string]string{"member_id": "m-3"}
 		}
 		if _, err := s.CreateIntent(ctx, in); err != nil {
@@ -159,7 +161,7 @@ func TestListNewestFirstWithFilters(t *testing.T) {
 		}
 	}
 	other := testIntent("req-other-org", base)
-	other.OrganizationID = "org-2"
+	other.OrganizationID = strPtr("org-2")
 	if _, err := s.CreateIntent(ctx, other); err != nil {
 		t.Fatal(err)
 	}
@@ -225,3 +227,58 @@ func TestEnsurePartitionsAcrossMonthEnds(t *testing.T) {
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
+
+func TestPersonsEventGainsTheNamedOrg(t *testing.T) {
+	s, pool := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	person := &Intent{
+		RequestID:  "req-user",
+		OccurredAt: now.UTC().Truncate(time.Millisecond),
+		UserID:     strPtr("u-1"),
+		Actor:      Actor{AuthType: AuthJWT},
+		Service:    "identity",
+		Method:     "POST",
+		Route:      "/user/organizations",
+		Params:     map[string]string{},
+		IP:         "203.0.113.7",
+	}
+	if _, err := s.CreateIntent(ctx, person); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateIntent(ctx, testIntent("req-org", now)); err != nil {
+		t.Fatal(err)
+	}
+
+	named := &Outcome{Outcome: OutcomeResponded, Status: intPtr(201), CreatedID: strPtr("org-9"),
+		Named: &Named{OrganizationID: "org-9", MemberID: "m-9"}}
+	if _, err := s.ApplyOutcome(ctx, "req-user", named); err != nil {
+		t.Fatal(err)
+	}
+	// An org's event keeps the org and member its credential had.
+	if _, err := s.ApplyOutcome(ctx, "req-org", named); err != nil {
+		t.Fatal(err)
+	}
+
+	mine, _, err := s.List(ctx, Filter{UserID: "u-1", Limit: 10})
+	if err != nil || len(mine) != 1 || *mine[0].OrganizationID != "org-9" || *mine[0].Actor.MemberID != "m-9" || *mine[0].CreatedID != "org-9" {
+		t.Fatalf("person's log: %v %+v", err, mine)
+	}
+	theirs, _, err := s.List(ctx, Filter{OrganizationID: "org-9", Limit: 10})
+	if err != nil || len(theirs) != 1 || theirs[0].RequestID != "req-user" {
+		t.Fatalf("the named org's log: %v %+v", err, theirs)
+	}
+	byCreated, _, err := s.List(ctx, Filter{OrganizationID: "org-9", CreatedID: "org-9", Limit: 10})
+	if err != nil || len(byCreated) != 1 {
+		t.Fatalf("created_id filter: %v %+v", err, byCreated)
+	}
+	org, _, err := s.List(ctx, Filter{OrganizationID: "org-1", Limit: 10})
+	if err != nil || len(org) != 1 || *org[0].Actor.MemberID != "m-1" {
+		t.Fatalf("org event unchanged: %v %+v", err, org)
+	}
+
+	if _, err := pool.Exec(ctx, `UPDATE audit_events SET organization_id = 'org-x', actor_member_id = 'm-x' WHERE request_id = 'req-org'`); err == nil {
+		t.Fatal("an org's event must not change org")
+	}
+}

@@ -107,8 +107,8 @@ func TestListShape(t *testing.T) {
 		Intent: Intent{
 			RequestID:      "req-1",
 			OccurredAt:     time.Date(2026, 10, 8, 18, 30, 0, 120_000_000, time.UTC),
-			OrganizationID: "org-1",
-			Actor:          Actor{MemberID: "m-1", AuthType: AuthMemberAPIKey, KeyPrefix: "plat5-mk-1-AbC9"},
+			OrganizationID: strPtr("org-1"),
+			Actor:          Actor{MemberID: strPtr("m-1"), AuthType: AuthMemberAPIKey, KeyPrefix: strPtr("plat5-k-2-AbC9")},
 			Service:        "identity",
 			Method:         "DELETE",
 			Route:          "/org",

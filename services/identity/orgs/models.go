@@ -53,12 +53,20 @@ type Membership struct {
 	OrganizationSlug string
 }
 
-// Member is an org principal: exactly one of UserID or ServiceAccountID.
+// Member is an org membership: a user or a service account. At most one of
+// UserID or ServiceAccountID is set; neither once a removed person's account
+// is deleted. Kind says which it was.
 type Member struct {
 	ID               string
 	OrganizationID   string
+	Kind             string
 	UserID           *string
 	ServiceAccountID *string
+	// DisplayOverride is this org's name for the member, if set.
+	DisplayOverride *string
+	// DisplayName is what a roster shows: the override, else the person's
+	// global name or the service account's name. Filled on read.
+	DisplayName *string
 	// Role is a slug from the roles file. Nil only when roles are off (docs/roles.md).
 	Role      *string
 	Status    Status
@@ -81,10 +89,21 @@ type ServiceAccount struct {
 }
 
 func (m *Member) Principal() string {
+	if m.Kind != "" {
+		return m.Kind
+	}
 	if m.ServiceAccountID != nil {
 		return PrincipalServiceAccount
 	}
 	return PrincipalUser
+}
+
+// IdentityID is the person or service account, or nil.
+func (m *Member) IdentityID() *string {
+	if m.ServiceAccountID != nil {
+		return m.ServiceAccountID
+	}
+	return m.UserID
 }
 
 func NewULID() string {

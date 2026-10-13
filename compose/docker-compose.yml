@@ -134,13 +134,10 @@ services:
       AUTH_JWKS_URI: ${AUTH_JWKS_URI:-http://host.docker.internal:5000/.well-known/jwks.json}
       AUTH_ALLOWED_AUDIENCES: ${AUTH_ALLOWED_AUDIENCES:-plat5}
       AUTH_USER_ID_CLAIM: ${AUTH_USER_ID_CLAIM:-properties.user_id}
-      USER_APIKEY_VALIDATE_URL: http://identity:3001/internal/user-keys/validate
-      MEMBER_APIKEY_VALIDATE_URL: http://identity:3001/internal/member-keys/validate
-      MEMBER_SESSION_VALIDATE_URL: http://identity:3001/internal/member-sessions/validate
+      CREDENTIAL_VALIDATE_URL: http://identity:3001/internal/credentials/validate
       # Audit is on unless AUDIT_ENABLED=false (then audit need not run).
       AUDIT_ENABLED: ${AUDIT_ENABLED:-true}
       AUDIT_URL: http://audit:3003
-      APIKEY_BRAND: ${APIKEY_BRAND:-plat5}
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN:-dev-internal-token}
       RUST_LOG: info
       APIKEY_CACHE_TTL_SECS: "300"

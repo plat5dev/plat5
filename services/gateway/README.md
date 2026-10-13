@@ -25,12 +25,9 @@ cargo test --all-targets
 | `AUTH_ISSUER` | (required) | JWT `iss` |
 | `AUTH_JWKS_URI` | (required) | JWKS URL |
 | `AUTH_ALLOWED_AUDIENCES` | (empty) | Comma-separated allowed `aud` values |
-| `AUTH_USER_ID_CLAIM` | `properties.user_id` | Dotted claim path for Plat5 user id (`sub` for many OIDC IdPs) |
-| `USER_APIKEY_VALIDATE_URL` | (required) | User key validate (`…/internal/user-keys/validate`); keys `{brand}-sk-1-…` |
-| `MEMBER_APIKEY_VALIDATE_URL` | (required) | Member key validate (`…/internal/member-keys/validate`); keys `{brand}-mk-1-…` |
-| `APIKEY_BRAND` | `plat5` | Same value as identity. `[a-z][a-z0-9]*`, max 32. Unset → `plat5`; empty → refuse boot |
-| `MEMBER_SESSION_VALIDATE_URL` | (required) | Member session validate (`…/internal/member-sessions/validate`); tokens `{brand}-ms-1-…` |
-| `APIKEY_CACHE_TTL_SECS` | `300` | User key, member key, and member session cache TTL (hits and invalid credentials) |
+| `AUTH_USER_ID_CLAIM` | `properties.user_id` | Dotted claim path for the person's IdP subject (`sub` for many OIDC IdPs). Identity resolves issuer + subject to a `user_id` |
+| `CREDENTIAL_VALIDATE_URL` | (required) | Identity's one validate (`…/internal/credentials/validate`): every `X-API-Key`, and every JWT's issuer and subject |
+| `APIKEY_CACHE_TTL_SECS` | `300` | Credential and IdP subject cache TTL (valid and invalid results) |
 | `INTERNAL_AUTH_TOKEN` | unset | Sent as `X-Plat5-Internal-Token` to validate and audit when set |
 | `AUDIT_ENABLED` | `true` | `false` turns audit off for the deployment. Anything but `true` / `false` refuses boot |
 | `AUDIT_URL` | (required unless audit is off) | Audit's internal base URL, e.g. `http://audit:3003` ([`docs/audit.md`](../../docs/audit.md)) |

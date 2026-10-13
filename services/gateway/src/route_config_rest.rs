@@ -284,18 +284,19 @@ fn validate_required_labels(
     Ok(())
 }
 
-/// `audit` belongs to routes that have an org log: `organization` and `member`.
+/// `audit` belongs to routes that have a log: `user` (the person's), `organization`
+/// and `member` (the org's). `public` has no realm to log into.
 fn validate_audit(
     service: &str,
     scope_name: &str,
     path: &str,
     audit: Option<bool>,
 ) -> Result<(), ConfigError> {
-    if audit.is_some() && !matches!(scope_name, "organization" | "member") {
+    if audit.is_some() && !matches!(scope_name, "user" | "organization" | "member") {
         return Err(ConfigError::InvalidRoute {
             service: service.to_string(),
             reason: format!(
-                "{} route '{}' sets audit; audit applies only to organization and member routes",
+                "{} route '{}' sets audit; audit applies only to user, organization, and member routes",
                 scope_name, path
             ),
         });

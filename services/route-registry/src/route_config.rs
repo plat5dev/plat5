@@ -83,7 +83,7 @@ pub struct RouteConfig {
     pub required_labels: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limit: Option<RouteRateLimit>,
-    /// Omitted = method default (writes audited). `organization` and `member` only.
+    /// Omitted = method default (writes audited). `user`, `organization`, and `member` only.
     /// Route-level value applies only to the flat methods list form.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audit: Option<bool>,

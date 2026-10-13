@@ -19,6 +19,8 @@ pub struct GatewayContext {
     pub credential: crate::admission::RequestCredential,
     /// Set once an audit intent is attempted. The logging phase turns it into the outcome.
     pub audit: Option<crate::audit::AuditState>,
+    /// The audited route is a `user` route: a service may name the org it changed.
+    pub audit_user_route: bool,
     /// The upstream peer was handed to Pingora: the service may have been called.
     pub forwarded: bool,
 }
@@ -44,6 +46,7 @@ impl GatewayContext {
             rate_limit: None,
             credential: Default::default(),
             audit: None,
+            audit_user_route: false,
             forwarded: false,
         }
     }

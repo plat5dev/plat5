@@ -46,18 +46,6 @@ func TestParseAPIKeyBrand(t *testing.T) {
 	}
 }
 
-func TestWirePrefixes(t *testing.T) {
-	if g := userAPIKeyPrefix("plat5"); g != "plat5-sk-1-" {
-		t.Fatalf("user: %q", g)
-	}
-	if g := memberAPIKeyPrefix("acme"); g != "acme-mk-1-" {
-		t.Fatalf("member: %q", g)
-	}
-	if g := memberSessionPrefix("plat5"); g != "plat5-ms-1-" {
-		t.Fatalf("session: %q", g)
-	}
-}
-
 func TestLoadIgnoresSMTP(t *testing.T) {
 	t.Setenv("SMTP_HOST", "mail.example.com")
 	t.Setenv("SMTP_USER", "u")

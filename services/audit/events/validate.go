@@ -36,6 +36,7 @@ var auditedMethods = map[string]bool{
 type intentRequest struct {
 	OccurredAt     *string           `json:"occurred_at"`
 	OrganizationID *string           `json:"organization_id"`
+	UserID         *string           `json:"user_id"`
 	Actor          *actorRequest     `json:"actor"`
 	Service        *string           `json:"service"`
 	Method         *string           `json:"method"`
@@ -52,9 +53,12 @@ type actorRequest struct {
 }
 
 type outcomeRequest struct {
-	Outcome *string         `json:"outcome"`
-	Status  *int            `json:"status"`
-	Details json.RawMessage `json:"details"`
+	Outcome        *string         `json:"outcome"`
+	Status         *int            `json:"status"`
+	Details        json.RawMessage `json:"details"`
+	CreatedID      *string         `json:"created_id"`
+	OrganizationID *string         `json:"organization_id"`
+	MemberID       *string         `json:"member_id"`
 }
 
 type fieldErrs []errors.Field
@@ -120,16 +124,43 @@ func ParseIntent(requestID string, body []byte, now time.Time) (*Intent, error) 
 		in.OccurredAt = t.UTC().Truncate(time.Millisecond)
 	}
 
-	in.OrganizationID = text(&bad, "organization_id", req.OrganizationID, maxIDLen)
+	// An org's event: the org and member come from the credential. A person's
+	// event: the person; the member comes later, if the service names one.
+	orgEvent := req.OrganizationID != nil
+	ownerKnown := orgEvent != (req.UserID != nil)
+	switch {
+	case !ownerKnown:
+		bad.add("organization_id")
+	case orgEvent:
+		in.OrganizationID = optText(&bad, "organization_id", req.OrganizationID, maxIDLen)
+	default:
+		in.UserID = optText(&bad, "user_id", req.UserID, maxIDLen)
+	}
 	if req.Actor == nil {
 		bad.add("actor")
 	} else {
-		in.Actor.MemberID = text(&bad, "actor.member_id", req.Actor.MemberID, maxIDLen)
 		in.Actor.AuthType = text(&bad, "actor.auth_type", req.Actor.AuthType, maxIDLen)
-		if in.Actor.AuthType != "" && in.Actor.AuthType != AuthMemberAPIKey && in.Actor.AuthType != AuthMemberSession {
+		member := in.Actor.AuthType == AuthMemberAPIKey || in.Actor.AuthType == AuthMemberSession
+		person := in.Actor.AuthType == AuthUserAPIKey || in.Actor.AuthType == AuthJWT
+		switch {
+		case in.Actor.AuthType == "":
+		case !member && !person, ownerKnown && member != orgEvent:
 			bad.add("actor.auth_type")
+		case member:
+			in.Actor.MemberID = optText(&bad, "actor.member_id", req.Actor.MemberID, maxIDLen)
+			in.Actor.KeyPrefix = optText(&bad, "actor.key_prefix", req.Actor.KeyPrefix, maxKeyPrefixLen)
+		default:
+			// A person's credential: no member until the service names one,
+			// and no key prefix for a JWT.
+			if req.Actor.MemberID != nil {
+				bad.add("actor.member_id")
+			}
+			if in.Actor.AuthType == AuthUserAPIKey {
+				in.Actor.KeyPrefix = optText(&bad, "actor.key_prefix", req.Actor.KeyPrefix, maxKeyPrefixLen)
+			} else if req.Actor.KeyPrefix != nil {
+				bad.add("actor.key_prefix")
+			}
 		}
-		in.Actor.KeyPrefix = text(&bad, "actor.key_prefix", req.Actor.KeyPrefix, maxKeyPrefixLen)
 	}
 	in.Service = text(&bad, "service", req.Service, maxServiceLen)
 	in.Method = text(&bad, "method", req.Method, maxIDLen)
@@ -212,6 +243,22 @@ func ParseOutcome(requestID string, body []byte) (*Outcome, error) {
 		}
 	}
 
+	// Ids from service headers. The gateway only sends them on a response.
+	if req.CreatedID != nil {
+		out.CreatedID = optText(&bad, "created_id", req.CreatedID, maxIDLen)
+	}
+	if (req.OrganizationID == nil) != (req.MemberID == nil) {
+		bad.add("member_id")
+	} else if req.OrganizationID != nil {
+		out.Named = &Named{
+			OrganizationID: text(&bad, "organization_id", req.OrganizationID, maxIDLen),
+			MemberID:       text(&bad, "member_id", req.MemberID, maxIDLen),
+		}
+	}
+	if out.Outcome != OutcomeResponded && (req.CreatedID != nil || req.OrganizationID != nil) {
+		bad.add("outcome")
+	}
+
 	if err := bad.err(); err != nil {
 		return nil, err
 	}
@@ -233,6 +280,16 @@ func text(bad *fieldErrs, path string, v *string, max int) string {
 		return ""
 	}
 	return *v
+}
+
+// optText is text that the caller already knows is present. It returns a
+// pointer for nullable columns.
+func optText(bad *fieldErrs, path string, v *string, max int) *string {
+	s := text(bad, path, v, max)
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func printableASCII(s string) bool {

@@ -1,7 +1,7 @@
-// Package auditx says what an identity write changed, for the org's audit log
-// (docs/audit.md#details). The gateway reads the header on audited routes,
-// stores it as sent, and strips it. Identity does not know whether a route is
-// audited or who called; it only reports the change.
+// Package auditx says what an identity write changed, for the audit log
+// (docs/audit.md#what-a-service-adds). The gateway reads the headers on audited
+// routes, stores them as sent, and strips them. Identity does not know whether
+// a route is audited or who called; it only reports the change.
 package auditx
 
 import (
@@ -17,6 +17,12 @@ import (
 
 const (
 	Header = "X-Plat5-Audit-Details"
+	// CreatedHeader is the id a create produced.
+	CreatedHeader = "X-Plat5-Audit-Created"
+	// OrganizationHeader and MemberHeader name the org a user route changed,
+	// and the member in it. The event goes in that org's log too.
+	OrganizationHeader = "X-Plat5-Audit-Organization"
+	MemberHeader       = "X-Plat5-Audit-Member"
 	// MaxBytes is the gateway's cap. Over it, the gateway drops the details.
 	MaxBytes = 4096
 )
@@ -56,6 +62,18 @@ func Set(c fiber.Ctx, d Details) {
 		return
 	}
 	c.Set(Header, value)
+}
+
+// SetCreated names the id a create produced.
+func SetCreated(c fiber.Ctx, id string) {
+	c.Set(CreatedHeader, id)
+}
+
+// SetOrganization names the org a user route changed, and the member in it.
+// Only for user routes: elsewhere the route subject already names the org.
+func SetOrganization(c fiber.Ctx, organizationID, memberID string) {
+	c.Set(OrganizationHeader, organizationID)
+	c.Set(MemberHeader, memberID)
 }
 
 // Encode is d as one JSON object of visible ASCII within MaxBytes. Non-ASCII is

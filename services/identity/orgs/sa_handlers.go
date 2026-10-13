@@ -67,6 +67,7 @@ func (h *Handler) CreateServiceAccount(c fiber.Ctx) error {
 		"name":               sa.Name,
 		"role":               sa.Role,
 	})
+	auditx.SetCreated(c, sa.ID)
 	return c.Status(fiber.StatusCreated).JSON(h.toServiceAccountResponse(sa))
 }
 

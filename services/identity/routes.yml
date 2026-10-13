@@ -7,14 +7,19 @@
 # except the invite list, which returns live tokens. Labels are opaque: edit
 # them here, not in identity.
 #
-# organization and member writes are in the org's audit log by default
-# (docs/audit.md). The invite list is a read worth recording: it returns live
-# tokens, so it sets audit: true.
+# Writes are audited by default (docs/audit.md): organization and member
+# writes in the org's log, user writes in the person's own log. Creating an
+# org, redeeming an invite, and minting a session are in that org's log too.
+# The invite list is a read worth recording: it returns live tokens, so it
+# sets audit: true.
 services:
   identity:
     url: http://identity:3000
     user:
       routes:
+        - path: /user
+          upstream: /users/{subject.user_id}
+          methods: [GET, PATCH, DELETE]
         - path: /user/memberships
           upstream: /users/{subject.user_id}/memberships
           methods: [GET]

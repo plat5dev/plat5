@@ -1,6 +1,8 @@
-//! Org audit log writes (docs/audit.md). On an audited route the gateway writes an
+//! Audit log writes (docs/audit.md). On an audited route the gateway writes an
 //! intent before forward and waits on it, then an outcome after, in the background.
-//! Audit is on or off for the whole deployment.
+//! An event is in the log of the realm that owns what it changed: the org's on
+//! `organization` and `member` routes, the person's on `user` routes. Audit is on or
+//! off for the whole deployment.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,7 +21,21 @@ use crate::metrics;
 /// A service says what changed on this response header. The gateway stores it as
 /// sent and strips it, from requests and responses, on every route.
 pub const DETAILS_HEADER: &str = "X-Plat5-Audit-Details";
+/// The id a create produced.
+pub const CREATED_HEADER: &str = "X-Plat5-Audit-Created";
+/// On a `user` route, the org the service changed and the member in it.
+pub const ORGANIZATION_HEADER: &str = "X-Plat5-Audit-Organization";
+pub const MEMBER_HEADER: &str = "X-Plat5-Audit-Member";
+/// Every header a service uses to talk to the audit log. Stripped both ways, always.
+pub const SERVICE_HEADERS: &[&str] = &[
+    DETAILS_HEADER,
+    CREATED_HEADER,
+    ORGANIZATION_HEADER,
+    MEMBER_HEADER,
+];
 pub const MAX_DETAILS_BYTES: usize = 4096;
+/// An id from a service header: one path segment of visible ASCII.
+pub const MAX_ID_BYTES: usize = 128;
 pub const MAX_USER_AGENT_CHARS: usize = 512;
 
 const INTENT_ATTEMPTS: u32 = 3;
@@ -43,20 +59,28 @@ const OUTCOME_BACKOFF: &[Duration] = &[
     Duration::from_secs(60),
 ];
 
+/// The credential that acted. On a person's event there is no member until the
+/// service names one; a JWT has no key prefix.
 #[derive(Debug, Serialize)]
 pub struct Actor {
-    pub member_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_id: Option<String>,
     pub auth_type: &'static str,
-    pub key_prefix: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_prefix: Option<String>,
 }
 
 /// Everything the gateway knows before forward. `request_id` is in the URL.
+/// Exactly one of `organization_id` (an org's event) or `user_id` (a person's).
 #[derive(Debug, Serialize)]
 pub struct Intent {
     #[serde(skip)]
     pub request_id: String,
     pub occurred_at: String,
-    pub organization_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
     pub actor: Actor,
     pub service: String,
     pub method: String,
@@ -83,6 +107,13 @@ pub struct Outcome {
     /// What the gateway answered with. None when the client was gone first.
     pub status: Option<u16>,
     pub details: Option<Box<RawValue>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_id: Option<String>,
+    /// On a `user` route, the org the service named and the member in it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_id: Option<String>,
 }
 
 /// An audited request between its intent and its outcome.
@@ -91,27 +122,48 @@ pub struct AuditState {
     /// Set when the upstream response arrives.
     pub upstream_status: Option<u16>,
     pub details: Option<Box<RawValue>>,
+    pub created_id: Option<String>,
+    /// The org and member a service named on a `user` route's 2xx.
+    pub named: Option<(String, String)>,
 }
 
 /// How the request ended. `forwarded` = the gateway handed it to the upstream.
+/// What a service said only counts when it answered.
 pub fn outcome_for(state: AuditState, forwarded: bool, written_status: Option<u16>) -> Outcome {
-    match (state.upstream_status, forwarded) {
-        (Some(status), _) => Outcome {
-            outcome: OutcomeKind::Responded,
-            status: Some(status),
-            details: state.details,
-        },
-        (None, true) => Outcome {
-            outcome: OutcomeKind::NoResponse,
-            status: written_status,
+    let (outcome, status) = match (state.upstream_status, forwarded) {
+        (Some(status), _) => (OutcomeKind::Responded, Some(status)),
+        (None, true) => (OutcomeKind::NoResponse, written_status),
+        (None, false) => (OutcomeKind::Rejected, written_status),
+    };
+    if outcome != OutcomeKind::Responded {
+        return Outcome {
+            outcome,
+            status,
             details: None,
-        },
-        (None, false) => Outcome {
-            outcome: OutcomeKind::Rejected,
-            status: written_status,
-            details: None,
-        },
+            created_id: None,
+            organization_id: None,
+            member_id: None,
+        };
     }
+    let (organization_id, member_id) = state.named.unzip();
+    Outcome {
+        outcome,
+        status,
+        details: state.details,
+        created_id: state.created_id,
+        organization_id,
+        member_id,
+    }
+}
+
+/// An id header: visible ASCII, one path segment, at most [`MAX_ID_BYTES`].
+pub fn parse_id(value: &[u8]) -> Option<String> {
+    let ok = !value.is_empty()
+        && value.len() <= MAX_ID_BYTES
+        && value
+            .iter()
+            .all(|b| (0x21..=0x7e).contains(b) && *b != b'/');
+    ok.then(|| String::from_utf8_lossy(value).into_owned())
 }
 
 /// The details header as one JSON object of visible ASCII within the cap, or None.
@@ -404,15 +456,33 @@ mod tests {
     fn outcome_follows_how_the_request_ended() {
         let responded = outcome_for(
             AuditState {
-                upstream_status: Some(200),
+                upstream_status: Some(201),
                 details: parse_details(br#"{"a":1}"#),
+                created_id: Some("org-9".into()),
+                named: Some(("org-9".into(), "m-9".into())),
             },
             true,
-            Some(200),
+            Some(201),
         );
         assert_eq!(responded.outcome, OutcomeKind::Responded);
-        assert_eq!(responded.status, Some(200));
+        assert_eq!(responded.status, Some(201));
         assert!(responded.details.is_some());
+        assert_eq!(responded.created_id.as_deref(), Some("org-9"));
+        assert_eq!(responded.organization_id.as_deref(), Some("org-9"));
+        assert_eq!(responded.member_id.as_deref(), Some("m-9"));
+
+        // What a service said counts only when it answered.
+        let cut = outcome_for(
+            AuditState {
+                upstream_status: None,
+                details: None,
+                created_id: Some("x".into()),
+                named: Some(("o".into(), "m".into())),
+            },
+            true,
+            Some(502),
+        );
+        assert!(cut.created_id.is_none() && cut.organization_id.is_none());
 
         let no_response = outcome_for(AuditState::default(), true, Some(502));
         assert_eq!(no_response.outcome, OutcomeKind::NoResponse);
@@ -427,15 +497,30 @@ mod tests {
     }
 
     #[test]
+    fn ids_are_one_visible_segment() {
+        assert_eq!(parse_id(b"01J9ZX").as_deref(), Some("01J9ZX"));
+        for bad in [
+            &b""[..],
+            b"a b",
+            b"a/b",
+            "é".as_bytes(),
+            &[b'a'; MAX_ID_BYTES + 1],
+        ] {
+            assert!(parse_id(bad).is_none(), "{bad:?}");
+        }
+    }
+
+    #[test]
     fn wire_shapes() {
         let intent = Intent {
             request_id: "req-1".into(),
             occurred_at: "2026-10-08T18:30:00.123Z".into(),
-            organization_id: "org-1".into(),
+            organization_id: Some("org-1".into()),
+            user_id: None,
             actor: Actor {
-                member_id: "m-1".into(),
+                member_id: Some("m-1".into()),
                 auth_type: "member_apikey",
-                key_prefix: "plat5-mk-1-AbC9".into(),
+                key_prefix: Some("plat5-k-2-AbC9".into()),
             },
             service: "identity".into(),
             method: "PATCH".into(),
@@ -446,13 +531,32 @@ mod tests {
         };
         let v = serde_json::to_value(&intent).unwrap();
         assert!(v.get("request_id").is_none(), "request_id is in the URL");
+        assert!(v.get("user_id").is_none(), "an org's event has no user_id");
         assert_eq!(v["actor"]["auth_type"], "member_apikey");
         assert!(v["user_agent"].is_null());
+
+        let person = Intent {
+            organization_id: None,
+            user_id: Some("u-1".into()),
+            actor: Actor {
+                member_id: None,
+                auth_type: "jwt",
+                key_prefix: None,
+            },
+            ..intent
+        };
+        let v = serde_json::to_value(&person).unwrap();
+        assert_eq!(v["user_id"], "u-1");
+        assert!(v.get("organization_id").is_none());
+        assert_eq!(v["actor"], serde_json::json!({ "auth_type": "jwt" }));
 
         let out = Outcome {
             outcome: OutcomeKind::NoResponse,
             status: None,
             details: None,
+            created_id: None,
+            organization_id: None,
+            member_id: None,
         };
         assert_eq!(
             serde_json::to_string(&out).unwrap(),
@@ -496,11 +600,12 @@ mod tests {
         Intent {
             request_id: "req-1".into(),
             occurred_at: rfc3339_millis(SystemTime::now()),
-            organization_id: "org-1".into(),
+            organization_id: Some("org-1".into()),
+            user_id: None,
             actor: Actor {
-                member_id: "m-1".into(),
+                member_id: Some("m-1".into()),
                 auth_type: "member_apikey",
-                key_prefix: "plat5-mk-1-AbC9".into(),
+                key_prefix: Some("plat5-k-2-AbC9".into()),
             },
             service: "s".into(),
             method: "POST".into(),

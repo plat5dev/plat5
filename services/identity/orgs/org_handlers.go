@@ -65,9 +65,10 @@ func (h *Handler) CreateOrganization(c fiber.Ctx) error {
 		UpdatedAt: now,
 	}
 
-	if _, err := h.store.CreateOrganization(ctx, org, userID, h.roles.Creator()); err != nil {
+	creator, err := h.store.CreateOrganization(ctx, org, userID, h.roles.Creator())
+	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to create organization", httpx.DBErr{
-			NotFound: ErrNotFound, Resource: "organization", ResourceID: org.ID,
+			NotFound: ErrUserNotFound, Resource: "user", ResourceID: userID,
 			Conflict: ErrConflict, Field: "slug", FieldValue: slug,
 			Message: "An organization with this slug already exists.",
 		})
@@ -75,6 +76,8 @@ func (h *Handler) CreateOrganization(c fiber.Ctx) error {
 
 	metrics.RecordOrgCreated()
 	metrics.RecordMemberOp("create")
+	auditx.SetCreated(c, org.ID)
+	auditx.SetOrganization(c, org.ID, creator.ID)
 	return c.Status(fiber.StatusCreated).JSON(toOrgResponse(org))
 }
 
@@ -177,4 +180,18 @@ func toOrgResponse(o *Organization) OrgResponse {
 		CreatedAt: httpx.FormatTime(o.CreatedAt),
 		UpdatedAt: httpx.FormatTime(o.UpdatedAt),
 	}
+}
+
+// DeleteUser deletes the person's account. It lives here because it removes
+// the person's members, under the same rules as a member remove.
+func (h *Handler) DeleteUser(c fiber.Ctx) error {
+	ctx := c.Context()
+	userID := httpx.PathParam(c, "user_id")
+
+	if err := h.store.DeleteAccount(ctx, userID, h.roles); err != nil {
+		return httpx.MapDB(ctx, err, "failed to delete account", httpx.DBErr{
+			NotFound: ErrUserNotFound, Resource: "user", ResourceID: userID,
+		})
+	}
+	return c.SendStatus(fiber.StatusNoContent)
 }

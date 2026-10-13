@@ -46,12 +46,10 @@ func (s *Store) CreateOrganization(ctx context.Context, org *Organization, userI
 		UpdatedAt:      org.UpdatedAt,
 	}
 
-	_, err = tx.Exec(ctx, `
-		INSERT INTO members
-			(id, organization_id, user_id, service_account_id, role, status, created_at, updated_at)
-		VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)
-	`, m.ID, m.OrganizationID, userID, m.Role, m.Status, m.CreatedAt, m.UpdatedAt)
-	if err != nil {
+	if err := insertMember(ctx, tx, m); err != nil {
+		if dbx.IsForeignKeyViolation(err) {
+			return nil, op.Expected("user not found", ErrUserNotFound)
+		}
 		return nil, op.Fail(err)
 	}
 

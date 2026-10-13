@@ -49,7 +49,7 @@ Gateway uses `host.docker.internal` so a host-published IdP does not need a shar
 
 Roles: identity reads [`roles.yml`](roles.yml) (`ROLES_FILE`). Dev and prod compose both mount it and point `ROLES_FILE` at it. Set `ROLES_FILE=` (empty) to turn roles off: every member holds every label, and authorization is left to something else. Restart identity after editing it. See [`../docs/roles.md`](../docs/roles.md).
 
-`APIKEY_BRAND` (default `plat5`) is the same value on gateway and identity. Identity wire prefixes are `{brand}-sk-1-` / `{brand}-mk-1-` / `{brand}-ms-1-`. The gateway accepts all three on `X-API-Key` (`-sk-` on `user` routes; `-mk-` / `-ms-` on `organization` and `member` routes). See [`../docs/identity.md`](../docs/identity.md).
+`APIKEY_BRAND` (default `plat5`) is identity's alone: keys are `{brand}-k-2-…`, sessions `{brand}-s-2-…`. The gateway checks a key's shape and sends it to identity's one validate (`CREDENTIAL_VALIDATE_URL`), which says whose it is: a user key passes on `user` routes, a member key or session on `organization` and `member` routes. See [`../docs/identity.md`](../docs/identity.md#credential-format).
 
 Gateway rate limits (Valkey; replicas share one budget): `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` (default 60/60; `0` requests = unlimited fallback). Named policies on the service; `shared: true` is opt-in cross-service. Subject follows route scope (`public`→ip, `user`→user, `organization`→org, `member`→member). Failed-auth IP limiter: `RATE_LIMIT_AUTH_FAILURE_*` (default 60/60). `VALKEY_URL` is required. See [`../docs/routes.md`](../docs/routes.md) and [`../docs/gateway-contract.md`](../docs/gateway-contract.md).
 

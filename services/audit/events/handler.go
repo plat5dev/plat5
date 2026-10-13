@@ -37,9 +37,11 @@ func (h *Handler) MountInternal(router fiber.Router) {
 	router.Patch("/events/:request_id", h.PatchOutcome)
 }
 
-// MountPublic registers the org's read. The catalog publishes it as /org/audit-events.
+// MountPublic registers the reads. The catalog publishes them as
+// /org/audit-events and /user/audit-events.
 func (h *Handler) MountPublic(router fiber.Router) {
 	router.Get("/organizations/:organization_id/audit-events", h.List)
+	router.Get("/users/:user_id/audit-events", h.ListUser)
 }
 
 // PutIntent creates the pending event, or leaves an existing one alone.
@@ -86,11 +88,14 @@ type listResponse struct {
 	HasMore     bool            `json:"has_more"`
 }
 
+// eventResponse is one event. UserID is only in a person's own read: an
+// org's read never carries it.
 type eventResponse struct {
 	ID             string            `json:"id"`
 	OccurredAt     string            `json:"occurred_at"`
 	RequestID      string            `json:"request_id"`
-	OrganizationID string            `json:"organization_id"`
+	OrganizationID *string           `json:"organization_id"`
+	UserID         *string           `json:"user_id,omitempty"`
 	Actor          Actor             `json:"actor"`
 	Service        string            `json:"service"`
 	Method         string            `json:"method"`
@@ -101,9 +106,10 @@ type eventResponse struct {
 	Outcome        string            `json:"outcome"`
 	Status         *int              `json:"status"`
 	Details        json.RawMessage   `json:"details"`
+	CreatedID      *string           `json:"created_id"`
 }
 
-func toResponse(e *Event) eventResponse {
+func toResponse(e *Event, withUser bool) eventResponse {
 	params := e.Params
 	if params == nil {
 		params = map[string]string{}
@@ -112,7 +118,7 @@ func toResponse(e *Event) eventResponse {
 	if details == nil {
 		details = json.RawMessage("null")
 	}
-	return eventResponse{
+	resp := eventResponse{
 		ID:             e.ID,
 		OccurredAt:     e.OccurredAt.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
 		RequestID:      e.RequestID,
@@ -127,17 +133,35 @@ func toResponse(e *Event) eventResponse {
 		Outcome:        e.Outcome.Outcome,
 		Status:         e.Status,
 		Details:        details,
+		CreatedID:      e.CreatedID,
 	}
+	if withUser {
+		resp.UserID = e.UserID
+	}
+	return resp
 }
 
-// List is one page of the org's log, newest first.
+// List is one page of the org's log, newest first. No user_id.
 func (h *Handler) List(c fiber.Ctx) error {
 	f, err := parseFilter(c)
 	if err != nil {
 		return err
 	}
 	f.OrganizationID = httpx.PathParam(c, "organization_id")
+	return h.list(c, f, false)
+}
 
+// ListUser is one page of the person's own log, newest first.
+func (h *Handler) ListUser(c fiber.Ctx) error {
+	f, err := parseFilter(c)
+	if err != nil {
+		return err
+	}
+	f.UserID = httpx.PathParam(c, "user_id")
+	return h.list(c, f, true)
+}
+
+func (h *Handler) list(c fiber.Ctx, f Filter, withUser bool) error {
 	list, hasMore, err := h.store.List(c.Context(), f)
 	if err != nil {
 		httpx.LogError(c.Context(), "list audit events", err, errors.KindDB)
@@ -145,7 +169,7 @@ func (h *Handler) List(c fiber.Ctx) error {
 	}
 	resp := listResponse{AuditEvents: make([]eventResponse, 0, len(list)), HasMore: hasMore}
 	for _, e := range list {
-		resp.AuditEvents = append(resp.AuditEvents, toResponse(e))
+		resp.AuditEvents = append(resp.AuditEvents, toResponse(e, withUser))
 	}
 	return c.JSON(resp)
 }
@@ -219,6 +243,8 @@ func parseFilter(c fiber.Ctx) (Filter, error) {
 				continue
 			}
 			f.RequestID = value
+		case "created_id":
+			f.CreatedID = filterText(&bad, key, value, maxIDLen)
 		case "occurred_after", "occurred_before":
 			t, err := time.Parse(time.RFC3339Nano, value)
 			if err != nil {

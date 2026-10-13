@@ -487,13 +487,14 @@ mod tests {
     }
 
     #[test]
-    fn audit_rejected_on_user_and_public_routes() {
+    fn audit_on_user_routes_rejected_on_public() {
         for r in [
             parse_route(r#"{"path":"/user/x","methods":["POST"],"audit":true}"#),
             parse_route(r#"{"path":"/user/x","methods":{"POST":{"audit":false}}}"#),
         ] {
-            let err = user_service(vec![r]).prepare_for_registry("w").unwrap_err();
-            assert!(err.to_string().contains("audit applies only to organization and member"), "{err}");
+            user_service(vec![r])
+                .prepare_for_registry("w")
+                .expect("audit on a user route: the person's log");
         }
         let mut svc = user_service(Vec::new());
         svc.user = None;
@@ -501,7 +502,8 @@ mod tests {
             route_prefix: None,
             routes: vec![parse_route(r#"{"path":"/public/x","methods":["POST"],"audit":true}"#)],
         });
-        assert!(svc.prepare_for_registry("w").is_err());
+        let err = svc.prepare_for_registry("w").unwrap_err();
+        assert!(err.to_string().contains("audit applies only to user, organization, and member"), "{err}");
     }
 
     #[test]

@@ -4,6 +4,7 @@ import "github.com/gofiber/fiber/v3"
 
 // MountUser registers person routes. Mount under /users.
 func (h *Handler) MountUser(router fiber.Router) {
+	router.Delete("/:user_id", h.DeleteUser)
 	router.Get("/:user_id/memberships", h.ListMemberships)
 	router.Post("/:user_id/organizations", h.CreateOrganization)
 	router.Post("/:user_id/invites/redeem", h.RedeemInvite)

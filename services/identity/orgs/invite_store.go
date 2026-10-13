@@ -169,11 +169,9 @@ func (s *Store) RedeemInvite(ctx context.Context, tokenHash, userID string) (*Me
 		return nil, op.Expected("dead", &InviteDeadError{Status: inv.Status})
 	}
 
-	existing, err := scanMember(tx.QueryRow(ctx, `
-		SELECT `+memberCols+`
-		FROM members
-		WHERE organization_id = $1 AND user_id = $2 AND status <> 'removed'
-		FOR UPDATE
+	existing, err := scanMember(tx.QueryRow(ctx, memberSelect+`
+		WHERE m.organization_id = $1 AND m.identity_id = $2 AND m.principal = 'user' AND m.status <> 'removed'
+		FOR UPDATE OF m
 	`, inv.OrganizationID, userID))
 	if err != nil && !dbx.IsNoRows(err) {
 		return nil, op.Fail(err)
@@ -193,18 +191,20 @@ func (s *Store) RedeemInvite(ctx context.Context, tokenHash, userID string) (*Me
 			CreatedAt:      now,
 			UpdatedAt:      now,
 		}
-		_, err = tx.Exec(ctx, `
-			INSERT INTO members
-				(id, organization_id, user_id, service_account_id, role, status, created_at, updated_at)
-			VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)
-		`, m.ID, m.OrganizationID, userID, m.Role, m.Status, m.CreatedAt, m.UpdatedAt)
-		if err != nil {
+		if err := insertMember(ctx, tx, m); err != nil {
 			if dbx.IsUniqueViolation(err) {
 				return nil, op.SoftFail("conflict", ErrConflict, ErrConflict)
 			}
+			if dbx.IsForeignKeyViolation(err) {
+				return nil, op.Expected("user not found", ErrUserNotFound)
+			}
 			return nil, op.Fail(err)
 		}
-		member = m
+		// Read back for the display name the person already has.
+		member, err = scanMember(tx.QueryRow(ctx, memberSelect+`WHERE m.id = $1`, m.ID))
+		if err != nil {
+			return nil, op.Fail(err)
+		}
 	}
 
 	next := inv.UseCount + 1

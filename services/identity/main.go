@@ -15,17 +15,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/plat5dev/plat5/identity/config"
+	"github.com/plat5dev/plat5/identity/credentials"
 	"github.com/plat5dev/plat5/identity/db"
+	"github.com/plat5dev/plat5/identity/directory"
 	apierrors "github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/lifecycle"
-	"github.com/plat5dev/plat5/identity/memberkeys"
 	"github.com/plat5dev/plat5/identity/metrics"
 	"github.com/plat5dev/plat5/identity/middleware"
 	"github.com/plat5dev/plat5/identity/orgs"
 	"github.com/plat5dev/plat5/identity/roles"
-	"github.com/plat5dev/plat5/identity/sessions"
 	"github.com/plat5dev/plat5/identity/telemetry"
-	"github.com/plat5dev/plat5/identity/userkeys"
 )
 
 func main() {
@@ -57,15 +56,15 @@ func main() {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
 
+	dirStore := directory.NewStore(pool)
 	orgStore := orgs.NewStore(pool)
-	orgHandler := orgs.NewHandler(orgStore, roleSet)
-	userKeyHandler := userkeys.NewHandler(userkeys.NewStore(pool), cfg.UserKeyPrefix)
-	memberKeyHandler := memberkeys.NewHandler(memberkeys.NewStore(pool), orgStore, cfg.MemberKeyPrefix, roleSet)
-	sessionHandler := sessions.NewHandler(sessions.NewStore(pool), orgStore, cfg.SessionPrefix, roleSet)
+	dirHandler := directory.NewHandler(dirStore)
+	orgHandler := orgs.NewHandler(orgStore, dirStore, roleSet)
+	credHandler := credentials.NewHandler(credentials.NewStore(pool), orgStore, dirStore, cfg.APIKeyBrand, roleSet)
 	lifecycleHandler := lifecycle.NewHandler(lifecycle.NewStore(pool))
 
-	app := newPublicApp(telem, orgHandler, userKeyHandler, memberKeyHandler, sessionHandler)
-	internalApp := newInternalApp(telem, pool, cfg.InternalAuthToken, orgHandler, userKeyHandler, memberKeyHandler, sessionHandler, lifecycleHandler)
+	app := newPublicApp(telem, dirHandler, orgHandler, credHandler)
+	internalApp := newInternalApp(telem, pool, cfg.InternalAuthToken, credHandler, lifecycleHandler)
 
 	baseLogger := telem.Logger()
 	baseLogger.Info().
@@ -118,10 +117,9 @@ func main() {
 
 func newPublicApp(
 	telem *telemetry.Telemetry,
+	dirHandler *directory.Handler,
 	orgHandler *orgs.Handler,
-	userKeyHandler *userkeys.Handler,
-	memberKeyHandler *memberkeys.Handler,
-	sessionHandler *sessions.Handler,
+	credHandler *credentials.Handler,
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName:      "identity",
@@ -137,16 +135,16 @@ func newPublicApp(
 	app.Use(middleware.RequestLogger(telem))
 
 	users := app.Group("/users")
+	dirHandler.Mount(users)
 	orgHandler.MountUser(users)
-	userKeyHandler.MountPublic(users)
-	sessionHandler.MountPublic(users)
+	credHandler.MountUser(users)
 
 	orgHandler.MountOrganizations(app)
-	memberKeyHandler.MountServiceAccountKeys(app)
+	credHandler.MountServiceAccountKeys(app)
 
 	members := app.Group("/members")
 	orgHandler.MountMembers(members)
-	memberKeyHandler.MountPublic(members)
+	credHandler.MountMembers(members)
 	return app
 }
 
@@ -154,10 +152,7 @@ func newInternalApp(
 	telem *telemetry.Telemetry,
 	pool *pgxpool.Pool,
 	internalToken string,
-	orgHandler *orgs.Handler,
-	userKeyHandler *userkeys.Handler,
-	memberKeyHandler *memberkeys.Handler,
-	sessionHandler *sessions.Handler,
+	credHandler *credentials.Handler,
 	lifecycleHandler *lifecycle.Handler,
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
@@ -190,9 +185,7 @@ func newInternalApp(
 		middleware.RequestLogger(telem),
 		middleware.RequireInternalToken(internalToken),
 	)
-	userKeyHandler.MountInternal(internalAPI)
-	memberKeyHandler.MountInternal(internalAPI)
-	sessionHandler.MountInternal(internalAPI)
+	credHandler.MountInternal(internalAPI)
 	lifecycleHandler.MountInternal(internalAPI)
 	return app
 }

@@ -9,15 +9,22 @@ import (
 	"github.com/plat5dev/plat5/identity/roles"
 )
 
+// people resolves an IdP subject to a person in the directory, creating them
+// when the subject is new.
+type people interface {
+	Resolve(ctx context.Context, issuer, subject string) (userID, status string, err error)
+}
+
 type Handler struct {
 	store   *Store
 	invites inviteStore
+	people  people
 	// roles is the deployment's roles file. Nil: roles are off.
 	roles *roles.Set
 }
 
-func NewHandler(store *Store, roleSet *roles.Set) *Handler {
-	return &Handler{store: store, roles: roleSet}
+func NewHandler(store *Store, dir people, roleSet *roles.Set) *Handler {
+	return &Handler{store: store, people: dir, roles: roleSet}
 }
 
 func (h *Handler) requireOrganization(ctx context.Context, orgID string) error {

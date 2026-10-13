@@ -7,8 +7,6 @@ const DEFAULT_PORT: &str = "5001";
 const DEFAULT_INTERNAL_PORT: &str = "8000";
 const DEFAULT_ETCD_URL: &str = "http://localhost:2379";
 const DEFAULT_USER_ID_CLAIM: &str = "properties.user_id";
-const DEFAULT_APIKEY_BRAND: &str = "plat5";
-const MAX_APIKEY_BRAND_LEN: usize = 32;
 const DEFAULT_APIKEY_CACHE_TTL_SECS: u64 = 300;
 const DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_UPSTREAM_READ_TIMEOUT_MS: u64 = 30_000;
@@ -32,21 +30,13 @@ pub struct GatewayConfig {
     /// Dotted claim path segments for Plat5 user id.
     pub auth_user_id_claim: Vec<String>,
 
-    pub user_apikey_validate_url: String,
-    pub member_apikey_validate_url: String,
-    pub member_session_validate_url: String,
+    /// Identity's one credential validate (`CREDENTIAL_VALIDATE_URL`): every
+    /// `X-API-Key`, and every JWT's issuer and subject. The gateway does not
+    /// know the brand; identity does.
+    pub credential_validate_url: String,
     pub internal_auth_token: Option<String>,
 
-    /// `APIKEY_BRAND`; same value as identity. Unset → `plat5`.
-    pub apikey_brand: String,
-    /// `{brand}-sk-1-`
-    pub user_key_prefix: String,
-    /// `{brand}-mk-1-`
-    pub member_key_prefix: String,
-    /// `{brand}-ms-1-`
-    pub session_prefix: String,
-
-    /// TTL for user keys, member keys, and member sessions (`APIKEY_CACHE_TTL_SECS`).
+    /// TTL for every credential and IdP subject resolve (`APIKEY_CACHE_TTL_SECS`).
     pub apikey_cache_ttl_secs: u64,
 
     pub upstream_connect_timeout: Duration,
@@ -85,11 +75,8 @@ impl GatewayConfig {
     pub fn from_env() -> Result<Self, GatewayConfigError> {
         let auth_issuer = require_env("AUTH_ISSUER")?;
         let auth_jwks_uri = require_env("AUTH_JWKS_URI")?;
-        let user_apikey_validate_url = require_env("USER_APIKEY_VALIDATE_URL")?;
-        let member_apikey_validate_url = require_env("MEMBER_APIKEY_VALIDATE_URL")?;
-        let member_session_validate_url = require_env("MEMBER_SESSION_VALIDATE_URL")?;
+        let credential_validate_url = require_env("CREDENTIAL_VALIDATE_URL")?;
         let valkey_url = require_env("VALKEY_URL")?;
-        let apikey_brand = apikey_brand_from_env()?;
         let audit_url = audit_url_from_env()?;
         let rate_limit_requests =
             parse_u64_env("RATE_LIMIT_REQUESTS", DEFAULT_RATE_LIMIT_REQUESTS)?;
@@ -133,15 +120,8 @@ impl GatewayConfig {
                     .unwrap_or_else(|_| DEFAULT_USER_ID_CLAIM.to_string()),
             ),
 
-            user_apikey_validate_url,
-            member_apikey_validate_url,
-            member_session_validate_url,
+            credential_validate_url,
             internal_auth_token: optional_nonempty_env("INTERNAL_AUTH_TOKEN"),
-
-            apikey_brand: apikey_brand.clone(),
-            user_key_prefix: user_apikey_prefix(&apikey_brand),
-            member_key_prefix: member_apikey_prefix(&apikey_brand),
-            session_prefix: member_session_prefix(&apikey_brand),
 
             apikey_cache_ttl_secs: parse_u64_env(
                 "APIKEY_CACHE_TTL_SECS",
@@ -224,76 +204,9 @@ fn parse_audit(
     }
 }
 
-fn apikey_brand_from_env() -> Result<String, GatewayConfigError> {
-    match env::var("APIKEY_BRAND") {
-        Ok(raw) => parse_apikey_brand(&raw),
-        Err(_) => Ok(DEFAULT_APIKEY_BRAND.to_string()),
-    }
-}
-
-/// `[a-z][a-z0-9]*`, max 32. No case folding. Same rule as identity.
-fn parse_apikey_brand(raw: &str) -> Result<String, GatewayConfigError> {
-    let s = raw.trim();
-    if s.is_empty() {
-        return Err(GatewayConfigError::Invalid {
-            key: "APIKEY_BRAND",
-            message: "is empty".to_string(),
-        });
-    }
-    if s.len() > MAX_APIKEY_BRAND_LEN {
-        return Err(GatewayConfigError::Invalid {
-            key: "APIKEY_BRAND",
-            message: format!("longer than {MAX_APIKEY_BRAND_LEN} characters"),
-        });
-    }
-    let mut chars = s.chars();
-    let first = chars.next().expect("non-empty");
-    if !first.is_ascii_lowercase() || !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) {
-        return Err(GatewayConfigError::Invalid {
-            key: "APIKEY_BRAND",
-            message: format!("must be [a-z][a-z0-9]*, max {MAX_APIKEY_BRAND_LEN}"),
-        });
-    }
-    Ok(s.to_string())
-}
-
-fn user_apikey_prefix(brand: &str) -> String {
-    format!("{brand}-sk-1-")
-}
-
-fn member_apikey_prefix(brand: &str) -> String {
-    format!("{brand}-mk-1-")
-}
-
-fn member_session_prefix(brand: &str) -> String {
-    format!("{brand}-ms-1-")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_apikey_brand_ok() {
-        for brand in ["plat5", "acme", "a", "a1", "happ", "sk"] {
-            assert_eq!(parse_apikey_brand(brand).unwrap(), brand);
-        }
-        assert_eq!(parse_apikey_brand("  acme  ").unwrap(), "acme");
-    }
-
-    #[test]
-    fn parse_apikey_brand_rejects() {
-        for brand in ["", "   ", "Plat5", "acme-app", "1acme", "-x"] {
-            assert!(
-                parse_apikey_brand(brand).is_err(),
-                "expected error for {brand:?}"
-            );
-        }
-        let too_long = "a".repeat(MAX_APIKEY_BRAND_LEN + 1);
-        assert!(parse_apikey_brand(&too_long).is_err());
-        let max = "a".repeat(MAX_APIKEY_BRAND_LEN);
-        assert_eq!(parse_apikey_brand(&max).unwrap(), max);
-    }
 
     #[test]
     fn audit_is_on_by_default_and_needs_a_url() {
@@ -325,12 +238,5 @@ mod tests {
             None
         );
         assert!(parse_audit(Some("no"), Some("http://audit:3003")).is_err());
-    }
-
-    #[test]
-    fn wire_prefixes() {
-        assert_eq!(user_apikey_prefix("plat5"), "plat5-sk-1-");
-        assert_eq!(member_apikey_prefix("acme"), "acme-mk-1-");
-        assert_eq!(member_session_prefix("acme"), "acme-ms-1-");
     }
 }

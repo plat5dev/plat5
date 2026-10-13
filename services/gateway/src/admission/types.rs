@@ -47,11 +47,13 @@ impl Admission {
 /// Who presented the request, for the gateway's request log. Never a secret.
 ///
 /// `key_prefix` is identity's display prefix for an `X-API-Key` credential: the wire
-/// prefix (`{brand}-sk-1-`, `{brand}-mk-1-`, `{brand}-ms-1-`) plus the first
-/// [`KEY_DISPLAY_LEN`] characters after it. It equals the `key_prefix` (keys) or
-/// `token_prefix` (sessions) identity stores and lists, so a log line can be matched
-/// to a key. It is set before validation, so 401s carry it too. A value without a
-/// known wire prefix, or too short to have a preview, is never logged.
+/// prefix (`{brand}-k-2-`, `{brand}-s-2-`, or a version 1 one) plus the first
+/// [`KEY_DISPLAY_LEN`] characters after it. It equals the `key_prefix` identity
+/// stores and lists, so a log line can be matched to a key. It is set before
+/// validation, so 401s carry it too. A value of an unknown shape is never logged.
+///
+/// `auth_type` is set once the credential is known: a session by its shape, a key
+/// once validate says whose it is, a JWT once verified.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RequestCredential {
     pub auth_type: Option<AuthType>,
@@ -65,14 +67,11 @@ pub struct RequestCredential {
 /// `apikey.PrefixDisplayLen`.
 pub const KEY_DISPLAY_LEN: usize = 4;
 
-/// Identity's display prefix for `key`, if it starts with `wire_prefix` and is long
-/// enough to have a preview. Never returns the whole key.
-pub fn key_display_prefix(key: &str, wire_prefix: &str) -> Option<String> {
-    if wire_prefix.is_empty() || !key.starts_with(wire_prefix) {
-        return None;
-    }
-    let n = wire_prefix.len() + KEY_DISPLAY_LEN;
-    if key.len() <= n {
+/// Identity's display prefix for a well-shaped `key` whose wire prefix is
+/// `wire_prefix_len` long. Never returns the whole key.
+pub fn key_display_prefix(key: &str, wire_prefix_len: usize) -> Option<String> {
+    let n = wire_prefix_len + KEY_DISPLAY_LEN;
+    if wire_prefix_len == 0 || key.len() <= n {
         return None;
     }
     key.get(..n).map(str::to_string)
@@ -82,9 +81,10 @@ pub fn key_display_prefix(key: &str, wire_prefix: &str) -> Option<String> {
 #[derive(Debug)]
 pub enum AdmitError {
     Auth(AuthError),
-    MemberApiKeyInvalid,
-    MemberSessionInvalid,
-    /// Credential is present but is not accepted by this scope. Not a compare, so not 404.
+    /// An `X-API-Key` of the wrong shape, or one validate does not accept.
+    CredentialInvalid,
+    /// Credential is present but is not accepted by this scope: another realm's. Not a
+    /// compare, so not 404.
     WrongCredential,
     Unavailable,
     /// Route/config invariant broken.
@@ -94,9 +94,7 @@ pub enum AdmitError {
 impl AdmitError {
     pub fn is_unadmitted_401(&self) -> bool {
         match self {
-            AdmitError::MemberApiKeyInvalid
-            | AdmitError::MemberSessionInvalid
-            | AdmitError::WrongCredential => true,
+            AdmitError::CredentialInvalid | AdmitError::WrongCredential => true,
             AdmitError::Auth(err) => err.is_client_error(),
             _ => false,
         }
@@ -107,13 +105,14 @@ impl AdmitError {
 pub enum AuthError {
     MissingAuthorization,
     InvalidAuthorizationHeader,
-    InvalidToken { reason: &'static str },
+    InvalidToken {
+        reason: &'static str,
+    },
     MissingUserId,
-    MissingUserApiKey,
-    InvalidUserApiKeyHeader,
-    InvalidUserApiKey,
+    /// The subject resolves to a person who is suspended.
+    InactiveUser,
     JwtValidationUnavailable,
-    UserApiKeyValidationUnavailable,
+    SubjectResolveUnavailable,
 }
 
 impl AuthError {
@@ -123,26 +122,15 @@ impl AuthError {
             AuthError::InvalidAuthorizationHeader => "invalid_authorization",
             AuthError::InvalidToken { reason } => reason,
             AuthError::MissingUserId => "missing_user_id",
-            AuthError::MissingUserApiKey => "missing_user_apikey",
-            AuthError::InvalidUserApiKeyHeader => "invalid_user_apikey_header",
-            AuthError::InvalidUserApiKey => "invalid_user_apikey",
+            AuthError::InactiveUser => "inactive_user",
             AuthError::JwtValidationUnavailable => "jwks_unavailable",
-            AuthError::UserApiKeyValidationUnavailable => "user_apikey_service_unavailable",
+            AuthError::SubjectResolveUnavailable => "subject_resolve_unavailable",
         }
     }
 
+    /// Every `AuthError` is about a JWT. `X-API-Key` failures are `AdmitError`s.
     pub fn auth_type(&self) -> AuthType {
-        match self {
-            AuthError::MissingAuthorization
-            | AuthError::InvalidAuthorizationHeader
-            | AuthError::InvalidToken { .. }
-            | AuthError::MissingUserId
-            | AuthError::JwtValidationUnavailable => AuthType::Jwt,
-            AuthError::MissingUserApiKey
-            | AuthError::InvalidUserApiKeyHeader
-            | AuthError::InvalidUserApiKey
-            | AuthError::UserApiKeyValidationUnavailable => AuthType::UserApiKey,
-        }
+        AuthType::Jwt
     }
 
     pub fn is_client_error(&self) -> bool {
@@ -152,9 +140,7 @@ impl AuthError {
                 | AuthError::InvalidAuthorizationHeader
                 | AuthError::InvalidToken { .. }
                 | AuthError::MissingUserId
-                | AuthError::MissingUserApiKey
-                | AuthError::InvalidUserApiKeyHeader
-                | AuthError::InvalidUserApiKey
+                | AuthError::InactiveUser
         )
     }
 
@@ -214,17 +200,19 @@ mod tests {
     #[test]
     fn display_prefix_keeps_four_chars_after_wire_prefix() {
         assert_eq!(
-            key_display_prefix("plat5-mk-1-abcdSECRETSECRET", "plat5-mk-1-").as_deref(),
-            Some("plat5-mk-1-abcd")
+            key_display_prefix("plat5-k-2-abcdSECRETSECRET", "plat5-k-2-".len()).as_deref(),
+            Some("plat5-k-2-abcd")
         );
     }
 
     #[test]
-    fn display_prefix_never_returns_whole_or_unknown_key() {
-        assert_eq!(key_display_prefix("plat5-mk-1-abcd", "plat5-mk-1-"), None);
-        assert_eq!(key_display_prefix("plat5-mk-1-ab", "plat5-mk-1-"), None);
-        assert_eq!(key_display_prefix("sk_live_abcdefgh", "plat5-mk-1-"), None);
-        assert_eq!(key_display_prefix("anything", ""), None);
+    fn display_prefix_never_returns_whole_key() {
+        assert_eq!(
+            key_display_prefix("plat5-k-2-abcd", "plat5-k-2-".len()),
+            None
+        );
+        assert_eq!(key_display_prefix("plat5-k-2-ab", "plat5-k-2-".len()), None);
+        assert_eq!(key_display_prefix("anything", 0), None);
     }
 
     #[test]

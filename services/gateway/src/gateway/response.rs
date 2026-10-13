@@ -6,7 +6,7 @@ use pingora::Result;
 use tracing::{info, warn, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::admission::{AdmitError, AuthError, AuthType};
+use crate::admission::{AdmitError, AuthError};
 use crate::error::{ApiError, ErrorKind};
 use crate::metrics;
 use crate::rate_limit::RateLimitInfo;
@@ -149,25 +149,8 @@ pub async fn write_admit_error(
 ) -> Result<bool> {
     match err {
         AdmitError::Auth(auth_err) => write_auth_error(cors, session, ctx, auth_err).await,
-        AdmitError::MemberApiKeyInvalid => {
-            write_credential_failure(
-                cors,
-                session,
-                ctx,
-                AuthType::MemberApiKey.as_str(),
-                "invalid_member_apikey",
-            )
-            .await
-        }
-        AdmitError::MemberSessionInvalid => {
-            write_credential_failure(
-                cors,
-                session,
-                ctx,
-                AuthType::MemberSession.as_str(),
-                "invalid_member_session",
-            )
-            .await
+        AdmitError::CredentialInvalid => {
+            write_credential_failure(cors, session, ctx, "credential", "invalid_credential").await
         }
         AdmitError::WrongCredential => {
             write_credential_failure(cors, session, ctx, "credential", "wrong_credential").await

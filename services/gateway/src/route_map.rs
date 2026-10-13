@@ -32,11 +32,12 @@ pub struct Route {
 }
 
 impl Route {
-    /// Whether a request with `method` goes in the org's audit log (docs/audit.md).
-    /// Only `organization` and `member` routes have an org to log into. Writes are
-    /// audited by default; the route's `audit` overrides.
+    /// Whether a request with `method` goes in an audit log (docs/audit.md#which-log):
+    /// the org's on `organization` and `member` routes, the person's on `user` routes.
+    /// `public` has no realm to log into. Writes are audited by default; the route's
+    /// `audit` overrides.
     pub fn audited(&self, method: &str) -> bool {
-        if !matches!(self.scope, RouteScope::Organization | RouteScope::Member) {
+        if self.scope == RouteScope::Public {
             return false;
         }
         self.audit
@@ -540,8 +541,12 @@ mod tests {
     }
 
     #[test]
-    fn writes_are_audited_by_default_on_org_and_member_routes() {
-        for scope in [RouteScope::Organization, RouteScope::Member] {
+    fn writes_are_audited_by_default_on_user_org_and_member_routes() {
+        for scope in [
+            RouteScope::User,
+            RouteScope::Organization,
+            RouteScope::Member,
+        ] {
             let route = audit_route(scope, None);
             for m in ["POST", "PUT", "PATCH", "DELETE"] {
                 assert!(route.audited(m), "{scope:?} {m}");
@@ -561,11 +566,9 @@ mod tests {
     }
 
     #[test]
-    fn public_and_user_routes_are_never_audited() {
-        for scope in [RouteScope::Public, RouteScope::User] {
-            assert!(!audit_route(scope, None).audited("POST"));
-            assert!(!audit_route(scope, Some(true)).audited("POST"));
-        }
+    fn public_routes_are_never_audited() {
+        assert!(!audit_route(RouteScope::Public, None).audited("POST"));
+        assert!(!audit_route(RouteScope::Public, Some(true)).audited("POST"));
     }
 
     #[test]

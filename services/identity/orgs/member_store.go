@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/plat5dev/plat5/identity/internal/dbx"
@@ -19,10 +20,8 @@ func (s *Store) GetMember(ctx context.Context, memberID string) (*Member, error)
 	defer cancel()
 	defer op.End()
 
-	m, err := scanMember(s.pool.QueryRow(ctx, `
-		SELECT `+memberCols+`
-		FROM members
-		WHERE id = $1
+	m, err := scanMember(s.pool.QueryRow(ctx, memberSelect+`
+		WHERE m.id = $1 AND m.organization_id IS NOT NULL
 	`, memberID))
 	if err != nil {
 		if dbx.IsNoRows(err) {
@@ -43,10 +42,8 @@ func (s *Store) ResolveMember(ctx context.Context, userID, organizationID string
 	defer cancel()
 	defer op.End()
 
-	m, err := scanMember(s.pool.QueryRow(ctx, `
-		SELECT `+memberCols+`
-		FROM members
-		WHERE organization_id = $1 AND user_id = $2 AND status <> 'removed'
+	m, err := scanMember(s.pool.QueryRow(ctx, memberSelect+`
+		WHERE m.organization_id = $1 AND m.identity_id = $2 AND m.principal = 'user' AND m.status <> 'removed'
 	`, organizationID, userID))
 	if err != nil {
 		if dbx.IsNoRows(err) {
@@ -73,12 +70,10 @@ func (s *Store) ListMembers(ctx context.Context, organizationID string, limit in
 	if startingAfter != "" {
 		after = startingAfter
 	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT `+memberCols+`
-		FROM members
-		WHERE organization_id = $1 AND status <> 'removed'
-		AND ($2::text IS NULL OR id > $2)
-		ORDER BY id ASC
+	rows, err := s.pool.Query(ctx, memberSelect+`
+		WHERE m.organization_id = $1 AND m.status <> 'removed'
+		AND ($2::text IS NULL OR m.id > $2)
+		ORDER BY m.id ASC
 		LIMIT $3
 	`, organizationID, after, limit+1)
 	if err != nil {
@@ -120,9 +115,9 @@ func (s *Store) ListMemberships(ctx context.Context, userID string, limit int, s
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT m.id, m.role, m.status, o.id, o.name, o.slug
-		FROM members m
+		FROM memberships m
 		INNER JOIN organizations o ON o.id = m.organization_id
-		WHERE m.user_id = $1 AND m.status = 'active'
+		WHERE m.identity_id = $1 AND m.principal = 'user' AND m.status = 'active'
 		AND ($2::text IS NULL OR m.id > $2)
 		ORDER BY m.id ASC
 		LIMIT $3
@@ -167,14 +162,12 @@ func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 	defer cancel()
 	defer op.End()
 
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO members
-			(id, organization_id, user_id, service_account_id, role, status, created_at, updated_at)
-		VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)
-	`, m.ID, m.OrganizationID, *m.UserID, m.Role, m.Status, m.CreatedAt, m.UpdatedAt)
-	if err != nil {
+	if err := insertMember(ctx, s.pool, m); err != nil {
 		if dbx.IsUniqueViolation(err) {
 			return op.SoftFail("conflict", ErrConflict, ErrConflict)
+		}
+		if dbx.IsForeignKeyViolation(err) {
+			return op.Expected("org or user not found", ErrNotFound)
 		}
 		return op.Fail(err)
 	}
@@ -182,12 +175,27 @@ func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 	return nil
 }
 
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// insertMember writes m as an org membership. Kind follows which id is set.
+func insertMember(ctx context.Context, q execer, m *Member) error {
+	m.Kind = m.Principal()
+	_, err := q.Exec(ctx, `
+		INSERT INTO memberships
+			(id, identity_id, organization_id, principal, display_name, role, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, m.ID, m.IdentityID(), m.OrganizationID, m.Kind, m.DisplayOverride, m.Role, m.Status, m.CreatedAt, m.UpdatedAt)
+	return err
+}
+
 // MemberChange checks and applies a write to target. members is every row in
 // the org, locked, target included. Return an error to refuse the write.
 type MemberChange func(target *Member, members []*Member) error
 
 // MutateMember locks every member in the target's org, applies change, and
-// persists role and status. organizationID "" is the self address (any org);
+// persists role, status, and the display override. organizationID "" is the self address (any org);
 // otherwise a member in another org is not found. Removed is not an address.
 func (s *Store) MutateMember(ctx context.Context, organizationID, memberID string, change MemberChange) (*Member, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "mutate_member", dbx.DefaultTimeout,
@@ -203,7 +211,9 @@ func (s *Store) MutateMember(ctx context.Context, organizationID, memberID strin
 	defer tx.Rollback(ctx)
 
 	var memberOrg string
-	err = tx.QueryRow(ctx, `SELECT organization_id FROM members WHERE id = $1`, memberID).Scan(&memberOrg)
+	err = tx.QueryRow(ctx, `
+		SELECT organization_id FROM memberships WHERE id = $1 AND organization_id IS NOT NULL
+	`, memberID).Scan(&memberOrg)
 	if err != nil {
 		if dbx.IsNoRows(err) {
 			return nil, op.Expected("not found", ErrNotFound)
@@ -239,10 +249,10 @@ func (s *Store) MutateMember(ctx context.Context, organizationID, memberID strin
 
 	target.UpdatedAt = time.Now().UTC()
 	tag, err := tx.Exec(ctx, `
-		UPDATE members
-		SET role = $3, status = $4, updated_at = $5
+		UPDATE memberships
+		SET role = $3, status = $4, display_name = $5, updated_at = $6
 		WHERE organization_id = $1 AND id = $2
-	`, memberOrg, memberID, target.Role, target.Status, target.UpdatedAt)
+	`, memberOrg, memberID, target.Role, target.Status, target.DisplayOverride, target.UpdatedAt)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
@@ -267,13 +277,15 @@ func (s *Store) MutateMember(ctx context.Context, organizationID, memberID strin
 // member.removed. Nothing of a removed member stays usable (docs/identity.md#status).
 func finishRemove(ctx context.Context, tx pgx.Tx, m *Member) error {
 	if _, err := tx.Exec(ctx, `
-		UPDATE member_api_keys
+		UPDATE credentials
 		SET revoked_at = $2
-		WHERE member_id = $1 AND revoked_at IS NULL
+		WHERE membership_id = $1 AND kind = 'key' AND revoked_at IS NULL
 	`, m.ID, m.UpdatedAt); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM member_sessions WHERE member_id = $1`, m.ID); err != nil {
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM credentials WHERE membership_id = $1 AND kind = 'session'
+	`, m.ID); err != nil {
 		return err
 	}
 	principal := m.Principal()
@@ -286,12 +298,10 @@ func finishRemove(ctx context.Context, tx pgx.Tx, m *Member) error {
 }
 
 func lockOrgMembers(ctx context.Context, tx pgx.Tx, organizationID string) ([]*Member, error) {
-	rows, err := tx.Query(ctx, `
-		SELECT `+memberCols+`
-		FROM members
-		WHERE organization_id = $1
-		ORDER BY id
-		FOR UPDATE
+	rows, err := tx.Query(ctx, memberSelect+`
+		WHERE m.organization_id = $1
+		ORDER BY m.id
+		FOR UPDATE OF m
 	`, organizationID)
 	if err != nil {
 		return nil, err

@@ -128,3 +128,66 @@ func TestParseOutcome(t *testing.T) {
 		})
 	}
 }
+
+const userIntent = `{
+	"occurred_at": "2026-10-08T18:30:00Z",
+	"user_id": "01J9ZX4K7M2P5Q8R1S3T6V9W0Z",
+	"actor": {"auth_type": "jwt"},
+	"service": "identity",
+	"method": "POST",
+	"route": "/user/organizations",
+	"ip": "203.0.113.7"
+}`
+
+func TestParseUserIntent(t *testing.T) {
+	in, err := ParseIntent("r", []byte(userIntent), testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.UserID == nil || in.OrganizationID != nil || in.Actor.MemberID != nil || in.Actor.KeyPrefix != nil {
+		t.Fatalf("a person's event: %+v", in)
+	}
+	key := strings.Replace(userIntent, `{"auth_type": "jwt"}`, `{"auth_type": "user_apikey", "key_prefix": "plat5-k-2-AbC9"}`, 1)
+	in, err = ParseIntent("r", []byte(key), testNow)
+	if err != nil || in.Actor.KeyPrefix == nil {
+		t.Fatalf("user key: %+v %v", in, err)
+	}
+
+	bad := map[string]struct{ from, to, field string }{
+		"both owners":       {`"user_id"`, `"organization_id": "o", "user_id"`, "organization_id"},
+		"member credential": {`{"auth_type": "jwt"}`, `{"auth_type": "member_apikey", "member_id": "m", "key_prefix": "p"}`, "actor.auth_type"},
+		"member on jwt":     {`{"auth_type": "jwt"}`, `{"auth_type": "jwt", "member_id": "m"}`, "actor.member_id"},
+		"prefix on jwt":     {`{"auth_type": "jwt"}`, `{"auth_type": "jwt", "key_prefix": "p"}`, "actor.key_prefix"},
+		"user key, no pfx":  {`{"auth_type": "jwt"}`, `{"auth_type": "user_apikey"}`, "actor.key_prefix"},
+	}
+	for name, tc := range bad {
+		t.Run(name, func(t *testing.T) {
+			_, err := ParseIntent("r", []byte(strings.Replace(userIntent, tc.from, tc.to, 1)), testNow)
+			paths := fieldPaths(t, err)
+			if len(paths) != 1 || paths[0] != tc.field {
+				t.Fatalf("want %s, got %v", tc.field, paths)
+			}
+		})
+	}
+}
+
+func TestParseOutcomeIDs(t *testing.T) {
+	out, err := ParseOutcome("r", []byte(`{"outcome":"responded","status":201,"created_id":"o1","organization_id":"o1","member_id":"m1"}`))
+	if err != nil || *out.CreatedID != "o1" || out.Named == nil || out.Named.MemberID != "m1" {
+		t.Fatalf("ids: %+v %v", out, err)
+	}
+	bad := map[string]struct{ body, field string }{
+		"org without member":  {`{"outcome":"responded","status":201,"organization_id":"o1"}`, "member_id"},
+		"created on rejected": {`{"outcome":"rejected","status":403,"created_id":"x"}`, "outcome"},
+		"created not ascii":   {`{"outcome":"responded","status":201,"created_id":"a b"}`, "created_id"},
+	}
+	for name, tc := range bad {
+		t.Run(name, func(t *testing.T) {
+			_, err := ParseOutcome("r", []byte(tc.body))
+			paths := fieldPaths(t, err)
+			if len(paths) != 1 || paths[0] != tc.field {
+				t.Fatalf("want %s, got %v", tc.field, paths)
+			}
+		})
+	}
+}

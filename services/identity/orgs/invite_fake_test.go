@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"sort"
 	"sync"
@@ -173,6 +174,12 @@ func testInviteApp(h *Handler) *fiber.App {
 
 func doJSON(t *testing.T, app *fiber.App, method, path, body string) (int, []byte) {
 	t.Helper()
+	code, b, _ := doJSONHeaders(t, app, method, path, body)
+	return code, b
+}
+
+func doJSONHeaders(t *testing.T, app *fiber.App, method, path, body string) (int, []byte, http.Header) {
+	t.Helper()
 	var rdr io.Reader
 	if body != "" {
 		rdr = bytes.NewReader([]byte(body))
@@ -190,7 +197,7 @@ func doJSON(t *testing.T, app *fiber.App, method, path, body string) (int, []byt
 	if err != nil {
 		t.Fatal(err)
 	}
-	return resp.StatusCode, b
+	return resp.StatusCode, b, resp.Header
 }
 
 func seedOwner(f *fakeInvites, orgID, userID string) {

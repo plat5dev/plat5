@@ -142,6 +142,7 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 	metrics.RecordInviteOp("create")
 	// Never the token: the log outlives the invite.
 	auditx.Set(c, auditx.Details{"invite_id": inv.ID, "role": inv.Role})
+	auditx.SetCreated(c, inv.ID)
 	return c.Status(fiber.StatusCreated).JSON(h.toInviteResponse(inv, true))
 }
 
@@ -215,6 +216,9 @@ func (h *Handler) redeem(c fiber.Ctx, token, userID string) error {
 		if stderrors.As(err, &dead) {
 			return inviteConflict(dead.Status)
 		}
+		if stderrors.Is(err, ErrUserNotFound) {
+			return errors.NotFoundError("user", userID)
+		}
 		return httpx.MapDB(ctx, err, "failed to redeem invite", httpx.DBErr{
 			NotFound: ErrNotFound, Resource: "invite", ResourceID: nil,
 		})
@@ -222,6 +226,7 @@ func (h *Handler) redeem(c fiber.Ctx, token, userID string) error {
 
 	metrics.RecordInviteOp("redeem")
 	metrics.RecordMemberOp("create")
+	auditx.SetOrganization(c, member.OrganizationID, member.ID)
 	return c.JSON(h.toMemberResponse(member))
 }
 
