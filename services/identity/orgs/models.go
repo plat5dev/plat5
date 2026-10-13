@@ -1,8 +1,6 @@
 package orgs
 
 import (
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/plat5dev/plat5/identity/internal/id"
@@ -37,7 +35,6 @@ func (s Status) Valid() bool {
 type Organization struct {
 	ID        string
 	Name      string
-	Slug      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -50,7 +47,6 @@ type Membership struct {
 	Status           Status
 	OrganizationID   string
 	OrganizationName string
-	OrganizationSlug string
 }
 
 // Member is an org membership: a user or a service account. At most one of
@@ -108,30 +104,4 @@ func (m *Member) IdentityID() *string {
 
 func NewULID() string {
 	return id.New()
-}
-
-var (
-	slugSanitize = regexp.MustCompile(`[^a-z0-9]+`)
-	slugValid    = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
-)
-
-func Slugify(name string) string {
-	s := strings.ToLower(strings.TrimSpace(name))
-	s = slugSanitize.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
-	if s == "" {
-		s = "org"
-	}
-	if len(s) > 64 {
-		s = s[:64]
-		s = strings.Trim(s, "-")
-	}
-	return s
-}
-
-func ValidSlug(slug string) bool {
-	if slug == "" || len(slug) > 64 {
-		return false
-	}
-	return slugValid.MatchString(slug)
 }

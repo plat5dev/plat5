@@ -26,13 +26,10 @@ func (s *Store) CreateOrganization(ctx context.Context, org *Organization, userI
 	defer tx.Rollback(ctx)
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO organizations (id, name, slug, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5)
-	`, org.ID, org.Name, org.Slug, org.CreatedAt, org.UpdatedAt)
+		INSERT INTO organizations (id, name, created_at, updated_at)
+		VALUES ($1, $2, $3, $4)
+	`, org.ID, org.Name, org.CreatedAt, org.UpdatedAt)
 	if err != nil {
-		if dbx.IsUniqueViolation(err) {
-			return nil, op.SoftFail("slug conflict", ErrConflict, ErrConflict)
-		}
 		return nil, op.Fail(err)
 	}
 
@@ -69,7 +66,7 @@ func (s *Store) GetOrganization(ctx context.Context, organizationID string) (*Or
 	defer op.End()
 
 	org, err := scanOrg(s.pool.QueryRow(ctx, `
-		SELECT id, name, slug, created_at, updated_at
+		SELECT id, name, created_at, updated_at
 		FROM organizations WHERE id = $1
 	`, organizationID))
 	if err != nil {
@@ -103,7 +100,7 @@ func (s *Store) ListOrganizations(ctx context.Context, limit int, startingAfter 
 		after = startingAfter
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, name, slug, created_at, updated_at
+		SELECT id, name, created_at, updated_at
 		FROM organizations
 		WHERE ($1::text IS NULL OR id > $1)
 		ORDER BY id ASC
@@ -135,9 +132,9 @@ func (s *Store) ListOrganizations(ctx context.Context, limit int, startingAfter 
 	return out, hasMore, nil
 }
 
-// UpdateOrganization sets name and slug where non-nil. It also returns the
+// UpdateOrganization sets name where non-nil. It also returns the
 // organization as it was, read under the same lock.
-func (s *Store) UpdateOrganization(ctx context.Context, organizationID string, name, slug *string) (*Organization, Organization, error) {
+func (s *Store) UpdateOrganization(ctx context.Context, organizationID string, name *string) (*Organization, Organization, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "update_organization", dbx.DefaultTimeout,
 		attribute.String("organization.id", organizationID),
 	)
@@ -151,7 +148,7 @@ func (s *Store) UpdateOrganization(ctx context.Context, organizationID string, n
 	defer tx.Rollback(ctx)
 
 	org, err := scanOrg(tx.QueryRow(ctx, `
-		SELECT id, name, slug, created_at, updated_at
+		SELECT id, name, created_at, updated_at
 		FROM organizations WHERE id = $1
 		FOR UPDATE
 	`, organizationID))
@@ -166,19 +163,13 @@ func (s *Store) UpdateOrganization(ctx context.Context, organizationID string, n
 	if name != nil {
 		org.Name = *name
 	}
-	if slug != nil {
-		org.Slug = *slug
-	}
 	org.UpdatedAt = time.Now().UTC()
 	_, err = tx.Exec(ctx, `
 		UPDATE organizations
-		SET name = $2, slug = $3, updated_at = $4
+		SET name = $2, updated_at = $3
 		WHERE id = $1
-	`, org.ID, org.Name, org.Slug, org.UpdatedAt)
+	`, org.ID, org.Name, org.UpdatedAt)
 	if err != nil {
-		if dbx.IsUniqueViolation(err) {
-			return nil, Organization{}, op.SoftFail("slug conflict", ErrConflict, ErrConflict)
-		}
 		return nil, Organization{}, op.Fail(err)
 	}
 

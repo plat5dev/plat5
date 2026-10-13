@@ -114,7 +114,7 @@ func (s *Store) ListMemberships(ctx context.Context, userID string, limit int, s
 		after = startingAfter
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT m.id, m.role, m.status, o.id, o.name, o.slug
+		SELECT m.id, m.role, m.status, o.id, o.name
 		FROM memberships m
 		INNER JOIN organizations o ON o.id = m.organization_id
 		WHERE m.identity_id = $1 AND m.principal = 'user' AND m.status = 'active'

@@ -9,7 +9,6 @@ import (
 type MembershipOrgResponse struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-	Slug string `json:"slug"`
 }
 
 type MembershipResponse struct {
@@ -53,7 +52,6 @@ func (h *Handler) toMembershipResponse(m *Membership) MembershipResponse {
 		Organization: MembershipOrgResponse{
 			ID:   m.OrganizationID,
 			Name: m.OrganizationName,
-			Slug: m.OrganizationSlug,
 		},
 		Role:   m.Role,
 		Status: string(m.Status),

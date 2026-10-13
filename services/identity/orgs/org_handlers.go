@@ -1,12 +1,10 @@
 package orgs
 
 import (
-	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
 
-	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/internal/auditx"
 	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/metrics"
@@ -14,18 +12,15 @@ import (
 
 type CreateOrgRequest struct {
 	Name string `json:"name"`
-	Slug string `json:"slug"`
 }
 
 type UpdateOrgRequest struct {
 	Name *string `json:"name"`
-	Slug *string `json:"slug"`
 }
 
 type OrgResponse struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
-	Slug      string `json:"slug"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
@@ -49,18 +44,10 @@ func (h *Handler) CreateOrganization(c fiber.Ctx) error {
 		return err
 	}
 
-	slug := strings.TrimSpace(req.Slug)
-	if slug == "" {
-		slug = Slugify(name)
-	} else if !ValidSlug(slug) {
-		return errors.FieldError("slug", "Slug can only use lowercase letters, numbers, and dashes.")
-	}
-
 	now := time.Now().UTC()
 	org := &Organization{
 		ID:        NewULID(),
 		Name:      name,
-		Slug:      slug,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -69,8 +56,6 @@ func (h *Handler) CreateOrganization(c fiber.Ctx) error {
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to create organization", httpx.DBErr{
 			NotFound: ErrUserNotFound, Resource: "user", ResourceID: userID,
-			Conflict: ErrConflict, Field: "slug", FieldValue: slug,
-			Message: "An organization with this slug already exists.",
 		})
 	}
 
@@ -125,7 +110,7 @@ func (h *Handler) UpdateOrganization(c fiber.Ctx) error {
 		return err
 	}
 
-	var name, slug *string
+	var name *string
 	if req.Name != nil {
 		n, err := requireName(*req.Name, "name", MaxOrgNameLen)
 		if err != nil {
@@ -133,29 +118,15 @@ func (h *Handler) UpdateOrganization(c fiber.Ctx) error {
 		}
 		name = &n
 	}
-	if req.Slug != nil {
-		s := strings.TrimSpace(*req.Slug)
-		if !ValidSlug(s) {
-			return errors.FieldError("slug", "Slug can only use lowercase letters, numbers, and dashes.")
-		}
-		slug = &s
-	}
 
-	org, prior, err := h.store.UpdateOrganization(ctx, orgID, name, slug)
+	org, prior, err := h.store.UpdateOrganization(ctx, orgID, name)
 	if err != nil {
-		var attempted string
-		if slug != nil {
-			attempted = *slug
-		}
 		return httpx.MapDB(ctx, err, "failed to update organization", httpx.DBErr{
 			NotFound: ErrNotFound, Resource: "organization", ResourceID: orgID,
-			Conflict: ErrConflict, Field: "slug", FieldValue: attempted,
-			Message: "An organization with this slug already exists.",
 		})
 	}
 	details := auditx.Details{}
 	details.Changed("name", prior.Name, org.Name)
-	details.Changed("slug", prior.Slug, org.Slug)
 	auditx.Set(c, details)
 	return c.JSON(toOrgResponse(org))
 }
@@ -176,7 +147,6 @@ func toOrgResponse(o *Organization) OrgResponse {
 	return OrgResponse{
 		ID:        o.ID,
 		Name:      o.Name,
-		Slug:      o.Slug,
 		CreatedAt: httpx.FormatTime(o.CreatedAt),
 		UpdatedAt: httpx.FormatTime(o.UpdatedAt),
 	}

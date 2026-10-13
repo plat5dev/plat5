@@ -57,8 +57,6 @@ Use these only when a more specific sentence does not apply.
 |------|-----------|
 | Name empty | Name is required. |
 | Name > 128 | Name is too long. |
-| Slug not `[a-z0-9-]+` | Slug can only use lowercase letters, numbers, and dashes. |
-| Slug taken | An organization with this slug already exists. |
 
 ### Members
 

@@ -46,7 +46,6 @@ Public routes are not auto-published. The process still serves them on the publi
 
 Illegal states. Not permissions.
 
-- Slug is globally unique.
 - A member is exactly one of user or service account.
 - One non-removed member row per `(organization_id, user_id)`. One member row per service account. A service account lives in exactly one org.
 - A remove must leave at least one non-removed member. `active` and `suspended` both count. Service accounts count.
@@ -118,7 +117,7 @@ Active **user** memberships only: not service accounts, not `suspended`, not `re
 ```json
 {
   "id": "...",
-  "organization": { "id": "...", "name": "Acme", "slug": "acme" },
+  "organization": { "id": "...", "name": "Acme" },
   "role": "admin",
   "status": "active"
 }
@@ -158,19 +157,19 @@ Create **201** also includes `"key": "{brand}-k-2-…"` once.
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/users/{user_id}/organizations` | Create. Body `{ "name", "slug?" }`. Inserts an **active** member for that user with `creator_role`. |
+| `POST` | `/users/{user_id}/organizations` | Create. Body `{ "name" }`. Inserts an **active** member for that user with `creator_role`. |
 | `GET` | `/organizations` | Every organization. |
 | `GET` | `/organizations/{organization_id}` | **404** if missing |
-| `PATCH` | `/organizations/{organization_id}` | Name and slug. Slug uniqueness stays. |
+| `PATCH` | `/organizations/{organization_id}` | Name. |
 | `DELETE` | `/organizations/{organization_id}` | Hard delete. Cascades members, invites, service accounts, and keys. Missing → **404**. Not blocked by the last-member rule. |
 
 #### Create body
 
 ```json
-{ "name": "Acme", "slug": "acme" }
+{ "name": "Acme" }
 ```
 
-`slug` optional (derived from name). Globally unique. IDs are **ULID** strings. `name` max 128 chars.
+IDs are **ULID** strings. `name` max 128 chars.
 
 #### Org response
 
@@ -178,7 +177,6 @@ Create **201** also includes `"key": "{brand}-k-2-…"` once.
 {
   "id": "...",
   "name": "Acme",
-  "slug": "acme",
   "created_at": "...",
   "updated_at": "..."
 }
@@ -440,7 +438,7 @@ A `user` route that changes something an org owns names that org and member on `
 
 | Write | Details |
 |-------|---------|
-| `PATCH /organizations/{organization_id}` | `name`, `slug` as changes |
+| `PATCH /organizations/{organization_id}` | `name` as a change |
 | `POST /organizations/{organization_id}/members` | `member_id`, `role` |
 | `PATCH /organizations/{organization_id}/members/{member_id}` | `role`, `status`, `display_name` as changes |
 | `PATCH /members/{member_id}` | `status`, `display_name` as changes |

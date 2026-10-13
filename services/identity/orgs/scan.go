@@ -33,7 +33,6 @@ func scanMembership(row dbx.Scannable) (*Membership, error) {
 		&status,
 		&m.OrganizationID,
 		&m.OrganizationName,
-		&m.OrganizationSlug,
 	)
 	if err != nil {
 		return nil, err
@@ -44,7 +43,7 @@ func scanMembership(row dbx.Scannable) (*Membership, error) {
 
 func scanOrg(row dbx.Scannable) (*Organization, error) {
 	var o Organization
-	err := row.Scan(&o.ID, &o.Name, &o.Slug, &o.CreatedAt, &o.UpdatedAt)
+	err := row.Scan(&o.ID, &o.Name, &o.CreatedAt, &o.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

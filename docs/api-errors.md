@@ -13,11 +13,11 @@ Product sentences live in [`error-copy.md`](error-copy.md).
   "error": {
     "type": "invalid_request_error",
     "code": "VALIDATION_ERROR",
-    "message": "Slug can only use lowercase letters, numbers, and dashes.",
+    "message": "Name is required.",
     "request_id": "abc-123",
     "details": {
       "fields": [
-        { "path": "slug", "message": "Slug can only use lowercase letters, numbers, and dashes." }
+        { "path": "name", "message": "Name is required." }
       ]
     }
   }

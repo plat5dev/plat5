@@ -70,6 +70,7 @@ Do not add these because they would be convenient:
 - Global / platform admin service accounts
 - Multi-org service accounts (`home_organization_id`, SA member in a second org)
 - Org `settings` / platform config bag
+- An organization slug, or any second human key. The id is the address; `name` is the label
 - Role names or meanings in Plat5 code (`owner` / `admin` / `member`), or getting a user id from `member_id` for org-scope apps
 - Roles in the route registry, etcd, or the gateway
 - More than one role per member, or per-org custom roles (deferred)

@@ -109,7 +109,7 @@ PATCH /organizations/{organization_id}/members/{member_id}
 PATCH /members/{member_id}
 ```
 
-The path names every id the handler reads. The catalog's route labels decide who may call. Identity refuses illegal states: slug uniqueness, one membership row per user per org, last member, last `creator_role` holder, the invite machine, an address that does not exist, and a role not in the roles file.
+The path names every id the handler reads. The catalog's route labels decide who may call. Identity refuses illegal states: one membership row per user per org, last member, last `creator_role` holder, the invite machine, an address that does not exist, and a role not in the roles file.
 
 ## Error split (locked)
 
