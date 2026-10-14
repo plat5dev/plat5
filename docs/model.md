@@ -118,7 +118,7 @@ Why:
 
 ## Lifecycle
 
-Identity writes lifecycle events in the same transaction as the change. Services opt in by reading a pull feed. The events are `organization.deleted` (one per delete, not cascaded per member) and `member.removed`. `removed` is final: re-adding someone creates a new member id. Deleting an account emits `member.removed` in each organization it touches, and nothing for the directory.
+Identity writes lifecycle events in the same transaction as the change. Services opt in by reading a pull feed. The events are births and ends of organizations and members: `organization.created`, `organization.deleted` (one per delete, not cascaded per member), `member.created`, and `member.removed`. An org create writes `organization.created`, then `member.created` for the founder. `removed` is final: re-adding someone creates a new member id and a new `member.created`. Deleting an account emits `member.removed` in each organization it touches, and nothing for the directory. Updates, suspends, and the directory are not events.
 
 People:
 

@@ -36,7 +36,7 @@ Read the doc, don’t re-derive:
 | JWT / IdP required to boot. API keys are an alternative credential | [`docs/idp-contract.md`](docs/idp-contract.md) |
 | Identity **public** routes are operator-owned. Apply the catalog (or a subset) | [`docs/routes.md`](docs/routes.md), [`services/identity/routes.yml`](services/identity/routes.yml) |
 | Internal validate stays on `INTERNAL_PORT`. Gateway boots with `CREDENTIAL_VALIDATE_URL`. `APIKEY_BRAND` is identity's alone; the gateway checks a key's shape, not its brand | identity.md, gateway-contract.md |
-| Lifecycle events: identity writes `organization.deleted` and `member.removed` (also one per org on account deletion) in the same transaction as the change. Always recorded; services opt in by reading the internal feed. Event writes are serialized, so `id` order is commit order | identity.md |
+| Lifecycle events: identity writes births and ends of organizations and members (`organization.created`, `organization.deleted`, `member.created`, `member.removed`) in the same transaction as the change. Org create also writes `member.created` for the founder, after `organization.created`. Account deletion writes `member.removed` per org and nothing for the directory. Always recorded; services opt in by reading the internal feed. Event writes are serialized, so `id` order is commit order | identity.md |
 | Route-registry: Postgres desired state + revisions; etcd is the gateway projection | [`docs/route-registry.md`](docs/route-registry.md) |
 | Apply is **upsert** of services in the file. Services not in the file are left alone | route-registry.md |
 | etcd prefix: `edge/gateway/routes/` | routes.md |
@@ -105,6 +105,7 @@ Do not add these because they would be convenient:
 - Audit events in Valkey or etcd
 - A queue, broker, or push delivery in identity for lifecycle events. Push is a relay that reads the feed
 - Lifecycle events that are not written in the same transaction as the change, or that carry `user_id`
+- Lifecycle events other than births and ends of organizations and members, or a name or role on one. Updates, suspends, the directory, credentials, and invites are not events
 - Deriving lifecycle events from the audit log
 
 ## Siblings

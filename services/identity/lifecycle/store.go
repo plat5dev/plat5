@@ -17,7 +17,9 @@ import (
 )
 
 const (
+	TypeOrganizationCreated = "organization.created"
 	TypeOrganizationDeleted = "organization.deleted"
+	TypeMemberCreated       = "member.created"
 	TypeMemberRemoved       = "member.removed"
 )
 

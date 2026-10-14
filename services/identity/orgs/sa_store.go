@@ -71,6 +71,9 @@ func (s *Store) CreateServiceAccount(ctx context.Context, sa *ServiceAccount) (*
 	if err := insertMember(ctx, tx, m); err != nil {
 		return nil, op.Fail(err)
 	}
+	if err := recordMemberCreated(ctx, tx, m); err != nil {
+		return nil, op.Fail(err)
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, op.Fail(err)

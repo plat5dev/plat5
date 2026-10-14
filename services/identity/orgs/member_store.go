@@ -148,8 +148,9 @@ func (s *Store) ListMemberships(ctx context.Context, userID string, limit int, s
 	return out, hasMore, nil
 }
 
-// CreateUserMember inserts a new user member. A removed member for the same
-// person stays removed: removed is final, and adding again is a new member id.
+// CreateUserMember inserts a new user member and writes member.created.
+// A removed member for the same person stays removed: removed is final,
+// and adding again is a new member id.
 func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 	if m.UserID == nil || m.ServiceAccountID != nil {
 		return fmt.Errorf("create_user_member: user_id required")
@@ -162,13 +163,25 @@ func (s *Store) CreateUserMember(ctx context.Context, m *Member) error {
 	defer cancel()
 	defer op.End()
 
-	if err := insertMember(ctx, s.pool, m); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return op.Fail(err)
+	}
+	defer tx.Rollback(ctx)
+
+	if err := insertMember(ctx, tx, m); err != nil {
 		if dbx.IsUniqueViolation(err) {
 			return op.SoftFail("conflict", ErrConflict, ErrConflict)
 		}
 		if dbx.IsForeignKeyViolation(err) {
 			return op.Expected("org or user not found", ErrNotFound)
 		}
+		return op.Fail(err)
+	}
+	if err := recordMemberCreated(ctx, tx, m); err != nil {
+		return op.Fail(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return op.Fail(err)
 	}
 	op.OK("ok")
@@ -270,6 +283,18 @@ func (s *Store) MutateMember(ctx context.Context, organizationID, memberID strin
 	}
 	op.OK("ok")
 	return target, nil
+}
+
+// recordMemberCreated writes member.created. Ids and principal only: no name,
+// role, or user_id (docs/identity.md#lifecycle-events).
+func recordMemberCreated(ctx context.Context, tx pgx.Tx, m *Member) error {
+	principal := m.Principal()
+	return lifecycle.Record(ctx, tx, lifecycle.Event{
+		Type:           lifecycle.TypeMemberCreated,
+		OrganizationID: m.OrganizationID,
+		MemberID:       &m.ID,
+		Principal:      &principal,
+	})
 }
 
 // finishRemove is the rest of a remove, after the status write and in its

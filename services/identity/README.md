@@ -13,7 +13,7 @@ Contract: [`docs/identity.md`](../../docs/identity.md)
 | `directory/` | People: IdP subject resolve (first sign-in creates the person), `GET` / `PATCH /users/{user_id}` |
 | `orgs/` | Organizations, members, invites, service accounts, account deletion |
 | `credentials/` | Every API key and session (`{brand}-k-2-`, `{brand}-s-2-`): user keys, member keys, the service-account address for the same rows, session mint, and the one internal validate |
-| `lifecycle/` | Lifecycle events (`organization.deleted`, `member.removed`). Written in the change's transaction; read on the internal port. |
+| `lifecycle/` | Lifecycle events (`organization.created`, `organization.deleted`, `member.created`, `member.removed`). Written in the change's transaction; read on the internal port. |
 
 `APIKEY_BRAND` (default `plat5`) is identity's alone. The gateway checks a key's shape, not its brand.
 

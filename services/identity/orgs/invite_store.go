@@ -178,6 +178,8 @@ func (s *Store) RedeemInvite(ctx context.Context, tokenHash, userID string) (*Me
 	}
 
 	// A removed member stays removed. Redeem by the same person inserts a new one.
+	// Already a member is not a birth: member.created is only the insert.
+	inserted := false
 	var member *Member
 	if err == nil {
 		member = existing
@@ -200,6 +202,7 @@ func (s *Store) RedeemInvite(ctx context.Context, tokenHash, userID string) (*Me
 			}
 			return nil, op.Fail(err)
 		}
+		inserted = true
 		// Read back for the display name the person already has.
 		member, err = scanMember(tx.QueryRow(ctx, memberSelect+`WHERE m.id = $1`, m.ID))
 		if err != nil {
@@ -224,6 +227,11 @@ func (s *Store) RedeemInvite(ctx context.Context, tokenHash, userID string) (*Me
 	}
 	if err != nil {
 		return nil, op.Fail(err)
+	}
+	if inserted {
+		if err := recordMemberCreated(ctx, tx, member); err != nil {
+			return nil, op.Fail(err)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

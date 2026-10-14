@@ -158,7 +158,7 @@ Create **201** also includes `"key": "{brand}-k-2-…"` once.
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/users/{user_id}/organizations` | Create. Body `{ "name" }`. Inserts an **active** member for that user with `creator_role`. |
+| `POST` | `/users/{user_id}/organizations` | Create. Body `{ "name" }`. Inserts an **active** member for that user with `creator_role`. Writes `organization.created`, then `member.created` for that member. |
 | `GET` | `/organizations` | Every organization. |
 | `GET` | `/organizations/{organization_id}` | **404** if missing |
 | `PATCH` | `/organizations/{organization_id}` | Name. |
@@ -188,7 +188,7 @@ IDs are **ULID** strings. `name` max 128 chars.
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/organizations/{organization_id}/members` | Non-removed members. Unknown org → **404**. Empty org → empty page. |
-| `POST` | `/organizations/{organization_id}/members` | Body `{ "idp": { "issuer", "subject" }, "role?" }`. Immediate `active`. `role` omitted → `default_role`. |
+| `POST` | `/organizations/{organization_id}/members` | Body `{ "idp": { "issuer", "subject" }, "role?" }`. Immediate `active`. `role` omitted → `default_role`. Writes `member.created`. |
 
 A member has two addresses, like a service account. Both read and write the same row.
 
@@ -270,7 +270,7 @@ List, redeem, and revoke expire lazily: if `expires_at` is in the past and statu
 | `POST` | `/organizations/{organization_id}/invites` | Body `{ "email?", "role?", "expires_in_seconds?", "max_uses?" }`. Returns `token`. Unknown org → **404**. `role` omitted → `default_role`. |
 | `GET` | `/organizations/{organization_id}/invites` | `token` included while `active`. Unknown org → **404**. |
 | `DELETE` | `/organizations/{organization_id}/invites/{invite_id}` | Revoke. Idempotent. Status `revoked`, `token` null. Hash stays. |
-| `POST` | `/users/{user_id}/invites/redeem` | Body `{ "token" }`. Inserts an **active** member for that user. Already a member on a still-`active` token → **200** idempotent (counts as a use). A person who was removed gets a new member row. Unknown token → **404** `NOT_FOUND` (no org leak). Redeemed / revoked / expired → **409** `CONFLICT` (`field` is `status`, `value` is the terminal status). |
+| `POST` | `/users/{user_id}/invites/redeem` | Body `{ "token" }`. Inserts an **active** member for that user and writes `member.created`. Already a member on a still-`active` token → **200** idempotent (counts as a use), and writes no event. A person who was removed gets a new member row. Unknown token → **404** `NOT_FOUND` (no org leak). Redeemed / revoked / expired → **409** `CONFLICT` (`field` is `status`, `value` is the terminal status). |
 
 #### Create body
 
@@ -306,7 +306,7 @@ Redeem copies the invite's `role` onto the new member's `role`. A slug since rem
 
 ### Service accounts
 
-Created under an organization. One transaction: service account row + **active** member. Lives in **that org only**.
+Created under an organization. One transaction: service account row + **active** member, and `member.created`. Lives in **that org only**.
 
 A service account is the org's. It is not tied to the member who created it: its role is its own, and its keys carry that role. Whoever may call the route may create one with any role ([`roles.md`](roles.md#who-may-assign)).
 
@@ -522,7 +522,7 @@ Gateway: [`gateway-contract.md`](gateway-contract.md#credentials). It caches val
 
 ### Lifecycle events
 
-A feed of facts other services may act on, such as cleaning up an org's data after it is deleted. Every change is recorded. Reading is opt-in: a service that does not read the feed is not affected by it. Plat5 names no queue or broker. Anyone who wants push delivery runs a relay that reads this feed.
+A feed of facts other services may act on: the birth or the end of an organization or a member. A service that holds data keyed by those ids cleans up on an end, and may allocate state on a birth before any request arrives. Every birth and end is recorded. Reading is opt-in: a service that does not read the feed is not affected by it. Plat5 names no queue or broker. Anyone who wants push delivery runs a relay that reads this feed.
 
 ```
 GET /internal/lifecycle-events?starting_after=<id>&limit=<n>
@@ -532,8 +532,10 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 ```json
 {
   "lifecycle_events": [
-    { "id": "1041", "type": "organization.deleted", "occurred_at": "…", "organization_id": "…" },
-    { "id": "1042", "type": "member.removed", "occurred_at": "…", "organization_id": "…", "member_id": "…", "principal": "service_account" }
+    { "id": "1041", "type": "organization.created", "occurred_at": "…", "organization_id": "…" },
+    { "id": "1042", "type": "member.created", "occurred_at": "…", "organization_id": "…", "member_id": "…", "principal": "user" },
+    { "id": "1043", "type": "organization.deleted", "occurred_at": "…", "organization_id": "…" },
+    { "id": "1044", "type": "member.removed", "occurred_at": "…", "organization_id": "…", "member_id": "…", "principal": "service_account" }
   ],
   "has_more": false
 }
@@ -541,16 +543,18 @@ X-Plat5-Internal-Token: <INTERNAL_AUTH_TOKEN>   # when token is set
 
 | Type | Written by | Fields |
 |------|------------|--------|
+| `organization.created` | `POST /users/{user_id}/organizations` | `organization_id` |
 | `organization.deleted` | `DELETE /organizations/{organization_id}` | `organization_id` |
+| `member.created` | the founder on org create, `POST /organizations/{organization_id}/members`, invite redeem when it inserts a member, and service-account create | `organization_id`, `member_id`, `principal` |
 | `member.removed` | `DELETE` at either member address, the service-account delete, and account deletion (one per org) | `organization_id`, `member_id`, `principal` |
 
-`principal` is `user` or `service_account`. No `user_id`, name, role, or anything else from the row.
+`principal` is `user` or `service_account`. No `user_id`, name, role, or anything else from the row. A service account is a member: its create is `member.created`, not its own type.
 
-`member.removed` is final. A person added again is a new `member_id`, so a service never has to undo what it did on a remove.
+`member.removed` is final. A person added again is a new `member_id` and a new `member.created`. A service never undoes a remove.
 
-An org delete writes one `organization.deleted`, not a `member.removed` per member. It covers everything in the org.
+An org create writes `organization.created`, then `member.created` for the founder, in that order, in the same transaction. An org delete writes one `organization.deleted`, not a `member.removed` per member. It covers everything in the org.
 
-Not events: suspend (of a member or a person), role changes, org rename, display names, keys, sessions, and invites. The directory has no events: an account deletion is the `member.removed` events it causes. A suspend or role change is not an end, and anything that depends on it is decided when the work runs. Services hold nothing keyed by keys, sessions, or invites.
+Not events: suspend (of a member or a person), role changes, org rename, display names, keys, sessions, and invites. An invite redeem that finds an existing member writes nothing. The directory has no events: an account deletion is the `member.removed` events it causes, and creating a person writes none. A suspend or role change is not an end, and anything that depends on it is decided when the work runs. Services hold nothing keyed by keys, sessions, or invites. The feed is not a copy of the row: a consumer that needs a name or a role reads it.
 
 **Delivery.** The event is written in the same transaction as the change. A change that commits has its event. A change that rolls back has none. The org delete is a hard cascade, so after it commits the event is the only record that the org existed.
 

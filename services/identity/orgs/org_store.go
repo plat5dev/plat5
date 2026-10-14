@@ -11,7 +11,8 @@ import (
 	"github.com/plat5dev/plat5/identity/lifecycle"
 )
 
-// CreateOrganization inserts the org and its creator as an active member with role.
+// CreateOrganization inserts the org and its creator as an active member with
+// role, then writes organization.created and member.created for that member.
 func (s *Store) CreateOrganization(ctx context.Context, org *Organization, userID string, role *string) (*Member, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_organization", dbx.DefaultTimeout,
 		attribute.String("organization.id", org.ID),
@@ -47,6 +48,17 @@ func (s *Store) CreateOrganization(ctx context.Context, org *Organization, userI
 		if dbx.IsForeignKeyViolation(err) {
 			return nil, op.Expected("user not found", ErrUserNotFound)
 		}
+		return nil, op.Fail(err)
+	}
+	// organization.created, then member.created for the founder. Same
+	// transaction, that order (docs/identity.md#lifecycle-events).
+	if err := lifecycle.Record(ctx, tx, lifecycle.Event{
+		Type:           lifecycle.TypeOrganizationCreated,
+		OrganizationID: org.ID,
+	}); err != nil {
+		return nil, op.Fail(err)
+	}
+	if err := recordMemberCreated(ctx, tx, m); err != nil {
 		return nil, op.Fail(err)
 	}
 
