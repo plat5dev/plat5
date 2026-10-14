@@ -55,7 +55,7 @@ services:
       service.namespace: edge
       metrics.port: "5003"
     ports:
-      - "5002:5002"
+      - "5402:5002"
     environment:
       PORT: 5002
       INTERNAL_PORT: 5003
@@ -100,13 +100,13 @@ services:
       service.namespace: edge
       metrics.port: "8000"
     ports:
-      - "5001:5001"
+      - "5400:5001"
     environment:
       PORT: 5001
       INTERNAL_PORT: 8000
       # Any IdP via host/public URL — do not join the IdP Docker network.
-      AUTH_ISSUER: ${AUTH_ISSUER:-http://localhost:5000}
-      AUTH_JWKS_URI: ${AUTH_JWKS_URI:-http://host.docker.internal:5000/.well-known/jwks.json}
+      AUTH_ISSUER: ${AUTH_ISSUER:-http://localhost:5401}
+      AUTH_JWKS_URI: ${AUTH_JWKS_URI:-http://host.docker.internal:5401/.well-known/jwks.json}
       AUTH_ALLOWED_AUDIENCES: ${AUTH_ALLOWED_AUDIENCES:-plat5}
       AUTH_USER_ID_CLAIM: ${AUTH_USER_ID_CLAIM:-properties.user_id}
       CREDENTIAL_VALIDATE_URL: http://identity:3001/internal/credentials/validate

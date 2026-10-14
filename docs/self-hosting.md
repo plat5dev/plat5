@@ -138,7 +138,7 @@ Gateway and issuer speak HTTP. Terminate TLS at the edge:
 
 Do not put SMTP submission on a tunnel.
 
-`AUTH_ISSUER` / `PUBLIC_ISSUER_URL` / SPA `VITE_AUTH_ISSUER` must be the **same** public string. `http://localhost:5000` ≠ `https://auth.example.com`.
+`AUTH_ISSUER` / `PUBLIC_ISSUER_URL` / SPA `VITE_AUTH_ISSUER` must be the **same** public string. `http://localhost:5401` ≠ `https://auth.example.com`.
 
 ## 4. Attach your API
 

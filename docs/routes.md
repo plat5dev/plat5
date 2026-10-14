@@ -17,13 +17,13 @@ Write path and feed details: [`control-plane.md`](control-plane.md).
 
 Long-running service. Validates config, expands `route_prefix` and nested `methods` maps, records a revision in Postgres, and serves the current services to the gateway.
 
-- **Local admin URL:** `http://localhost:5002`
+- **Local admin URL:** `http://localhost:5402`
 - **Auth:** `Authorization: Bearer <ADMIN_TOKEN>`
 - **Apply:** `POST /apply` with a `routes.yml` body (JSON or YAML) — **upsert** of the services in the file. Services not in the file are left alone.
 - **Identity:** public identity routes are operator-owned. Catalog: [`services/identity/routes.yml`](../services/identity/routes.yml). Apply it (or a subset). Dev compose may seed missing services from that file on first boot; it does not overwrite. Prod does not seed.
 
 ```bash
-curl -sS -X POST http://localhost:5002/apply \
+curl -sS -X POST http://localhost:5402/apply \
   -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/yaml" \
   --data-binary @routes.yml

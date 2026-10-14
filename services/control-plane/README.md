@@ -50,18 +50,18 @@ Health and `/metrics` are not request-traced. The `/internal/*` reads are.
 
 ## Run (compose)
 
-Started with Plat5 compose. Dev admin API: `http://localhost:5002`.
+Started with Plat5 compose. Dev admin API: `http://localhost:5402`.
 
 ```bash
 export ADMIN_TOKEN=dev-admin-token
-curl -sS http://localhost:5002/services \
+curl -sS http://localhost:5402/services \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
 ## Apply routes
 
 ```bash
-curl -sS -X POST http://localhost:5002/apply \
+curl -sS -X POST http://localhost:5402/apply \
   -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/yaml" \
   --data-binary @./routes.yml
@@ -70,12 +70,12 @@ curl -sS -X POST http://localhost:5002/apply \
 ## Set roles and CORS origins
 
 ```bash
-curl -sS -X PUT http://localhost:5002/roles \
+curl -sS -X PUT http://localhost:5402/roles \
   -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/yaml" \
   --data-binary @./roles.yml
 
-curl -sS -X PUT http://localhost:5002/cors \
+curl -sS -X PUT http://localhost:5402/cors \
   -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/json" \
   -d '{"allowed_origins": ["http://localhost:5173"]}'

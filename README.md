@@ -19,8 +19,8 @@ docker compose up --build
 
 | Service | URL | Notes |
 |---------|-----|--------|
-| Gateway | `http://localhost:5001` | API edge; internal metrics on `:8000` |
-| Control plane | `http://localhost:5002` | Admin API for routes, roles, CORS origins (Bearer `ADMIN_TOKEN`, default `dev-admin-token`) |
+| Gateway | `http://localhost:5400` | API edge; internal metrics on `:8000` |
+| Control plane | `http://localhost:5402` | Admin API for routes, roles, CORS origins (Bearer `ADMIN_TOKEN`, default `dev-admin-token`) |
 
 JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defaults). API keys are an alternative credential; the IdP is still required.
 
@@ -60,7 +60,7 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defau
 3. Apply routes:
 
 ```bash
-curl -sS -X POST http://localhost:5002/apply \
+curl -sS -X POST http://localhost:5402/apply \
   -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/yaml" \
   --data-binary @routes.yml

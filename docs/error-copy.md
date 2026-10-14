@@ -122,4 +122,4 @@ Fallback 422 is enough.
 
 Gateway-owned 401/403/404/413/429/500/503 keep the fallback table.
 
-Siblings (`cli`, `template-*`, `web-demo`): update only if they snapshot exact plat5 `message` strings.
+Siblings (`cli`, `template-*`, `template-web`): update only if they snapshot exact plat5 `message` strings.

@@ -15,8 +15,8 @@ docker compose up --build
 
 | URL | Service |
 |-----|---------|
-| `http://localhost:5001` | Gateway |
-| `http://localhost:5002` | Control plane admin API (routes, roles, CORS origins) |
+| `http://localhost:5400` | Gateway |
+| `http://localhost:5402` | Control plane admin API (routes, roles, CORS origins) |
 
 Admin token default: `dev-admin-token` (`ADMIN_TOKEN`).
 Internal token default: `dev-internal-token` (`INTERNAL_AUTH_TOKEN`) — gateway → identity validate, audit, and the control plane; identity → the control plane.
@@ -24,7 +24,7 @@ Internal token default: `dev-internal-token` (`INTERNAL_AUTH_TOKEN`) — gateway
 ## Apply routes
 
 ```bash
-curl -sS -X POST http://localhost:5002/apply \
+curl -sS -X POST http://localhost:5402/apply \
   -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/yaml" \
   --data-binary @../services/identity/routes.yml
@@ -40,7 +40,7 @@ Set env (or defaults) for any IdP reachable from the gateway container:
 
 | Variable | Local default | Notes |
 |----------|---------------|--------|
-| `AUTH_ISSUER` | `http://localhost:5000` | Token `iss` as clients see it |
+| `AUTH_ISSUER` | `http://localhost:5401` | Token `iss` as clients see it |
 | `AUTH_JWKS_URI` | `http://host.docker.internal:5000/.well-known/jwks.json` | Fetch JWKS via host port |
 | `AUTH_USER_ID_CLAIM` | `properties.user_id` | Use `sub` for many OIDC providers |
 | `AUTH_ALLOWED_AUDIENCES` | `plat5` | Plat5 API audience; match your IdP client/`aud` |

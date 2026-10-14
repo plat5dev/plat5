@@ -118,9 +118,9 @@ Do not add these because they would be convenient:
 
 ## Siblings
 
-Wire or boot changes are not done in this repo alone. Update **cli** (embedded compose, generated `routes.identity.yml`, control-plane client), **template-***, **web-demo**, **toolbox** when the contract they generate, apply, or type changes.
+Wire or boot changes are not done in this repo alone. Update **cli** (embedded compose in `internal/bundle/stack`, generated `routes.identity.yml`, control-plane client), **template-***, **template-web**, **toolbox** when the contract they generate, apply, or type changes.
 
-CLI image pin (`plat5_version`) lags this tree until a plat5 release. Local `--plat5-compose` is how you run HEAD.
+The CLI's image pin (`versions.plat5`) lags this tree until a plat5 release. `plat5 init --source plat5=../plat5` (or `toolbox/localdev`) is how you run HEAD.
 
 ## Working here
 

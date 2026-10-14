@@ -41,7 +41,7 @@ Postgres is the source of truth, and the only store. Every write bumps one revis
 
 | Surface | URL |
 |---------|-----|
-| Admin API (dev compose) | `http://localhost:5002` |
+| Admin API (dev compose) | `http://localhost:5402` |
 | Internal (feeds, health, metrics) | container `:5003` |
 
 Prod compose does **not** publish the admin port by default.
@@ -106,7 +106,7 @@ Revision responses:
 The body is the roles file: [`roles.md`](roles.md#the-roles-document).
 
 ```bash
-curl -sS -X PUT http://localhost:5002/roles \
+curl -sS -X PUT http://localhost:5402/roles \
   -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/yaml" \
   --data-binary @roles.yml
@@ -138,7 +138,7 @@ plat5 roles apply ./roles.yml
 curl:
 
 ```bash
-curl -sS -X POST http://localhost:5002/apply \
+curl -sS -X POST http://localhost:5402/apply \
   -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/yaml" \
   --data-binary @routes.yml
