@@ -10,7 +10,7 @@ The service is a function of the URL. The path names every id the operation uses
 
 Who may call is the proxy. This service does not know which proxy called, and it does not grow a second policy for a second caller. It does not know the caller's role or labels, and it does not compare the caller to what it grants.
 
-Roles are the deployment's. Identity reads the roles file at boot and resolves a member's role at validate. Model and rules: [`roles.md`](roles.md).
+Roles are the deployment's. Identity reads the roles document from the control plane, follows its changes without a restart, and resolves a member's role at validate. Model and rules: [`roles.md`](roles.md).
 
 There is no `/api` prefix. The first path segment is the subject.
 
@@ -34,7 +34,7 @@ Public routes are not auto-published. The process still serves them on the publi
 | **organization** | The isolation boundary. A realm that users join and service accounts are born in. |
 | **member** | A membership in an org. Exactly one of: a **user** or a **service account**. Wire id: `member_id`. |
 | **membership** | An identity's standing in a realm. A person has one in the directory (their anchor: it holds their own keys, and has no status or role) and one per org they belong to (a member). On the wire, `/users/{user_id}/memberships` lists a person's org memberships. |
-| **role** | Slug on a member. The deployment's roles file says which labels it grants. Plat5 defines no role names. Every member has one. [`roles.md`](roles.md) |
+| **role** | Slug on a member. The deployment's roles document says which labels it grants. Plat5 defines no role names. Every member has one. [`roles.md`](roles.md) |
 | **service account** | Non-human identity, born in an organization. Exactly one member, in that org. |
 | **credential** | An API key or a session. Belongs to one membership and carries exactly its permissions: a member's credential carries the member's role labels. No labels of its own. |
 | **api key** | Long-lived named credential. A **user key** belongs to the person's directory membership; a **member key** to a member. Same table, format, and validate. |
@@ -53,7 +53,7 @@ Illegal states. Not permissions.
 - A key addressed under a user, member, or service account that does not own it is **404**. That is the address, not an access check.
 - A service account or member addressed under the wrong org, or whose member is `removed`, is **404**.
 - Unknown id is **404**. A removed member is **404**, except a read at the org address, which returns what is left of it ([Former members](#former-members)). Empty collection is an empty page.
-- A `role` that is not a slug in the roles file is **422**.
+- A `role` that is not a slug in the roles document is **422**.
 - A write may not take an org's non-removed members holding `creator_role` from one to zero (**422**).
 - An account may not be deleted while its person is the last non-removed member, or the last `creator_role` holder, of an org (**409** `ORGANIZATION_HANDOFF_REQUIRED`).
 
@@ -283,7 +283,7 @@ List, redeem, and revoke expire lazily: if `expires_at` is in the past and statu
 
 Token prefix `inv_`. `token_hash` is SHA-256 hex. `use_count` increments on successful redeem. When `use_count` reaches `max_uses`, status becomes `redeemed` and `token` is nulled. Unlimited (`max_uses` null) stays `active` with `token`.
 
-Redeem copies the invite's `role` onto the new member's `role`. A slug since removed from the roles file is copied as-is and grants nothing. Already a member: redeem does not change the existing role.
+Redeem copies the invite's `role` onto the new member's `role`. A slug since removed from the roles document is copied as-is and grants nothing. Already a member: redeem does not change the existing role.
 
 #### Create / list row
 
@@ -401,7 +401,7 @@ No `user_id`. `role` is `string | null` (`null` when roles are off). `labels` is
 
 ### Roles
 
-The deployment's roles, from the roles file. Same list for every org today. Shape and rules: [`roles.md`](roles.md#listing-roles).
+The deployment's roles, from the roles document. Same list for every org today. Shape and rules: [`roles.md`](roles.md#listing-roles).
 
 | Method | Path | Notes |
 |--------|------|--------|
@@ -597,7 +597,7 @@ A service account has exactly one membership, in its org. A person has exactly o
 
 Credentials hold no labels of their own. Validate resolves the member's role every time.
 
-`memberships.role` and `organization_invites.role` are nullable `TEXT` slugs. No `CHECK` constraint: the roles file gives them meaning, and identity checks the slug against it on write. `NULL` while roles are off, and on directory memberships. With roles on, an org membership's writes always set a role.
+`memberships.role` and `organization_invites.role` are nullable `TEXT` slugs. No `CHECK` constraint: the roles document gives them meaning, and identity checks the slug against it on write. `NULL` while roles are off, and on directory memberships. With roles on, an org membership's writes always set a role.
 
 ## Runtime
 
@@ -611,9 +611,10 @@ Credentials hold no labels of their own. Validate resolves the member's role eve
 | Database | Plat5 Postgres via `DATABASE_URL` |
 | Schema | **`identity`** (service-owned; tables + `schema_migrations`) |
 | `APIKEY_BRAND` | default `plat5`. Identity only ([format](#credential-format)) |
-| `ROLES_FILE` | optional; path to the roles file, read at boot. Unset or empty → roles off (logged as a warning). Invalid → refuse boot. [`roles.md`](roles.md) |
+| `ROLES_ENABLED` | default `true`. `false` → roles off (logged as a warning). Anything else refuses boot. A boot switch: only the roles themselves change while identity runs. [`roles.md`](roles.md) |
+| `CONTROL_PLANE_URL` | required while roles are on. The control plane's internal base URL, e.g. `http://control-plane:5003`. Identity does not listen until it has the roles document. [`control-plane.md`](control-plane.md#internal-feeds) |
 
-Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
+Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable, or roles are on and not loaded.
 
 ## Non-goals
 
@@ -627,8 +628,8 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - SMTP / sending invite email (identity returns a token; the console may send mail)
 - Pending member rows. Add by IdP subject and invite redeem both insert an **active** member.
 - Resource ACL, FGA, project permissions
-- Role names or meanings in identity code. The deployment's roles file names roles and grants their labels.
-- More than one role per member, per-org custom roles, or reloading the roles file without a restart
+- Role names or meanings in identity code. The deployment's roles document names roles and grants their labels.
+- More than one role per member, per-org custom roles, or turning roles on or off without a restart
 - Caller checks of any kind: a grant cap on roles, on acting on a member, or on minting keys and sessions
 - Attribution in identity: who added a member, created an invite, or created a service account. Identity reports what changed; the gateway's audit log records who ([`audit.md`](audit.md))
 - Key or session labels, or default-deny on unlabeled routes

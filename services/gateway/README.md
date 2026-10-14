@@ -4,7 +4,7 @@ Rust reverse proxy built on Pingora. Handles request routing, JWT / API key / me
 
 ## Local Development
 
-Requires stable Rust (install via `rustup`) and `protoc` (`protobuf-compiler`, needed by the etcd client build).
+Requires stable Rust (install via `rustup`).
 
 ```bash
 cd services/gateway
@@ -20,7 +20,7 @@ cargo test --all-targets
 |---|---|---|
 | `PORT` | `5001` | Public HTTP proxy port |
 | `INTERNAL_PORT` | `8000` | Internal port for `/health` and `/metrics` |
-| `ETCD_URL` | `http://localhost:2379` | etcd endpoint for route registry |
+| `CONTROL_PLANE_URL` | (required) | Control plane's internal base URL, e.g. `http://control-plane:5003`. Routes and CORS origins come from `…/internal/gateway` |
 | `VALKEY_URL` | (required) | Valkey for rate-limit counters. Replicas share one budget |
 | `AUTH_ISSUER` | (required) | JWT `iss` |
 | `AUTH_JWKS_URI` | (required) | JWKS URL |
@@ -28,15 +28,15 @@ cargo test --all-targets
 | `AUTH_USER_ID_CLAIM` | `properties.user_id` | Dotted claim path for the person's IdP subject (`sub` for many OIDC IdPs). Identity resolves issuer + subject to a `user_id` |
 | `CREDENTIAL_VALIDATE_URL` | (required) | Identity's one validate (`…/internal/credentials/validate`): every `X-API-Key`, and every JWT's issuer and subject |
 | `APIKEY_CACHE_TTL_SECS` | `300` | Credential and IdP subject cache TTL (valid and invalid results) |
-| `INTERNAL_AUTH_TOKEN` | unset | Sent as `X-Plat5-Internal-Token` to validate and audit when set |
+| `INTERNAL_AUTH_TOKEN` | unset | Sent as `X-Plat5-Internal-Token` to validate, audit, and the control plane when set |
 | `AUDIT_ENABLED` | `true` | `false` turns audit off for the deployment. Anything but `true` / `false` refuses boot |
 | `AUDIT_URL` | (required unless audit is off) | Audit's internal base URL, e.g. `http://audit:3003` ([`docs/audit.md`](../../docs/audit.md)) |
 | `RATE_LIMIT_REQUESTS` | `60` | Fallback per-route limit. `0` = unlimited fallback |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Fallback window |
 | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` | `60` | Failed-auth IP limiter. `0` = off |
 | `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` | `60` | Failed-auth IP window |
-| `UPSTREAM_CONNECT_TIMEOUT_MS` | `10000` | Upstream connection timeout |
-| `UPSTREAM_READ_TIMEOUT_MS` | `30000` | Upstream read timeout |
+| `UPSTREAM_CONNECT_TIMEOUT_MS` | `10000` | Upstream connection timeout, for a service whose route config sets no `timeouts.connect_ms` |
+| `UPSTREAM_READ_TIMEOUT_MS` | `30000` | Upstream read timeout, for a service whose route config sets no `timeouts.read_ms` |
 | `OTEL_SERVICE_NAME` | `gateway` | Resource `service.name` |
 | `OTEL_SERVICE_NAMESPACE` | `edge` | Resource `service.namespace` |
 | `OTEL_SERVICE_VERSION` | crate version | Resource `service.version` |
@@ -50,7 +50,6 @@ cargo test --all-targets
 | `OTEL_METRIC_EXPORT_INTERVAL` | SDK default | ms (OTLP metrics only) |
 | `OTEL_TRACES_SAMPLER_RATIO` | `1` | Trace sampling ratio |
 | `OTEL_SDK_DISABLED` | unset | `true` → no OTLP; stdout + `/metrics` remain |
-| `ALLOWED_ORIGINS` | (empty → `*`) | Comma-separated CORS origin allowlist. Empty allows `*`; non-empty reflects matching `Origin` and sets `Vary: Origin` |
 
 Audit: on an audited `organization` or `member` route, the intent is written before forward (up to 3 attempts in 1s) or the request is **503** and not forwarded. The outcome is queued after the response and retried for about five minutes; a full queue drops it and the event stays `pending`. `X-Plat5-Audit-Details` is stripped from every request and response. Audit is not part of `/health/ready`.
 
@@ -77,13 +76,13 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
 
 Do not include `service_name` or `service_namespace` labels in Prometheus metrics if your collector adds them from container labels.
 
-## Route Registry
+## Control plane
 
-The gateway loads route configuration from etcd (watch). Writes go through **route-registry**. See [`docs/routes.md`](../../docs/routes.md) and [`docs/route-registry.md`](../../docs/route-registry.md).
+Routes and CORS origins come from the **control plane**. The gateway waits for the first snapshot at boot, then long-polls for changes and keeps the last snapshot while the control plane is down. CORS origins are not env: set them with `PUT /cors`. See [`docs/routes.md`](../../docs/routes.md) and [`docs/control-plane.md`](../../docs/control-plane.md).
 
 ## Health
 
-- `/health/live` — process up (always 200 when serving).
+- `/health/live` — process up (always 200 when serving). The gateway serves nothing until it has a control-plane snapshot.
 - `/health/ready` — 200 when JWKS is loaded and Valkey answers PING within 500ms; **503** otherwise (do not send traffic until ready).
 
 ## Span Status

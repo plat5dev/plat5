@@ -31,7 +31,7 @@ Per-service details live in each service's `README.md`.
 | [`gateway-contract.md`](gateway-contract.md) | Auth delegation, subject fill, perimeter, TLS, service rules |
 | [`idp-contract.md`](idp-contract.md) | BYO IdP, JWKS, user-id claim mapping |
 | [`routes.md`](routes.md) | Route publishing, scopes, `route_prefix`, rate-limit policies |
-| [`route-registry.md`](route-registry.md) | Desired state (Postgres) + etcd projection |
+| [`control-plane.md`](control-plane.md) | The deployment's desired state: routes, roles, CORS origins; admin API and the feeds the gateway and identity read |
 | [`identity.md`](identity.md) | Identity service: orgs, members, service accounts, API keys, sessions, internal validate |
-| [`roles.md`](roles.md) | Deployment-defined roles: the roles file, what credentials carry, who may assign, catalog labels |
+| [`roles.md`](roles.md) | Deployment-defined roles: the roles document, what credentials carry, who may assign, catalog labels |
 | [`audit.md`](audit.md) | Org audit log: which requests, intent and outcome delivery, details header, read API, audit service |

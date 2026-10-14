@@ -221,7 +221,7 @@ func TestSessionMint(t *testing.T) {
 
 func TestRolesOffCarryEveryLabel(t *testing.T) {
 	f := newFixture(t)
-	f.h.roles = nil
+	f.h.roles = roles.Off()
 	f.addUser("alice", directory.StatusActive)
 	f.addMember("org1", "mem", "alice", orgs.StatusActive, nil)
 	key := f.mint(t, "mem", apikey.KindKey, nil)
@@ -272,7 +272,7 @@ default_role: member
 		dir:   &fakePeople{users: map[string]*directory.User{}, links: map[string]string{}},
 		now:   time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC),
 	}
-	f.h = &Handler{store: f.store, orgs: f.orgs, people: f.dir, brand: "plat5", roles: set, now: func() time.Time { return f.now }}
+	f.h = &Handler{store: f.store, orgs: f.orgs, people: f.dir, brand: "plat5", roles: roles.Static(set), now: func() time.Time { return f.now }}
 	f.store.lookupMembership = f.found
 	app := fiber.New(fiber.Config{ErrorHandler: apierrors.FiberErrorHandler})
 	f.h.MountUser(app.Group("/users"))

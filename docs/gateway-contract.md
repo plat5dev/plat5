@@ -59,7 +59,7 @@ Services are not told the caller's role or labels. The gateway decides which rou
 
 ## Route Configuration
 
-Routes live in etcd under `edge/gateway/routes/`. Scopes are `public` / `user` / `organization` / `member` blocks. Full schema and publish path: [`routes.md`](routes.md).
+Routes come from the control plane ([`control-plane.md`](control-plane.md)). Scopes are `public` / `user` / `organization` / `member` blocks. Full schema and publish path: [`routes.md`](routes.md).
 
 ```yaml
 services:
@@ -84,9 +84,9 @@ services:
               required_labels: [org:write]
 ```
 
-`methods` may be a list (route-level `required_labels` / `rate_limit` apply to every verb) or a nested map (per-verb). Nested maps are expanded at apply into one etcd row per verb; the gateway always sees `methods` as a string array. Full schema: [`routes.md`](routes.md).
+`methods` may be a list (route-level `required_labels` / `rate_limit` apply to every verb) or a nested map (per-verb). Nested maps are expanded at apply into one stored row per verb; the gateway always sees `methods` as a string array. Full schema: [`routes.md`](routes.md).
 
-Services publish via the **route-registry** admin API (`POST /apply`). Gateway loads at startup and watches etcd. Route existence is decoupled from service health — a downed service returns 502 `SERVICE_UNAVAILABLE`, not 404.
+Services publish via the **control plane** admin API (`POST /apply`). The gateway loads a snapshot at startup and long-polls `CONTROL_PLANE_URL` for changes ([`control-plane.md`](control-plane.md#internal-feeds)). Route existence is decoupled from service health — a downed service returns 502 `SERVICE_UNAVAILABLE`, not 404.
 
 ### Route `required_labels`
 
@@ -164,7 +164,7 @@ An active service account can call `organization` and `member` routes. It uses a
 
 Identity's own HTTP paths name the subject. See [`identity.md`](identity.md) and [`routes.md`](routes.md).
 
-## Internal identity control plane
+## Internal identity API
 
 Gateway calls identity over HTTP (not published on the edge route map):
 
@@ -173,6 +173,17 @@ Gateway calls identity over HTTP (not published on the edge route map):
 | Credential validate | `CREDENTIAL_VALIDATE_URL` | `http://identity:3001/internal/credentials/validate` |
 
 It lives on identity’s **`INTERNAL_PORT`** and is required to boot. Optional shared `INTERNAL_AUTH_TOKEN` is sent as `X-Plat5-Internal-Token`. Contract: [`identity.md`](identity.md#credential-validate).
+
+## Control plane
+
+Routes and CORS origins come from the control plane: `CONTROL_PLANE_URL` (e.g. `http://control-plane:5003`), required to boot. The gateway reads `GET {CONTROL_PLANE_URL}/internal/gateway`, sending the same `INTERNAL_AUTH_TOKEN`.
+
+- **Boot.** The gateway waits for its first snapshot, retrying while the control plane is down, and does not listen until it has one.
+- **Running.** It long-polls with `?after={revision}` and swaps routes and CORS whole on each change.
+- **Control plane down.** It keeps serving the last snapshot.
+- **A snapshot it cannot validate.** It keeps the current one and logs an error.
+
+Contract: [`control-plane.md`](control-plane.md#internal-feeds).
 
 ## Audit
 
@@ -199,6 +210,8 @@ TLS terminates at the **edge / load balancer**, not the gateway process. Edge de
 ## CORS
 
 Gateway answers every `OPTIONS` request as a preflight: `204 No Content`, no body, `Access-Control-Allow-*` and `Access-Control-Max-Age: 86400`; the connection stays reusable. It adds `Access-Control-Allow-*` on responses. Services behind the gateway have no CORS config. Direct-exposed services handle CORS as needed.
+
+The allowed origins are the control plane's `cors` document ([`control-plane.md`](control-plane.md#cors)), and change without a restart. No document, or an empty list, answers `Access-Control-Allow-Origin: *`. Otherwise an `Origin` in the list is echoed with `Vary: Origin`, and any other origin gets no `Access-Control-Allow-Origin`.
 
 ## Security headers
 
@@ -232,7 +245,7 @@ Revoke, suspend (of a member or a person), remove, and role changes are visible 
 
 ## Boot / ready
 
-`/health/ready` is **200** when JWKS is loaded **and** Valkey answers PING within 500ms. Otherwise **503**. etcd empty (no routes) is still ready — unmatched paths are **404**. Audit is not part of ready: while it is down, audited routes are **503** and the rest keep working.
+The gateway listens only once it has a control-plane snapshot. `/health/ready` is **200** when JWKS is loaded **and** Valkey answers PING within 500ms. Otherwise **503**. The control plane is not part of ready: while it is down, the gateway serves its last snapshot. A snapshot with no routes is still ready — unmatched paths are **404**. Audit is not part of ready: while it is down, audited routes are **503** and the rest keep working.
 
 ## Errors
 

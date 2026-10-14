@@ -5,7 +5,6 @@ use crate::admission::parse_user_id_claim;
 
 const DEFAULT_PORT: &str = "5001";
 const DEFAULT_INTERNAL_PORT: &str = "8000";
-const DEFAULT_ETCD_URL: &str = "http://localhost:2379";
 const DEFAULT_USER_ID_CLAIM: &str = "properties.user_id";
 const DEFAULT_APIKEY_CACHE_TTL_SECS: u64 = 300;
 const DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS: u64 = 10_000;
@@ -20,7 +19,9 @@ const DEFAULT_RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS: u64 = 60;
 pub struct GatewayConfig {
     pub port: String,
     pub internal_port: String,
-    pub etcd_url: String,
+    /// The control plane's internal base URL (`CONTROL_PLANE_URL`): routes and
+    /// CORS origins come from `{url}/internal/gateway`.
+    pub control_plane_url: String,
     /// Valkey for rate-limit counters. Required.
     pub valkey_url: String,
 
@@ -39,10 +40,9 @@ pub struct GatewayConfig {
     /// TTL for every credential and IdP subject resolve (`APIKEY_CACHE_TTL_SECS`).
     pub apikey_cache_ttl_secs: u64,
 
+    /// Defaults for a service whose route config sets no `timeouts`.
     pub upstream_connect_timeout: Duration,
     pub upstream_read_timeout: Duration,
-    /// Empty = CORS `*`. Non-empty = allowlist.
-    pub allowed_origins: Vec<String>,
 
     /// Gateway fallback. `0` = unlimited fallback (routes may still override).
     pub rate_limit_requests: u64,
@@ -76,6 +76,10 @@ impl GatewayConfig {
         let auth_issuer = require_env("AUTH_ISSUER")?;
         let auth_jwks_uri = require_env("AUTH_JWKS_URI")?;
         let credential_validate_url = require_env("CREDENTIAL_VALIDATE_URL")?;
+        let control_plane_url = require_env("CONTROL_PLANE_URL")?
+            .trim()
+            .trim_end_matches('/')
+            .to_string();
         let valkey_url = require_env("VALKEY_URL")?;
         let audit_url = audit_url_from_env()?;
         let rate_limit_requests =
@@ -109,7 +113,7 @@ impl GatewayConfig {
             port: env::var("PORT").unwrap_or_else(|_| DEFAULT_PORT.to_string()),
             internal_port: env::var("INTERNAL_PORT")
                 .unwrap_or_else(|_| DEFAULT_INTERNAL_PORT.to_string()),
-            etcd_url: env::var("ETCD_URL").unwrap_or_else(|_| DEFAULT_ETCD_URL.to_string()),
+            control_plane_url,
             valkey_url,
 
             auth_issuer,
@@ -136,7 +140,6 @@ impl GatewayConfig {
                 "UPSTREAM_READ_TIMEOUT_MS",
                 DEFAULT_UPSTREAM_READ_TIMEOUT_MS,
             )?),
-            allowed_origins: csv_env("ALLOWED_ORIGINS"),
 
             rate_limit_requests,
             rate_limit_window_seconds,

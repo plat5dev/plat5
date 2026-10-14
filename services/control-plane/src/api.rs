@@ -1,27 +1,31 @@
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::route_config::{
     find_route_conflicts, validate_shared_rate_limits, Config, ServiceConfig,
 };
-use axum::extract::{MatchedPath, Path, Request, State};
+use axum::extract::{MatchedPath, Path, Query, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use opentelemetry::trace::Status;
-use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
+use crate::documents::{Cors, Document, Roles};
 use crate::error::AppError;
 use crate::metrics;
-use crate::pg_store::{CommitResult, Revision};
-use crate::projection;
+use crate::pg_store::{CommitResult, DocumentRevision, Revision};
 use crate::AppState;
+
+/// How long an internal read with `after` waits for a newer revision.
+const LONG_POLL_WAIT: Duration = Duration::from_secs(25);
 
 pub fn public_router(state: AppState) -> Router {
     let authed = Router::new()
@@ -36,11 +40,10 @@ pub fn public_router(state: AppState) -> Router {
             "/services/{name}/revisions/{rev}/restore",
             post(restore_revision),
         )
-        .route("/apply", post(apply_routes))
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            admin_auth_middleware,
-        ));
+        .route("/apply", post(apply_routes));
+    let authed = document_routes::<Cors>(document_routes::<Roles>(authed)).layer(
+        middleware::from_fn_with_state(state.clone(), admin_auth_middleware),
+    );
 
     Router::new()
         .merge(authed)
@@ -48,11 +51,41 @@ pub fn public_router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// `/roles`, `/cors`: the current document, its history, and restore.
+fn document_routes<D: Document>(router: Router<AppState>) -> Router<AppState> {
+    let base = format!("/{}", D::KIND);
+    router
+        .route(&base, get(get_document::<D>).put(put_document::<D>))
+        .route(
+            &format!("{base}/revisions"),
+            get(list_document_revisions::<D>),
+        )
+        .route(
+            &format!("{base}/revisions/{{rev}}"),
+            get(get_document_revision::<D>),
+        )
+        .route(
+            &format!("{base}/revisions/{{rev}}/restore"),
+            post(restore_document::<D>),
+        )
+}
+
 pub fn internal_router(state: AppState) -> Router {
+    // What the runtime reads. Behind INTERNAL_AUTH_TOKEN when it is set.
+    let feeds = Router::new()
+        .route("/internal/gateway", get(gateway_feed))
+        .route("/internal/roles", get(roles_feed))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            internal_auth_middleware,
+        ))
+        .route_layer(middleware::from_fn(http_observability));
+
     Router::new()
         .route("/health/live", get(health_live))
         .route("/health/ready", get(health_ready))
         .route("/metrics", get(metrics_scrape))
+        .merge(feeds)
         .with_state(state)
 }
 
@@ -148,6 +181,25 @@ async fn admin_auth_middleware(
     Ok(next.run(request).await)
 }
 
+async fn internal_auth_middleware(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Result<Response, AppError> {
+    if let Some(expected) = state.internal_token.as_deref() {
+        let got = request
+            .headers()
+            .get("x-plat5-internal-token")
+            .and_then(|v| v.to_str().ok());
+        if got != Some(expected) {
+            return Err(AppError::unauthorized_internal(request_id_from_headers(
+                request.headers(),
+            )));
+        }
+    }
+    Ok(next.run(request).await)
+}
+
 fn request_id_from_headers(headers: &axum::http::HeaderMap) -> String {
     headers
         .get("x-request-id")
@@ -173,9 +225,7 @@ async fn health_live() -> impl IntoResponse {
 }
 
 async fn health_ready(State(state): State<AppState>) -> impl IntoResponse {
-    let pg_ok = state.pg.ping().await.is_ok();
-    let etcd_ok = state.etcd.ping().await.is_ok();
-    if pg_ok && etcd_ok {
+    if state.pg.ping().await.is_ok() {
         (StatusCode::OK, Json(json!({ "status": "healthy" }))).into_response()
     } else {
         (
@@ -300,24 +350,7 @@ async fn apply_routes(
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, AppError> {
     let request_id = request_id_from_headers(&headers);
-    let content_type = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/json");
-
-    let config: Config = if content_type.contains("yaml") || content_type.contains("yml") {
-        serde_yaml::from_slice(&body).map_err(|e| config_parse_error(request_id.clone(), &e))?
-    } else {
-        match serde_json::from_slice(&body) {
-            Ok(c) => c,
-            Err(json_err) => serde_yaml::from_slice(&body).map_err(|yaml_err| {
-                config_parse_error(
-                    request_id.clone(),
-                    &format!("invalid JSON ({json_err}) or YAML ({yaml_err})"),
-                )
-            })?,
-        }
-    };
+    let config: Config = parse_body(&headers, &body, &request_id, "route config")?;
 
     if config.services.is_empty() {
         return Err(AppError::invalid_request(
@@ -505,12 +538,39 @@ async fn ensure_no_route_conflicts(
     ))
 }
 
-fn config_parse_error(request_id: String, err: &impl std::fmt::Display) -> AppError {
+/// A write body in YAML (by content type) or JSON, falling back to YAML.
+fn parse_body<T: DeserializeOwned>(
+    headers: &axum::http::HeaderMap,
+    body: &[u8],
+    request_id: &str,
+    what: &str,
+) -> Result<T, AppError> {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/json");
+    if content_type.contains("yaml") || content_type.contains("yml") {
+        return serde_yaml::from_slice(body)
+            .map_err(|e| parse_error(request_id.to_string(), what, &e));
+    }
+    match serde_json::from_slice(body) {
+        Ok(c) => Ok(c),
+        Err(json_err) => serde_yaml::from_slice(body).map_err(|yaml_err| {
+            parse_error(
+                request_id.to_string(),
+                what,
+                &format!("invalid JSON ({json_err}) or YAML ({yaml_err})"),
+            )
+        }),
+    }
+}
+
+fn parse_error(request_id: String, what: &str, err: &impl std::fmt::Display) -> AppError {
     let msg = err.to_string();
     if msg.contains("unknown field") {
         AppError::validation(request_id, format!("unknown field: {msg}"))
     } else {
-        AppError::invalid_request(request_id, format!("invalid route config: {msg}"))
+        AppError::invalid_request(request_id, format!("invalid {what}: {msg}"))
     }
 }
 
@@ -553,7 +613,7 @@ async fn commit(
     items: Vec<(String, Option<ServiceConfig>)>,
     request_id: &str,
 ) -> Result<Vec<CommitResult>, AppError> {
-    let commits = state
+    let (commits, head) = state
         .pg
         .commit_batch(&items, request_id)
         .await
@@ -561,6 +621,281 @@ async fn commit(
             tracing::error!(error = %e, "postgres commit failed");
             AppError::service_unavailable(request_id.to_string())
         })?;
-    projection::project_commits(&state.etcd, &commits).await;
+    state.feed.advance(head);
     Ok(commits)
+}
+
+#[derive(Serialize)]
+struct DocumentResponse<D> {
+    revision: i64,
+    #[serde(flatten)]
+    document: D,
+}
+
+#[derive(Serialize)]
+struct DocumentRevisionResponse {
+    kind: &'static str,
+    revision: i64,
+    config: serde_json::Value,
+    request_id: String,
+    created_at: String,
+}
+
+#[derive(Serialize)]
+struct DocumentRevisionListResponse {
+    revisions: Vec<DocumentRevisionResponse>,
+}
+
+fn to_document_revision_response<D: Document>(r: DocumentRevision) -> DocumentRevisionResponse {
+    DocumentRevisionResponse {
+        kind: D::KIND,
+        revision: r.revision,
+        config: r.body,
+        request_id: r.request_id,
+        created_at: r.created_at.to_rfc3339(),
+    }
+}
+
+fn pg_unavailable<'a>(
+    request_id: &'a str,
+    what: &'static str,
+) -> impl FnOnce(crate::pg_store::PgError) -> AppError + 'a {
+    move |e| {
+        tracing::error!(error = %e, "{what} failed");
+        AppError::service_unavailable(request_id.to_string())
+    }
+}
+
+async fn get_document<D: Document>(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let request_id = request_id_from_headers(&headers);
+    let current = state
+        .pg
+        .get_document(D::KIND)
+        .await
+        .map_err(pg_unavailable(&request_id, "get document"))?;
+    let Some(current) = current else {
+        return Err(AppError::not_found(request_id, "document", D::KIND));
+    };
+    let document: D = serde_json::from_value(current.body).map_err(|e| {
+        tracing::error!(error = %e, kind = D::KIND, "stored document does not parse");
+        AppError::service_unavailable(request_id.clone())
+    })?;
+    Ok((
+        with_request_id(request_id),
+        Json(DocumentResponse {
+            revision: current.revision,
+            document,
+        }),
+    ))
+}
+
+async fn put_document<D: Document>(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, AppError> {
+    let request_id = request_id_from_headers(&headers);
+    let what = format!("{} document", D::KIND);
+    let document: D = parse_body(&headers, &body, &request_id, &what)?;
+    let revision = commit_document(&state, &document, &request_id).await?;
+    Ok((
+        StatusCode::OK,
+        with_request_id(request_id),
+        Json(DocumentResponse { revision, document }),
+    ))
+}
+
+async fn list_document_revisions<D: Document>(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let request_id = request_id_from_headers(&headers);
+    let revisions = state
+        .pg
+        .list_document_revisions(D::KIND)
+        .await
+        .map_err(pg_unavailable(&request_id, "list document revisions"))?;
+    match revisions {
+        Some(list) => Ok((
+            with_request_id(request_id),
+            Json(DocumentRevisionListResponse {
+                revisions: list
+                    .into_iter()
+                    .map(to_document_revision_response::<D>)
+                    .collect(),
+            }),
+        )),
+        None => Err(AppError::not_found(request_id, "document", D::KIND)),
+    }
+}
+
+async fn get_document_revision<D: Document>(
+    State(state): State<AppState>,
+    Path(rev): Path<i64>,
+    headers: axum::http::HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let request_id = request_id_from_headers(&headers);
+    let revision = state
+        .pg
+        .get_document_revision(D::KIND, rev)
+        .await
+        .map_err(pg_unavailable(&request_id, "get document revision"))?;
+    match revision {
+        Some(r) => Ok((
+            with_request_id(request_id),
+            Json(to_document_revision_response::<D>(r)),
+        )),
+        None => Err(AppError::not_found(
+            request_id,
+            "revision",
+            &format!("{}#{rev}", D::KIND),
+        )),
+    }
+}
+
+async fn restore_document<D: Document>(
+    State(state): State<AppState>,
+    Path(rev): Path<i64>,
+    headers: axum::http::HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let request_id = request_id_from_headers(&headers);
+    let revision = state
+        .pg
+        .get_document_revision(D::KIND, rev)
+        .await
+        .map_err(pg_unavailable(
+            &request_id,
+            "get document revision for restore",
+        ))?;
+    let Some(revision) = revision else {
+        return Err(AppError::not_found(
+            request_id,
+            "revision",
+            &format!("{}#{rev}", D::KIND),
+        ));
+    };
+    // Restored as if written now: today's rules apply.
+    let document: D = serde_json::from_value(revision.body).map_err(|e| {
+        AppError::validation(
+            request_id.clone(),
+            format!("revision no longer parses: {e}"),
+        )
+    })?;
+    let revision = commit_document(&state, &document, &request_id).await?;
+    Ok((
+        StatusCode::OK,
+        with_request_id(request_id),
+        Json(DocumentResponse { revision, document }),
+    ))
+}
+
+/// Validates and writes a document. Returns its new revision.
+async fn commit_document<D: Document>(
+    state: &AppState,
+    document: &D,
+    request_id: &str,
+) -> Result<i64, AppError> {
+    document
+        .validate()
+        .map_err(|e| AppError::validation(request_id.to_string(), format!("{}: {e}", D::KIND)))?;
+    let body = serde_json::to_value(document).map_err(|e| {
+        tracing::error!(error = %e, "document serialize failed");
+        AppError::service_unavailable(request_id.to_string())
+    })?;
+    let (revision, head) = state
+        .pg
+        .commit_document(D::KIND, &body, request_id)
+        .await
+        .map_err(pg_unavailable(request_id, "commit document"))?;
+    state.feed.advance(head);
+    Ok(revision)
+}
+
+#[derive(Deserialize)]
+struct FeedQuery {
+    after: Option<i64>,
+}
+
+/// With `after`, waits until the control plane is past it. False means nothing
+/// newer came within the wait. A cursor ahead of the head (the store was reset)
+/// is answered at once.
+async fn wait_for_newer(state: &AppState, after: Option<i64>) -> bool {
+    let Some(after) = after else {
+        return true;
+    };
+    if after > state.feed.current() {
+        return true;
+    }
+    state.feed.wait_past(after, LONG_POLL_WAIT).await
+}
+
+#[derive(Serialize)]
+struct GatewayFeed {
+    revision: i64,
+    services: HashMap<String, ServiceConfig>,
+    cors: Cors,
+}
+
+/// What a gateway runs on: every current service and the CORS document.
+async fn gateway_feed(
+    State(state): State<AppState>,
+    Query(query): Query<FeedQuery>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, AppError> {
+    let request_id = request_id_from_headers(&headers);
+    if !wait_for_newer(&state, query.after).await {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
+    let snapshot = state
+        .pg
+        .gateway_snapshot()
+        .await
+        .map_err(pg_unavailable(&request_id, "gateway snapshot"))?;
+    let cors = match snapshot.cors {
+        Some(body) => serde_json::from_value(body).map_err(|e| {
+            tracing::error!(error = %e, "stored cors document does not parse");
+            AppError::service_unavailable(request_id.clone())
+        })?,
+        None => Cors::default(),
+    };
+    Ok(Json(GatewayFeed {
+        revision: snapshot.revision,
+        services: snapshot.services,
+        cors,
+    })
+    .into_response())
+}
+
+#[derive(Serialize)]
+struct RolesFeed {
+    revision: i64,
+    roles: Roles,
+}
+
+/// What identity runs on: the roles document. **404** until one is written.
+async fn roles_feed(
+    State(state): State<AppState>,
+    Query(query): Query<FeedQuery>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, AppError> {
+    let request_id = request_id_from_headers(&headers);
+    if !wait_for_newer(&state, query.after).await {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
+    let (revision, roles) = state
+        .pg
+        .roles_snapshot()
+        .await
+        .map_err(pg_unavailable(&request_id, "roles snapshot"))?;
+    let Some(roles) = roles else {
+        return Err(AppError::not_found(request_id, "document", Roles::KIND));
+    };
+    let roles: Roles = serde_json::from_value(roles).map_err(|e| {
+        tracing::error!(error = %e, "stored roles document does not parse");
+        AppError::service_unavailable(request_id.clone())
+    })?;
+    Ok(Json(RolesFeed { revision, roles }).into_response())
 }

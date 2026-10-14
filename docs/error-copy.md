@@ -76,7 +76,7 @@ Members, invites, and service accounts.
 
 | When | `message` |
 |------|-----------|
-| `role` not a slug in the roles file | That role doesn't exist. |
+| `role` not a slug in the roles document | That role doesn't exist. |
 | `role` sent while roles are off | Roles aren't set up for this deployment. |
 | Demote, remove, or delete the last `creator_role` holder | Keep at least one member with the {creator_role} role. |
 
@@ -116,7 +116,7 @@ Internal validate (`credential` or `idp` required) is not product UI. Fallback 4
 
 Fallback 422 is enough.
 
-## Route-registry
+## Control plane
 
 `AppError::validation` puts the validation text in `message`. Operator-facing.
 

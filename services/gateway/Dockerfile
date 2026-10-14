@@ -7,7 +7,7 @@ FROM rust:1 AS local
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake curl protobuf-compiler \
+    build-essential cmake curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN cargo install cargo-watch
@@ -40,7 +40,7 @@ FROM rust:1 AS builder
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake protobuf-compiler \
+    build-essential cmake \
     && rm -rf /var/lib/apt/lists/*
 
 RUN cargo install cargo-chef --locked

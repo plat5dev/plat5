@@ -108,7 +108,7 @@ func (h *Handler) CreateInvite(c fiber.Ctx) error {
 		return err
 	}
 	// Checked here, not at redeem: the invitee is not a member yet.
-	role, err := h.roles.Choose(req.Role)
+	role, err := h.roles.Set().Choose(req.Role)
 	if err != nil {
 		return err
 	}

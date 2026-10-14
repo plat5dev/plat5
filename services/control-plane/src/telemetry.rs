@@ -79,7 +79,7 @@ pub fn init_telemetry() -> Result<TelemetryGuard, Box<dyn std::error::Error + Se
     }
 
     let service_name =
-        env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "route-registry".to_string());
+        env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "control-plane".to_string());
     let service_namespace =
         env::var("OTEL_SERVICE_NAMESPACE").unwrap_or_else(|_| "edge".to_string());
     let service_instance_id = env::var("OTEL_SERVICE_INSTANCE_ID")

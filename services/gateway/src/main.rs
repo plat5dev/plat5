@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use gateway::auth;
 use gateway::config::GatewayConfig;
+use gateway::control_plane::ControlPlane;
 use gateway::health;
 use gateway::metrics;
-use gateway::route_registry;
 use gateway::telemetry;
 use gateway::UserGateway;
 use tracing::info;
@@ -24,14 +24,12 @@ fn main() {
     // Use a single Tokio runtime for all async initialization.
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
-    let route_map = rt.block_on(async {
-        let registry = route_registry::RouteRegistry::connect(&cfg.etcd_url)
+    // Routes and CORS: wait for the first snapshot, then follow the control plane.
+    let snapshot = rt.block_on(async {
+        ControlPlane::connect(&cfg.control_plane_url, cfg.internal_auth_token.clone())
             .await
-            .expect("failed to initialize route registry from etcd");
-        registry.route_map()
+            .snapshot()
     });
-
-    info!("route registry initialized");
 
     let opt = Opt::parse_args();
     let mut my_server = Server::new(Some(opt)).unwrap();
@@ -70,7 +68,7 @@ fn main() {
         UserGateway::new(
             &cfg,
             jwt_validator.clone(),
-            route_map,
+            snapshot,
             limiter.clone(),
             audit,
         ),

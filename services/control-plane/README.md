@@ -1,15 +1,15 @@
-# Route registry
+# Control plane
 
-Admin HTTP service: validate route configs, record desired state + revisions in Postgres, project current JSON to etcd for the Plat5 gateway.
+The deployment's desired state: routes, roles, and CORS origins. Validates each write, records it with revisions in Postgres, and serves the current state to the gateway and identity over long-poll.
 
-Contract: [`../../docs/route-registry.md`](../../docs/route-registry.md).
+Contract: [`../../docs/control-plane.md`](../../docs/control-plane.md).
 
 ## Ports
 
 | Port | Env | Purpose |
 |------|-----|---------|
-| 5002 | `PORT` | Admin API |
-| 5003 | `INTERNAL_PORT` | `/health/live`, `/health/ready`, `/metrics` |
+| 5002 | `PORT` | Admin API (Bearer `ADMIN_TOKEN`) |
+| 5003 | `INTERNAL_PORT` | `/internal/gateway`, `/internal/roles`, `/health/live`, `/health/ready`, `/metrics` |
 
 ## Telemetry
 
@@ -24,7 +24,7 @@ Contract: [`../../docs/telemetry.md`](../../docs/telemetry.md).
 
 | Var | Default | Purpose |
 |-----|---------|---------|
-| `OTEL_SERVICE_NAME` | `route-registry` | Resource `service.name` |
+| `OTEL_SERVICE_NAME` | `control-plane` | Resource `service.name` |
 | `OTEL_SERVICE_NAMESPACE` | `edge` | Resource `service.namespace` |
 | `OTEL_SERVICE_VERSION` | crate version | Resource `service.version` |
 | `OTEL_SERVICE_INSTANCE_ID` | hostname / pid | Resource `service.instance.id` |
@@ -46,7 +46,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
 # OTEL_METRICS_EXPORTER=prometheus  # opt out of metrics push
 ```
 
-Health and `/metrics` are on the internal app (not request-traced).
+Health and `/metrics` are not request-traced. The `/internal/*` reads are.
 
 ## Run (compose)
 
@@ -67,11 +67,24 @@ curl -sS -X POST http://localhost:5002/apply \
   --data-binary @./routes.yml
 ```
 
+## Set roles and CORS origins
+
+```bash
+curl -sS -X PUT http://localhost:5002/roles \
+  -H "Authorization: Bearer dev-admin-token" \
+  -H "Content-Type: application/yaml" \
+  --data-binary @./roles.yml
+
+curl -sS -X PUT http://localhost:5002/cors \
+  -H "Authorization: Bearer dev-admin-token" \
+  -H "Content-Type: application/json" \
+  -d '{"allowed_origins": ["http://localhost:5173"]}'
+```
+
 ## Local cargo
 
 ```bash
-cd services/route-registry
-export ETCD_URL=http://localhost:2379
+cd services/control-plane
 export DATABASE_URL=postgres://plat5:plat5@localhost:5432/plat5?sslmode=disable
 export ADMIN_TOKEN=dev-admin-token
 cargo run

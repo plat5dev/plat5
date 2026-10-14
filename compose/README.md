@@ -1,6 +1,6 @@
 # Plat5 compose
 
-Self-contained Plat5 runtime: gateway, route-registry, identity, audit, postgres, etcd, valkey. Own Docker network.
+Self-contained Plat5 runtime: gateway, control-plane, identity, audit, postgres, valkey. Own Docker network.
 
 ## Quick start
 
@@ -16,10 +16,10 @@ docker compose up --build
 | URL | Service |
 |-----|---------|
 | `http://localhost:5001` | Gateway |
-| `http://localhost:5002` | Route registry admin API |
+| `http://localhost:5002` | Control plane admin API (routes, roles, CORS origins) |
 
 Admin token default: `dev-admin-token` (`ADMIN_TOKEN`).
-Internal control-plane token default: `dev-internal-token` (`INTERNAL_AUTH_TOKEN`) — gateway ↔ identity validate.
+Internal token default: `dev-internal-token` (`INTERNAL_AUTH_TOKEN`) — gateway → identity validate, audit, and the control plane; identity → the control plane.
 
 ## Apply routes
 
@@ -47,7 +47,9 @@ Set env (or defaults) for any IdP reachable from the gateway container:
 
 Gateway uses `host.docker.internal` so a host-published IdP does not need a shared Docker network. API keys are an alternative to JWT; the IdP is still required.
 
-Roles: identity reads [`roles.yml`](roles.yml) (`ROLES_FILE`). Dev and prod compose both mount it and point `ROLES_FILE` at it. Set `ROLES_FILE=` (empty) to turn roles off: every member holds every label, and authorization is left to something else. Restart identity after editing it. See [`../docs/roles.md`](../docs/roles.md).
+Roles: identity reads the roles document from the control plane and picks up changes without a restart. Dev and prod compose both seed [`roles.yml`](roles.yml) as the first document (`SEED_ROLES_FILE`); after that, change roles with `PUT /roles` on the admin API, since editing the file does nothing. Set `ROLES_ENABLED=false` to turn roles off: every member holds every label, and authorization is left to something else. See [`../docs/roles.md`](../docs/roles.md).
+
+CORS: the gateway answers with `*` until you set origins with `PUT /cors` ([`../docs/control-plane.md`](../docs/control-plane.md#cors)).
 
 `APIKEY_BRAND` (default `plat5`) is identity's alone: keys are `{brand}-k-2-…`, sessions `{brand}-s-2-…`. The gateway checks a key's shape and sends it to identity's one validate (`CREDENTIAL_VALIDATE_URL`), which says whose it is: a user key passes on `user` routes, a member key or session on `organization` and `member` routes. See [`../docs/identity.md`](../docs/identity.md#credential-format).
 
@@ -76,6 +78,6 @@ docker compose -f docker-compose.prod.yml -f docker-compose.prod.build.yml --env
 
 Required: `POSTGRES_PASSWORD`, `ADMIN_TOKEN`, `INTERNAL_AUTH_TOKEN`, `AUTH_ISSUER`, `AUTH_JWKS_URI`.
 
-`POSTGRES_PASSWORD` is interpolated into `DATABASE_URL` — use a URL-safe value (hex). Route registry admin port is **not** published in prod by default.
+`POSTGRES_PASSWORD` is interpolated into `DATABASE_URL` — use a URL-safe value (hex). The control plane's admin port is **not** published in prod by default.
 
 Operator walkthrough (Auth, TLS, attach your API): [`../docs/self-hosting.md`](../docs/self-hosting.md).

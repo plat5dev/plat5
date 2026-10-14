@@ -14,7 +14,7 @@ The route is a type. A handler does not get extra identity. Plat5 authenticates 
 
 **What a member can reach.** `organization` has `organization_id`. `member` has `organization_id` and `member_id`. Neither has `user_id`: an org sees its members, not the directory. A check on one resource ("may this member touch doc D?") is the gateway's, through the policy-engine hook. A list of what a member can reach is a `member` route: the service gets `member_id` as its subject and asks the engine which resources it can reach ([`model.md`](model.md#what-i-can-reach)). The subject is what the answer is about, not who called.
 
-**Roles are the deployment's, and they are not product ACL.** Plat5 names no roles. The deployment's roles file says which labels a role grants, and the gateway checks those labels against the route. Whether this member may touch this project is the optional policy engine's. Plat5 does not ship an owner / admin / member.
+**Roles are the deployment's, and they are not product ACL.** Plat5 names no roles. The deployment's roles document says which labels a role grants, and the gateway checks those labels against the route. Whether this member may touch this project is the optional policy engine's. Plat5 does not ship an owner / admin / member.
 
 **User-subject routes stay on `user` scope.** `organization` and `member` do not have `user_id`. Identity's organization and member routes are published on those scopes because the template fills the subject from the credential. The handler reads the path. Who may call is the proxy.
 
@@ -28,7 +28,7 @@ Trusting the rewritten path is a perimeter protocol: [`gateway-contract.md`](gat
 |-------|----------|--------|
 | **Authentication** | Who is this? | Gateway + **IdP (JWT)** / identity credentials: keys and sessions (stripped before upstream). Identity resolves a JWT's subject to the person |
 | **Scope projection** | Which fields is this route allowed to see? | Gateway. The credential is the proof. The scope drops fields. |
-| **Role resolution** | Which labels does this member's role grant? | Identity, from the deployment's roles file, at credential validate ([`roles.md`](roles.md)). The gateway never sees a role. |
+| **Role resolution** | Which labels does this member's role grant? | Identity, from the deployment's roles document, at credential validate ([`roles.md`](roles.md)). The gateway never sees a role. |
 | **Route labels** | Do the caller's labels share one with `required_labels`? | Gateway after admission, and only the gateway. A credential carries its principal's labels: a member key or session carries the member's role labels. A user has no role, so user credentials skip. Omitted `required_labels` → any admitted principal. |
 | **Resource authorization** | Can this member do X to project/doc/…? Which projects can it reach? | The optional **policy engine**. The gateway asks it about one resource; a service asks it which resources its subject can reach. Neither Plat5 nor the service decides |
 | **State rules** | Is this valid for the resource's current state? | **Business services**, over the subject in the path. Rules that hold whoever asks |
@@ -53,7 +53,7 @@ Always: `X-Request-ID`, `traceparent`. Services are not told the caller's labels
 
 ## Roles
 
-Plat5 ships no role names. A member carries a role slug, and the deployment's roles file says which labels it grants ([`roles.md`](roles.md)). Identity resolves the role at validate. The gateway checks labels and never sees a role. Services see neither. Roles are on or off for the whole deployment: with a roles file every member holds one of its roles; without one no member has a role and every member holds every label.
+Plat5 ships no role names. A member carries a role slug, and the deployment's roles document says which labels it grants ([`roles.md`](roles.md)). Identity resolves the role at validate. The gateway checks labels and never sees a role. Services see neither. Roles are on or off for the whole deployment: with a roles document every member holds one of its roles; without one no member has a role and every member holds every label.
 
 Assigning roles is a privilege like any other. Whoever may call a route that assigns a role, or creates a service account, may assign any role. The deployment decides who gets that label.
 
@@ -109,7 +109,7 @@ PATCH /organizations/{organization_id}/members/{member_id}
 PATCH /members/{member_id}
 ```
 
-The path names every id the handler reads. The catalog's route labels decide who may call. Identity refuses illegal states: one membership row per user per org, last member, last `creator_role` holder, the invite machine, an address that does not exist, and a role not in the roles file.
+The path names every id the handler reads. The catalog's route labels decide who may call. Identity refuses illegal states: one membership row per user per org, last member, last `creator_role` holder, the invite machine, an address that does not exist, and a role not in the roles document.
 
 ## Error split (locked)
 
@@ -135,7 +135,7 @@ Org invites live in **identity** (`organization_invites`). Create, list, and rev
 - FGA / ReBAC engines inside Plat5. One plugs in behind the policy-engine hook
 - Tenant as a name for an organization
 - Operator / employee admin planes
-- Role names or meanings in Plat5. The deployment names roles in its roles file.
+- Role names or meanings in Plat5. The deployment names roles in its roles document.
 - Service accounts as a parallel auth system (they are members with keys)
 - Service accounts tied to the member who created them. A service account is the org's. Its role is its own.
 - Key or session labels narrower than the principal

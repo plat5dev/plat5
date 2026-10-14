@@ -18,6 +18,7 @@ mod tests {
         ServiceConfig {
             url: "http://w:3000".into(),
             rate_limits: None,
+            timeouts: None,
             public: None,
             user: Some(ScopeConfig {
                 route_prefix: None,
@@ -75,8 +76,8 @@ mod tests {
     }
 
     #[test]
-    fn service_name_fits_an_etcd_key_and_an_audit_event() {
-        for name in ["identity", "route-registry", "my_api", "Api.v2", &"a".repeat(128)] {
+    fn service_name_fits_a_bucket_key_and_an_audit_event() {
+        for name in ["identity", "control-plane", "my_api", "Api.v2", &"a".repeat(128)] {
             validate_named(name, "/a").unwrap_or_else(|e| panic!("{name}: {e}"));
         }
         for name in ["", "billing api", "a/b", "a:b", "caf\u{e9}", &"a".repeat(129)] {
@@ -170,6 +171,7 @@ mod tests {
         let svc = ServiceConfig {
             url: "http://orgs:3000".into(),
             rate_limits: None,
+            timeouts: None,
             public: None,
             user: Some(ScopeConfig {
                 route_prefix: Some("/api/organizations".into()),
@@ -317,7 +319,7 @@ mod tests {
             other => panic!("expected POST rate limit, got {other:?}"),
         }
         let json = serde_json::to_value(get).unwrap();
-        assert!(json["methods"].is_array(), "etcd methods must stay a list");
+        assert!(json["methods"].is_array(), "stored methods must stay a list");
         assert!(json.get("methods_form").is_none());
     }
 
@@ -507,6 +509,7 @@ mod tests {
         ServiceConfig {
             url: "http://w:3000".into(),
             rate_limits: None,
+            timeouts: None,
             public: None,
             user: None,
             organization: Some(ScopeConfig {
@@ -573,6 +576,7 @@ mod tests {
         let svc = ServiceConfig {
             url: "http://p:3000".into(),
             rate_limits: None,
+            timeouts: None,
             public: None,
             user: None,
             organization: Some(ScopeConfig {
@@ -684,6 +688,33 @@ mod tests {
     fn audit_must_be_a_bool() {
         let parsed: Result<RouteConfig, _> =
             serde_json::from_str(r#"{"path":"/org/x","methods":["POST"],"audit":"yes"}"#);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn timeouts_are_optional_and_bounded() {
+        let mut svc = user_service(vec![route("/a", &["GET"])]);
+        svc.timeouts = Some(TimeoutsConfig {
+            connect_ms: Some(2_000),
+            read_ms: None,
+        });
+        let prepared = svc.clone().prepare_for_registry("w").expect("connect only");
+        let json = serde_json::to_value(&prepared).unwrap();
+        assert_eq!(json["timeouts"], serde_json::json!({ "connect_ms": 2000 }));
+
+        for bad in [0, MAX_TIMEOUT_MS + 1] {
+            svc.timeouts = Some(TimeoutsConfig {
+                connect_ms: None,
+                read_ms: Some(bad),
+            });
+            let err = svc.clone().prepare_for_registry("w").unwrap_err();
+            assert!(err.to_string().contains("timeouts.read_ms"), "{err}");
+        }
+    }
+
+    #[test]
+    fn timeouts_reject_unknown_fields() {
+        let parsed: Result<TimeoutsConfig, _> = serde_json::from_str(r#"{"write_ms":5}"#);
         assert!(parsed.is_err());
     }
 }

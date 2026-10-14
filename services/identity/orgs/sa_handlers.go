@@ -45,7 +45,7 @@ func (h *Handler) CreateServiceAccount(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	role, err := h.roles.ChooseServiceAccount(req.Role)
+	role, err := h.roles.Set().ChooseServiceAccount(req.Role)
 	if err != nil {
 		return err
 	}
@@ -152,7 +152,7 @@ func (h *Handler) DeleteServiceAccount(c fiber.Ctx) error {
 		}
 		prior := *target
 		target.Status = StatusRemoved
-		return rejectLastCreator(h.roles, members, prior, "service_account_id")
+		return rejectLastCreator(h.roles.Set(), members, prior, "service_account_id")
 	})
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to delete service account", httpx.DBErr{

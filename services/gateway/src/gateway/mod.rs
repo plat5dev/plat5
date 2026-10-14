@@ -26,15 +26,16 @@ use crate::audit::{self, Audit, AuditState};
 use crate::auth::jwt::JwtValidatorState;
 use crate::auth::{AuthStack, AuthType};
 use crate::config::GatewayConfig;
+use crate::control_plane::Snapshot;
 use crate::error::{ApiError, ErrorKind};
 use crate::metrics;
 use crate::rate_limit::{RateLimitError, RateLimiter};
-use crate::route_map::{LimitBucket, Route, RouteLimiter, RouteMap, RouteScope};
+use crate::route_map::{LimitBucket, Route, RouteLimiter, RouteScope};
 use labels::satisfies_required_labels;
 
 pub use crate::admission::parse_user_id_claim;
 pub use context::GatewayContext;
-use cors::CorsPolicy;
+pub use cors::CorsPolicy;
 
 const MAX_BODY_SIZE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 
@@ -45,10 +46,10 @@ struct RateLimitFallback {
 
 pub struct UserGateway {
     admissor: Admissor,
-    route_map: Arc<ArcSwap<RouteMap>>,
+    /// Routes and CORS from the control plane, swapped whole on each change.
+    snapshot: Arc<ArcSwap<Snapshot>>,
     connect_timeout: Duration,
     read_timeout: Duration,
-    cors: CorsPolicy,
     limiter: RateLimiter,
     rate_limit_fallback: RateLimitFallback,
     auth_failure_requests: u64,
@@ -60,16 +61,15 @@ impl UserGateway {
     pub fn new(
         cfg: &GatewayConfig,
         jwt_validator: JwtValidatorState,
-        route_map: Arc<ArcSwap<RouteMap>>,
+        snapshot: Arc<ArcSwap<Snapshot>>,
         limiter: RateLimiter,
         audit: Audit,
     ) -> Self {
         Self {
             admissor: Admissor::new(AuthStack::from_config(cfg, jwt_validator)),
-            route_map,
+            snapshot,
             connect_timeout: cfg.upstream_connect_timeout,
             read_timeout: cfg.upstream_read_timeout,
-            cors: CorsPolicy::new(cfg.allowed_origins.clone()),
             limiter,
             rate_limit_fallback: RateLimitFallback {
                 requests: cfg.rate_limit_requests,
@@ -81,12 +81,17 @@ impl UserGateway {
         }
     }
 
+    /// The current CORS policy. Each response reads it once.
+    fn cors(&self) -> Arc<CorsPolicy> {
+        self.snapshot.load().cors.clone()
+    }
+
     /// CORS preflight: 204 with no body. A 204 has no body by definition, so the
     /// response is complete after the headers and the connection can be reused.
     async fn handle_preflight(&self, session: &mut Session, ctx: &GatewayContext) -> Result<bool> {
         let mut header = ResponseHeader::build(204, None)?;
         response::apply_security_headers(&mut header)?;
-        self.cors
+        self.cors()
             .apply(&mut header, ctx.request_origin.as_deref())?;
         header.insert_header("Access-Control-Max-Age", "86400")?;
         session
@@ -119,7 +124,7 @@ impl UserGateway {
         );
         Ok(Some(
             response::write_json_error(
-                &self.cors,
+                &self.cors(),
                 session,
                 ctx,
                 413,
@@ -130,8 +135,9 @@ impl UserGateway {
     }
 
     fn resolve_route(&self, path: &str, method: &str) -> Option<(Route, HashMap<String, String>)> {
-        let route_map = self.route_map.load();
-        route_map
+        let snapshot = self.snapshot.load();
+        snapshot
+            .routes
             .find_route(path, method)
             .map(|(route, params)| (route.clone(), params))
     }
@@ -152,11 +158,11 @@ impl UserGateway {
         {
             Ok(_) => Ok(None),
             Err(RateLimitError::Exceeded { retry_after, .. }) => Ok(Some(
-                response::write_rate_limited(&self.cors, session, ctx, retry_after, None).await?,
+                response::write_rate_limited(&self.cors(), session, ctx, retry_after, None).await?,
             )),
             Err(RateLimitError::Unavailable) => Ok(Some(
                 response::write_json_error(
-                    &self.cors,
+                    &self.cors(),
                     session,
                     ctx,
                     503,
@@ -185,7 +191,7 @@ impl UserGateway {
                 "failed to inject X-Request-ID header"
             );
             return response::write_json_error(
-                &self.cors,
+                &self.cors(),
                 session,
                 ctx,
                 500,
@@ -212,7 +218,7 @@ impl UserGateway {
                         return Ok(done);
                     }
                 }
-                return response::write_admit_error(&self.cors, session, ctx, err).await;
+                return response::write_admit_error(&self.cors(), session, ctx, err).await;
             }
         };
 
@@ -229,7 +235,7 @@ impl UserGateway {
                 }
                 Err(RateLimitError::Exceeded { retry_after, info }) => {
                     return response::write_rate_limited(
-                        &self.cors,
+                        &self.cors(),
                         session,
                         ctx,
                         retry_after,
@@ -239,7 +245,7 @@ impl UserGateway {
                 }
                 Err(RateLimitError::Unavailable) => {
                     return response::write_json_error(
-                        &self.cors,
+                        &self.cors(),
                         session,
                         ctx,
                         503,
@@ -267,7 +273,7 @@ impl UserGateway {
             ctx.audit_user_route = route.scope == RouteScope::User;
             if !written {
                 return response::write_json_error(
-                    &self.cors,
+                    &self.cors(),
                     session,
                     ctx,
                     503,
@@ -280,7 +286,7 @@ impl UserGateway {
         // After the limiter, so a label-denied request still spends budget.
         if !satisfies_required_labels(route.required_labels.as_deref(), admission.labels()) {
             return response::write_json_error(
-                &self.cors,
+                &self.cors(),
                 session,
                 ctx,
                 403,
@@ -303,8 +309,8 @@ impl UserGateway {
             route,
             params,
             &admission,
-            self.connect_timeout,
-            self.read_timeout,
+            route.timeouts.connect.unwrap_or(self.connect_timeout),
+            route.timeouts.read.unwrap_or(self.read_timeout),
         )
         .await
         {
@@ -315,7 +321,7 @@ impl UserGateway {
                 }
                 rewrite::RewriteError::BadUpstream => (502, ApiError::internal_error()),
             };
-            return response::write_json_error(&self.cors, session, ctx, status, body).await;
+            return response::write_json_error(&self.cors(), session, ctx, status, body).await;
         }
         Ok(false)
     }
@@ -577,7 +583,7 @@ impl ProxyHttp for UserGateway {
                 return Ok(done);
             }
             return response::write_json_error(
-                &self.cors,
+                &self.cors(),
                 session,
                 ctx,
                 404,
@@ -642,7 +648,8 @@ impl ProxyHttp for UserGateway {
                 502 => ApiError::service_unavailable(),
                 _ => ApiError::internal_error(),
             };
-            if let Err(err) = response::send_json_error(&self.cors, session, ctx, code, error).await
+            if let Err(err) =
+                response::send_json_error(&self.cors(), session, ctx, code, error).await
             {
                 warn!(
                     status = code,
@@ -746,7 +753,7 @@ impl ProxyHttp for UserGateway {
                 }
             }
         }
-        self.cors
+        self.cors()
             .apply(upstream_response, ctx.request_origin.as_deref())?;
 
         debug!("rewrote upstream response headers");

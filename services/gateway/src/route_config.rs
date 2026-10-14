@@ -2,9 +2,6 @@ use serde::de::{self, Deserializer, IgnoredAny};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-/// etcd key prefix for gateway route registry entries.
-pub const ROUTES_PREFIX: &str = "edge/gateway/routes/";
-
 pub const MAX_LABEL_COUNT: usize = 32;
 pub const MAX_LABEL_LEN: usize = 64;
 
@@ -35,6 +32,10 @@ pub struct ServiceConfig {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limits: Option<HashMap<String, RateLimitPolicy>>,
+    /// Upstream timeouts for this service. Omitted fields use the gateway's
+    /// `UPSTREAM_CONNECT_TIMEOUT_MS` / `UPSTREAM_READ_TIMEOUT_MS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeouts: Option<TimeoutsConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public: Option<ScopeConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -43,6 +44,15 @@ pub struct ServiceConfig {
     pub organization: Option<ScopeConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member: Option<ScopeConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimeoutsConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -80,7 +90,7 @@ pub struct RouteConfig {
     pub path: String,
     pub methods: Vec<String>,
     /// Absolute upstream path template. Omitted means proxy `path` unchanged.
-    /// Placeholders stay in etcd; the gateway substitutes at request time.
+    /// Placeholders stay in the stored config; the gateway substitutes at request time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream: Option<String>,
     /// Optional labels this route requires (any one of them).
@@ -98,7 +108,7 @@ pub struct RouteConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audit: Option<bool>,
     /// Nested methods map, if the YAML/JSON used the per-verb object form.
-    /// Cleared when expanded at apply. Never written to etcd.
+    /// Cleared when expanded at apply. Never stored.
     #[serde(skip)]
     pub(crate) methods_form: MethodsForm,
 }

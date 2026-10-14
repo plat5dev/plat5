@@ -49,7 +49,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
 | `ORGANIZATION_HANDOFF_REQUIRED` | 409 | `invalid_request_error` | Hand off or delete your organizations first. | `{ organizations: [{ id, name }] }` |
-| `ROUTE_CONFLICT` | 409 | `invalid_request_error` | (route-registry apply, put, restore) Message lists each conflicting route (same method, same path shape) and its owner service. | — |
+| `ROUTE_CONFLICT` | 409 | `invalid_request_error` | (control-plane apply, put, restore) Message lists each conflicting route (same method, same path shape) and its owner service. | — |
 | `PAYLOAD_TOO_LARGE` | 413 | `invalid_request_error` | Request body is too large. | `{ max_size_bytes }` |
 | `RATE_LIMITED` | 429 | `api_error` | Too many requests. Try again in a moment. | `{ retry_after_seconds }` |
 | `INTERNAL_ERROR` | 500 | `api_error` | An unexpected error occurred. | `null` |

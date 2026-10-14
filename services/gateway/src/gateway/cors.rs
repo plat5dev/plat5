@@ -1,7 +1,7 @@
 use pingora::http::ResponseHeader;
 use pingora::Result;
 
-/// CORS policy from `ALLOWED_ORIGINS`. Empty allowlist → `*`.
+/// CORS policy from the control plane's `cors` document. Empty allowlist → `*`.
 #[derive(Clone, Debug)]
 pub struct CorsPolicy {
     allowed_origins: Vec<String>,

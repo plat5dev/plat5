@@ -452,6 +452,26 @@ pub fn validate_shared_rate_limits(
     Ok(())
 }
 
+/// Longest upstream timeout a service may set: 10 minutes.
+pub const MAX_TIMEOUT_MS: u64 = 600_000;
+
+fn validate_timeouts(service: &str, timeouts: Option<&TimeoutsConfig>) -> Result<(), ConfigError> {
+    let Some(t) = timeouts else {
+        return Ok(());
+    };
+    for (field, value) in [("connect_ms", t.connect_ms), ("read_ms", t.read_ms)] {
+        if let Some(ms) = value {
+            if ms == 0 || ms > MAX_TIMEOUT_MS {
+                return Err(ConfigError::InvalidRoute {
+                    service: service.to_string(),
+                    reason: format!("timeouts.{field} must be 1-{MAX_TIMEOUT_MS}, got {ms}"),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn valid_scope_label(s: &str) -> bool {
     if s.is_empty() || s.len() > MAX_LABEL_LEN {
         return false;

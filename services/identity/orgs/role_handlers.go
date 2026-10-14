@@ -32,13 +32,14 @@ func (h *Handler) ListRoles(c fiber.Ctx) error {
 		return err
 	}
 
-	list := h.roles.List()
+	set := h.roles.Set()
+	list := set.List()
 	out := ListRolesResponse{
 		Roles:       make([]RoleResponse, 0, len(list)),
-		CreatorRole: h.roles.Creator(),
-		DefaultRole: h.roles.Default(),
+		CreatorRole: set.Creator(),
+		DefaultRole: set.Default(),
 
-		ServiceAccountDefaultRole: h.roles.ServiceAccountDefault(),
+		ServiceAccountDefaultRole: set.ServiceAccountDefault(),
 	}
 	for _, r := range list {
 		out.Roles = append(out.Roles, RoleResponse{Slug: r.Slug, Labels: r.Labels})

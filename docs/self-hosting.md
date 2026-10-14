@@ -4,7 +4,7 @@ Operator guide: run Plat5 (and optionally [Plat5 Auth](https://github.com/plat5d
 
 This is **not** the CLI. `plat5 start` is laptop-only. On a server you pull GHCR images, fill `.env`, and apply routes yourself.
 
-Local contracts stay in this repo (`idp-contract.md`, `routes.md`, `route-registry.md`, `gateway-contract.md`). Auth env/OIDC live in the Auth repo. This page is the cross-product operator path those READMEs already link.
+Local contracts stay in this repo (`idp-contract.md`, `routes.md`, `control-plane.md`, `gateway-contract.md`). Auth env/OIDC live in the Auth repo. This page is the cross-product operator path those READMEs already link.
 
 ## What you run
 
@@ -14,7 +14,7 @@ Internet
   https://auth.example.com  → TLS edge → issuer  :5000   (or any OIDC IdP)
 
 Docker (two stacks, two networks):
-  plat5   postgres, etcd, valkey, gateway, identity, audit, route-registry
+  plat5   postgres, valkey, gateway, identity, audit, control-plane
   auth    postgres, issuer     (skip if you already have an IdP)
 
 Your app:
@@ -24,7 +24,7 @@ Your app:
 
 | Piece | Image pin | Compose |
 |-------|-----------|---------|
-| Runtime (gateway, identity, audit, route-registry) | `PLAT5_VERSION` | [`compose/docker-compose.prod.yml`](../compose/docker-compose.prod.yml) |
+| Runtime (gateway, identity, audit, control-plane) | `PLAT5_VERSION` | [`compose/docker-compose.prod.yml`](../compose/docker-compose.prod.yml) |
 | Auth (optional IdP) | `AUTH_VERSION` (independent) | [auth `compose/docker-compose.prod.yml`](https://github.com/plat5dev/auth/blob/master/compose/docker-compose.prod.yml) |
 | Your API | your image | your compose; join plat5’s network |
 | TLS | — | Cloudflare tunnel, Caddy, … — **not** in the gateway |
@@ -92,12 +92,12 @@ AUTH_JWKS_URI=https://auth.example.com/.well-known/jwks.json
 AUTH_ALLOWED_AUDIENCES=<same as AUTH_ALLOWED_CLIENTS>
 AUTH_USER_ID_CLAIM=properties.user_id   # Plat5 Auth; use sub for many OIDC IdPs
 # APIKEY_BRAND=plat5                    # optional; identity only; keys {brand}-k-2-…, sessions {brand}-s-2-…
-# ROLES_FILE=/etc/plat5/roles.yml       # the default; identity; compose/roles.yml is mounted there. Empty = roles off
+# ROLES_ENABLED=true                    # the default; identity. false = roles off
 ```
 
-With `ROLES_FILE`, every member holds one of its roles, and the identity catalog's labels decide who manages the org. Compose mounts [`compose/roles.yml`](../compose/roles.yml) at `/etc/plat5/roles.yml` and points `ROLES_FILE` there; edit it before first boot. Format and rules: [`roles.md`](roles.md). Identity reads it at boot; restart identity after editing it.
+With roles on, every member holds one of its roles, and the identity catalog's labels decide who manages the org. The roles live in the control plane. Compose seeds [`compose/roles.yml`](../compose/roles.yml) as the first roles document, so edit it before first boot. After that, the file is not read again: change roles with `PUT /roles` (below), and identity picks them up without a restart. Identity does not start serving until it has a roles document. Format and rules: [`roles.md`](roles.md).
 
-`ROLES_FILE=` (empty) turns roles off: no member has a role, every member holds every label, and route labels block no one. Use it when something else decides authorization. Identity logs a warning at boot.
+`ROLES_ENABLED=false` turns roles off: no member has a role, every member holds every label, and route labels block no one. Use it when something else decides authorization. Identity logs a warning at boot. It is a boot switch: turning roles on later leaves existing members without a role.
 
 Audit is on by default: the gateway records each audited `organization` and `member` request in the org's audit log, through the `audit` service. While audit is down, audited requests are **503**. `AUDIT_ENABLED=false` on the gateway turns it off for the whole deployment; then you may stop the `audit` service and skip its catalog. Model and guarantees: [`audit.md`](audit.md).
 
@@ -105,9 +105,27 @@ Audit is on by default: the gateway records each audited `organization` and `mem
 
 Compose network name is **`plat5_plat5`** (`name: plat5` + network `plat5`). Attach apps to that name.
 
-Route-registry **:5002 is not published**. Apply from a container on `plat5_plat5`, or an SSH tunnel. Do not put the admin API on the public internet.
+The control plane's **:5002 is not published**. Apply from a container on `plat5_plat5`, or an SSH tunnel. Do not put the admin API on the public internet: `ADMIN_TOKEN` can route traffic and change what every role grants.
 
-Gateway `ALLOWED_ORIGINS` is unset in prod compose → CORS `*`. Set it on the gateway service when you want an allowlist.
+CORS answers `*` until you set an allowlist on the control plane:
+
+```bash
+curl -sS -X PUT http://control-plane:5002/cors \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"allowed_origins": ["https://app.example.com"]}'
+```
+
+Roles change the same way, with the roles file as the body:
+
+```bash
+curl -sS -X PUT http://control-plane:5002/roles \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/yaml" \
+  --data-binary @roles.yml
+```
+
+Both apply without a restart, and both keep revisions you can restore ([`control-plane.md`](control-plane.md)).
 
 JWKS must be a URL the **gateway container** can fetch. Public HTTPS is the usual case — no `host.docker.internal` on the gateway.
 
@@ -143,17 +161,17 @@ services:
 
 ```bash
 # from a throwaway client on plat5_plat5
-curl -sS -X POST http://route-registry:5002/apply \
+curl -sS -X POST http://control-plane:5002/apply \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/yaml" \
   --data-binary @services/identity/routes.yml
 
-curl -sS -X POST http://route-registry:5002/apply \
+curl -sS -X POST http://control-plane:5002/apply \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/yaml" \
   --data-binary @services/audit/routes.yml   # skip with AUDIT_ENABLED=false
 
-curl -sS -X POST http://route-registry:5002/apply \
+curl -sS -X POST http://control-plane:5002/apply \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/yaml" \
   --data-binary @routes.yml
@@ -163,7 +181,7 @@ Identity public paths are operator-owned. Catalog: [`services/identity/routes.ym
 
 Your `organization` and `member` writes are in the org's audit log by default. Set `audit: false` on a write nobody needs there, and `audit: true` on a read worth recording ([`routes.md`](routes.md#audit)).
 
-Apply is **upsert**. Format: [`routes.md`](routes.md), [`route-registry.md`](route-registry.md).
+Apply is **upsert**. Format: [`routes.md`](routes.md), [`control-plane.md`](control-plane.md).
 
 Local CLI `upstreams:` (bare port → `host.docker.internal`) is for laptop Docker. On a shared compose network, put `url:` in the file.
 
@@ -182,7 +200,7 @@ The SPA does not need the brand. A credential's kind comes back in the API respo
 
 SPA fallback so `/callback` serves `index.html` (Pages `_redirects`: `/* /index.html 200`).
 
-Match Auth allowlists to that origin + redirect. Empty gateway `ALLOWED_ORIGINS` is `*`.
+Match Auth allowlists to that origin + redirect, and add the origin to the control plane's `cors` document (no document is `*`).
 
 Static hosting (Cloudflare Pages, object storage, nginx) is fine. The console is not part of the Plat5 runtime.
 
@@ -198,16 +216,17 @@ curl -sS https://api.example.com/org
 
 Empty route map → 404. After apply, missing JWT → 401.
 
-Gateway ready requires JWKS loaded and Valkey reachable (`/health/ready` on internal `:8000`). While Valkey is unreachable, limited requests are 503; they resume when it answers again. Valkey restart resets open rate-limit windows.
+The gateway starts serving once it has loaded routes from the control plane. Gateway ready requires JWKS loaded and Valkey reachable (`/health/ready` on internal `:8000`). While Valkey is unreachable, limited requests are 503; they resume when it answers again. Valkey restart resets open rate-limit windows.
 
 ## Footguns
 
 - Choose `AUTH_USER_ID_CLAIM` before the first sign-in. Identity links each person by issuer and that claim's value, so changing the claim later signs everyone in as a new person. With Plat5 Auth use `properties.user_id` (the template default); use `sub` for generic OIDC IdPs.
 - `plat5.yml` / `plat5 start` do not operate this stack.
 - `docker compose down -v` wipes identity orgs/keys and Auth users.
-- Recreating etcd without Postgres is ok (projection rebuilds). Wiping Postgres loses desired routes — re-apply.
+- Wiping Postgres loses routes, roles, and CORS origins — re-apply. A wiped deployment re-seeds roles from `compose/roles.yml`.
+- After first boot, editing `compose/roles.yml` does nothing. Apply it with `PUT /roles`.
 - Audience and SPA client id are one string if you customize them. The brand is identity's alone.
 
 ## Pins
 
-Images: `ghcr.io/plat5dev/{gateway,identity,route-registry}:$PLAT5_VERSION` and `ghcr.io/plat5dev/auth:$AUTH_VERSION`. Tags are independent. Use released `v*` tags, not `latest`.
+Images: `ghcr.io/plat5dev/{gateway,identity,control-plane,audit}:$PLAT5_VERSION` and `ghcr.io/plat5dev/auth:$AUTH_VERSION`. Tags are independent. Use released `v*` tags, not `latest`.

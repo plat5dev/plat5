@@ -1,14 +1,16 @@
-// Package roles is the deployment's roles file: role slug → labels.
+// Package roles is the deployment's roles: role slug → labels.
 //
-// Plat5 names no roles. The file is optional. With one, every member holds one
-// of its roles. Without one (a nil *Set), roles are off: no member has a role,
-// and every member holds every label. Contract: docs/roles.md.
+// Plat5 names no roles. Roles are on or off for the whole deployment. On, every
+// member holds one of the roles in the control plane's roles document. Off (a
+// nil *Set), no member has a role, and every member holds every label.
+// Contract: docs/roles.md.
 package roles
 
 import (
+	"bytes"
+	"encoding/json"
 	stderrors "errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -39,32 +41,39 @@ type Set struct {
 	saDef   string
 }
 
+// file is the roles document: roles.yml as written, or its JSON from the
+// control plane.
 type file struct {
-	Roles       map[string][]string `yaml:"roles"`
-	CreatorRole string              `yaml:"creator_role"`
-	DefaultRole string              `yaml:"default_role"`
+	Roles       map[string][]string `yaml:"roles" json:"roles"`
+	CreatorRole string              `yaml:"creator_role" json:"creator_role"`
+	DefaultRole string              `yaml:"default_role" json:"default_role"`
 	// ServiceAccountDefaultRole is optional. Unset is default_role.
-	ServiceAccountDefaultRole string `yaml:"service_account_default_role"`
+	ServiceAccountDefaultRole string `yaml:"service_account_default_role" json:"service_account_default_role"`
 }
 
-// Load reads ROLES_FILE. An empty path is roles off (nil, nil).
-func Load(path string) (*Set, error) {
-	if path == "" {
-		return nil, nil
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read roles file: %w", err)
-	}
-	return Parse(data)
-}
-
-// Parse validates a roles file. Any problem refuses boot.
+// Parse validates a roles file in YAML.
 func Parse(data []byte) (*Set, error) {
 	var f file
 	if err := yaml.UnmarshalStrict(data, &f); err != nil {
 		return nil, fmt.Errorf("roles file: %w", err)
 	}
+	return build(f)
+}
+
+// ParseJSON validates a roles document in JSON, as the control plane serves it.
+func ParseJSON(data []byte) (*Set, error) {
+	var f file
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&f); err != nil {
+		return nil, fmt.Errorf("roles file: %w", err)
+	}
+	return build(f)
+}
+
+// build applies the same rules the control plane applies on write. Identity
+// checks again, so a document it cannot use never replaces the current one.
+func build(f file) (*Set, error) {
 	if len(f.Roles) == 0 {
 		return nil, stderrors.New("roles file: roles must define at least one role")
 	}

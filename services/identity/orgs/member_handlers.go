@@ -111,7 +111,7 @@ func (h *Handler) CreateMember(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	role, err := h.roles.Choose(req.Role)
+	role, err := h.roles.Set().Choose(req.Role)
 	if err != nil {
 		return err
 	}
@@ -263,9 +263,12 @@ func (h *Handler) UpdateOrgMember(c fiber.Ctx) error {
 		}
 		status = parsed
 	}
+	// One document for the whole request: the role chosen and the last-creator
+	// rule read the same roles.
+	set := h.roles.Set()
 	var role *string
 	if req.Role != nil {
-		chosen, err := h.roles.Choose(req.Role)
+		chosen, err := set.Choose(req.Role)
 		if err != nil {
 			return err
 		}
@@ -285,7 +288,7 @@ func (h *Handler) UpdateOrgMember(c fiber.Ctx) error {
 			target.Role = role
 		}
 		name.apply(target)
-		return rejectLastCreator(h.roles, members, prior, "role")
+		return rejectLastCreator(set, members, prior, "role")
 	})
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to update member", httpx.DBErr{
@@ -319,7 +322,7 @@ func (h *Handler) removeMember(c fiber.Ctx, orgID string) error {
 		}
 		prior := *target
 		target.Status = StatusRemoved
-		return rejectLastCreator(h.roles, members, prior, "member_id")
+		return rejectLastCreator(h.roles.Set(), members, prior, "member_id")
 	})
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to remove member", httpx.DBErr{

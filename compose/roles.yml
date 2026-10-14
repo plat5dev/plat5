@@ -1,6 +1,7 @@
 # Starter roles for this deployment (docs/roles.md). Plat5 names no roles:
-# these are yours to rename, add to, or replace. Identity reads this file at
-# boot (ROLES_FILE); restart identity after editing it.
+# these are yours to rename, add to, or replace. The control plane writes this
+# file as the first roles document. After that, apply changes with PUT /roles
+# (`plat5 roles apply`); identity picks them up without a restart.
 #
 # A role grants labels. Routes require labels (required_labels). ["*"] grants
 # every label. The org:* labels match the identity and audit catalogs

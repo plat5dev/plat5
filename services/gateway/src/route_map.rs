@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::time::Duration;
 
 use regex::Regex;
 use tracing::warn;
 
-use crate::route_config::{Config, RateLimitPolicy, RouteRateLimit};
+use crate::route_config::{Config, RateLimitPolicy, RouteRateLimit, TimeoutsConfig};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RouteScope {
@@ -29,6 +30,27 @@ pub struct Route {
     pub limiter: RouteLimiter,
     /// The route's `audit` override. None = method default.
     pub audit: Option<bool>,
+    /// The service's `timeouts`. None = the gateway's `UPSTREAM_*_TIMEOUT_MS`.
+    pub timeouts: UpstreamTimeouts,
+}
+
+/// A service's upstream timeouts. Each one left out uses the gateway default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UpstreamTimeouts {
+    pub connect: Option<Duration>,
+    pub read: Option<Duration>,
+}
+
+impl UpstreamTimeouts {
+    fn from_config(cfg: Option<&TimeoutsConfig>) -> Self {
+        let Some(cfg) = cfg else {
+            return Self::default();
+        };
+        Self {
+            connect: cfg.connect_ms.map(Duration::from_millis),
+            read: cfg.read_ms.map(Duration::from_millis),
+        }
+    }
 }
 
 impl Route {
@@ -109,6 +131,7 @@ impl RouteMap {
         for service_name in service_names {
             let service_config = &config.services[service_name];
             let base_url = &service_config.url;
+            let timeouts = UpstreamTimeouts::from_config(service_config.timeouts.as_ref());
 
             let scopes = [
                 (service_config.public.as_ref(), RouteScope::Public),
@@ -162,6 +185,10 @@ impl RouteMap {
                             error = %e,
                             "skipping invalid route"
                         );
+                        continue;
+                    }
+                    if let Some(added) = route_map.routes.last_mut() {
+                        added.route.timeouts = timeouts;
                     }
                 }
             }
@@ -197,6 +224,7 @@ impl RouteMap {
             required_labels,
             limiter,
             audit,
+            timeouts: UpstreamTimeouts::default(),
         };
 
         self.routes.push(CompiledRoute {
@@ -378,6 +406,7 @@ mod tests {
             ServiceConfig {
                 url: "http://b".into(),
                 rate_limits: None,
+                timeouts: None,
                 public: Some(ScopeConfig {
                     route_prefix: None,
                     routes: vec![route("/api/{id}", &["GET"])],
@@ -392,6 +421,7 @@ mod tests {
             ServiceConfig {
                 url: "http://a".into(),
                 rate_limits: None,
+                timeouts: None,
                 public: Some(ScopeConfig {
                     route_prefix: None,
                     routes: vec![route("/api/health", &["GET"])],
@@ -408,6 +438,49 @@ mod tests {
     }
 
     #[test]
+    fn service_timeouts_reach_its_routes() {
+        let mut services = HashMap::new();
+        for (name, path, timeouts) in [
+            (
+                "slow",
+                "/slow",
+                Some(TimeoutsConfig {
+                    connect_ms: None,
+                    read_ms: Some(120_000),
+                }),
+            ),
+            ("plain", "/plain", None),
+        ] {
+            services.insert(
+                name.to_string(),
+                ServiceConfig {
+                    url: "http://s".into(),
+                    rate_limits: None,
+                    timeouts,
+                    public: Some(ScopeConfig {
+                        route_prefix: None,
+                        routes: vec![route(path, &["GET"])],
+                    }),
+                    user: None,
+                    organization: None,
+                    member: None,
+                },
+            );
+        }
+        let map = RouteMap::from_config(&Config { services });
+        let (slow, _) = map.find_route("/slow", "GET").unwrap();
+        assert_eq!(
+            slow.timeouts,
+            UpstreamTimeouts {
+                connect: None,
+                read: Some(Duration::from_secs(120)),
+            }
+        );
+        let (plain, _) = map.find_route("/plain", "GET").unwrap();
+        assert_eq!(plain.timeouts, UpstreamTimeouts::default());
+    }
+
+    #[test]
     fn deterministic_service_order() {
         // Same specificity: path string order decides
         let mut services = HashMap::new();
@@ -417,6 +490,7 @@ mod tests {
                 ServiceConfig {
                     url: url.into(),
                     rate_limits: None,
+                    timeouts: None,
                     public: Some(ScopeConfig {
                         route_prefix: None,
                         routes: vec![route(path, &["GET"])],
@@ -472,6 +546,7 @@ mod tests {
                         },
                     ),
                 ])),
+                timeouts: None,
                 public: None,
                 user: Some(ScopeConfig {
                     route_prefix: None,

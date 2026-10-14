@@ -14,7 +14,7 @@ Plat5 is the front door for multi-tenant APIs. On every request it answers three
 | **Organization** | The tenant: the isolation boundary. Service accounts are born here. It holds the roster, roles, invites and sessions. Everything inside belongs to exactly one. |
 | **Membership** | An identity's standing in a realm. In an organization it carries a role and a status. A person's directory membership is their anchor there: it holds their own resources and keys, and has no status or role of its own. |
 | **Credential** | A user JWT, an API key or a session. Always belongs to a membership. Carries exactly that membership's permissions. |
-| **Role** | The deployment's name for a set of labels, from `roles.yml`. Plat5 names no roles. |
+| **Role** | The deployment's name for a set of labels, from its roles document in the control plane. Plat5 names no roles. |
 | **Label** | A permission a route can require. Only the gateway checks labels. |
 | **Scope** | Who owns what a route addresses: `public` (no one), `organization` (the org), or the caller's own membership: `user` in the directory, `member` in an organization. |
 | **Subject** | The owner's ids that the gateway fills into `upstream`. |
@@ -34,7 +34,7 @@ Plat5 is the front door for multi-tenant APIs. On every request it answers three
 8. **Services enforce only what holds no matter who asks.** That means state rules ("archived is read-only"), and scoping every lookup by the subject.
 9. **A credential is never narrower than its membership.** To give a machine less, give it a service account with a smaller role.
 10. **Everyone with access is on the organization's roster.** There are no outside members.
-11. **The deployment's data, not plat5's names.** Roles come from a file. Plat5 ships defaults and gives none of them special status.
+11. **The deployment's data, not plat5's names.** Roles come from the deployment's roles document: a file the operator writes and applies to the control plane, like routes. Plat5 ships defaults and gives none of them special status.
 12. **An event goes in the log of the realm that owns what it changed.**
 
 ## Where each decision lives

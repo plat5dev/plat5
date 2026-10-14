@@ -1,4 +1,4 @@
-# Catalog of identity public routes. Apply via route-registry (or a subset).
+# Catalog of identity public routes. Apply to the control plane (or a subset).
 # Not auto-published. Internal validate stays on INTERNAL_PORT.
 # GET /organizations, GET /users, PATCH /users/{user_id}/status, and
 # GET /members/{member_id}/user are served by identity and omitted here: they

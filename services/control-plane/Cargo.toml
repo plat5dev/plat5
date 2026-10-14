@@ -1,16 +1,15 @@
 [package]
-name = "route-registry"
+name = "control-plane"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "route-registry"
+name = "control-plane"
 path = "src/main.rs"
 
 [dependencies]
 axum = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
-etcd-client = "0.14"
 http = "1"
 once_cell = "1.19"
 opentelemetry = { version = "0.31", features = ["trace", "metrics"] }

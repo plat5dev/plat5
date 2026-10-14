@@ -1,4 +1,4 @@
-# Catalog of audit public routes. Apply via route-registry.
+# Catalog of audit public routes. Apply to the control plane.
 # Not auto-published. Internal intent/outcome writes stay on INTERNAL_PORT.
 # Skip this file when audit is off (AUDIT_ENABLED=false on the gateway).
 #

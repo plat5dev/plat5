@@ -2,12 +2,12 @@ use std::path::Path;
 
 use tracing::{info, warn};
 
-use crate::etcd_store::EtcdStore;
+use crate::documents::{Document, Roles};
 use crate::pg_store::PgStore;
-use crate::projection;
 use crate::route_config::Config;
 
-pub async fn seed_missing(pg: &PgStore, etcd: &EtcdStore, dir: &str) -> Result<(), String> {
+/// Dev and first boot: applies each YAML file's services that have no history.
+pub async fn seed_missing(pg: &PgStore, dir: &str) -> Result<(), String> {
     let path = Path::new(dir);
     if !path.is_dir() {
         return Err(format!("SEED_ROUTES_DIR is not a directory: {dir}"));
@@ -65,11 +65,10 @@ pub async fn seed_missing(pg: &PgStore, etcd: &EtcdStore, dir: &str) -> Result<(
             continue;
         }
 
-        let commits = pg
+        let (commits, _) = pg
             .commit_batch(&batch, "seed")
             .await
             .map_err(|e| format!("seed commit failed: {e}"))?;
-        projection::project_commits(etcd, &commits).await;
         for commit in commits {
             info!(
                 service = %commit.service,
@@ -80,5 +79,33 @@ pub async fn seed_missing(pg: &PgStore, etcd: &EtcdStore, dir: &str) -> Result<(
         }
     }
 
+    Ok(())
+}
+
+/// First boot: writes the roles file as the roles document when there has never
+/// been one. A document with history is never overwritten; change it with
+/// `PUT /roles`.
+pub async fn seed_roles(pg: &PgStore, file: &str) -> Result<(), String> {
+    if pg
+        .has_document(Roles::KIND)
+        .await
+        .map_err(|e| format!("seed lookup failed for roles: {e}"))?
+    {
+        info!(file = %file, "roles seed skipped; roles already have history");
+        return Ok(());
+    }
+    let content =
+        std::fs::read_to_string(file).map_err(|e| format!("failed to read {file}: {e}"))?;
+    let roles: Roles =
+        serde_yaml::from_str(&content).map_err(|e| format!("failed to parse {file}: {e}"))?;
+    roles
+        .validate()
+        .map_err(|e| format!("seed validation failed for {file}: {e}"))?;
+    let body = serde_json::to_value(&roles).map_err(|e| e.to_string())?;
+    let (revision, _) = pg
+        .commit_document(Roles::KIND, &body, "seed")
+        .await
+        .map_err(|e| format!("roles seed commit failed: {e}"))?;
+    info!(file = %file, revision, "seeded roles");
     Ok(())
 }

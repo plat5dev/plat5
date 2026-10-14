@@ -1,13 +1,13 @@
 # syntax=docker/dockerfile:1
 #
-# Build context: services/route-registry/
+# Build context: services/control-plane/
 
 FROM rust:1 AS local
 
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake curl protobuf-compiler \
+    build-essential cmake curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN cargo install cargo-watch
@@ -16,7 +16,7 @@ COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src && echo "fn main() {}" > src/main.rs \
     && cargo build \
     && rm -rf src \
-    && rm -f target/debug/deps/route_registry* \
+    && rm -f target/debug/deps/control_plane* \
     && mkdir -p src && echo "fn main() {}" > src/main.rs
 
 COPY src ./src
@@ -39,7 +39,7 @@ FROM rust:1 AS builder
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake protobuf-compiler \
+    build-essential cmake \
     && rm -rf /var/lib/apt/lists/*
 
 RUN cargo install cargo-chef --locked
@@ -58,8 +58,8 @@ ARG VERSION=dev
 ARG REVISION=
 ARG SOURCE=https://github.com/plat5dev/plat5
 
-LABEL org.opencontainers.image.title="route-registry" \
-      org.opencontainers.image.description="Plat5 route registry" \
+LABEL org.opencontainers.image.title="control-plane" \
+      org.opencontainers.image.description="Plat5 control plane" \
       org.opencontainers.image.source="${SOURCE}" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}" \
@@ -72,10 +72,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -r app && useradd -r -g app app
 
-COPY --from=builder /app/target/release/route-registry ./route-registry
+COPY --from=builder /app/target/release/control-plane ./control-plane
 
 USER app
 
 EXPOSE 5002
 
-CMD ["./route-registry"]
+CMD ["./control-plane"]

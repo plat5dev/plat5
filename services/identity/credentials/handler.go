@@ -41,12 +41,12 @@ type Handler struct {
 	// brand is APIKEY_BRAND: identity mints every credential with it.
 	brand string
 	// roles resolves a member's labels at validate and mint.
-	roles *roles.Set
+	roles *roles.Source
 	now   func() time.Time
 }
 
-func NewHandler(store *Store, orgStore *orgs.Store, dir *directory.Store, brand string, roleSet *roles.Set) *Handler {
-	return &Handler{store: store, orgs: orgStore, people: dir, brand: brand, roles: roleSet, now: time.Now}
+func NewHandler(store *Store, orgStore *orgs.Store, dir *directory.Store, brand string, roleSource *roles.Source) *Handler {
+	return &Handler{store: store, orgs: orgStore, people: dir, brand: brand, roles: roleSource, now: time.Now}
 }
 
 // MountUser registers the person's own keys and session mint. Mount under /users.

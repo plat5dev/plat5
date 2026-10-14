@@ -2,7 +2,6 @@ use serde::de::{self, Deserializer, IgnoredAny};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-pub const ROUTES_PREFIX: &str = "edge/gateway/routes/";
 pub const MAX_LABEL_COUNT: usize = 32;
 pub const MAX_LABEL_LEN: usize = 64;
 const HTTP_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
@@ -34,6 +33,10 @@ pub struct ServiceConfig {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limits: Option<HashMap<String, RateLimitPolicy>>,
+    /// Upstream timeouts for this service. Omitted fields use the gateway's
+    /// `UPSTREAM_CONNECT_TIMEOUT_MS` / `UPSTREAM_READ_TIMEOUT_MS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeouts: Option<TimeoutsConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public: Option<ScopeConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -42,6 +45,15 @@ pub struct ServiceConfig {
     pub organization: Option<ScopeConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member: Option<ScopeConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TimeoutsConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -76,7 +88,7 @@ pub struct RouteConfig {
     pub path: String,
     pub methods: Vec<String>,
     /// Absolute upstream path template. Omitted means proxy `path` unchanged.
-    /// Placeholders stay in etcd; the gateway substitutes at request time.
+    /// Placeholders stay in the stored config; the gateway substitutes at request time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

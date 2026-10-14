@@ -23,10 +23,10 @@ Services expose Prometheus `/metrics` on the internal port ([`telemetry.md`](tel
 | Namespace | Used By |
 |-----------|---------|
 | `identity` | Plat5 identity backend: `identity` |
-| `edge` | Gateway (`gateway`), route registry (`route-registry`) |
+| `edge` | Gateway (`gateway`), control plane (`control-plane`) |
 | `audit` | Plat5 audit log: `audit` |
 | `api` | Business API services — **not** Plat5 identity |
-| `infra` | Dependencies (etcd, postgres, valkey) |
+| `infra` | Dependencies (postgres, valkey) |
 
 ### Platform service labels
 
@@ -34,7 +34,7 @@ Services expose Prometheus `/metrics` on the internal port ([`telemetry.md`](tel
 |---------|---------------------|--------|
 | `identity` | **`identity`** | Orgs, members, service accounts, API keys |
 | `gateway` | **`edge`** | Gateway hop |
-| `route-registry` | **`edge`** | Route admin API |
+| `control-plane` | **`edge`** | Admin API for routes, roles, CORS; feeds for gateway and identity |
 | `audit` | **`audit`** | Org audit log |
 
 When changing namespaces: update Docker Compose labels and `OTEL_SERVICE_NAMESPACE` together.

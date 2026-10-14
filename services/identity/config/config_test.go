@@ -46,7 +46,25 @@ func TestParseAPIKeyBrand(t *testing.T) {
 	}
 }
 
+func TestParseRoles(t *testing.T) {
+	on, u, err := parseRoles("", "http://control-plane:5003/")
+	if err != nil || !on || u != "http://control-plane:5003" {
+		t.Fatalf("default on: %v %q %v", on, u, err)
+	}
+	if _, _, err := parseRoles("true", " "); err == nil {
+		t.Fatal("roles on without CONTROL_PLANE_URL must fail boot")
+	}
+	on, u, err = parseRoles("false", "")
+	if err != nil || on || u != "" {
+		t.Fatalf("off: %v %q %v", on, u, err)
+	}
+	if _, _, err := parseRoles("no", "http://control-plane:5003"); err == nil {
+		t.Fatal("ROLES_ENABLED is true or false")
+	}
+}
+
 func TestLoadIgnoresSMTP(t *testing.T) {
+	t.Setenv("CONTROL_PLANE_URL", "http://control-plane:5003")
 	t.Setenv("SMTP_HOST", "mail.example.com")
 	t.Setenv("SMTP_USER", "u")
 	t.Setenv("SMTP_PASS", "p")

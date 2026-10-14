@@ -337,5 +337,5 @@ Ready probe fails closed (**503** `unhealthy`) when Postgres is unreachable.
 - Changing an event after its outcome, or deleting events through an API
 - Turning `pending` into anything else after the fact
 - Audit for some orgs or services and not others
-- Audit in Valkey or etcd
+- Audit in Valkey or the control plane
 - Retention and purge (deferred, [`../TODO.md`](../TODO.md))

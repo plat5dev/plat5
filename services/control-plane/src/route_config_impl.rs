@@ -15,6 +15,7 @@ impl Config {
                 });
             }
             validate_rate_limit_policies(name, service.rate_limits.as_ref())?;
+            validate_timeouts(name, service.timeouts.as_ref())?;
             if let Some(ref public) = service.public {
                 validate_scope_routes(name, "public", public, service.rate_limits.as_ref())?;
             }
@@ -194,7 +195,7 @@ pub fn find_route_conflicts(
 /// Audit refuses a longer service name on an event (docs/audit.md).
 const MAX_SERVICE_NAME_LEN: usize = 128;
 
-/// A service name is an etcd key segment, a rate-limit bucket prefix, and the
+/// A service name is a rate-limit bucket prefix, the key the gateway reads, and the
 /// `service` on every audit event: 1-128 of `[A-Za-z0-9._-]`.
 fn validate_service_name(name: &str) -> Result<(), ConfigError> {
     let ok = !name.is_empty()

@@ -26,7 +26,7 @@ pub fn register_process_metrics() {}
 static HTTP_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "http_requests_total",
-        "Total HTTP requests processed by route-registry",
+        "Total HTTP requests processed by control-plane",
         &["route", "method", "status"]
     )
     .expect("failed to register http_requests_total")
@@ -35,7 +35,7 @@ static HTTP_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
 static HTTP_REQUEST_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
     let opts = histogram_opts!(
         "http_request_duration_seconds",
-        "HTTP request latency as observed by route-registry",
+        "HTTP request latency as observed by control-plane",
         vec![0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0]
     );
     register_histogram_vec!(opts, &["route", "method"])
@@ -49,15 +49,15 @@ struct OtelInstruments {
 }
 
 static OTEL: Lazy<OtelInstruments> = Lazy::new(|| {
-    let meter = global::meter("route-registry");
+    let meter = global::meter("control-plane");
     OtelInstruments {
         http_requests: meter
             .u64_counter("http_requests_total")
-            .with_description("Total HTTP requests processed by route-registry")
+            .with_description("Total HTTP requests processed by control-plane")
             .build(),
         http_duration: meter
             .f64_histogram("http_request_duration_seconds")
-            .with_description("HTTP request latency as observed by route-registry")
+            .with_description("HTTP request latency as observed by control-plane")
             .with_boundaries(vec![
                 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0,
             ])

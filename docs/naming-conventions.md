@@ -4,16 +4,16 @@ Formats and terminology for labels, routes, metrics, and error codes across Plat
 
 ## Project Terminology
 
-- **Plat5** — Brand and main product: gateway, identity, route registry, contracts (platform runtime).
+- **Plat5** — Brand and main product: gateway, identity, control plane, contracts (platform runtime).
 - **Plat5 Auth** — Optional reference OIDC IdP (separate product).
 - **Service** — Any unit of code that runs with Plat5 (e.g. `gateway`, `identity`, `widgets`).
-- **Platform service** — Plat5 runtime units: `gateway`, `route-registry`, `identity`, `audit`.
+- **Platform service** — Plat5 runtime units: `gateway`, `control-plane`, `identity`, `audit`.
 - **Business service** — Use-case service behind Plat5: domain APIs.
 - **IdP** — External identity provider (JWT issuer). Not part of Plat5 (optional Plat5 Auth is a separate product).
 
 ### Scope of Plat5
 
-Plat5 owns the directory of people (ids linked to IdP subjects, display names), organizations, members, service accounts, credentials (API keys and sessions), audit, the route registry, and the user-facing gateway. Login is the IdP. Access to individual resources is an optional policy engine's. See [`model.md`](model.md).
+Plat5 owns the directory of people (ids linked to IdP subjects, display names), organizations, members, service accounts, credentials (API keys and sessions), audit, the control plane (routes, roles, CORS origins), and the user-facing gateway. Login is the IdP. Access to individual resources is an optional policy engine's. See [`model.md`](model.md).
 
 ### Identity domain nouns
 
@@ -25,7 +25,7 @@ Plat5 owns the directory of people (ids linked to IdP subjects, display names), 
 | Isolation boundary | **Organization** | Do not call it tenant. |
 | An identity's standing in a realm | **Membership** | A person's in the directory, or a member in an org |
 | Org principal | **Member** | User *or* service account in an org; wire id `member_id` |
-| What a member holds | **Role** | Deployment-defined slug on a member; its labels come from the roles file ([`roles.md`](roles.md)). Plat5 names no roles. |
+| What a member holds | **Role** | Deployment-defined slug on a member; its labels come from the roles document ([`roles.md`](roles.md)). Plat5 names no roles. |
 | Route requirement | **Label** | Opaque `[a-z0-9:._-]+`. Routes require them (`required_labels`); roles grant them. Keys and sessions carry their member's. Not `scope`: route `scope` is `public` / `user` / `organization` / `member`. |
 | Non-human org identity | **Service account** | Created under an organization; always has a member row |
 | Credential | **API key** | A user key (the person's own) or a member key. One credential table with sessions |
@@ -38,7 +38,7 @@ The identity control-plane service is **`identity`** (`service.name: identity`).
 ## Service Names
 
 - Format: `kebab-case`
-- Examples: `identity`, `gateway`, `route-registry`
+- Examples: `identity`, `gateway`, `control-plane`
 - Match the service directory name
 - Used in `service.name` container label and OTel resource attribute
 
@@ -49,7 +49,7 @@ Full table and labels: [`container-labels.md`](container-labels.md). Identity ba
 | Service | `service.namespace` |
 |---------|---------------------|
 | `identity` | `identity` |
-| `gateway`, `route-registry` | `edge` |
+| `gateway`, `control-plane` | `edge` |
 | `audit` | `audit` |
 | Business APIs | `api` (etc.) |
 

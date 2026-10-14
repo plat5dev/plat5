@@ -276,7 +276,7 @@ When OTLP metrics are enabled, the same series should appear there too. Extra pr
 | Service | Namespace | Notes |
 |---------|-----------|--------|
 | gateway | `edge` | Internal `/metrics`; gateway sets edge span identity attrs |
-| route-registry | `edge` | Internal `/metrics` |
+| control-plane | `edge` | Internal `/metrics` |
 | identity | `identity` | Internal `/metrics` |
 
 ## Non-goals

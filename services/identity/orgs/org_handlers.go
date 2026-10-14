@@ -52,7 +52,7 @@ func (h *Handler) CreateOrganization(c fiber.Ctx) error {
 		UpdatedAt: now,
 	}
 
-	creator, err := h.store.CreateOrganization(ctx, org, userID, h.roles.Creator())
+	creator, err := h.store.CreateOrganization(ctx, org, userID, h.roles.Set().Creator())
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to create organization", httpx.DBErr{
 			NotFound: ErrUserNotFound, Resource: "user", ResourceID: userID,
@@ -158,7 +158,7 @@ func (h *Handler) DeleteUser(c fiber.Ctx) error {
 	ctx := c.Context()
 	userID := httpx.PathParam(c, "user_id")
 
-	if err := h.store.DeleteAccount(ctx, userID, h.roles); err != nil {
+	if err := h.store.DeleteAccount(ctx, userID, h.roles.Set()); err != nil {
 		return httpx.MapDB(ctx, err, "failed to delete account", httpx.DBErr{
 			NotFound: ErrUserNotFound, Resource: "user", ResourceID: userID,
 		})

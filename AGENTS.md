@@ -8,7 +8,7 @@ The model, and the reason behind each decision: [`docs/model.md`](docs/model.md)
 
 ## What this is
 
-A thin platform runtime: auth-delegating gateway, a private directory of people, org/member plane, audit, route publish.
+A thin platform runtime: auth-delegating gateway, a private directory of people, org/member plane, audit, and a control plane for the deployment's routes, roles, and CORS origins.
 
 Not an IdP, not FGA, not a hosted multi-tenant control plane. The directory holds ids, display names, and links to IdP subjects; customers cannot list it; staff can.
 
@@ -35,17 +35,19 @@ Read the doc, don’t re-derive:
 | Subject id is not one segment → **500**. Path param is not one segment → **400** | identity-boundary |
 | JWT / IdP required to boot. API keys are an alternative credential | [`docs/idp-contract.md`](docs/idp-contract.md) |
 | Identity **public** routes are operator-owned. Apply the catalog (or a subset) | [`docs/routes.md`](docs/routes.md), [`services/identity/routes.yml`](services/identity/routes.yml) |
-| Internal validate stays on `INTERNAL_PORT`. Gateway boots with `CREDENTIAL_VALIDATE_URL`. `APIKEY_BRAND` is identity's alone; the gateway checks a key's shape, not its brand | identity.md, gateway-contract.md |
+| Internal validate stays on `INTERNAL_PORT`. Gateway boots with `CREDENTIAL_VALIDATE_URL` and `CONTROL_PLANE_URL`. `APIKEY_BRAND` is identity's alone; the gateway checks a key's shape, not its brand | identity.md, gateway-contract.md |
 | Lifecycle events: identity writes births and ends of organizations and members (`organization.created`, `organization.deleted`, `member.created`, `member.removed`) in the same transaction as the change. Org create also writes `member.created` for the founder, after `organization.created`. Account deletion writes `member.removed` per org and nothing for the directory. Always recorded; services opt in by reading the internal feed. Event writes are serialized, so `id` order is commit order | identity.md |
-| Route-registry: Postgres desired state + revisions; etcd is the gateway projection | [`docs/route-registry.md`](docs/route-registry.md) |
-| Apply is **upsert** of services in the file. Services not in the file are left alone | route-registry.md |
-| etcd prefix: `edge/gateway/routes/` | routes.md |
+| Control plane: the deployment's desired state (routes, roles, CORS origins) in Postgres, with revisions. One head revision, bumped in each write's transaction; the gateway and identity long-poll it. No projection store | [`docs/control-plane.md`](docs/control-plane.md) |
+| The control plane holds the operator's typed, deployment-wide state that changes while the deployment runs. Each document has its own schema. Wiring, secrets, trust anchors, on/off switches, and per-org data stay out | control-plane.md |
+| A reader waits for its first load and does not serve before it. It keeps the last good state while the control plane is down. Nothing loaded never reads as empty: no routes, or roles off | control-plane.md |
+| Apply is **upsert** of services in the file. Services not in the file are left alone | control-plane.md |
+| CORS origins are the control plane's `cors` document. No gateway env | control-plane.md, gateway-contract.md |
 | Named rate-limit policies on the service; `shared: true` is opt-in cross-service; limiter subject follows route scope | [`docs/routes.md`](docs/routes.md), [`docs/gateway-contract.md`](docs/gateway-contract.md) |
 | Rate-limit counters in Valkey; replicas share one budget; Valkey required to boot; fail-closed 503 | [`docs/gateway-contract.md`](docs/gateway-contract.md), [`docs/routes.md`](docs/routes.md) |
 | Admission cache in-process (positive + negative); singleflight; TTL is revoke/suspend/role-change latency | [`docs/gateway-contract.md`](docs/gateway-contract.md), [`docs/identity.md`](docs/identity.md) |
 | Gateway admits and fills the route subject into `upstream`. Access to individual resources is the optional policy engine's: the gateway asks it about one resource; a service asks it, on a `member` route, which resources its subject can reach. Until the hook ships, see [`TODO.md`](TODO.md) | identity-boundary, model.md |
 | Services see owners, never actors. No actor header and no creator concept: who-did-it that matters is a member-owned record; the rest is audit | model.md |
-| Roles are the deployment's: `ROLES_FILE` on identity, read at boot. On or off for the whole deployment: with a file every member holds one of its roles; without one no member has a role and every member holds every label. Plat5 names no roles. Identity resolves the role at validate. The gateway sees labels only | [`docs/roles.md`](docs/roles.md) |
+| Roles are the deployment's: the control plane's roles document, which identity follows without a restart. On or off for the whole deployment, a boot switch on identity (`ROLES_ENABLED`): on, every member holds one of its roles; off, no member has a role and every member holds every label. With roles on, identity does not serve until it has the document. Plat5 names no roles. Identity resolves the role at validate. The gateway sees labels only | [`docs/roles.md`](docs/roles.md), control-plane.md |
 | A credential carries its membership's permissions. Member keys and sessions carry the member's role labels. User credentials have no labels to check. Keys and sessions have no labels of their own | roles.md |
 | No grant cap. Whoever may call a route may assign any role and act on any member. The route's labels are the only check | roles.md |
 | The gateway is the only access check before a service. Services are not told the caller's role or labels | [`docs/gateway-contract.md`](docs/gateway-contract.md) |
@@ -72,7 +74,8 @@ Do not add these because they would be convenient:
 - Org `settings` / platform config bag
 - An organization slug, or any second human key. The id is the address; `name` is the label
 - Role names or meanings in Plat5 code (`owner` / `admin` / `member`), or getting a user id from `member_id` for org-scope apps
-- Roles in the route registry, etcd, or the gateway
+- Roles in the gateway, or in the gateway's feed. The control plane stores the roles document; only identity reads it
+- Turning roles on or off without a restart. It changes what stored roles mean: a migration, not a document
 - More than one role per member, or per-org custom roles (deferred)
 - Telling services the caller's role or labels
 - Key or session labels, or any other way to narrow a credential below its principal
@@ -86,7 +89,12 @@ Do not add these because they would be convenient:
 - Treating omitted identity routes as “feature off” (the process still serves them on the network)
 - Auto-merge of new identity paths into existing operator YAML
 - Shared `route-config` crate until a third consumer exists (two copies are deliberate)
-- Rate-limit policy catalog (separate apply / etcd resource)
+- A projection store (etcd or similar) between the control plane and its readers. Postgres is the one store
+- An untyped key or settings bag in the control plane. Each document is a typed schema with its own validation
+- Secrets, trust anchors (IdP issuer, JWKS, audiences), wiring, or on/off switches (`ROLES_ENABLED`, `AUDIT_ENABLED`) in the control plane
+- Per-org data in the control plane (per-org roles stay in identity)
+- A reader that serves before its first load, or reads "nothing loaded" as no routes or roles off
+- Rate-limit policy catalog (separate apply / control-plane document)
 - Limiter subject override (ip / user / org / member comes from route scope)
 - Billing, usage, or meter fields on `rate_limit` / `rate_limits`
 - Cost weights, multi-window, burst, or calendar quotas on the gateway limiter
@@ -102,7 +110,7 @@ Do not add these because they would be convenient:
 - A product feature that reads the audit log
 - Changing an audit event after its outcome, deleting events through an API, or turning `pending` into anything else after the fact
 - Audit on for some orgs or services and off for others
-- Audit events in Valkey or etcd
+- Audit events in Valkey or the control plane
 - A queue, broker, or push delivery in identity for lifecycle events. Push is a relay that reads the feed
 - Lifecycle events that are not written in the same transaction as the change, or that carry `user_id`
 - Lifecycle events other than births and ends of organizations and members, or a name or role on one. Updates, suspends, the directory, credentials, and invites are not events
@@ -110,7 +118,7 @@ Do not add these because they would be convenient:
 
 ## Siblings
 
-Wire or boot changes are not done in this repo alone. Update **cli** (embedded compose, generated `routes.identity.yml`, registry client), **template-***, **web-demo**, **toolbox** when the contract they generate, apply, or type changes.
+Wire or boot changes are not done in this repo alone. Update **cli** (embedded compose, generated `routes.identity.yml`, control-plane client), **template-***, **web-demo**, **toolbox** when the contract they generate, apply, or type changes.
 
 CLI image pin (`plat5_version`) lags this tree until a plat5 release. Local `--plat5-compose` is how you run HEAD.
 
@@ -118,5 +126,5 @@ CLI image pin (`plat5_version`) lags this tree until a plat5 release. Local `--p
 
 1. Read the relevant `docs/*.md` before editing.
 2. Hash design (invariants / stop / defer) before a non-trivial change.
-3. Don’t special-case `identity` in the registry.
+3. Don’t special-case `identity` in the control plane. Roles are a deployment document, not identity's.
 4. Don’t commit unless asked.

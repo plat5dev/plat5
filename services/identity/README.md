@@ -21,7 +21,7 @@ List includes `token` while the invite is active. The host sends any email.
 
 A key or session carries its principal's permissions. It has no labels of its own. Identity does not know the caller's labels and does not compare the caller to what it grants: whoever the gateway admits to a route may assign any role. Contract: [`docs/identity.md`](../../docs/identity.md).
 
-`ROLES_FILE` is the deployment's roles file, read at boot. With it, every member holds one of its roles, and validate returns that role's labels for a member's key or session. Unset → roles are off: no member has a role, and validate returns `["*"]` (every label). Contract: [`docs/roles.md`](../../docs/roles.md).
+Roles are on unless `ROLES_ENABLED=false`. On, identity reads the roles document from the control plane (`CONTROL_PLANE_URL`), serves nothing until it has one, and picks up each change without a restart. Every member holds one of its roles, and validate returns that role's labels for a member's key or session. Off: no member has a role, and validate returns `["*"]` (every label). Contract: [`docs/roles.md`](../../docs/roles.md).
 
 ## Local
 

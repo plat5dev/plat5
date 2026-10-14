@@ -20,11 +20,11 @@ type Handler struct {
 	invites inviteStore
 	people  people
 	// roles is the deployment's roles file. Nil: roles are off.
-	roles *roles.Set
+	roles *roles.Source
 }
 
-func NewHandler(store *Store, dir people, roleSet *roles.Set) *Handler {
-	return &Handler{store: store, people: dir, roles: roleSet}
+func NewHandler(store *Store, dir people, roleSource *roles.Source) *Handler {
+	return &Handler{store: store, people: dir, roles: roleSource}
 }
 
 func (h *Handler) requireOrganization(ctx context.Context, orgID string) error {

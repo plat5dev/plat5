@@ -24,12 +24,21 @@ type Config struct {
 	InternalAuthToken string
 	// APIKeyBrand starts every credential identity mints (docs/identity.md#credential-format).
 	APIKeyBrand string
-	// RolesFile is ROLES_FILE: the deployment's roles, read at boot. Empty = roles off.
-	RolesFile string
+	// RolesEnabled is ROLES_ENABLED: roles on (the default) or off for the
+	// whole deployment. It is a boot switch; only the roles themselves change
+	// while identity runs.
+	RolesEnabled bool
+	// ControlPlaneURL is CONTROL_PLANE_URL: the control plane's internal base
+	// URL, where the roles document is read. Required while roles are on.
+	ControlPlaneURL string
 }
 
 func Load() (Config, error) {
 	brand, err := apiKeyBrandFromEnv()
+	if err != nil {
+		return Config{}, err
+	}
+	rolesOn, controlPlane, err := parseRoles(os.Getenv("ROLES_ENABLED"), os.Getenv("CONTROL_PLANE_URL"))
 	if err != nil {
 		return Config{}, err
 	}
@@ -39,8 +48,26 @@ func Load() (Config, error) {
 		DatabaseURL:       envOr("DATABASE_URL", defaultDatabaseURL),
 		InternalAuthToken: strings.TrimSpace(os.Getenv("INTERNAL_AUTH_TOKEN")),
 		APIKeyBrand:       brand,
-		RolesFile:         strings.TrimSpace(os.Getenv("ROLES_FILE")),
+		RolesEnabled:      rolesOn,
+		ControlPlaneURL:   controlPlane,
 	}, nil
+}
+
+// parseRoles: roles are on unless ROLES_ENABLED=false. On, CONTROL_PLANE_URL is
+// required, so a forgotten URL fails boot instead of turning roles off.
+func parseRoles(enabled, controlPlaneURL string) (bool, string, error) {
+	switch strings.TrimSpace(enabled) {
+	case "", "true":
+	case "false":
+		return false, "", nil
+	default:
+		return false, "", fmt.Errorf("ROLES_ENABLED must be true or false, got %q", enabled)
+	}
+	u := strings.TrimRight(strings.TrimSpace(controlPlaneURL), "/")
+	if u == "" {
+		return false, "", fmt.Errorf("CONTROL_PLANE_URL is required while roles are on (set ROLES_ENABLED=false to turn roles off)")
+	}
+	return true, u, nil
 }
 
 func apiKeyBrandFromEnv() (string, error) {

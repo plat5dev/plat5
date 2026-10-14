@@ -4,7 +4,6 @@
 name: plat5
 
 volumes:
-  etcd_data:
   pg_data:
 
 networks:
@@ -33,32 +32,6 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  etcd:
-    image: gcr.io/etcd-development/etcd:v3.6.0
-    labels:
-      service.name: etcd
-      service.namespace: infra
-    environment:
-      ETCD_NAME: etcd0
-      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
-      ETCD_ADVERTISE_CLIENT_URLS: http://localhost:2379
-      ETCD_INITIAL_CLUSTER_TOKEN: etcd-cluster-1
-      ETCD_INITIAL_CLUSTER_STATE: new
-    command:
-      - /usr/local/bin/etcd
-      - --data-dir=/etcd-data
-    volumes:
-      - etcd_data:/etcd-data
-    networks:
-      - plat5
-    healthcheck:
-      test: ["CMD", "etcdctl", "endpoint", "health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-    restart: unless-stopped
-
   valkey:
     image: valkey/valkey:8-alpine
     labels:
@@ -74,29 +47,32 @@ services:
       retries: 5
     restart: unless-stopped
 
-  route-registry:
-    image: ghcr.io/plat5dev/route-registry:${PLAT5_VERSION:?set PLAT5_VERSION}
+  control-plane:
+    image: ghcr.io/plat5dev/control-plane:${PLAT5_VERSION:?set PLAT5_VERSION}
     labels:
-      service.name: route-registry
+      service.name: control-plane
       service.namespace: edge
       metrics.port: "5003"
     # Admin API not published by default in prod — reach via private network.
     environment:
       PORT: 5002
       INTERNAL_PORT: 5003
-      ETCD_URL: http://etcd:2379
       ADMIN_TOKEN: ${ADMIN_TOKEN}
+      INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-plat5}?sslmode=disable
+      # roles.yml is written once, as the first roles document. After that,
+      # change roles with PUT /roles (docs/roles.md); editing the file does nothing.
+      SEED_ROLES_FILE: /seed-roles/roles.yml
       RUST_LOG: info
-      OTEL_SERVICE_NAME: route-registry
+      OTEL_SERVICE_NAME: control-plane
       OTEL_SERVICE_NAMESPACE: edge
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       DEPLOYMENT_ENV: prod
+    volumes:
+      - ./roles.yml:/seed-roles/roles.yml:ro
     networks:
       - plat5
     depends_on:
-      etcd:
-        condition: service_healthy
       postgres:
         condition: service_healthy
     healthcheck:
@@ -133,7 +109,8 @@ services:
       RATE_LIMIT_AUTH_FAILURE_REQUESTS: ${RATE_LIMIT_AUTH_FAILURE_REQUESTS:-60}
       RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS: ${RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS:-60}
       VALKEY_URL: redis://valkey:6379
-      ETCD_URL: http://etcd:2379
+      # Routes and CORS origins (docs/control-plane.md).
+      CONTROL_PLANE_URL: http://control-plane:5003
       OTEL_SERVICE_NAME: gateway
       OTEL_SERVICE_NAMESPACE: edge
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
@@ -141,11 +118,9 @@ services:
     networks:
       - plat5
     depends_on:
-      etcd:
-        condition: service_healthy
       valkey:
         condition: service_healthy
-      route-registry:
+      control-plane:
         condition: service_healthy
       identity:
         condition: service_started
@@ -171,19 +146,20 @@ services:
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
       APIKEY_BRAND: ${APIKEY_BRAND:-plat5}
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-plat5}?sslmode=disable
-      # roles.yml is mounted here; edit it, then restart identity.
-      # ROLES_FILE= (empty) turns roles off: every member holds every label.
-      ROLES_FILE: ${ROLES_FILE-/etc/plat5/roles.yml}
+      # Roles come from the control plane; change them with PUT /roles.
+      # ROLES_ENABLED=false turns roles off: every member holds every label.
+      ROLES_ENABLED: ${ROLES_ENABLED:-true}
+      CONTROL_PLANE_URL: http://control-plane:5003
       OTEL_SERVICE_NAME: identity
       OTEL_SERVICE_NAMESPACE: identity
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       DEPLOYMENT_ENV: prod
-    volumes:
-      - ./roles.yml:/etc/plat5/roles.yml:ro
     networks:
       - plat5
     depends_on:
       postgres:
+        condition: service_healthy
+      control-plane:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/health/ready"]

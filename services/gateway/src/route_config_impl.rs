@@ -1,5 +1,5 @@
 impl Config {
-    /// Validate config is well-formed (source YAML or etcd JSON).
+    /// Validate config is well-formed (source YAML or the control plane's JSON).
     pub fn validate(&self) -> Result<(), ConfigError> {
         for (name, service) in &self.services {
             if service.public.is_none()
@@ -15,6 +15,7 @@ impl Config {
             }
 
             validate_rate_limit_policies(name, service.rate_limits.as_ref())?;
+            validate_timeouts(name, service.timeouts.as_ref())?;
 
             if let Some(ref public) = service.public {
                 validate_scope_routes(name, "public", public, service.rate_limits.as_ref())?;
@@ -36,7 +37,7 @@ impl Config {
 
 impl ServiceConfig {
     /// Expand `route_prefix` into each route path and expand nested methods
-    /// into one `RouteConfig` row per verb. Call before writing etcd
+    /// into one `RouteConfig` row per verb. Call before storing
     /// (full paths only; `methods` always a string array).
     pub fn expand_route_prefixes(&mut self) -> Result<(), ConfigError> {
         if let Some(ref mut public) = self.public {

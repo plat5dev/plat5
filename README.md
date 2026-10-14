@@ -20,7 +20,7 @@ docker compose up --build
 | Service | URL | Notes |
 |---------|-----|--------|
 | Gateway | `http://localhost:5001` | API edge; internal metrics on `:8000` |
-| Route registry | `http://localhost:5002` | Admin API (Bearer `ADMIN_TOKEN`, default `dev-admin-token`) |
+| Control plane | `http://localhost:5002` | Admin API for routes, roles, CORS origins (Bearer `ADMIN_TOKEN`, default `dev-admin-token`) |
 
 JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defaults). API keys are an alternative credential; the IdP is still required.
 
@@ -29,8 +29,8 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defau
 | Path | Purpose |
 |------|---------|
 | `services/gateway/` | Reverse proxy, auth, routing (Rust / Pingora) |
-| `services/route-registry/` | Route admin API → etcd (Rust) |
-| `services/identity/` | Identity control plane (Go) |
+| `services/control-plane/` | The deployment's routes, roles, and CORS origins: admin API, revisions, feeds (Rust) |
+| `services/identity/` | People, orgs, members, credentials (Go) |
 | `services/audit/` | Org audit log store and read API (Go) |
 | `compose/` | Self-contained Plat5 stack |
 | `docs/` | Contracts |
@@ -46,7 +46,7 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defau
 | [`docs/idp-contract.md`](docs/idp-contract.md) | BYO IdP / JWT user-id claim |
 | [`docs/gateway-contract.md`](docs/gateway-contract.md) | Auth delegation, subject fill, perimeter |
 | [`docs/routes.md`](docs/routes.md) | Route config format |
-| [`docs/route-registry.md`](docs/route-registry.md) | Apply routes via admin API |
+| [`docs/control-plane.md`](docs/control-plane.md) | Apply routes, roles, and CORS origins via admin API |
 | [`docs/identity.md`](docs/identity.md) | Identity service API |
 | [`docs/roles.md`](docs/roles.md) | Deployment-defined roles and the labels they grant |
 | [`docs/audit.md`](docs/audit.md) | Org audit log: what the gateway records and how orgs read it |

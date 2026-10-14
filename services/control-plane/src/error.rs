@@ -42,6 +42,17 @@ impl AppError {
         }
     }
 
+    pub fn unauthorized_internal(request_id: String) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            error_type: "invalid_request_error",
+            code: "UNAUTHORIZED",
+            message: "Authentication required.".into(),
+            details: Some(json!({ "reason": "invalid_internal_token" })),
+            request_id,
+        }
+    }
+
     pub fn not_found(request_id: String, resource: &str, id: &str) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,

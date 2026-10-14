@@ -90,10 +90,22 @@ func TestParseTooManyLabels(t *testing.T) {
 	}
 }
 
-func TestLoadEmptyPathIsRolesOff(t *testing.T) {
-	s, err := Load("")
-	if err != nil || s != nil || s.Enabled() {
-		t.Fatalf("got %v, %v", s, err)
+func TestParseJSONMatchesYAML(t *testing.T) {
+	s, err := ParseJSON([]byte(`{"roles":{"owner":["*"],"admin":["org:write","org:members:write","org:service-accounts:write"],"member":[]},"creator_role":"owner","default_role":"member"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(s.List(), mustParse(t, starter).List()) {
+		t.Fatalf("json and yaml differ: %#v", s.List())
+	}
+	for _, bad := range []string{
+		`{"roles":{"a":null},"creator_role":"a","default_role":"a"}`,
+		`{"roles":{"a":[]},"creator_role":"a","default_role":"a","extra":1}`,
+		`{"roles":{},"creator_role":"a","default_role":"a"}`,
+	} {
+		if _, err := ParseJSON([]byte(bad)); err == nil {
+			t.Fatalf("expected %s to be refused", bad)
+		}
 	}
 }
 

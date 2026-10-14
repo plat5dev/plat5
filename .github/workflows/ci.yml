@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       gateway: ${{ steps.filter.outputs.gateway }}
-      route-registry: ${{ steps.filter.outputs.route-registry }}
+      control-plane: ${{ steps.filter.outputs.control-plane }}
       identity: ${{ steps.filter.outputs.identity }}
       audit: ${{ steps.filter.outputs.audit }}
     steps:
@@ -31,9 +31,9 @@ jobs:
             gateway:
               - '.github/workflows/ci.yml'
               - 'services/gateway/**'
-            route-registry:
+            control-plane:
               - '.github/workflows/ci.yml'
-              - 'services/route-registry/**'
+              - 'services/control-plane/**'
             identity:
               - '.github/workflows/ci.yml'
               - 'services/identity/**'
@@ -50,8 +50,6 @@ jobs:
         working-directory: services/gateway
     steps:
       - uses: actions/checkout@v4
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -62,23 +60,21 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all-targets
 
-  route-registry:
+  control-plane:
     needs: changes
-    if: needs.changes.outputs.route-registry == 'true'
+    if: needs.changes.outputs.control-plane == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: services/route-registry
+        working-directory: services/control-plane
     steps:
       - uses: actions/checkout@v4
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: services/route-registry
+          workspaces: services/control-plane
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all-targets
@@ -141,7 +137,7 @@ jobs:
     needs:
       - changes
       - gateway
-      - route-registry
+      - control-plane
       - identity
       - audit
     if: always()
@@ -152,7 +148,7 @@ jobs:
           results=(
             "${{ needs.changes.result }}"
             "${{ needs.gateway.result }}"
-            "${{ needs.route-registry.result }}"
+            "${{ needs.control-plane.result }}"
             "${{ needs.identity.result }}"
             "${{ needs.audit.result }}"
           )

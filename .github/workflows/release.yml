@@ -33,12 +33,12 @@ jobs:
             context: services/gateway
             platform: linux/arm64
             runner: ubuntu-24.04-arm
-          - name: route-registry
-            context: services/route-registry
+          - name: control-plane
+            context: services/control-plane
             platform: linux/amd64
             runner: ubuntu-24.04
-          - name: route-registry
-            context: services/route-registry
+          - name: control-plane
+            context: services/control-plane
             platform: linux/arm64
             runner: ubuntu-24.04-arm
           - name: identity
@@ -110,7 +110,7 @@ jobs:
       matrix:
         name:
           - gateway
-          - route-registry
+          - control-plane
           - identity
           - audit
     steps:

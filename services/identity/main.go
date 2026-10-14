@@ -32,10 +32,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("invalid identity configuration: %v", err)
 	}
-	roleSet, err := roles.Load(cfg.RolesFile)
-	if err != nil {
-		log.Fatalf("invalid roles file: %v", err)
-	}
 	ctx := context.Background()
 
 	// Register prometheus metrics before OTLP bridge so the first export sees them.
@@ -56,30 +52,43 @@ func main() {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
 
+	baseLogger := telem.Logger()
+	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Roles on: identity serves nothing until the control plane's roles document
+	// is loaded, so a missing document can never read as roles off.
+	roleSource := roles.Off()
+	if cfg.RolesEnabled {
+		roleSource = roles.On()
+		follower := roles.NewFollower(cfg.ControlPlaneURL, cfg.InternalAuthToken, roleSource, baseLogger)
+		if err := follower.Load(runCtx); err != nil {
+			pool.Close()
+			baseLogger.Info().Err(err).Msg("stopped before roles loaded")
+			return
+		}
+		go follower.Follow(runCtx)
+	} else {
+		baseLogger.Warn().Msg("ROLES_ENABLED=false: roles are off and every member holds every label")
+	}
+
 	dirStore := directory.NewStore(pool)
 	orgStore := orgs.NewStore(pool)
 	dirHandler := directory.NewHandler(dirStore)
-	orgHandler := orgs.NewHandler(orgStore, dirStore, roleSet)
-	credHandler := credentials.NewHandler(credentials.NewStore(pool), orgStore, dirStore, cfg.APIKeyBrand, roleSet)
+	orgHandler := orgs.NewHandler(orgStore, dirStore, roleSource)
+	credHandler := credentials.NewHandler(credentials.NewStore(pool), orgStore, dirStore, cfg.APIKeyBrand, roleSource)
 	lifecycleHandler := lifecycle.NewHandler(lifecycle.NewStore(pool))
 
 	app := newPublicApp(telem, dirHandler, orgHandler, credHandler)
-	internalApp := newInternalApp(telem, pool, cfg.InternalAuthToken, credHandler, lifecycleHandler)
+	internalApp := newInternalApp(telem, pool, roleSource, cfg.InternalAuthToken, credHandler, lifecycleHandler)
 
-	baseLogger := telem.Logger()
 	baseLogger.Info().
 		Str("port", cfg.Port).
 		Str("internal_port", cfg.InternalPort).
 		Str("apikey_brand", cfg.APIKeyBrand).
-		Str("roles_file", cfg.RolesFile).
-		Int("roles", len(roleSet.List())).
+		Bool("roles_enabled", roleSource.Enabled()).
+		Int("roles", len(roleSource.Set().List())).
 		Msg("starting identity server")
-	if !roleSet.Enabled() {
-		baseLogger.Warn().Msg("ROLES_FILE is unset: roles are off and every member holds every label")
-	}
-
-	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	errCh := make(chan error, 2)
 	go func() {
@@ -151,6 +160,7 @@ func newPublicApp(
 func newInternalApp(
 	telem *telemetry.Telemetry,
 	pool *pgxpool.Pool,
+	roleSource *roles.Source,
 	internalToken string,
 	credHandler *credentials.Handler,
 	lifecycleHandler *lifecycle.Handler,
@@ -167,7 +177,7 @@ func newInternalApp(
 	app.Get("/health/ready", func(c fiber.Ctx) error {
 		pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		if err := pool.Ping(pingCtx); err != nil {
+		if err := pool.Ping(pingCtx); err != nil || !roleSource.Loaded() {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"status": "unhealthy"})
 		}
 		return c.JSON(fiber.Map{"status": "healthy"})

@@ -108,7 +108,7 @@ func (h *Handler) validateCredential(c fiber.Ctx, value string) error {
 	}
 	recordValid(cred.Kind)
 	// The member's role labels: ["*"] is every label, [] is none. Never null.
-	labels := h.roles.Grants(found.MemberRole)
+	labels := h.roles.Set().Grants(found.MemberRole)
 	if labels == nil {
 		labels = []string{}
 	}

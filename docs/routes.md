@@ -5,25 +5,17 @@ Publish routes for the Plat5 gateway to discover and proxy traffic.
 ## Pipeline
 
 ```
-Service (routes.yml) → route-registry (Postgres desired state + revision)
-                    → etcd (edge/gateway/routes/{name}) → Gateway
+Service (routes.yml) → control plane (Postgres desired state + revision)
+                    → GET /internal/gateway (long-poll) → Gateway
 ```
 
-Postgres is the source of truth. etcd is the live projection the gateway watches. Apply while gateways are down; they pick up the map on watch/reconnect.
+Postgres is the source of truth. The gateway long-polls the control plane and swaps its whole route map on each change. Apply while gateways are down; they load the current map when they start.
 
-Write path details: [`route-registry.md`](route-registry.md).
+Write path and feed details: [`control-plane.md`](control-plane.md).
 
-## etcd Schema
+## Control plane
 
-| Key | Value | Written By |
-|-----|-------|------------|
-| `edge/gateway/routes/{service_name}` | JSON `ServiceConfig` blob | **route-registry** (projection) |
-
-Gateway watches the prefix. Create/modify/delete triggers a full route reload.
-
-## Route registry
-
-Long-running service. Validates config, expands `route_prefix` and nested `methods` maps, records a revision in Postgres, projects current JSON to etcd.
+Long-running service. Validates config, expands `route_prefix` and nested `methods` maps, records a revision in Postgres, and serves the current services to the gateway.
 
 - **Local admin URL:** `http://localhost:5002`
 - **Auth:** `Authorization: Bearer <ADMIN_TOKEN>`
@@ -40,7 +32,7 @@ curl -sS -X POST http://localhost:5002/apply \
 Validation is at **apply time**, and the same checks run on `PUT /services/{name}` and on revision restore (a restored revision must pass today's rules). Malformed config → `422 VALIDATION_ERROR`; nothing written.
 
 - Service `url` is required and must be exactly `http://host:port` (explicit port, no path or query), e.g. `http://my-service:3000`. `https://` → `422` saying TLS (https) upstreams aren't supported yet. Bare `host:port`, any other scheme, a missing port, or a path/query → `422 VALIDATION_ERROR` naming that form. Routes already stored with a bare `host:port` keep routing (the gateway strips the scheme) until re-applied. `http://user@host:port` → `422` saying credentials aren't allowed; a port outside 1–65535 → `422` saying it is out of range. A missing `url` → `422` telling you to set `url` (the CLI catches this first and points at `upstreams:` in `plat5.yml`).
-- A service name is 1–128 characters of letters, digits, `.`, `_`, and `-`. It is an etcd key, a rate-limit bucket prefix, and the `service` on every audit event ([`audit.md`](audit.md)). `billing api` or `a/b` → `422`.
+- A service name is 1–128 characters of letters, digits, `.`, `_`, and `-`. It is a rate-limit bucket prefix, and the `service` on every audit event ([`audit.md`](audit.md)). `billing api` or `a/b` → `422`.
 - Paths are canonical and are **rejected, not rewritten**: no trailing `/` (except `/` itself) and no uppercase letters outside `{params}` (param names keep their case). `/user/profile/` and `/USER/profile` → `422` naming the canonical form (`/user/profile`). This applies to the full path after `route_prefix` is joined.
 - A path is what an audit event records as `route`, and what a request can match: visible ASCII (no spaces; percent-encode anything else), at most 1024 bytes. Param names are letters, digits, and `_`, not starting with a digit, at most 64 characters, at most 32 per path. `{project-id}` → `422`; use `{project_id}`.
 - A route may belong to only one service, compared by **shape**: each `{param}` matches any other `{param}`, a literal segment matches only the same literal (a literal never matches a param). If an incoming method + shape is already owned by a **different** service, the whole apply is rejected with `409 ROUTE_CONFLICT`; the message lists each conflicting route and its current owner (and the owner's path when it differs, e.g. `GET /a/{x} (owned by 'a2' as /a/{y})`). Nothing is written.
@@ -48,18 +40,11 @@ Validation is at **apply time**, and the same checks run on `PUT /services/{name
   - Literal vs param never conflicts: `/a/special` and `/a/{x}` can live in different services.
   - Inside one service, shapes don't conflict: `POST /subscribers/{id}/subscriptions/change` and `GET /subscribers/{id}/subscriptions/{subscription_id}` apply cleanly. Re-applying a service's own routes replaces them and is allowed.
 
-After validation, all services in the batch commit in **one Postgres transaction** (each service gets a new revision). etcd projection follows; a reconciler retries if a put fails. `200` means desired state is recorded.
+After validation, all services in the batch commit in **one Postgres transaction** (each service gets a new revision). `200` means desired state is recorded; gateways see it on their next poll, within about a second.
 
-JSON in etcd (not YAML): registry validates and canonicalizes at write time; gateway deserializes into route types. Nested `methods` maps are expanded at apply so etcd `methods` is always a string array.
+Stored as JSON (not YAML): the control plane validates and canonicalizes at write time; the gateway deserializes into route types. Nested `methods` maps are expanded at apply so stored `methods` is always a string array.
 
-### Environment Variables (route-registry)
-
-| Variable | Description | Default |
-|----------|-------------|---------| 
-| `ETCD_URL` | etcd client endpoint | `http://localhost:2379` |
-| `DATABASE_URL` | Postgres (schema `routes`) | Required |
-| `ADMIN_TOKEN` | Bearer token for admin API | Required |
-| `SEED_ROUTES_DIR` | Optional; upsert **missing** services from YAML (dev) | empty |
+Environment: [`control-plane.md`](control-plane.md#environment).
 | `PORT` | Admin API port | `5002` |
 | `INTERNAL_PORT` | Health port | `5003` |
 
@@ -89,7 +74,7 @@ services:
             window_seconds: 60
 ```
 
-Same path, different per-verb `required_labels` / `rate_limit` — nested `methods` map (expanded at apply into one etcd row per verb):
+Same path, different per-verb `required_labels` / `rate_limit` — nested `methods` map (expanded at apply into one stored row per verb):
 
 ```yaml
         - path: /features
@@ -112,14 +97,15 @@ Same path, different per-verb `required_labels` / `rate_limit` — nested `metho
 | `services` | `map<string, ServiceConfig>` | Top-level wrapper. Keys are service names. |
 | `url` | `string` | Upstream, exactly `http://host:port` (e.g. `http://my-service:3000`). |
 | `rate_limits` | `map<string, RateLimitPolicy>?` | Optional on the **service**. Named policies this service’s routes may reference. |
+| `timeouts` | `{connect_ms?, read_ms?}?` | Optional on the **service**. Upstream timeouts in ms, each 1–600000. One left out uses the gateway's `UPSTREAM_CONNECT_TIMEOUT_MS` / `UPSTREAM_READ_TIMEOUT_MS`. |
 | `public` | `ScopeConfig?` | No authentication. |
 | `user` | `ScopeConfig?` | A person's credential: user JWT or **user** API key. Subject field: `user_id`. |
 | `organization` | `ScopeConfig?` | A member's credential: **member** API key or **session**. Subject field: `organization_id`. |
 | `member` | `ScopeConfig?` | Same credential as `organization`. Subject fields: `organization_id`, `member_id`. |
-| `route_prefix` | `string?` | Optional on any scope. Registry expands into each `path` before etcd. Not applied to `upstream`. |
+| `route_prefix` | `string?` | Optional on any scope. Expanded into each `path` at write time. Not applied to `upstream`. |
 | `routes` | `array<RouteConfig>` | HTTP routes for this scope. |
 | `path` | `string` | Match path (`/` or starts with `/`). Params are resource ids, not the subject. |
-| `upstream` | `string?` | Absolute path template. Omitted means proxy `path` unchanged. Placeholders stay in etcd; the gateway substitutes at request time. Route-level only — not per-method. |
+| `upstream` | `string?` | Absolute path template. Omitted means proxy `path` unchanged. Placeholders stay in the stored config; the gateway substitutes at request time. Route-level only — not per-method. |
 | `methods` | `array<string>` \| `map<string, MethodConfig>` | List form: allowed HTTP methods. Map form: per-verb config (see below). Do not mix list and map on the same route (`422`). |
 | `required_labels` | `string[]?` | Optional. Omitted = any admitted principal. If set, a member credential must hold `*` or share at least one label: any one of the list, not all. User credentials skip. Cannot include `*`. Validated at apply. Route-level value applies only to the flat methods list. |
 | `rate_limit` | `false` \| `{requests, window_seconds}` \| `string` \| omitted | Omitted **inherits** the gateway fallback. `false` opts out (unlimited). Object = this route+method only. String = named policy on **this** service. Limiter subject follows route scope (`public`→ip, `user`→`user_id`, `organization`→`organization_id`, `member`→`member_id`). Route-level value applies only to the flat methods list. |
@@ -154,7 +140,7 @@ Two forms. Do not mix them on the same route (`422`).
         window_seconds: 1
 ```
 
-Nested maps are an **apply-time YAML convenience**. Registry `prepare_for_registry` / prefix expand turns each verb into its own `RouteConfig` row (same `path`, `methods: [THAT_VERB]`, `required_labels` / `rate_limit` / `audit` taken from that method entry). `upstream` stays on the path. After expand, etcd `methods` is always a string array. Duplicate `path`+method after expand → `422`.
+Nested maps are an **apply-time YAML convenience**. The control plane's `prepare_for_registry` / prefix expand turns each verb into its own `RouteConfig` row (same `path`, `methods: [THAT_VERB]`, `required_labels` / `rate_limit` / `audit` taken from that method entry). `upstream` stays on the path. After expand, stored `methods` is always a string array. Duplicate `path`+method after expand → `422`.
 
 Labels are opaque. `org:write` does not imply `org:read`.
 
@@ -183,7 +169,7 @@ Route field (`rate_limit` on a route or nested method):
 
 A name on a flat methods list puts every verb in that list on the named bucket. An inline object on a flat list still uses **per-method** buckets (`GET /features` ≠ `POST /features`) with the same numbers.
 
-Named policies stay **names** in etcd (`rate_limit: writes` plus the service `rate_limits` map). Apply does not substitute `{requests, window_seconds}`. The gateway resolves the bucket at request time.
+Named policies stay **names** in the stored config (`rate_limit: writes` plus the service `rate_limits` map). Apply does not substitute `{requests, window_seconds}`. The gateway resolves the bucket at request time.
 
 #### Named policies (`rate_limits`)
 
@@ -253,7 +239,7 @@ Whether the gateway records this route+method in the audit log of the realm that
 
 `user`, `organization`, and `member` routes. On `public` → **422**: that scope has no realm to log into. `OPTIONS` is answered as a preflight and never audited.
 
-Omitted stays omitted in etcd. The gateway applies the method default. With audit off for the deployment, the gateway ignores the field.
+Omitted stays omitted in the stored config. The gateway applies the method default. With audit off for the deployment, the gateway ignores the field.
 
 ### `upstream`
 
@@ -279,7 +265,7 @@ member:
       methods: [GET, POST]
 ```
 
-`route_prefix` expands `path` only, at apply, before etcd. `upstream` is not prefixed. etcd stores the full `path` and the `upstream` template with placeholders still in it. The gateway substitutes at request time. The registry does not.
+`route_prefix` expands `path` only, at apply, before storing. `upstream` is not prefixed. The control plane stores the full `path` and the `upstream` template with placeholders still in it. The gateway substitutes at request time. The control plane does not.
 
 Apply-time **422**:
 
@@ -310,16 +296,16 @@ Subject fill and service rules: [`gateway-contract.md`](gateway-contract.md). La
 
 ### Startup
 
-1. Connect to etcd (`ETCD_URL`, default `http://localhost:2379`).
-2. Load all keys under `edge/gateway/routes/`.
-3. Parse JSON, validate, build `RouteMap`.
-4. Fail fast if etcd unreachable — no start without a route registry store.
+1. `GET {CONTROL_PLANE_URL}/internal/gateway`.
+2. Validate, build `RouteMap` and the CORS policy.
+3. Retry while the control plane is down. The gateway does not listen until it has a snapshot: without one, every path would be **404**.
 
 ### Runtime Updates
 
-1. Watch `edge/gateway/routes/`.
-2. On any event: **full reload** of all routes (small set; simpler than incremental).
-3. Reload failure → keep current routes, log warning.
+1. Long-poll `GET /internal/gateway?after={revision}`.
+2. On a newer revision: **full reload** of routes and CORS, swapped whole (small set; simpler than incremental).
+3. Reload failure → keep current routes, log an error, and move past that revision.
+4. Control plane down → keep current routes, retry.
 
 ### Service Health vs Route Existence
 
@@ -339,7 +325,7 @@ Joined with each route `path` so configs stay short.
 
 **Join rule:** path must be `/` (exactly the prefix) or start with `/`. Empty `path` invalid. When path is `/`, full path is the prefix with trailing slashes stripped.
 
-**Expand site (locked):** Registry expands `route_prefix` + `path` **and nested `methods` maps** **before** writing etcd. Registry stores **full paths only** and **list-form `methods` only** — one expand site, no gateway/registry drift.
+**Expand site (locked):** The control plane expands `route_prefix` + `path` **and nested `methods` maps** **before** storing. It stores **full paths only** and **list-form `methods` only** — one expand site, no gateway/control-plane drift.
 
 `upstream` is an absolute path template (not relative to `route_prefix`).
 
@@ -374,11 +360,11 @@ The handler reads `organization_id` from the rewritten path. The client path has
 
 ## Validation Rules
 
-Registry validates **before etcd**. Gateway validates again at load (expanded list form):
+The control plane validates **before storing**. The gateway validates again at load (expanded list form):
 
-- Service name: 1–128 of `[A-Za-z0-9._-]` (registry)
+- Service name: 1–128 of `[A-Za-z0-9._-]` (control plane)
 - `path` not empty; must be `/` or start with `/`
-- Expanded `path`: visible ASCII, at most 1024 bytes; at most 32 params, each `[A-Za-z_][A-Za-z0-9_]*`, at most 64 characters (registry)
+- Expanded `path`: visible ASCII, at most 1024 bytes; at most 32 params, each `[A-Za-z_][A-Za-z0-9_]*`, at most 64 characters (control plane)
 - `methods` not empty (list or non-empty map)
 - Nested `methods` map keys: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`
 - Do not mix methods list and map on the same route (`422`)
@@ -387,18 +373,18 @@ Registry validates **before etcd**. Gateway validates again at load (expanded li
 - Unknown fields **422**
 - `upstream` if present: absolute path; `subject.*` only a field that scope has; `path.*` names a param of the expanded path; bare `{foo}` rejected
 - Expanded `path` must not contain a subject-field param of that scope
-- `route_prefix` join rules at registry; etcd stores full paths only; `upstream` is not prefixed
+- `route_prefix` join rules at the control plane; it stores full paths only; `upstream` is not prefixed
 - `required_labels` if present: non-empty, `[a-z0-9:._-]+`, max 64 chars, max 32, unique
 - `rate_limit` if object: `requests` > 0, `window_seconds` > 0. `true` is invalid
 - `rate_limit` if string: names a policy on this service; policy name `[a-z0-9:._-]+`, max 64
 - `rate_limits` keys: same hygiene, unique; values `requests` > 0, `window_seconds` > 0
 - `audit` if present: a boolean, on a `user`, `organization`, or `member` route or method only
+- `timeouts` if present: `connect_ms` and `read_ms` each 1–600000; unknown fields **422**
 - Shared policy names: same name across services must agree on `requests`, `window_seconds`, and `shared` (full desired state, apply and PUT)
-- Duplicate service names in merged registry: first wins, warning
-- Malformed JSON values skipped with warning; other routes continue
+- A snapshot that fails the gateway's validation is not loaded; the gateway keeps its current routes
 
-The two copies of `route_config.rs` (gateway and route-registry) stay aligned.
+The two copies of `route_config.rs` (gateway and control-plane) stay aligned.
 
 ## Platform Integrity
 
-Auth delegation: [`gateway-contract.md`](gateway-contract.md). Layer split: [`identity-boundary.md`](identity-boundary.md). Admin write path: [`route-registry.md`](route-registry.md).
+Auth delegation: [`gateway-contract.md`](gateway-contract.md). Layer split: [`identity-boundary.md`](identity-boundary.md). Admin write path: [`control-plane.md`](control-plane.md).

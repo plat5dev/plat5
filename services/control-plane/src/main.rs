@@ -1,9 +1,9 @@
 mod api;
+mod documents;
 mod error;
-mod etcd_store;
+mod feed;
 mod metrics;
 mod pg_store;
-mod projection;
 mod route_config;
 mod seed;
 mod telemetry;
@@ -12,14 +12,16 @@ use std::net::SocketAddr;
 
 use tracing::{error, info};
 
-use crate::etcd_store::EtcdStore;
+use crate::feed::Feed;
 use crate::pg_store::PgStore;
 
 #[derive(Clone)]
 pub struct AppState {
     pub pg: PgStore,
-    pub etcd: EtcdStore,
+    pub feed: Feed,
     pub admin_token: String,
+    /// `INTERNAL_AUTH_TOKEN`: required on `/internal/*` when set.
+    pub internal_token: Option<String>,
 }
 
 #[tokio::main]
@@ -33,8 +35,6 @@ async fn main() {
     };
     metrics::register_process_metrics();
 
-    let etcd_url =
-        std::env::var("ETCD_URL").unwrap_or_else(|_| "http://localhost:2379".to_string());
     let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
         error!("DATABASE_URL is required");
         std::process::exit(1);
@@ -61,39 +61,45 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(5003);
 
-    info!(etcd_url = %etcd_url, "connecting to etcd");
-    let etcd = EtcdStore::connect(&etcd_url).await.unwrap_or_else(|e| {
-        error!(error = %e, "failed to connect to etcd");
-        std::process::exit(1);
-    });
-
     info!("connecting to postgres");
     let pg = PgStore::connect(&database_url).await.unwrap_or_else(|e| {
         error!(error = %e, "failed to connect to postgres");
         std::process::exit(1);
     });
 
-    if let Ok(seed_dir) = std::env::var("SEED_ROUTES_DIR") {
-        if !seed_dir.is_empty() {
-            seed::seed_missing(&pg, &etcd, &seed_dir)
-                .await
-                .unwrap_or_else(|e| {
-                    error!(error = %e, "route seed failed");
-                    std::process::exit(1);
-                });
-        }
+    let internal_token = std::env::var("INTERNAL_AUTH_TOKEN")
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+
+    if let Some(seed_dir) = nonempty_env("SEED_ROUTES_DIR") {
+        seed::seed_missing(&pg, &seed_dir)
+            .await
+            .unwrap_or_else(|e| {
+                error!(error = %e, "route seed failed");
+                std::process::exit(1);
+            });
+    }
+    if let Some(roles_file) = nonempty_env("SEED_ROLES_FILE") {
+        seed::seed_roles(&pg, &roles_file)
+            .await
+            .unwrap_or_else(|e| {
+                error!(error = %e, "roles seed failed");
+                std::process::exit(1);
+            });
     }
 
-    if let Err(e) = projection::reconcile_once(&pg, &etcd).await {
-        error!(error = %e, "initial route projection reconcile failed");
+    let head = pg.head().await.unwrap_or_else(|e| {
+        error!(error = %e, "failed to read control-plane head");
         std::process::exit(1);
-    }
-    projection::spawn_reconciler(pg.clone(), etcd.clone());
+    });
+    let feed = Feed::spawn(pg.clone(), head);
 
     let state = AppState {
         pg,
-        etcd,
+        feed,
         admin_token,
+        internal_token,
     };
 
     let public = api::public_router(state.clone());
@@ -102,8 +108,8 @@ async fn main() {
     let public_addr = SocketAddr::from(([0, 0, 0, 0], port));
     let internal_addr = SocketAddr::from(([0, 0, 0, 0], internal_port));
 
-    info!(%public_addr, "route-registry admin API listening");
-    info!(%internal_addr, "route-registry internal listening");
+    info!(%public_addr, "control-plane admin API listening");
+    info!(%internal_addr, "control-plane internal listening");
 
     let public_listener = tokio::net::TcpListener::bind(public_addr)
         .await
@@ -140,6 +146,10 @@ async fn main() {
     if let Err(e) = internal_result {
         error!(error = %e, "internal server error");
     }
+}
+
+fn nonempty_env(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
 }
 
 async fn wait_for_shutdown_signal() {

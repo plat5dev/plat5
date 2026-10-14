@@ -80,6 +80,6 @@ func (h *Handler) CreateSession(c fiber.Ctx) error {
 		MemberID:       member.ID,
 		OrganizationID: member.OrganizationID,
 		Role:           member.Role,
-		Labels:         h.roles.Grants(member.Role),
+		Labels:         h.roles.Set().Grants(member.Role),
 	})
 }

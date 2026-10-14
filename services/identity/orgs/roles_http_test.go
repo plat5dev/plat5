@@ -19,13 +19,13 @@ creator_role: owner
 default_role: member
 `
 
-func starterSet(t *testing.T) *roles.Set {
+func starterSet(t *testing.T) *roles.Source {
 	t.Helper()
 	s, err := roles.Parse([]byte(starterRoles))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s
+	return roles.Static(s)
 }
 
 func TestInviteRoleDefaultsAndRedeemAssignsIt(t *testing.T) {
@@ -103,7 +103,7 @@ func TestInviteRoleValidation(t *testing.T) {
 }
 
 func TestRejectLastCreator(t *testing.T) {
-	set := starterSet(t)
+	set := starterSet(t).Set()
 	member := func(id, role string, status Status) *Member {
 		return &Member{ID: id, Role: &role, Status: status}
 	}
