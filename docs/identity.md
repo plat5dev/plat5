@@ -70,7 +70,8 @@ A person in the directory. First sign-in creates them: admission resolves the Id
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/users/{user_id}` | The person. **404** if missing |
-| `PATCH` | `/users/{user_id}` | Body `{ "display_name?", "status?" }`, at least one. `status` is `active` or `suspended`. `display_name` `null` clears it |
+| `PATCH` | `/users/{user_id}` | Body `{ "display_name" }`. `null` clears it. A `status` field is **422**: status has its own route |
+| `PATCH` | `/users/{user_id}/status` | Body `{ "status" }`: `active` or `suspended`. Not in the customer catalog; the operator gateway publishes it for staff |
 | `DELETE` | `/users/{user_id}` | Delete the account. See below |
 | `GET` | `/users` | Every person, as [user responses](#user-response). Body key `users`. Not in the customer catalog; the operator gateway publishes it for staff |
 
@@ -92,7 +93,7 @@ The directory is private to customers: no customer route lists or searches peopl
 
 #### Person status
 
-A person's `status` holds in every realm. `suspended` stops every credential the person has: their JWT, user keys, and every member key and session of theirs in any org. It is reversible. A person may suspend themselves; re-enabling is whoever may call the route, typically staff through the operator gateway.
+A person's `status` holds in every realm. `suspended` stops every credential the person has: their JWT, user keys, and every member key and session of theirs in any org. It is reversible. Only staff change it, through the operator gateway: the customer catalog leaves `PATCH /users/{user_id}/status` out, because a person who suspended themselves could not undo it.
 
 #### Account deletion
 
@@ -447,7 +448,8 @@ A `user` route that changes something an org owns names that org and member on `
 | `POST /organizations/{organization_id}/members` | `member_id`, `role` |
 | `PATCH /organizations/{organization_id}/members/{member_id}` | `role`, `status`, `display_name` as changes |
 | `PATCH /members/{member_id}` | `status`, `display_name` as changes |
-| `PATCH /users/{user_id}` | `status`, `display_name` as changes |
+| `PATCH /users/{user_id}` | `display_name` as a change |
+| `PATCH /users/{user_id}/status` | `status` as a change |
 | `POST /users/{user_id}/api-keys` | `key_id`, `key_prefix`, `name`. Never the key |
 | `POST /organizations/{organization_id}/invites` | `invite_id`, `role`. Never the token |
 | `POST /organizations/{organization_id}/service-accounts` | `service_account_id`, `member_id`, `name`, `role` |

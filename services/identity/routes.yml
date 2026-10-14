@@ -1,7 +1,8 @@
 # Catalog of identity public routes. Apply via route-registry (or a subset).
 # Not auto-published. Internal validate stays on INTERNAL_PORT.
-# GET /organizations, GET /users, and GET /members/{member_id}/user are served
-# by identity and omitted here: they are for staff, through the operator gateway.
+# GET /organizations, GET /users, PATCH /users/{user_id}/status, and
+# GET /members/{member_id}/user are served by identity and omitted here: they
+# are for staff, through the operator gateway.
 #
 # Writes that manage the org carry labels. A member's role grants labels
 # (docs/roles.md); its keys and sessions carry them. Reads stay unlabeled,

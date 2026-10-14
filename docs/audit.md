@@ -48,7 +48,7 @@ An event goes in the log of the realm that owns what it changed. Scope decides i
 
 Service accounts are members. Their keys are member keys. Nothing special.
 
-**The person's log** holds what they did to their own account: user keys, profile, status, account deletion. Only the person and staff read it.
+**The person's log** holds what they did to their own account: user keys, profile, account deletion. Only the person and staff read it.
 
 **A `user` route that changes something an org owns** (creating an org, redeeming an invite, minting a session) is in that org's log too. The org is not taken from the path: an `organization_id` in a user path is a param, not a subject, and routing an event by it would let any caller write into any org's log. The service names the org and the member on `X-Plat5-Audit-Organization` and `X-Plat5-Audit-Member` instead. The service is trusted; the caller is not. The intent is written to the person's log before forward, as on any audited route. The outcome adds the org. Everything done with a minted session is in the org's log as usual.
 

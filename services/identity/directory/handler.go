@@ -25,9 +25,16 @@ func NewHandler(store *Store) *Handler {
 	return &Handler{store: store}
 }
 
+// UpdateRequest is the person's own fields. Status is not one: it has its own
+// route, which the customer catalog leaves out, so a person cannot suspend
+// themselves and be locked out.
 type UpdateRequest struct {
 	DisplayName httpx.Nullable `json:"display_name"`
 	Status      *string        `json:"status"`
+}
+
+type StatusRequest struct {
+	Status *string `json:"status"`
 }
 
 type UserResponse struct {
@@ -75,32 +82,46 @@ func (h *Handler) Get(c fiber.Ctx) error {
 }
 
 func (h *Handler) Update(c fiber.Ctx) error {
-	ctx := c.Context()
 	userID := httpx.PathParam(c, "user_id")
 
 	var req UpdateRequest
 	if err := c.Bind().Body(&req); err != nil {
 		return err
 	}
-	if !req.DisplayName.Set && req.Status == nil {
+	if req.Status != nil {
+		return errors.FieldError("status", "Status is changed at /users/{user_id}/status.")
+	}
+	if !req.DisplayName.Set {
 		return errors.FieldError("body", "Nothing to update.")
 	}
-	var u Update
-	if req.DisplayName.Set {
-		name, clear, err := ParseDisplayName(req.DisplayName, "display_name")
-		if err != nil {
-			return err
-		}
-		u.DisplayName, u.ClearName = name, clear
+	name, clear, err := ParseDisplayName(req.DisplayName, "display_name")
+	if err != nil {
+		return err
 	}
-	if req.Status != nil {
-		status := strings.TrimSpace(*req.Status)
-		if status != StatusActive && status != StatusSuspended {
-			return errors.FieldError("status", "Status must be active or suspended.")
-		}
-		u.Status = &status
-	}
+	return h.update(c, userID, Update{DisplayName: name, ClearName: clear})
+}
 
+// SetStatus suspends or re-enables a person. Not in the customer catalog:
+// staff call it through the operator gateway.
+func (h *Handler) SetStatus(c fiber.Ctx) error {
+	userID := httpx.PathParam(c, "user_id")
+
+	var req StatusRequest
+	if err := c.Bind().Body(&req); err != nil {
+		return err
+	}
+	if req.Status == nil {
+		return errors.FieldError("status", "Status is required.")
+	}
+	status := strings.TrimSpace(*req.Status)
+	if status != StatusActive && status != StatusSuspended {
+		return errors.FieldError("status", "Status must be active or suspended.")
+	}
+	return h.update(c, userID, Update{Status: &status})
+}
+
+func (h *Handler) update(c fiber.Ctx, userID string, u Update) error {
+	ctx := c.Context()
 	user, prior, err := h.store.Update(ctx, userID, u)
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to update user", httpx.DBErr{
@@ -140,10 +161,12 @@ func toUserResponse(u *User) UserResponse {
 	}
 }
 
-// Mount registers person routes. Mount under /users. DELETE is account
+// Mount registers person routes. Mount under /users. GET / and
+// PATCH /:user_id/status are for staff: the customer catalog omits them. DELETE is account
 // deletion, which is the orgs package's: it removes the person's members.
 func (h *Handler) Mount(router fiber.Router) {
 	router.Get("/", h.List)
 	router.Get("/:user_id", h.Get)
 	router.Patch("/:user_id", h.Update)
+	router.Patch("/:user_id/status", h.SetStatus)
 }
