@@ -1,3 +1,4 @@
+mod client_ip;
 mod context;
 mod cors;
 mod labels;
@@ -6,6 +7,7 @@ mod rewrite;
 mod upstream;
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,6 +36,7 @@ use crate::route_map::{LimitBucket, Route, RouteLimiter, RouteScope};
 use labels::satisfies_required_labels;
 
 pub use crate::admission::parse_user_id_claim;
+pub use client_ip::TrustedProxies;
 pub use context::GatewayContext;
 pub use cors::CorsPolicy;
 
@@ -55,6 +58,7 @@ pub struct UserGateway {
     auth_failure_requests: u64,
     auth_failure_window_seconds: u64,
     audit: Audit,
+    trusted_proxies: TrustedProxies,
 }
 
 impl UserGateway {
@@ -78,6 +82,7 @@ impl UserGateway {
             auth_failure_requests: cfg.rate_limit_auth_failure_requests,
             auth_failure_window_seconds: cfg.rate_limit_auth_failure_window_seconds,
             audit,
+            trusted_proxies: cfg.trusted_proxies.clone(),
         }
     }
 
@@ -150,7 +155,7 @@ impl UserGateway {
         match self
             .limiter
             .allow(
-                &format!("ip:{}", client_ip(session)),
+                &format!("ip:{}", client_ip(session, &self.trusted_proxies)),
                 self.auth_failure_requests,
                 self.auth_failure_window_seconds,
             )
@@ -227,7 +232,7 @@ impl UserGateway {
             &self.rate_limit_fallback,
             ctx.method_label(),
             &admission,
-            &client_ip(session),
+            &client_ip(session, &self.trusted_proxies),
         ) {
             match self.limiter.allow(&bucket, limit, window).await {
                 Ok(info) => {
@@ -260,7 +265,14 @@ impl UserGateway {
         // and nothing reaches the service unless it is (docs/audit.md#delivery).
         if self.audit.enabled() && route.audited(ctx.method_label()) {
             ctx.audit = Some(AuditState::default());
-            let written = match audit_intent(session, ctx, route, params, request_id) {
+            let written = match audit_intent(
+                session,
+                ctx,
+                route,
+                params,
+                request_id,
+                &self.trusted_proxies,
+            ) {
                 Some(intent) => self.audit.write_intent(&intent).await.is_ok(),
                 None => {
                     warn!(
@@ -327,29 +339,23 @@ impl UserGateway {
     }
 }
 
-fn client_ip(session: &Session) -> String {
-    let headers = &session.req_header().headers;
-    if let Some(v) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(first) = v.split(',').next() {
-            let t = first.trim();
-            if !t.is_empty() {
-                return t.to_string();
-            }
-        }
-    }
-    if let Some(v) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
-        let t = v.trim();
-        if !t.is_empty() {
-            return t.to_string();
-        }
-    }
-    match session.client_addr() {
-        Some(addr) => match addr.as_inet() {
-            Some(sock) => sock.ip().to_string(),
-            None => addr.to_string(),
-        },
-        None => "unknown".to_string(),
-    }
+/// The client IP for audit and the IP limits ([`client_ip`]). A peer that is
+/// not an inet socket is used as is.
+fn client_ip(session: &Session, trusted: &TrustedProxies) -> String {
+    let Some(addr) = session.client_addr() else {
+        return "unknown".to_string();
+    };
+    let Some(sock) = addr.as_inet() else {
+        return addr.to_string();
+    };
+    let forwarded_for = session
+        .req_header()
+        .headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|v| v.to_str().ok());
+    let ip: IpAddr = trusted.client_ip(sock.ip(), forwarded_for);
+    ip.to_string()
 }
 
 /// The intent for an audited request, in the log of the realm the route's subject
@@ -361,6 +367,7 @@ fn audit_intent(
     route: &Route,
     params: &HashMap<String, String>,
     request_id: &str,
+    trusted_proxies: &TrustedProxies,
 ) -> Option<audit::Intent> {
     let cred = &ctx.credential;
     let auth_type = cred.auth_type?;
@@ -391,7 +398,7 @@ fn audit_intent(
         method: ctx.method_label().to_string(),
         route: route.path.clone(),
         params: params.clone(),
-        ip: client_ip(session),
+        ip: client_ip(session, trusted_proxies),
         user_agent: session
             .req_header()
             .headers

@@ -203,6 +203,14 @@ Some services are intentionally exposed outside the gateway (e.g. an **IdP / iss
 
 TLS still typically terminates at the edge.
 
+## Client IP
+
+What an audit event records as `ip`, and what `public` routes and the failed-auth limiter key on.
+
+The TCP peer, unless the peer is in `TRUSTED_PROXIES` (comma-separated addresses and CIDRs). Then `X-Forwarded-For` is walked from the right, past trusted proxies, and the first address that is not one is the client. A client can write anything at the left of the header, so nothing left of an untrusted hop is read. An entry that is not an address stops the walk at the last trusted proxy. No other header names the client.
+
+`TRUSTED_PROXIES` empty (the default): `X-Forwarded-For` is ignored. Behind a tunnel or load balancer, list it, or every request has the edge's IP.
+
 ## TLS Termination
 
 TLS terminates at the **edge / load balancer**, not the gateway process. Edge decrypts and forwards plaintext HTTP to the gateway (e.g. `localhost:5001`). Certificate management stays at the edge provider. Services behind the gateway receive plaintext HTTP and must not terminate TLS.

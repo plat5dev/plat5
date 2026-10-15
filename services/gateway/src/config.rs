@@ -2,6 +2,7 @@ use std::env;
 use std::time::Duration;
 
 use crate::admission::parse_user_id_claim;
+use crate::gateway::TrustedProxies;
 
 const DEFAULT_PORT: &str = "5001";
 const DEFAULT_INTERNAL_PORT: &str = "8000";
@@ -52,6 +53,10 @@ pub struct GatewayConfig {
 
     /// Audit's internal base URL. None = audit off (`AUDIT_ENABLED=false`).
     pub audit_url: Option<String>,
+
+    /// Proxies whose `X-Forwarded-For` names the client (`TRUSTED_PROXIES`).
+    /// Empty = the TCP peer is the client.
+    pub trusted_proxies: TrustedProxies,
 }
 
 #[derive(Debug)]
@@ -109,6 +114,14 @@ impl GatewayConfig {
             });
         }
 
+        let trusted_proxies = TrustedProxies::parse(
+            &env::var("TRUSTED_PROXIES").unwrap_or_default(),
+        )
+        .map_err(|message| GatewayConfigError::Invalid {
+            key: "TRUSTED_PROXIES",
+            message,
+        })?;
+
         Ok(Self {
             port: env::var("PORT").unwrap_or_else(|_| DEFAULT_PORT.to_string()),
             internal_port: env::var("INTERNAL_PORT")
@@ -147,6 +160,7 @@ impl GatewayConfig {
             rate_limit_auth_failure_window_seconds,
 
             audit_url,
+            trusted_proxies,
         })
     }
 }

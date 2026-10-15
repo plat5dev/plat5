@@ -9,12 +9,6 @@ Two calls to an optional policy engine ([`docs/model.md`](docs/model.md#what-i-c
 
 Ready: a deployment that needs a resource-level decision its service cannot make. Until then, resource authz stays in the service. No policy engine in the default stack.
 
-## Client IP behind a proxy
-
-`client_ip()` trusts the leftmost `X-Forwarded-For` entry from anyone. Cloudflare appends to a client-sent `X-Forwarded-For` rather than replacing it, so a client can choose the IP on an audit event and the `public` rate-limit bucket. Behind one trusted hop, take the rightmost entry or `CF-Connecting-IP`. In general, trusted proxy CIDRs and walk from the right.
-
-Ready: before an audit event's `ip` is used as evidence, or before `public` rate limits matter.
-
 ## Audit retention
 
 Audit events are kept, including after an org is deleted. Partitions are monthly, so retention is dropping old partitions. Identity's `organization.deleted` ([`docs/identity.md`](docs/identity.md#lifecycle-events)) is the signal for erasing a deleted org's events.
@@ -40,3 +34,19 @@ A person has one or more IdP links, and first sign-in creates the first. There i
 ## Per-org custom roles
 
 Every org gets the deployment's roles. `GET /organizations/{organization_id}/roles` already has the org in the path. Ready: a customer org that needs a role the deployment does not define.
+
+## Operator console extension
+
+A custom-pages slot, or a page that browses a service's `operator.routes`. Today staff see a service's data only through the raw Request page. Ready: a deployment whose support work lives in its own service's data.
+
+## Operator routes that merge
+
+`operator.routes` replaces the image's route list, so image updates no longer reach it. Merge a deployment's routes with the image's. Ready: a deployment that adds staff routes and takes a release.
+
+## Customer web app as source
+
+The demo web app is a prebuilt image (`template-web`). Put its source in the project, or `plat5 eject web`. Ready: newcomers who need to change the demo, not only the API.
+
+## Audit event by request id
+
+Every error envelope gives the caller a `request_id`, but audit reads are per realm, so staff need the org or person first. A staff-only read by `request_id` across realms, on the operator gateway only. An event in both a person's log and an org's comes back twice. Ready: support that works from tickets carrying a `request_id`.

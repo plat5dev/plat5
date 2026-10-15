@@ -157,7 +157,7 @@ Audit is not part of the gateway's `/health/ready`. While audit is down, audited
 | `method` | HTTP method |
 | `route` | The matched path template, after `route_prefix`. Not the raw path, not `upstream` |
 | `params` | Path params by name, as matched. Each value is one segment. `{}` when the route has none |
-| `ip` | Client IP as the gateway derives it |
+| `ip` | Client IP ([`gateway-contract.md`](gateway-contract.md#client-ip)) |
 | `user_agent` | `User-Agent`, truncated to 512 characters. `null` when absent |
 | `outcome` | See below |
 | `status` | The HTTP status the gateway answered with. `null` while `pending`, or when the client was gone before an answer |
