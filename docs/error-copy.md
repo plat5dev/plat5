@@ -43,7 +43,7 @@ Use these only when a more specific sentence does not apply.
 | `INTERNAL_ERROR` | 500 | An unexpected error occurred. |
 | `SERVICE_UNAVAILABLE` | 503 | Service temporarily unavailable. |
 
-`UNAUTHORIZED` / `NOT_FOUND` / `INTERNAL_ERROR` / `SERVICE_UNAVAILABLE` stay generic on purpose.
+`NOT_FOUND` / `INTERNAL_ERROR` / `SERVICE_UNAVAILABLE` stay generic on purpose. `UNAUTHORIZED` from the gateway is specific only to the route ([below](#gateway-401)).
 
 `RATE_LIMITED` stays this sentence. Do not interpolate remaining seconds into `message` (`details.retry_after_seconds` / `Retry-After` / `X-RateLimit-*` carry that).
 
@@ -120,6 +120,15 @@ Fallback 422 is enough.
 
 `AppError::validation` puts the validation text in `message`. Operator-facing.
 
-Gateway-owned 401/403/404/413/429/500/503 keep the fallback table.
+Gateway-owned 403/404/413/429/500/503 keep the fallback table.
+
+### Gateway 401
+
+A 401 on a matched route says what the route's scope takes. The same sentence for no credential, an invalid one, and one of the wrong kind: it names the route's requirement, never the state of the credential sent, so it can't be used to test a key. `details.reason` on a JWT failure is unchanged.
+
+| Route scope | `message` |
+|-------------|-----------|
+| `user` | Authentication required: a user sign-in token or user API key. |
+| `organization`, `member` | Authentication required: a member API key or member session. |
 
 Siblings (`cli`, `template-*`, `template-web`): update only if they snapshot exact plat5 `message` strings.

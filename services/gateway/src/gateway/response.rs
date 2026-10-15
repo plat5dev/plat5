@@ -10,6 +10,7 @@ use crate::admission::{AdmitError, AuthError};
 use crate::error::{ApiError, ErrorKind};
 use crate::metrics;
 use crate::rate_limit::RateLimitInfo;
+use crate::route_map::RouteScope;
 
 use super::context::GatewayContext;
 use super::cors::CorsPolicy;
@@ -128,6 +129,7 @@ async fn write_credential_failure(
     cors: &CorsPolicy,
     session: &mut Session,
     ctx: &GatewayContext,
+    scope: RouteScope,
     auth_type: &str,
     reason: &'static str,
 ) -> Result<bool> {
@@ -138,7 +140,14 @@ async fn write_credential_failure(
         error_message = reason,
         "authentication failed"
     );
-    write_json_error(cors, session, ctx, 401, ApiError::unauthorized(None)).await
+    write_json_error(
+        cors,
+        session,
+        ctx,
+        401,
+        ApiError::unauthorized_for(scope, None),
+    )
+    .await
 }
 
 pub async fn write_admit_error(
@@ -146,14 +155,24 @@ pub async fn write_admit_error(
     session: &mut Session,
     ctx: &GatewayContext,
     err: AdmitError,
+    scope: RouteScope,
 ) -> Result<bool> {
     match err {
-        AdmitError::Auth(auth_err) => write_auth_error(cors, session, ctx, auth_err).await,
+        AdmitError::Auth(auth_err) => write_auth_error(cors, session, ctx, auth_err, scope).await,
         AdmitError::CredentialInvalid => {
-            write_credential_failure(cors, session, ctx, "credential", "invalid_credential").await
+            write_credential_failure(
+                cors,
+                session,
+                ctx,
+                scope,
+                "credential",
+                "invalid_credential",
+            )
+            .await
         }
         AdmitError::WrongCredential => {
-            write_credential_failure(cors, session, ctx, "credential", "wrong_credential").await
+            write_credential_failure(cors, session, ctx, scope, "credential", "wrong_credential")
+                .await
         }
         AdmitError::Unavailable => {
             write_json_error(cors, session, ctx, 503, ApiError::service_unavailable()).await
@@ -170,6 +189,7 @@ async fn write_auth_error(
     session: &mut Session,
     ctx: &GatewayContext,
     err: AuthError,
+    scope: RouteScope,
 ) -> Result<bool> {
     let auth_type = err.auth_type().as_str();
     if err.is_client_error() {
@@ -185,7 +205,7 @@ async fn write_auth_error(
             session,
             ctx,
             401,
-            ApiError::unauthorized(err.details()),
+            ApiError::unauthorized_for(scope, err.details()),
         )
         .await
     } else {

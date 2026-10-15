@@ -223,7 +223,8 @@ impl UserGateway {
                         return Ok(done);
                     }
                 }
-                return response::write_admit_error(&self.cors(), session, ctx, err).await;
+                return response::write_admit_error(&self.cors(), session, ctx, err, route.scope)
+                    .await;
             }
         };
 
@@ -816,7 +817,12 @@ impl ProxyHttp for UserGateway {
         if let Some(state) = ctx.audit.take() {
             let written = session.response_written().map(|r| r.status.as_u16());
             let outcome = audit::outcome_for(state, ctx.forwarded, written);
-            self.audit.send_outcome(request_id.to_string(), outcome);
+            let parent = ctx
+                .root_span()
+                .map(|span| span.context())
+                .unwrap_or_default();
+            self.audit
+                .send_outcome(request_id.to_string(), outcome, parent);
         }
 
         ctx.finish_root_span();

@@ -191,6 +191,8 @@ On `INTERNAL_PORT`. Each is one read, at one head, in one Postgres snapshot.
 
 Without `after`, the answer is immediate. With `?after={revision}`, the control plane waits until the head is past `after`, for up to 25 seconds. Nothing newer in that time is **204**, and the reader asks again. A cursor ahead of the head (the store was reset) is answered at once.
 
+Feed reads stay off traces and request metrics, like health checks: a long-poll is one 25-second span every cycle per reader, and its duration measures nothing. A 5xx is still logged. The readers don't trace their polls either.
+
 Any write wakes every reader. A reader that gets a document it already has applies it again; that is cheap and keeps one cursor.
 
 Each control-plane process polls the head in Postgres every second, so a write through any replica reaches readers of every replica within about a second.

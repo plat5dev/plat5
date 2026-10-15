@@ -12,7 +12,8 @@ use reqwest::Method;
 use serde::Serialize;
 use serde_json::value::RawValue;
 use tokio::sync::{mpsc, Semaphore};
-use tracing::{error, warn};
+use tracing::{error, warn, Instrument};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::error::ErrorKind;
 use crate::internal_http::InternalHttpClient;
@@ -228,7 +229,7 @@ pub struct Audit {
 struct Inner {
     base_url: String,
     http: InternalHttpClient,
-    outcomes: mpsc::Sender<(String, Outcome)>,
+    outcomes: mpsc::Sender<(String, Outcome, opentelemetry::Context)>,
 }
 
 impl Audit {
@@ -313,12 +314,18 @@ impl Audit {
     }
 
     /// Queue the outcome. Never waits. A full queue drops it and the event stays pending.
-    pub fn send_outcome(&self, request_id: String, outcome: Outcome) {
+    /// `parent` is the request's trace: the write lands in it, after the response.
+    pub fn send_outcome(
+        &self,
+        request_id: String,
+        outcome: Outcome,
+        parent: opentelemetry::Context,
+    ) {
         let Some(inner) = &self.inner else {
             return;
         };
-        if let Err(err) = inner.outcomes.try_send((request_id, outcome)) {
-            let (request_id, _) = err.into_inner();
+        if let Err(err) = inner.outcomes.try_send((request_id, outcome, parent)) {
+            let (request_id, _, _) = err.into_inner();
             warn!(
                 request_id = %request_id,
                 "audit outcome queue full; event stays pending"
@@ -335,19 +342,25 @@ fn event_url(base_url: &str, request_id: &str) -> String {
 async fn run_outcomes(
     base_url: String,
     http: InternalHttpClient,
-    mut rx: mpsc::Receiver<(String, Outcome)>,
+    mut rx: mpsc::Receiver<(String, Outcome, opentelemetry::Context)>,
 ) {
     let permits = Arc::new(Semaphore::new(OUTCOME_IN_FLIGHT));
-    while let Some((request_id, outcome)) = rx.recv().await {
+    while let Some((request_id, outcome, parent)) = rx.recv().await {
         let Ok(permit) = permits.clone().acquire_owned().await else {
             return;
         };
         let http = http.clone();
         let url = event_url(&base_url, &request_id);
-        tokio::spawn(async move {
-            write_outcome(&http, &url, &request_id, &outcome, OUTCOME_BACKOFF).await;
-            drop(permit);
-        });
+        let span = tracing::info_span!("audit.outcome");
+        // Err only when the span is disabled: nothing to trace then.
+        let _ = span.set_parent(parent);
+        tokio::spawn(
+            async move {
+                write_outcome(&http, &url, &request_id, &outcome, OUTCOME_BACKOFF).await;
+                drop(permit);
+            }
+            .instrument(span),
+        );
     }
 }
 
@@ -667,6 +680,7 @@ mod tests {
         Audit::off().send_outcome(
             "req-1".into(),
             outcome_for(AuditState::default(), false, None),
+            opentelemetry::Context::new(),
         );
     }
 

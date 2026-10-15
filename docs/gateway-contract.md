@@ -153,7 +153,7 @@ Every credential belongs to a membership in a realm: the directory (a person's o
 
 One organization result (`member_id`, `organization_id`, and the role's `labels`) feeds both `organization` and `member`. The scope picks the fields `upstream` may fill.
 
-1. Bad, missing, or wrong credential → **401** `UNAUTHORIZED`
+1. Bad, missing, or wrong credential → **401** `UNAUTHORIZED`, whose message names what the route takes ([`error-copy.md`](error-copy.md#gateway-401))
 2. Validate unavailable → **503** `SERVICE_UNAVAILABLE`
 3. Admitted → per-route rate limit → **429** `RATE_LIMITED`
 4. Then, on an audited route with audit on, the audit intent → **503** `SERVICE_UNAVAILABLE` if it cannot be written ([`audit.md`](audit.md#request-order))

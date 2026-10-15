@@ -38,7 +38,7 @@ Product sentences live in [`error-copy.md`](error-copy.md).
 
 ## Error Codes
 
-The **Fallback message** column is used only when nothing more specific applies. `UNAUTHORIZED`, `NOT_FOUND`, `INTERNAL_ERROR`, and `SERVICE_UNAVAILABLE` stay generic on purpose.
+The **Fallback message** column is used only when nothing more specific applies. `NOT_FOUND`, `INTERNAL_ERROR`, and `SERVICE_UNAVAILABLE` stay generic on purpose. The gateway's `UNAUTHORIZED` on a matched route names what the route takes ([`error-copy.md`](error-copy.md#gateway-401)), never why the credential sent failed.
 
 | Code | HTTP | Type | Fallback message | Details |
 |------|------|------|------------------|---------|

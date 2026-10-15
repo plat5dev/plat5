@@ -79,7 +79,7 @@ pub fn internal_router(state: AppState) -> Router {
             state.clone(),
             internal_auth_middleware,
         ))
-        .route_layer(middleware::from_fn(http_observability));
+        .route_layer(middleware::from_fn(feed_observability));
 
     Router::new()
         .route("/health/live", get(health_live))
@@ -158,6 +158,32 @@ async fn http_observability(request: Request, next: Next) -> Response {
     }
     .instrument(span)
     .await
+}
+
+/// A feed read is a long-poll: up to 25 seconds, over and over, per reader. As a
+/// trace or a request metric it would be one long span every cycle and a latency
+/// that measures nothing. Only failures are logged.
+async fn feed_observability(request: Request, next: Next) -> Response {
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|m| m.as_str().to_string());
+    let request_id = request_id_from_headers(request.headers());
+    let response = next.run(request).await;
+    let status = response.status().as_u16();
+    if status >= 500 {
+        let error_kind = if status == 503 { "network" } else { "internal" };
+        tracing::error!(
+            route = %route.as_deref().unwrap_or("unmatched"),
+            method = "GET",
+            status = status,
+            request_id = %request_id,
+            error_kind = error_kind,
+            error_message = "request failed",
+            "request completed"
+        );
+    }
+    response
 }
 
 async fn admin_auth_middleware(

@@ -1,6 +1,8 @@
 use serde::Serialize;
 use std::fmt;
 
+use crate::route_map::RouteScope;
+
 /// Standard error kinds for telemetry.
 /// Used in span attributes and log fields.
 /// Closed set: auth, network, db, io, internal, validation.
@@ -67,6 +69,22 @@ impl ApiError {
             message: "Authentication required.".to_string(),
             details,
         }
+    }
+
+    /// A 401 on a matched route: the message names what the route's scope takes.
+    /// It never says why the credential sent failed, so it tells a caller nothing
+    /// about a key they hold.
+    pub fn unauthorized_for(scope: RouteScope, details: Option<serde_json::Value>) -> Self {
+        let mut err = Self::unauthorized(details);
+        err.message = match scope {
+            RouteScope::User => "Authentication required: a user sign-in token or user API key.",
+            RouteScope::Organization | RouteScope::Member => {
+                "Authentication required: a member API key or member session."
+            }
+            RouteScope::Public => "Authentication required.",
+        }
+        .to_string();
+        err
     }
 
     pub fn forbidden(details: Option<serde_json::Value>) -> Self {
@@ -158,6 +176,23 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["error"]["code"], "INVALID_REQUEST");
         assert_eq!(parsed["error"]["message"], "Malformed request.");
+    }
+
+    #[test]
+    fn test_unauthorized_names_what_the_scope_takes() {
+        let user = ApiError::unauthorized_for(RouteScope::User, None);
+        assert_eq!(
+            user.message,
+            "Authentication required: a user sign-in token or user API key."
+        );
+        for scope in [RouteScope::Organization, RouteScope::Member] {
+            let member = ApiError::unauthorized_for(scope, None);
+            assert_eq!(
+                member.message,
+                "Authentication required: a member API key or member session."
+            );
+            assert_eq!(member.code, "UNAUTHORIZED");
+        }
     }
 
     #[test]
