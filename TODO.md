@@ -43,10 +43,6 @@ A custom-pages slot, or a page that browses a service's `operator.routes`. Today
 
 `operator.routes` replaces the image's route list, so image updates no longer reach it. Merge a deployment's routes with the image's. Ready: a deployment that adds staff routes and takes a release.
 
-## Customer web app as source
-
-The demo web app is a prebuilt image (`template-web`). Put its source in the project, or `plat5 eject web`. Ready: newcomers who need to change the demo, not only the API.
-
 ## Audit event by request id
 
 Every error envelope gives the caller a `request_id`, but audit reads are per realm, so staff need the org or person first. A staff-only read by `request_id` across realms, on the operator gateway only. An event in both a person's log and an org's comes back twice. Ready: support that works from tickets carrying a `request_id`.

@@ -131,4 +131,4 @@ A 401 on a matched route says what the route's scope takes. The same sentence fo
 | `user` | Authentication required: a user sign-in token or user API key. |
 | `organization`, `member` | Authentication required: a member API key or member session. |
 
-Siblings (`cli`, `template-*`, `template-web`): update only if they snapshot exact plat5 `message` strings.
+Siblings (`cli`, `template-*`): update only if they snapshot exact plat5 `message` strings.
