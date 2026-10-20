@@ -57,7 +57,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 
 ### `FORBIDDEN`
 
-Returned by the **gateway** when the member's role labels share no label with the route's `required_labels`. `details.required_labels` is the route's list. Any one of those labels would have admitted the request.
+Returned by the **gateway** when the member's role labels share no label with the route's `required_labels`. `details.required_labels` is the route's list. Any one of those labels would have admitted the request. The caller's own labels are not in the body; the gateway logs them on a `required_labels denied` line ([`telemetry.md`](telemetry.md#gateway-label-denied-line)).
 
 ### `ORGANIZATION_HANDOFF_REQUIRED`
 

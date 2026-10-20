@@ -94,7 +94,7 @@ After admission and the rate limit: if the route has `required_labels`, a member
 
 A credential carries its principal's labels. For a member key or member session, validate's list is the member's role labels ([`roles.md`](roles.md)). `labels` is always a list. `["*"]` (a `["*"]` role, or roles off) matches any route label. A route cannot require `*` itself. A valid validate result without a list counts as `[]`. `labels: []` cannot satisfy any `required_labels` and gets **403** there; unlabeled routes still admit it. User credentials (JWT and user API key) have no role and skip, so labels constrain `organization` and `member` routes only.
 
-The **403** `details` are `{ "permission": "required_labels", "resource": "route", "resource_id": "<route path>", "required_labels": [...] }`. `required_labels` is the route's list, so a client can tell which labels would have admitted it.
+The **403** `details` are `{ "permission": "required_labels", "resource": "route", "resource_id": "<route path>", "required_labels": [...] }`. `required_labels` is the route's list, so a client can tell which labels would have admitted it. The body never carries the caller's labels. The gateway logs them, with the route's list and who called, on a `required_labels denied` line ([`telemetry.md`](telemetry.md#gateway-label-denied-line)).
 
 ### Rate limits
 

@@ -116,7 +116,7 @@ The path names every id the handler reads. The catalog's route labels decide who
 | Case | HTTP / code |
 |------|-------------|
 | Bad, missing, or wrong credential for the scope | **401** `UNAUTHORIZED` |
-| Caller's labels miss route `required_labels` | **403** `FORBIDDEN` |
+| Caller's labels miss route `required_labels` | **403** `FORBIDDEN` (logged as `required_labels denied`, [`telemetry.md`](telemetry.md#gateway-label-denied-line)) |
 | Unknown id (identity handlers) | **404** `NOT_FOUND` |
 | Admitted route or failed-auth IP over limit | **429** `RATE_LIMITED` |
 | Credential validate down or timeout; Valkey down on a limited request; JWKS unavailable | **503** `SERVICE_UNAVAILABLE` |
