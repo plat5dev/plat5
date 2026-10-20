@@ -298,6 +298,7 @@ impl UserGateway {
 
         // After the limiter, so a label-denied request still spends budget.
         if !satisfies_required_labels(route.required_labels.as_deref(), admission.labels()) {
+            log_label_denied(ctx, route, &admission);
             return response::write_json_error(
                 &self.cors(),
                 session,
@@ -486,6 +487,35 @@ struct RequestLog<'a> {
     trace_id: Option<&'a str>,
     span_id: Option<&'a str>,
     credential: &'a RequestCredential,
+}
+
+/// `[a,b]`: a label list as one log field.
+fn label_list(labels: &[String]) -> String {
+    format!("[{}]", labels.join(","))
+}
+
+/// The why of a label-denied 403, next to the request line. Any one of
+/// `required_labels` would have admitted, so all of them are missing. `labels` is
+/// what the credential carried (its member's role labels); the gateway never sees
+/// the role name. Log only: services and the 403 body never get the caller's labels.
+fn log_label_denied(ctx: &GatewayContext, route: &Route, admission: &crate::admission::Admission) {
+    let required = label_list(route.required_labels.as_deref().unwrap_or_default());
+    let labels = label_list(admission.labels().unwrap_or_default());
+    let cred = &ctx.credential;
+    warn!(
+        request_id = ctx.request_id.as_deref(),
+        route = %route.path,
+        method = %ctx.method_label(),
+        status = 403u16,
+        auth_type = cred.auth_type.map(|t| t.as_str()),
+        key_prefix = cred.key_prefix.as_deref(),
+        organization_id = cred.organization_id.as_deref(),
+        member_id = cred.member_id.as_deref(),
+        required_labels = %required,
+        missing_labels = %required,
+        labels = %labels,
+        "required_labels denied"
+    );
 }
 
 /// One line per request. Credential fields are present only when known: `key_prefix`

@@ -163,10 +163,28 @@ The gateway writes one `request completed` (or `request failed`) line per reques
 | `user_id` | Admitted on a `user` route (JWT or user key) | |
 | `organization_id`, `member_id` | Admitted on an `organization` or `member` route (member key or session) | |
 
-`key_prefix` is set before validation, so 401 and 403 lines carry it. A value of an unknown shape, or with nothing after the preview, is not logged. The key or token itself, and a JWT, are never logged. The line has no labels or role.
+`key_prefix` is set before validation, so 401 and 403 lines carry it. A value of an unknown shape, or with nothing after the preview, is not logged. The key or token itself, and a JWT, are never logged. The request line has no labels or role; a label-denied 403 adds the [label-denied line](#gateway-label-denied-line).
 
 ```json
 {"timestamp":"2026-10-08T18:30:00Z","level":"info","message":"request completed","request_id":"…","route":"/widgets","method":"GET","status":403,"duration_ms":3.1,"auth_type":"member_apikey","key_prefix":"plat5-k-2-AbC9","organization_id":"01J…","member_id":"01J…"}
+```
+
+### Gateway label-denied line
+
+A **403** `FORBIDDEN` from `required_labels` also writes one `warn` line, `required_labels denied`, before the request line. It says why:
+
+| Field | Value |
+|-------|-------|
+| `request_id`, `route`, `method`, `status` | As on the request line. `route` is the route's path pattern |
+| `auth_type`, `key_prefix`, `organization_id`, `member_id` | As on the request line |
+| `required_labels` | The route's list, e.g. `[subscribers:write]`. Any one would have admitted |
+| `missing_labels` | The labels the caller lacks. Any-of, so on a deny this is the whole route list |
+| `labels` | The labels the credential carried: its member's role labels, e.g. `[subscribers:read]`. `[]` for a role with none |
+
+The gateway sees labels, never role names, so the line has no role; look the member up by `member_id` to get it. Org and member routes carry no `user_id`. The caller's labels go to this log line only, never to the 403 body or a service.
+
+```json
+{"timestamp":"2026-10-20T14:02:11Z","level":"warn","message":"required_labels denied","request_id":"…","route":"/org/subscribers","method":"POST","status":403,"auth_type":"member_apikey","key_prefix":"plat5-k-2-AbC9","organization_id":"01J…","member_id":"01J…","required_labels":"[subscribers:write]","missing_labels":"[subscribers:write]","labels":"[subscribers:read]"}
 ```
 
 ### Error fields (5xx only)
