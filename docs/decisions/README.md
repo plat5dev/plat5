@@ -11,3 +11,4 @@ Why Plat5 v2 is shaped this way, with references. Written while planning e10s v2
 | [0005](0005-boundaries-and-sharing.md) | Boundaries, sharing beyond one org, extension points | Accepted |
 | [0006](0006-apply-dry-run-and-preconditions.md) | Apply: dry run and preconditions, whole config | Accepted |
 | [0007](0007-filled-in-during-the-doc-rewrite.md) | Details filled in while writing the contracts | Accepted |
+| [0008](0008-decided-during-the-build.md) | Decided during the build, step by step | Open: each step adds rows |
