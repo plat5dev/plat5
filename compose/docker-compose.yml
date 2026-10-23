@@ -47,6 +47,8 @@ services:
   control-plane:
     build:
       context: ../services/control-plane
+      additional_contexts:
+        schema: ../schema/v2
       target: local
     # cargo-watch as PID 1 ignores SIGTERM; tini forwards stop signals.
     init: true
@@ -62,9 +64,10 @@ services:
       ADMIN_TOKEN: ${ADMIN_TOKEN:-dev-admin-token}
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN:-dev-internal-token}
       DATABASE_URL: postgres://plat5:plat5@postgres:5432/plat5?sslmode=disable
-      SEED_ROUTES_DIR: /seed
-      # Starter roles, written once when there are none (docs/roles.md).
-      SEED_ROLES_FILE: /seed-roles/roles.yml
+      IDENTITY_INTERNAL_URL: http://identity:3001
+      # plat5.yml and its routes files, applied once on first boot
+      # (docs/reference/api/control-plane.md#seeds).
+      SEED_DIR: /seed
       RUST_LOG: info
       OTEL_SERVICE_NAME: control-plane
       OTEL_SERVICE_NAMESPACE: edge
@@ -73,9 +76,8 @@ services:
     volumes:
       - ../services/control-plane/src:/app/src
       - ../services/control-plane/migrations:/app/migrations:ro
-      - ../services/identity/routes.yml:/seed/identity.yml:ro
-      - ../services/audit/routes.yml:/seed/audit.yml:ro
-      - ./roles.yml:/seed-roles/roles.yml:ro
+      - ../schema/v2:/schema/v2:ro
+      - ./seed:/seed:ro
     networks:
       - plat5
     depends_on:

@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 use tracing::warn;
 
-use crate::pg_store::PgStore;
+use crate::store::Store;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -18,7 +18,7 @@ pub struct Feed {
 
 impl Feed {
     /// Starts polling the head. `initial` is the head read at boot.
-    pub fn spawn(pg: PgStore, initial: i64) -> Self {
+    pub fn spawn(pg: Store, initial: i64) -> Self {
         let (head, _) = watch::channel(initial);
         let feed = Self { head };
         let poller = feed.clone();

@@ -4,6 +4,8 @@ services:
   control-plane:
     build:
       context: ../services/control-plane
+      additional_contexts:
+        schema: ../schema/v2
       target: prod
       args:
         VERSION: ${PLAT5_VERSION:?set PLAT5_VERSION}

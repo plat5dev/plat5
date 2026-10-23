@@ -1,0 +1,42 @@
+version: 2
+kinds:
+  directory:
+    sign_in: idp
+  organization:
+    label: Organization
+    segment: orgs
+  project:
+    label: Project
+    parent: organization
+roles:
+  admin:
+    labels: ["*"]
+    bindable_at: [organization, project]
+  member:
+    labels: ["organization:read"]
+    bindable_at: [organization]
+default_role: member
+creator_role: admin
+services:
+  e10s:
+    url: "http://e10s:3000"
+    routes:
+      - path: "/orgs/{organization}/projects/{project}/plans"
+        scope: project
+        upstream: "/projects/{subject.project_id}/plans"
+        methods:
+          GET:
+            required_labels: ["project:read"]
+          POST:
+            required_labels: ["catalog:write"]
+      - path: "/health"
+        scope: public
+        methods: [GET]
+  billing:
+    url: "http://billing:3000"
+    routes:
+      - path: "/orgs/{organization}/invoices"
+        scope: organization
+        upstream: "/orgs/{subject.organization_id}/invoices"
+        methods: [GET, POST]
+        required_labels: ["billing:read"]

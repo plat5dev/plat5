@@ -1,0 +1,42 @@
+{
+  "revision": 7,
+  "summary": {
+    "add": 1,
+    "change": 4,
+    "remove": 0,
+    "blocked": 0
+  },
+  "changes": [
+    {
+      "class": "safe",
+      "op": "change",
+      "what": "kind",
+      "name": "directory"
+    },
+    {
+      "class": "safe",
+      "op": "change",
+      "what": "kind",
+      "name": "organization"
+    },
+    {
+      "class": "safe",
+      "op": "change",
+      "what": "setting",
+      "name": "deletion_grace"
+    },
+    {
+      "class": "safe",
+      "op": "change",
+      "what": "setting",
+      "name": "reserved_slugs"
+    },
+    {
+      "class": "safe",
+      "op": "add",
+      "what": "cors",
+      "name": "allowed_origins"
+    }
+  ],
+  "confirm": {}
+}

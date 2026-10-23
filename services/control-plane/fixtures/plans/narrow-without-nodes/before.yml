@@ -1,0 +1,37 @@
+version: 2
+kinds:
+  directory:
+    sign_in: idp
+  organization:
+    label: Organization
+    segment: orgs
+  project:
+    label: Project
+    parent: [organization, folder]
+  folder:
+    label: Folder
+    parent: organization
+roles:
+  admin:
+    labels: ["*"]
+    bindable_at: [organization, folder, project]
+  member:
+    labels: ["organization:read"]
+    bindable_at: [organization]
+default_role: member
+creator_role: admin
+services:
+  e10s:
+    url: "http://e10s:3000"
+    routes:
+      - path: "/orgs/{organization}/projects/{project}/plans"
+        scope: project
+        upstream: "/projects/{subject.project_id}/plans"
+        methods:
+          GET:
+            required_labels: ["project:read"]
+          POST:
+            required_labels: ["catalog:write"]
+      - path: "/health"
+        scope: public
+        methods: [GET]

@@ -1,0 +1,64 @@
+{
+  "revision": 7,
+  "summary": {
+    "add": 2,
+    "change": 1,
+    "remove": 1,
+    "blocked": 1
+  },
+  "changes": [
+    {
+      "class": "safe",
+      "op": "add",
+      "what": "kind",
+      "name": "environment"
+    },
+    {
+      "class": "destructive",
+      "op": "remove",
+      "what": "kind",
+      "name": "folder",
+      "effects": {
+        "nodes": 14,
+        "bindings": 22,
+        "service_accounts": 3,
+        "keys": 9
+      }
+    },
+    {
+      "class": "blocked",
+      "op": "change",
+      "what": "kind",
+      "name": "project",
+      "reason": "parent_narrowed",
+      "in_the_way": {
+        "nodes": 3,
+        "sample": [
+          "n_…"
+        ]
+      }
+    },
+    {
+      "class": "safe",
+      "op": "change",
+      "what": "role",
+      "name": "admin"
+    },
+    {
+      "class": "safe",
+      "op": "change",
+      "what": "service",
+      "name": "e10s",
+      "routes": {
+        "add": 1,
+        "change": 0,
+        "remove": 0
+      }
+    }
+  ],
+  "confirm": {
+    "folder": {
+      "nodes": 14
+    }
+  }
+}

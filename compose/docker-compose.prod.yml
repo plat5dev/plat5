@@ -60,16 +60,17 @@ services:
       ADMIN_TOKEN: ${ADMIN_TOKEN}
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-plat5}?sslmode=disable
-      # roles.yml is written once, as the first roles document. After that,
-      # change roles with PUT /roles (docs/roles.md); editing the file does nothing.
-      SEED_ROLES_FILE: /seed-roles/roles.yml
+      IDENTITY_INTERNAL_URL: http://identity:3001
+      # seed-prod/plat5.yml is applied once on first boot. After that, change the
+      # config with plat5 apply (docs/guides/deploy.md); editing it does nothing.
+      SEED_DIR: /seed
       RUST_LOG: info
       OTEL_SERVICE_NAME: control-plane
       OTEL_SERVICE_NAMESPACE: edge
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       DEPLOYMENT_ENV: prod
     volumes:
-      - ./roles.yml:/seed-roles/roles.yml:ro
+      - ./seed-prod:/seed:ro
     networks:
       - plat5
     depends_on:

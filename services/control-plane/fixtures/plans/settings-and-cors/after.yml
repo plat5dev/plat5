@@ -1,0 +1,39 @@
+version: 2
+kinds:
+  directory:
+    sign_in: idp
+    name_claim: full_name
+  organization:
+    label: Workspace
+    segment: orgs
+  project:
+    label: Project
+    parent: organization
+roles:
+  admin:
+    labels: ["*"]
+    bindable_at: [organization, project]
+  member:
+    labels: ["organization:read"]
+    bindable_at: [organization]
+default_role: member
+creator_role: admin
+services:
+  e10s:
+    url: "http://e10s:3000"
+    routes:
+      - path: "/orgs/{organization}/projects/{project}/plans"
+        scope: project
+        upstream: "/projects/{subject.project_id}/plans"
+        methods:
+          GET:
+            required_labels: ["project:read"]
+          POST:
+            required_labels: ["catalog:write"]
+      - path: "/health"
+        scope: public
+        methods: [GET]
+deletion_grace: "7d"
+reserved_slugs: [new, settings]
+cors:
+  allowed_origins: ["https://app.example.com"]

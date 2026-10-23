@@ -1,0 +1,30 @@
+{
+  "revision": 7,
+  "summary": {
+    "add": 1,
+    "change": 1,
+    "remove": 1,
+    "blocked": 0
+  },
+  "changes": [
+    {
+      "class": "safe",
+      "op": "change",
+      "what": "role",
+      "name": "member"
+    },
+    {
+      "class": "safe",
+      "op": "add",
+      "what": "role",
+      "name": "support"
+    },
+    {
+      "class": "safe",
+      "op": "remove",
+      "what": "role",
+      "name": "viewer"
+    }
+  ],
+  "confirm": {}
+}

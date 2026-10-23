@@ -1,0 +1,43 @@
+version: 2
+kinds:
+  directory:
+    sign_in: idp
+  organization:
+    label: Organization
+    segment: orgs
+  project:
+    label: Project
+    parent: organization
+roles:
+  admin:
+    labels: ["*"]
+    bindable_at: [organization, project]
+  member:
+    labels: ["organization:read"]
+    bindable_at: [organization]
+default_role: member
+creator_role: admin
+services:
+  e10s:
+    url: "http://e10s:4000"
+    routes:
+      - path: "/orgs/{organization}/projects/{project}/plans"
+        scope: project
+        upstream: "/projects/{subject.project_id}/plans"
+        methods:
+          GET:
+            required_labels: ["project:read", "catalog:read"]
+          POST:
+            required_labels: ["catalog:write"]
+      - path: "/orgs/{organization}/projects/{project}/features"
+        scope: project
+        upstream: "/projects/{subject.project_id}/features"
+        methods: [GET, POST]
+        required_labels: ["catalog:write"]
+  notify:
+    url: "http://notify:3000"
+    routes:
+      - path: "/me/notifications"
+        scope: directory
+        upstream: "/people/{subject.member_id}/notifications"
+        methods: [GET, PUT]

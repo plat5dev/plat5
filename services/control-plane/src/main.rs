@@ -1,24 +1,38 @@
 mod api;
-mod documents;
+#[cfg(test)]
+mod api_tests;
+mod apply;
+mod catalog;
+mod config;
+mod counts;
+#[cfg(test)]
+mod docgen;
 mod error;
 mod feed;
 mod metrics;
-mod pg_store;
-mod route_config;
+mod plan;
+mod rules;
+mod schema;
 mod seed;
+mod store;
 mod telemetry;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use tracing::{error, info};
 
+use crate::counts::{Counts, HttpCounts};
 use crate::feed::Feed;
-use crate::pg_store::PgStore;
+use crate::store::Store;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub pg: PgStore,
+    pub store: Store,
     pub feed: Feed,
+    /// Identity's plan counts, asked only when a plan removes a kind or narrows
+    /// a parent.
+    pub counts: Arc<dyn Counts>,
     pub admin_token: String,
     /// `INTERNAL_AUTH_TOKEN`: required on `/internal/*` when set.
     pub internal_token: Option<String>,
@@ -61,8 +75,13 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(5003);
 
+    let identity_url = nonempty_env("IDENTITY_INTERNAL_URL").unwrap_or_else(|| {
+        error!("IDENTITY_INTERNAL_URL is required");
+        std::process::exit(1);
+    });
+
     info!("connecting to postgres");
-    let pg = PgStore::connect(&database_url).await.unwrap_or_else(|e| {
+    let store = Store::connect(&database_url).await.unwrap_or_else(|e| {
         error!(error = %e, "failed to connect to postgres");
         std::process::exit(1);
     });
@@ -72,32 +91,28 @@ async fn main() {
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty());
 
-    if let Some(seed_dir) = nonempty_env("SEED_ROUTES_DIR") {
-        seed::seed_missing(&pg, &seed_dir)
+    let counts: Arc<dyn Counts> = Arc::new(HttpCounts::new(&identity_url, internal_token.clone()));
+
+    // Applied before the head is read, so readers start at the seeded revision.
+    if let Some(seed_dir) = nonempty_env("SEED_DIR") {
+        seed::seed(&store, counts.as_ref(), &seed_dir)
             .await
             .unwrap_or_else(|e| {
-                error!(error = %e, "route seed failed");
-                std::process::exit(1);
-            });
-    }
-    if let Some(roles_file) = nonempty_env("SEED_ROLES_FILE") {
-        seed::seed_roles(&pg, &roles_file)
-            .await
-            .unwrap_or_else(|e| {
-                error!(error = %e, "roles seed failed");
+                error!(error = %e, "seed failed");
                 std::process::exit(1);
             });
     }
 
-    let head = pg.head().await.unwrap_or_else(|e| {
+    let head = store.head().await.unwrap_or_else(|e| {
         error!(error = %e, "failed to read control-plane head");
         std::process::exit(1);
     });
-    let feed = Feed::spawn(pg.clone(), head);
+    let feed = Feed::spawn(store.clone(), head);
 
     let state = AppState {
-        pg,
+        store,
         feed,
+        counts,
         admin_token,
         internal_token,
     };

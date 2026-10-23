@@ -1,0 +1,71 @@
+{
+  "revision": 0,
+  "summary": {
+    "add": 11,
+    "change": 0,
+    "remove": 0,
+    "blocked": 0
+  },
+  "changes": [
+    {
+      "class": "safe",
+      "op": "add",
+      "what": "kind",
+      "name": "directory"
+    },
+    {
+      "class": "safe",
+      "op": "add",
+      "what": "kind",
+      "name": "organization"
+    },
+    {
+      "class": "safe",
+      "op": "add",
+      "what": "kind",
+      "name": "project"
+    },
+    {
+      "class": "safe",
+      "op": "add",
+      "what": "setting",
+      "name": "creator_role"
+    },
+    {
+      "class": "safe",
+      "op": "add",
+      "what": "setting",
+      "name": "default_role"
+    },
+    {
+      "class": "safe",
+      "op": "add",
+      "what": "setting",
+      "name": "deletion_grace"
+    },
+    {
+      "class": "safe",
+      "op": "add",
+      "what": "role",
+      "name": "admin"
+    },
+    {
+      "class": "safe",
+      "op": "add",
+      "what": "role",
+      "name": "member"
+    },
+    {
+      "class": "safe",
+      "op": "add",
+      "what": "service",
+      "name": "e10s",
+      "routes": {
+        "add": 3,
+        "change": 0,
+        "remove": 0
+      }
+    }
+  ],
+  "confirm": {}
+}

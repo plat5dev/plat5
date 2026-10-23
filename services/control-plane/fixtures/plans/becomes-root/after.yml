@@ -1,0 +1,25 @@
+version: 2
+kinds:
+  directory:
+    sign_in: idp
+  organization:
+    label: Organization
+    segment: orgs
+  project:
+    label: Project
+roles:
+  admin:
+    labels: ["*"]
+    bindable_at: [organization, project]
+  member:
+    labels: ["organization:read"]
+    bindable_at: [organization, project]
+default_role: member
+creator_role: admin
+services:
+  e10s:
+    url: "http://e10s:3000"
+    routes:
+      - path: "/health"
+        scope: public
+        methods: [GET]
