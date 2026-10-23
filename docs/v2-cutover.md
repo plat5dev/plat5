@@ -92,6 +92,7 @@ No compatibility layer: these go in the same release that adds their replacement
 | Lifecycle | `organization.created`, `organization.deleted`, `member.created`, `member.removed` | `<kind>.created/.deleted/.restored/.purged`, `member.created/.removed` |
 | Operator console | Fixed organization and user pages | Out of this spec: the operator plane's own v2 work, in its repo |
 | Docs | v1 docs, `identity-boundary.md` | Done on this branch: `docs/` is the v2 contract. "Realm" and "user" as wire names go; "member" now means one principal in one tree |
+| Compose seeds | `compose/roles.yml`, mounted as `SEED_ROLES_FILE` | `compose/seed/`, a config directory, mounted as `SEED_DIR` |
 | Code-level READMEs | `services/*/README.md`, `compose/README.md` as written | Updated in the step that changes that service |
 | `TODO.md` | The policy-engine hook as the way to project access | Kept deferred, for permissions below a node only |
 

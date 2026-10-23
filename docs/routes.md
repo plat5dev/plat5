@@ -73,7 +73,7 @@ The versions route doesn't need the author in its path: the service reads `X-Pla
 | `required_labels` | `string[]` | Required on every method of a route scoped to a kind other than the sign-in kind. `[]` is allowed and means any member of the tree. Omitted or `[]` on `public` and sign-in routes; anything else there is **422** |
 | `rate_limit` | `false` \| `string` \| `string[]` \| `{requests, window_seconds}` \| omitted | Omitted inherits the gateway fallback |
 | `audit` | `bool?` | Omitted: the method default. Not on `public` routes |
-| `resolve_deleted` | `bool?` | Default `false`. `true` lets the last node in the chain be a deleted (not purged) node; its own bindings then grant nothing. For identity's restore route; see [`identity.md`](identity.md#admit) |
+| `resolve_deleted` | `bool?` | Default `false`. `true` lets the last node in the chain be a deleted (not purged) node. Its bindings are kept until purge and still count here, as Google Cloud keeps a deleted project's policy so it can be undeleted. For identity's restore route; see [`identity.md`](identity.md#admit) |
 
 Unknown fields are **422**.
 
@@ -173,7 +173,7 @@ A `count_at: project` bucket means a sandbox project can't spend a live project'
 
 Exceed: **429** `RATE_LIMITED`, `Retry-After`, `details.retry_after_seconds`. Limited admitted routes set `X-RateLimit-Limit` / `Remaining` / `Reset` on success and on 429.
 
-A separate failed-auth IP limiter (`RATE_LIMIT_AUTH_FAILURE_*`) covers unadmitted 401s and unmatched 404s. It is not per-route.
+A separate failed-auth IP limiter (`RATE_LIMIT_AUTH_FAILURE_*`) covers unadmitted 401s, not-found 403s (a missing node, or a caller outside the tree), and unmatched 404s. It is not per-route.
 
 The limiter runs before the label check, so a label-denied **403** counts against the route's limit.
 

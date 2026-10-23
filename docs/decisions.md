@@ -11,7 +11,7 @@ Oct 22, 2026 · @Kyle Smith
 - **Tree:** directory, organization and project are kinds in config. A node holds only id, kind, parent, slug, label and status.
 - **Access:** the union of a principal's bindings on a node and its ancestors. Org members see no projects by default; a role bound at a project grants that project, bound at the org grants all of them. People outside the org can be guests on a project.
 - **Credentials:** a person's credential reaches every tree they're bound in, with the binding picked per request. A service account is created at a node and can hold bindings anywhere in its own org's tree.
-- **Paths:** name the chain of slugs from the root, for example `/orgs/{org}/projects/{project}/…`. The gateway resolves slugs to ids; services see only ids.
+- **Paths:** name the chain of slugs from the root, for example `/orgs/{organization}/projects/{project}/…`. The gateway resolves slugs to ids; services see only ids.
 - **Closed world:** a tree's data refers only to its own nodes and members. Services get the caller's member id for that tree, never a person's id. Services do no auth, so other front doors (such as the operator plane) can call them under their own rules.
 - **Deletion:** always soft for `deletion_grace` (default 30 days), restorable, then purged. Ids and slugs are never reused.
 - **Config:** only what a deployment really decides (`parent`, `label`, `sign_in`, reserved slugs, roles, rate limits). Everything else is a fixed Plat5 rule.
@@ -69,12 +69,14 @@ roles:
 default_role: member
 creator_role: admin
 
-rate_limits:
-  evals-project: { requests: 100, window_seconds: 1, count_at: project }
-  evals-org:     { requests: 300, window_seconds: 1, count_at: organization }
+services:
+  e10s:
+    rate_limits:
+      evals-project: { requests: 100, window_seconds: 1, count_at: project }
+      evals-org:     { requests: 300, window_seconds: 1, count_at: organization }
 ```
 
-Labels and numbers are placeholders.
+Labels and numbers are placeholders. Rate-limit policies live on each service.
 
 | Field | What it does |
 | --- | --- |
@@ -216,7 +218,7 @@ Seven decisions follow from the model. Six land in Plat5 v2 as part of the model
 | # | Decision | Plat5 change | Recommendation | Status |
 | --- | --- | --- | --- | --- |
 | 1 | How a key is limited to one project | Needed | A service account bound to the project; the gateway checks bindings on the project and its ancestors. Members see no projects by default | Decided |
-| 2 | How the path names the project | Needed | `/orgs/{org}/projects/{project}/…` by slugs; the gateway resolves them and forwards ids | Decided |
+| 2 | How the path names the project | Needed | `/orgs/{organization}/projects/{project}/…` by slugs; the gateway resolves them and forwards ids | Decided |
 | 3 | What a project is | Needed | A Plat5 node; e10s keys its data on the node id | Decided |
 | 4 | Rate limits per org or per project | Needed | Each limit names the kind it counts at; monthly limits stay e10s counts | Decided |
 | 5 | Per-project activity log | Needed | Audit events carry the node; filter by project | Decided |
@@ -325,7 +327,7 @@ Three rules follow:
 
 ### Additions this needs
 
-- **Bindings that expire.** Support access becomes "the customer adds a support member for 7 days": visible, consented to, and self-ending. Each org chooses whether support members are allowed.
+- **Bindings that expire.** Support access becomes "the customer adds a support member for 7 days": visible, consented to, and self-ending. Whether support members exist at all is the deployment's roles: a `support` role with a `max_duration`. There's no per-org setting.
 - **A stated pattern for views across trees.** Built by the client from one credential per tree, or copied in as values with no ids. Never references.
 
 The agency case is answered later by group principals: the agency org is bound into each client project or org, so no ids cross trees. One outside person on one project is already covered in v2 by guest bindings.
@@ -347,7 +349,7 @@ Google Cloud's role bindings name users, service accounts, groups, whole domains
 | One outside person on one project | **In v2: guest bindings.** An invite below the org, gated by `organization:guests:write`; guests are listed as such on the org's access list. GitHub's outside collaborators work this way ([GitHub](https://docs.github.com/en/organizations/managing-user-access-to-your-organizations-repositories/managing-outside-collaborators/adding-outside-collaborators-to-repositories-in-your-organization)) | — |
 | A whole org shared into a project; an agency across client orgs | Not possible | **Group principals:** a binding whose principal is "members of org A" (Google Cloud's `group:` and `domain:`). Open design point: authored records need a per-person binding, for example one created the first time someone acts through the group |
 | Anyone with a link, or any signed-in user | Not possible | **Public principals,** like `allUsers` and `allAuthenticatedUsers` |
-| Moving a project to another org | Refused | **Cross-org move** with a `project.moved` event; records authored before the move keep their old binding ids, which resolve as former members |
+| Moving a project to another org | Refused | **Cross-org move** with a `project.moved` event; records authored before the move keep their old member ids, which resolve as former members |
 | Data in one org referring to data in another | Blocked by design | None. Share the container instead: bind people into one project |
 
 None of these extensions touches nodes, the ancestor rule, slugs or what services see; they add principal types and change how admit unions bindings.

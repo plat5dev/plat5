@@ -24,11 +24,11 @@ Also required on tokens: signature via JWKS, `exp`, and a `kid` in the JWT heade
 | `properties.user_id` | Nested custom subject properties (e.g. OpenAuth-style, Plat5 Auth) |
 | `user_id` | Flat custom claim |
 
-Local compose defaults use `properties.user_id` and a host-published JWKS URL on port `5000`; override for your IdP.
+Local compose defaults use `properties.user_id` and a host-published JWKS URL on port `5401`; override for your IdP.
 
 Missing or empty claim → **401** (same as invalid token).
 
-Identity links a person to one or more IdP subjects. Switching IdPs, or linking a second one, changes the links, not the member ids services hold.
+A person is linked to their IdP subjects, and services hold member ids, never subjects. There's no API yet to link a second subject ([`../TODO.md`](../TODO.md)), so switching IdPs today means rewriting `idp_links` by hand; done that way, every member id services hold stays the same.
 
 ## Name claim
 

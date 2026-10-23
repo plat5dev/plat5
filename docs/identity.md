@@ -51,10 +51,10 @@ Identity's edge routes are generated from the `kinds` document (`plat5 routes ge
 | `<kind>:create` | The parent | Creating one under the parent |
 | `<kind>:write` | The node | Changing the label |
 | `<kind>:delete` | The node | Deleting, listing deleted, restoring |
-| `<kind>:bindings:read` / `:write` | The node | Listing or changing who has access here; invites here |
+| `<kind>:bindings:read` / `:write` | The node | Listing or changing who has access here. On a root, also adding members and invites to join |
 | `<kind>:service-accounts:write` | The node | Creating service accounts here and their keys |
 | `<kind>:audit:read` | The node | Reading audit for this node and below |
-| `<root kind>:guests:write` | The root | Invites on nodes below the root, which can admit people outside the tree. Granted to no role: guests are off |
+| `<root kind>:guests:write` | The root | Invites on nodes below the root, which can admit people outside the tree. Granted to no role (counting `*`), guests are off |
 
 **These are defaults, not rules.** They're the labels written into the generated catalog; the team can rename them, change them or drop routes. Identity's code depends on no label name ([filtered lists](#filtered-lists)). Roles grant them like any label; `*` grants all.
 
@@ -63,7 +63,7 @@ Identity's edge routes are generated from the `kinds` document (`plat5 routes ge
 | Edge method and path | Labels | Upstream on identity | Notes |
 |---|---|---|---|
 | `GET /orgs/{organization}/projects` | `[]` | `GET /nodes/{subject.organization_id}/children/project` | [Filtered](#filtered-lists). `?state=deleted` lists deleted ones the caller could delete |
-| `POST /orgs/{organization}/projects` | `project:create` | `POST /nodes/{subject.organization_id}/children/project` | Body `{ label, slug? }`. The caller gets `creator_role` unless already covered |
+| `POST /orgs/{organization}/projects` | `project:create` | `POST /nodes/{subject.organization_id}/children/project` | Body `{ label, slug? }`. The caller gets `creator_role`, unless an inherited binding already holds it |
 | `GET /orgs/{organization}/projects/{project}` | `project:read` | `GET /nodes/{subject.project_id}` | |
 | `PATCH …/{project}` | `project:write` | `PATCH /nodes/{subject.project_id}` | `{ label }`. The slug never changes |
 | `DELETE …/{project}` | `project:delete` | `DELETE /nodes/{subject.project_id}` | Soft; cascades; revokes keys of service accounts born here and below |
@@ -75,20 +75,21 @@ Identity's edge routes are generated from the `kinds` document (`plat5 routes ge
 | `GET, PATCH, DELETE …/service-accounts/{service_account}` | `project:bindings:read`, `project:service-accounts:write` | `/nodes/{subject.project_id}/service-accounts/{path.service_account}` | `{ name }`. Delete removes its member and revokes its keys |
 | `GET, POST …/service-accounts/{service_account}/keys` | `project:service-accounts:write` | `…/service-accounts/{path.service_account}/keys` | Plaintext once |
 | `DELETE …/keys/{key_id}` | `project:service-accounts:write` | `…/keys/{path.key_id}` | Revoke |
-| `GET, POST …/{project}/invites` | `project:bindings:read`, `organization:guests:write` | `/nodes/{subject.project_id}/invites` | `{ role, max_uses?, expires_at }`. Can admit a guest |
+| `GET, POST …/{project}/invites` | `organization:guests:write` | `/nodes/{subject.project_id}/invites` | `{ role, role_duration?, max_uses?, expires_at }`. Can admit a guest. To give someone already in the org a project role, bind them directly |
 | `DELETE …/invites/{invite_id}` | `organization:guests:write` | `/nodes/{subject.project_id}/invites/{path.invite_id}` | Revoke |
 | `GET …/{project}/roles` | `[]` | `GET /nodes/{subject.project_id}/roles` | Roles bindable here |
 
-Roots get the same at `/orgs/{organization}`, with `organization:*` labels, plus:
+Roots get the same at `/orgs/{organization}`, with `organization:*` labels, except invites, which are the root's own (below). Plus:
 
 | Edge method and path | Scope, labels | Upstream on identity | Notes |
 |---|---|---|---|
 | `POST /orgs` | `directory`, `[]` | `POST /roots/organization` | `{ label, slug? }`. Creates a root; the caller gets a member and `creator_role` |
-| `GET, POST /orgs/{organization}/members` | `organization:bindings:read`, `:write` | `/nodes/{subject.organization_id}/members` | Post: `{ idp: { issuer, subject }, role? }`. `role` omitted → `default_role` |
+| `GET, POST /orgs/{organization}/members` | `organization:bindings:read`, `:write` | `/nodes/{subject.organization_id}/members` | Post: `{ idp: { issuer, subject }, role?, expires_at? }`. `role` omitted → `default_role` |
 | `GET /orgs/{organization}/members/{member}` | `[]` | `GET /nodes/{subject.organization_id}/members/{path.member}` | Name and status, a removed member too. So services and consoles can show "Dana (former member)" |
 | `DELETE /orgs/{organization}/members/{member}` | `organization:bindings:write` | `DELETE /nodes/{subject.organization_id}/members/{path.member}` | Remove |
 | `DELETE /orgs/{organization}/me` | `[]` | `DELETE /nodes/{subject.organization_id}/members/{subject.member_id}` | Leave the org |
-| `POST /orgs/{organization}/invites` | `organization:bindings:write` | `POST /nodes/{subject.organization_id}/invites` | `{ role?, grants?, max_uses?, expires_at }`. `grants` are bindings below the root made on redeem |
+| `GET, POST /orgs/{organization}/invites` | `organization:bindings:write` | `/nodes/{subject.organization_id}/invites` | `{ role?, role_duration?, grants?, max_uses?, expires_at }`. `grants` are bindings below the root made on redeem |
+| `DELETE /orgs/{organization}/invites/{invite_id}` | `organization:bindings:write` | `/nodes/{subject.organization_id}/invites/{path.invite_id}` | Revoke |
 
 The caller's own routes, all `scope: directory` with `[]`:
 
@@ -116,9 +117,9 @@ What the catalog points at, and what any other front door calls. Every path is i
 | `GET` | `/nodes/{node_id}` | `{ id, kind, parent_id, root_id, slug, label, status, deleted_at, created_at, updated_at }` |
 | `PATCH` | `/nodes/{node_id}` | `{ label }` |
 | `DELETE` | `/nodes/{node_id}` | Soft delete. Cascades to descendants, parents before children. Revokes keys of service accounts born at the node or below |
-| `POST` | `/nodes/{node_id}/restore` | Within `deletion_grace`. Restores the node and the descendants that its delete cascaded to. Keys stay revoked. **409** if the parent is deleted |
+| `POST` | `/nodes/{node_id}/restore` | Within `deletion_grace`. Restores the node and the descendants that its delete cascaded to (same `deletion_id`). Keys stay revoked. **409** if the parent is deleted |
 | `GET` | `/nodes/{node_id}/children/{kind}` | [Filtered](#filtered-lists) by `X-Plat5-Member-Id`; **400** without it. `?state=deleted` for deleted ones |
-| `POST` | `/nodes/{node_id}/children/{kind}` | `{ label, slug? }`. `{kind}` must allow this node's kind as parent (**422**). The member in `X-Plat5-Member-Id`, if any, gets `creator_role` unless already covered |
+| `POST` | `/nodes/{node_id}/children/{kind}` | `{ label, slug? }`. `{kind}` must allow this node's kind as parent (**422**). The member in `X-Plat5-Member-Id`, if any, gets `creator_role`, unless an inherited binding already holds it |
 | `POST` | `/roots/{kind}` | `{ label, slug? }`. A root kind other than the sign-in kind. `X-Plat5-Member-Id` is the caller's directory member; they get a member in the new tree with `creator_role` |
 | `GET` | `/nodes` | Every node, unfiltered: `?kind=`, `?parent_id=`, `?status=`. Not in the generated catalog; for other front doors |
 | `POST` | `/nodes/{node_id}/release-slug` | <a id="slug-release"></a>On a purged node: frees its slug for a new node. Not in the generated catalog |
@@ -130,7 +131,7 @@ What the catalog points at, and what any other front door calls. Every path is i
 | `GET` | `/nodes/{node_id}/bindings` | Bindings on this node |
 | `POST` | `/nodes/{node_id}/bindings` | `{ member, role, expires_at? }`. **422** if the member isn't in the node's tree, the role isn't bindable at the kind, or `expires_at` breaks `max_duration`. **409** if the member already has a binding here |
 | `PATCH` | `/nodes/{node_id}/bindings/{binding_id}` | `{ role?, expires_at? }` |
-| `DELETE` | `/nodes/{node_id}/bindings/{binding_id}` | A member left with no bindings is removed |
+| `DELETE` | `/nodes/{node_id}/bindings/{binding_id}` | A person's member left with no bindings is removed. A service account's isn't |
 | `GET` | `/nodes/{node_id}/access` | Every member with access here: direct bindings, and inherited ones with the node each comes from. Guests are marked `guest: true` |
 
 ### Members
@@ -138,13 +139,13 @@ What the catalog points at, and what any other front door calls. Every path is i
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/nodes/{root_id}/members` | Active members of the tree, guests marked |
-| `POST` | `/nodes/{root_id}/members` | `{ idp: { issuer, subject }, role? }`. Resolves the person, creating them if the subject is new. Binds `role` or `default_role` at the root. **409** if already a member |
+| `POST` | `/nodes/{root_id}/members` | `{ idp: { issuer, subject }, role?, expires_at? }`. Resolves the person, creating them if the subject is new. Binds `role` or `default_role` at the root, expiring at `expires_at`; required when the role has a `max_duration`. **409** if already a member |
 | `GET` | `/nodes/{root_id}/members/{member_id}` | `{ id, principal, name, status }`. A removed member answers with `status: removed`. **404** if not in this tree |
 | `DELETE` | `/nodes/{root_id}/members/{member_id}` | Remove: bindings deleted, `member.removed`. Final |
 | `GET` | `/members/{member_id}` | A directory member: the person, `{ id, name, status }` |
 | `DELETE` | `/members/{member_id}` | A directory member: [delete the account](#account-deletion) |
 | `PATCH` | `/members/{member_id}/status` | A directory member: `{ status: active \| suspended }`. Not in the generated catalog; for an operator plane |
-| `GET` | `/members/{member_id}/nodes` | A directory member: `?kind=` across every tree, filtered as below |
+| `GET` | `/members/{member_id}/nodes` | A directory member: `?kind=` across every tree, filtered as below. `?state=deleted` for deleted ones |
 
 ### Service accounts and keys
 
@@ -164,9 +165,11 @@ A service account is a principal like a person: its bindings can sit anywhere in
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `GET`, `POST` | `/nodes/{node_id}/invites` | Post: `{ role?, grants?, max_uses?, expires_at }`. Returns `token` while active. `grants` (`[{ node, role }]`, under the same root) only on a root |
+| `GET`, `POST` | `/nodes/{node_id}/invites` | Post: `{ role?, role_duration?, grants?, max_uses?, expires_at }`. Returns `token` while active. `grants` (`[{ node, role }]`, under the same root) only on a root |
 | `DELETE` | `/nodes/{node_id}/invites/{invite_id}` | Revoke. Idempotent |
 | `POST` | `/members/{member_id}/invites/redeem` | A directory member. `{ token }` |
+
+`expires_at` is when the token stops working. `role_duration` (and `duration` on each grant) is how long the binding it makes lasts, counted from redeem; required when the role has a `max_duration`, and no longer than it. `grants` are `[{ node, role, duration? }]`.
 
 Redeeming at a root makes a member with `role` (or `default_role`) at the root, plus each grant. Redeeming below a root binds `role` at that node; someone not already in the tree becomes a guest there. Already holding a binding on that node: **200**, a use, no change. Unknown token: **404**. Redeemed, revoked or expired: **409** `CONFLICT` (`{ field: "status", value }`).
 
@@ -184,13 +187,24 @@ Token prefix `inv_`, hashed at rest. `max_uses` omitted → 1; `null` → unlimi
 
 - **Which labels.** The labels of the kind's read route: the applied `GET` route to identity whose `upstream` is `/nodes/{subject.<kind>_id}`. Identity reads them from the services in its control-plane feed. With several such routes, any of their labels counts. With none applied, nothing is readable and the list is empty.
 - **Where.** At each listed node, from the union of the caller's bindings on it and its ancestors ([`roles.md`](roles.md#resolution)).
-- **Deleted.** `?state=deleted` uses the kind's delete route (`DELETE` to `/nodes/{subject.<kind>_id}`) the same way. A deleted node's own bindings grant nothing, so only bindings above it count.
+- **Deleted.** `?state=deleted` uses the kind's delete route (`DELETE` to `/nodes/{subject.<kind>_id}`) the same way, counting the deleted node's own bindings too: they're kept until purge, so whoever could delete a node can find and restore it. That includes a deleted org, which has nothing above it. `GET /me/nodes?kind=organization&state=deleted` is how a person finds one.
 
 This is why the generated list routes are `[]`: anyone in the tree may ask, and the answer is what they can read. A project-only member gets their projects from `GET /orgs/{organization}/projects`, not a 403.
 
 ### Account deletion
 
 `DELETE /members/{member_id}` on a directory member, in one transaction: every member of the person in every tree is removed (bindings deleted, `member.removed` per tree), personal keys and IdP links are deleted, and the principal is deleted. Removed member rows stay, with no name. Nothing blocks it: an org left with no admin is recovered through an operator plane.
+
+## Field limits
+
+| Field | Rule |
+|-------|------|
+| Node `label`, service account `name`, key `name` | 1 to 128 characters. A key's `name` defaults to `Unnamed key` |
+| Invite `expires_at` | Between 60 seconds and 30 days from now |
+| Invite `max_uses` | At least 1, or `null` for unlimited. Omitted → 1 |
+| Binding `expires_at`, `role_duration`, grant `duration` | In the future, and within the role's `max_duration` |
+
+Product sentences for each: [`error-copy.md`](error-copy.md#identity-specific-message).
 
 ## Errors
 
@@ -234,7 +248,7 @@ POST /internal/admit
 ```
 
 1. **Principal.** Hash the key, or look up the IdP link. A new IdP subject creates the person and their directory member; `name` (from the `name_claim`) sets or updates the person's name. A suspended person, a revoked key, or a service account whose born node is deleted is `valid: false`.
-2. **Nodes.** Resolve each `ref` (slug or id) under the previous node, by kind. A missing, purged or deleted node ends here with `found: false`. With `resolve_deleted`, the last node may be deleted (not purged); its own bindings then grant nothing.
+2. **Nodes.** Resolve each `ref` (slug or id) under the previous node, by kind. A missing, purged or deleted node ends here with `found: false`. With `resolve_deleted`, the last node may be deleted (not purged), and its own bindings still count. Nothing else ever counts a deleted node's bindings.
 3. **Member.** The principal's active member in the chain's tree. None means `member_id: null` and `labels: []`.
 4. **Labels.** The union of the roles of that member's live bindings on any node in the chain ([`roles.md`](roles.md#resolution)).
 5. **Good until.** The earliest `expires_at` among the contributing bindings, or `null`.
@@ -277,7 +291,7 @@ GET /internal/lifecycle-events?starting_after=<id>&limit=<n>
 | `<kind>.restored` | Restore within the grace period | Resume |
 | `<kind>.purged` | `deletion_grace` after delete | Delete the data |
 | `member.created` | A principal joins a tree: first sign-in, a redeemed invite, an admin add, a service account create, a root create | Nothing usually |
-| `member.removed` | Removed, left, account deleted, left with no bindings, or its root purged | Remove records owned by that member that should go with it |
+| `member.removed` | Removed, left, account deleted, a person left with no bindings, a service account deleted, or its root purged | Remove records owned by that member that should go with it |
 
 `principal` is `person` or `service_account`. No principal id, name or role. Binding changes aren't events: they change access, which is the gateway's concern, not service data.
 
@@ -318,6 +332,7 @@ CREATE TABLE nodes (
     label       TEXT NOT NULL,
     status      TEXT NOT NULL CHECK (status IN ('active', 'deleted', 'purged')),
     deleted_at  TIMESTAMPTZ,
+    deletion_id TEXT,                                  -- one per delete or kind removal; restore undoes exactly that one
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -409,14 +424,15 @@ Ids are ULIDs with a type prefix: `n_` nodes, `m_` members, `b_` bindings, `k_` 
 
 ### Invariants the code enforces
 
-- **Members.** One active member per principal per tree. In an org's tree it's created with its first binding; in the directory, at first sign-in. Removal sets `removed_at`, deletes its bindings and emits `member.removed`; it's never undone, and re-adding makes a new member. A member outside the directory left with no bindings is removed.
+- **Members.** One active member per principal per tree. In an org's tree it's created with its first binding; in the directory, at first sign-in. Removal sets `removed_at`, deletes its bindings and emits `member.removed`; it's never undone, and re-adding makes a new member. A person's member outside the directory left with no bindings, by delete or expiry, is removed. A service account's member is removed only with the service account (deleted directly, or with its born node); with no bindings its keys still authenticate and are refused everywhere, so a team can re-bind it.
 - **Guests.** A member with no binding at the root. Not stored; read from the bindings.
 - **Closed world.** A binding's node is under its member's root. A service account's member is in the tree of its `born_node_id`.
 - **Directory.** One sign-in node, created at boot. Every person has one member there and no bindings; that member's id is their user id.
 - **Roles.** A binding's `role` names a role in the roles document. A role that's missing, or not bindable at the binding's kind, grants nothing.
 - **Expiry.** A binding past `expires_at` grants nothing; a sweeper deletes it.
 - **Suspension.** A suspended principal's credentials are all invalid. There's no per-member suspension: remove the member instead.
-- **Deletion.** A node with `status = 'deleted'` grants nothing on it or below. Once `deletion_grace` has passed, the purge sweeper sets `status = 'purged'`, deletes bindings on it and below, removes members of a purged root, and keeps the row.
+- **Deletions.** Each delete, and each kind removal, stamps one `deletion_id` on every node it soft-deletes. A restore, or a kind applied again, restores exactly the nodes with that id. A node already deleted keeps its own id.
+- **Deletion.** A node with `status = 'deleted'` grants nothing on it or below, except on a `resolve_deleted` route (restore, listing deleted). Once `deletion_grace` has passed, the purge sweeper sets `status = 'purged'`, deletes bindings on it and below, removes members of a purged root, and keeps the row.
 
 ## Runtime
 
