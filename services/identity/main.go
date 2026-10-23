@@ -83,7 +83,7 @@ func main() {
 	lifecycleHandler := lifecycle.NewHandler(lifecycle.NewStore(pool))
 
 	app := newPublicApp(telem, nodeHandler, memberHandler)
-	internalApp := newInternalApp(telem, pool, src, cfg.InternalAuthToken, lifecycleHandler)
+	internalApp := newInternalApp(telem, pool, src, cfg.InternalAuthToken, lifecycleHandler, nodeHandler, memberHandler)
 
 	baseLogger.Info().
 		Str("port", cfg.Port).
@@ -152,6 +152,8 @@ func newInternalApp(
 	src *feed.Source,
 	internalToken string,
 	lifecycleHandler *lifecycle.Handler,
+	nodeHandler *nodes.Handler,
+	memberHandler *members.Handler,
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName:      "identity-internal",
@@ -184,5 +186,7 @@ func newInternalApp(
 		middleware.RequireInternalToken(internalToken),
 	)
 	lifecycleHandler.MountInternal(internalAPI)
+	memberHandler.MountInternal(internalAPI)
+	nodeHandler.MountInternal(internalAPI)
 	return app
 }

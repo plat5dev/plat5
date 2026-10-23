@@ -84,6 +84,8 @@ type env struct {
 	clock  *clock
 	signIn *nodes.Node
 	app    *fiber.App
+	// internal is the internal port's /internal routes: admit and plan counts.
+	internal *fiber.App
 }
 
 func setup(t *testing.T) *env {
@@ -103,6 +105,9 @@ func setup(t *testing.T) *env {
 	e.app = fiber.New(fiber.Config{ErrorHandler: apierrors.FiberErrorHandler})
 	nodes.NewHandler(nodeStore, e.src).Mount(e.app)
 	NewHandler(e.store, e.src).Mount(e.app)
+	e.internal = fiber.New(fiber.Config{ErrorHandler: apierrors.FiberErrorHandler})
+	NewHandler(e.store, e.src).MountInternal(e.internal.Group("/internal"))
+	nodes.NewHandler(nodeStore, e.src).MountInternal(e.internal.Group("/internal"))
 	return e
 }
 
@@ -271,6 +276,17 @@ func (r response) message() string {
 // call sends a request as caller (X-Plat5-Member-Id, "" for none).
 func (e *env) call(method, path, caller, body string) response {
 	e.t.Helper()
+	return e.send(e.app, method, path, caller, body)
+}
+
+// callInternal sends a request to the internal port.
+func (e *env) callInternal(method, path, body string) response {
+	e.t.Helper()
+	return e.send(e.internal, method, path, "", body)
+}
+
+func (e *env) send(app *fiber.App, method, path, caller, body string) response {
+	e.t.Helper()
 	var rd io.Reader
 	if body != "" {
 		rd = strings.NewReader(body)
@@ -282,7 +298,7 @@ func (e *env) call(method, path, caller, body string) response {
 	if caller != "" {
 		req.Header.Set(MemberHeader, caller)
 	}
-	resp, err := e.app.Test(req)
+	resp, err := app.Test(req)
 	if err != nil {
 		e.t.Fatal(err)
 	}

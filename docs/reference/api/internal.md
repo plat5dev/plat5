@@ -36,6 +36,10 @@ POST /internal/admit
 
 On a sign-in-kind route, `chain` is empty, the member is the person's directory member, and `labels` is `[]`. A service account has none, so its keys are `valid: false` there.
 
+Every field is in every answer, so the gateway never sees a missing one. With `valid: false`, `found` is `false`, `principal`, `member_id` and `good_until` are `null`, and `nodes` and `labels` are empty. With `found: false`, `nodes` is empty too: a partial chain says nothing the gateway uses. On a sign-in route `nodes` is empty. `labels` is sorted, with `*` as the role wrote it.
+
+Identity resolves `chain` by kind name only and doesn't check it against its kinds: a gateway a revision ahead or behind gets `found: false`, not an error. A body identity can't read is **422**: neither or both of `credential` and `idp`, an `idp` without `issuer` or `subject`, `scope` empty or `public`, a chain on a sign-in route, or a chain that is empty or doesn't end at `scope` on any other.
+
 | Result | Gateway |
 |--------|---------|
 | `valid: false` | **401** |
@@ -52,6 +56,8 @@ POST /internal/plan
 ```
 
 The control plane calls it on a dry run, and again on the apply to check the confirmed counts, only when the plan removes a kind or narrows a parent. A plan that does neither never calls identity ([`concepts/config.md`](../../concepts/config.md#preconditions)). `nodes` counts every node the removal would delete, live and deleted: the kind's nodes and all their descendants, of any kind (removing `folder` counts the projects under folders too). `bindings`, `service_accounts` and `keys` are those on, born at, or of service accounts born at any of them. A narrowed parent counts the kind's nodes, live and deleted, under a parent kind the config drops, except those a kind removal in the same plan deletes: removing `folder` and dropping it from `project`'s parents is one apply.
+
+The counts are what would be lost. A deleted node counts because it can still be restored; a binding past `expires_at` and a revoked key don't, because they never work again. Purged nodes never count. `sample` is up to five node ids, in id order. Every kind in the request has an entry, zeros included. All counts come from one snapshot. A body identity can't read (a kind name empty) is **422**.
 
 ### Lifecycle events
 

@@ -9,8 +9,8 @@ Contracts: [identity API](../../docs/reference/api/identity.md), [lifecycle](../
 | Package | Role |
 |---------|------|
 | `feed/` | The config from the control plane's `GET /internal/identity`: kinds, roles, `deletion_grace`, `reserved_slugs`, and the labels of the `identity` service's node routes, which filter node lists. Identity doesn't listen until it has one, and long-polls for changes |
-| `nodes/` | Nodes, the closure table, slugs and tombstones, soft delete, restore, purge, kind removal, and the sweeper that runs reconcile and purge |
-| `members/` | People and IdP links, directory members, members of each tree, bindings with expiry, the access list, service accounts, API keys, invites and redeem; creating nodes with the creator's binding, and filtered node lists. Its sweep deletes expired bindings |
+| `nodes/` | Nodes, the closure table, slugs and tombstones, soft delete, restore, purge, kind removal, and the sweeper that runs reconcile and purge. `POST /internal/plan` on the internal port: the control plane's counts for a plan that removes a kind or narrows a parent |
+| `members/` | People and IdP links, directory members, members of each tree, bindings with expiry, the access list, service accounts, API keys, invites and redeem; creating nodes with the creator's binding, and filtered node lists. Its sweep deletes expired bindings. `POST /internal/admit` on the internal port: the member and labels for a credential on a node chain |
 | `lifecycle/` | The lifecycle-events feed on the internal port. Written in the change's transaction |
 | `db/` | The v2 schema. Boot refuses a database with v1 migrations: v2 is a hard cutover |
 
