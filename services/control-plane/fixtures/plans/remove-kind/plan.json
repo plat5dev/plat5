@@ -1,0 +1,51 @@
+{
+  "revision": 7,
+  "summary": {
+    "add": 0,
+    "change": 2,
+    "remove": 2,
+    "blocked": 0
+  },
+  "changes": [
+    {
+      "class": "destructive",
+      "op": "remove",
+      "what": "kind",
+      "name": "folder",
+      "effects": {
+        "nodes": 14,
+        "bindings": 22,
+        "service_accounts": 3,
+        "keys": 9
+      }
+    },
+    {
+      "class": "safe",
+      "op": "change",
+      "what": "kind",
+      "name": "project"
+    },
+    {
+      "class": "safe",
+      "op": "change",
+      "what": "role",
+      "name": "admin"
+    },
+    {
+      "class": "safe",
+      "op": "change",
+      "what": "service",
+      "name": "e10s",
+      "routes": {
+        "add": 0,
+        "change": 0,
+        "remove": 1
+      }
+    }
+  ],
+  "confirm": {
+    "folder": {
+      "nodes": 14
+    }
+  }
+}

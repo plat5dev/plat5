@@ -1,0 +1,35 @@
+{
+  "revision": 7,
+  "summary": {
+    "add": 2,
+    "change": 1,
+    "remove": 0,
+    "blocked": 0
+  },
+  "changes": [
+    {
+      "class": "safe",
+      "op": "add",
+      "what": "kind",
+      "name": "environment"
+    },
+    {
+      "class": "safe",
+      "op": "change",
+      "what": "role",
+      "name": "admin"
+    },
+    {
+      "class": "safe",
+      "op": "change",
+      "what": "service",
+      "name": "e10s",
+      "routes": {
+        "add": 1,
+        "change": 0,
+        "remove": 0
+      }
+    }
+  ],
+  "confirm": {}
+}

@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plat5.com/schema/v2/roles.json",
+  "title": "Roles",
+  "description": "What each role grants and where it can be bound: the roles part of plat5.yml.",
+  "type": "object",
+  "properties": {
+    "roles": {
+      "title": "roles",
+      "description": "Map of slug → role. At least one role.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/role_slug" },
+      "additionalProperties": { "$ref": "#/$defs/role" }
+    },
+    "default_role": {
+      "title": "default_role",
+      "description": "Required. What joining a root grants. Bindable at every root kind other than the sign-in kind. No `max_duration`: joining without a stated end must grant something that doesn't need one.",
+      "$ref": "#/$defs/role_slug"
+    },
+    "creator_role": {
+      "title": "creator_role",
+      "description": "Required. What the creator of a node gets on it. Bindable at every kind that can be created. No `max_duration`.",
+      "$ref": "#/$defs/role_slug"
+    }
+  },
+  "$defs": {
+    "role_slug": {
+      "title": "slug",
+      "description": "`[a-z0-9:._-]+`, max 64. Opaque to Plat5.",
+      "type": "string",
+      "pattern": "^[a-z0-9:._-]{1,64}$"
+    },
+    "label": {
+      "title": "label",
+      "description": "`[a-z0-9:._-]+`, max 64.",
+      "type": "string",
+      "pattern": "^[a-z0-9:._-]{1,64}$"
+    },
+    "role": {
+      "title": "role",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["labels", "bindable_at"],
+      "properties": {
+        "labels": {
+          "title": "labels",
+          "description": "`[a-z0-9:._-]+`, max 64 chars, unique, max 64 labels. `[]` grants nothing. `[\"*\"]` grants every label; `*` is valid only alone.",
+          "anyOf": [
+            { "const": ["*"] },
+            { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/label" } }
+          ]
+        },
+        "bindable_at": {
+          "title": "bindable_at",
+          "description": "Required. The kinds this role can be bound at. Never the sign-in kind.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "kinds.json#/$defs/kind_name" }
+        },
+        "max_duration": {
+          "title": "max_duration",
+          "description": "Optional. A binding with this role must have an `expires_at` no further away than this. A duration: a whole number and `s`, `m`, `h` or `d` (`7d`, `8h`).",
+          "$ref": "kinds.json#/$defs/duration"
+        }
+      }
+    }
+  }
+}

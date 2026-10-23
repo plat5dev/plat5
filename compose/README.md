@@ -47,9 +47,7 @@ Set env (or defaults) for any IdP reachable from the gateway container:
 
 Gateway uses `host.docker.internal` so a host-published IdP does not need a shared Docker network. API keys are an alternative to JWT; the IdP is still required.
 
-Roles: identity reads the roles document from the control plane and picks up changes without a restart. Dev and prod compose both seed [`roles.yml`](roles.yml) as the first document (`SEED_ROLES_FILE`); after that, change roles with `PUT /roles` on the admin API, since editing the file does nothing. Set `ROLES_ENABLED=false` to turn roles off: every member holds every label, and authorization is left to something else. See [`../docs/roles.md`](../docs/roles.md).
-
-CORS: the gateway answers with `*` until you set origins with `PUT /cors` ([`../docs/control-plane.md`](../docs/control-plane.md#cors)).
+Config: kinds, roles, routes and CORS origins live in the control plane, applied as one config ([`../docs/concepts/config.md`](../docs/concepts/config.md)). On first boot it applies a seed (`SEED_DIR`): dev compose mounts [`seed/`](seed/) (`plat5.yml` and the generated identity and audit routes), prod compose mounts [`seed-prod/`](seed-prod/) (kinds and roles, no services). After that, editing the seed does nothing: change the config with `plat5 plan` and `plat5 apply`. CORS answers `*` until `plat5.yml` lists origins.
 
 `APIKEY_BRAND` (default `plat5`) is identity's alone: keys are `{brand}-k-2-…`, sessions `{brand}-s-2-…`. The gateway checks a key's shape and sends it to identity's one validate (`CREDENTIAL_VALIDATE_URL`), which says whose it is: a user key passes on `user` routes, a member key or session on `organization` and `member` routes. See [`../docs/identity.md`](../docs/identity.md#credential-format).
 

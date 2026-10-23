@@ -4,6 +4,8 @@ use axum::Json;
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::schema::FieldError;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ApiErrorBody {
     #[serde(rename = "type")]
@@ -26,7 +28,8 @@ pub struct AppError {
     pub error_type: &'static str,
     pub code: &'static str,
     pub message: String,
-    pub details: Option<Value>,
+    /// Boxed: a `Value` makes every `Result<_, AppError>` large.
+    pub details: Option<Box<Value>>,
     pub request_id: String,
 }
 
@@ -37,7 +40,9 @@ impl AppError {
             error_type: "invalid_request_error",
             code: "UNAUTHORIZED",
             message: "Authentication required.".into(),
-            details: Some(json!({ "reason": "invalid_or_missing_admin_token" })),
+            details: Some(Box::new(
+                json!({ "reason": "invalid_or_missing_admin_token" }),
+            )),
             request_id,
         }
     }
@@ -48,7 +53,7 @@ impl AppError {
             error_type: "invalid_request_error",
             code: "UNAUTHORIZED",
             message: "Authentication required.".into(),
-            details: Some(json!({ "reason": "invalid_internal_token" })),
+            details: Some(Box::new(json!({ "reason": "invalid_internal_token" }))),
             request_id,
         }
     }
@@ -59,28 +64,55 @@ impl AppError {
             error_type: "invalid_request_error",
             code: "NOT_FOUND",
             message: "Resource not found.".into(),
-            details: Some(json!({ "resource": resource, "id": id })),
+            details: Some(Box::new(json!({ "resource": resource, "id": id }))),
             request_id,
         }
     }
 
-    pub fn validation(request_id: String, message: String) -> Self {
+    /// **422** naming each field path. The message is the first problem; the
+    /// CLI adds the file to each path.
+    pub fn validation(request_id: String, fields: Vec<FieldError>) -> Self {
+        let message = match fields.as_slice() {
+            [] => "That doesn't look right.".to_string(),
+            [one] => one.to_string(),
+            [first, rest @ ..] => format!("{first} (and {} more)", rest.len()),
+        };
         Self {
             status: StatusCode::UNPROCESSABLE_ENTITY,
             error_type: "invalid_request_error",
             code: "VALIDATION_ERROR",
-            message: message.clone(),
-            details: Some(json!({ "fields": [{ "path": "body", "message": message }] })),
+            message,
+            details: Some(Box::new(json!({ "fields": fields }))),
             request_id,
         }
     }
 
-    pub fn route_conflict(request_id: String, message: String) -> Self {
+    /// **409**: an apply's precondition no longer holds (docs/reference/errors.md#plan_stale).
+    pub fn plan_stale(
+        request_id: String,
+        precondition: String,
+        expected: Option<i64>,
+        actual: Option<i64>,
+    ) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            error_type: "invalid_request_error",
+            code: "PLAN_STALE",
+            message: "The deployment changed since this plan was made. Plan again.".into(),
+            details: Some(Box::new(
+                json!({ "precondition": precondition, "expected": expected, "actual": actual }),
+            )),
+            request_id,
+        }
+    }
+
+    /// **409**: each method and path shape owned by two services.
+    pub fn route_conflict(request_id: String, conflicts: Vec<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,
             error_type: "invalid_request_error",
             code: "ROUTE_CONFLICT",
-            message,
+            message: format!("Route owned by two services: {}.", conflicts.join("; ")),
             details: None,
             request_id,
         }
@@ -118,7 +150,7 @@ impl IntoResponse for AppError {
                 code: self.code.to_string(),
                 message: self.message,
                 request_id: request_id.clone(),
-                details: self.details,
+                details: self.details.map(|d| *d),
             },
         };
         let mut res = (self.status, Json(body)).into_response();

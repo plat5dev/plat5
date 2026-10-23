@@ -79,6 +79,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
+          # The control plane compiles in the config schema; unused elsewhere.
+          build-contexts: |
+            schema=schema/v2
           target: prod
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
