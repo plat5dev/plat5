@@ -1,10 +1,8 @@
-# Plat5 API Error Response Standard
+# Plat5 API error response standard
 
 Standard envelope across Plat5 services.
 
-Clients show `error.message`. Branch on `code` and HTTP status. Do not parse `details` to invent copy.
-
-Product sentences live in [`error-copy.md`](error-copy.md).
+Clients show `error.message`. Branch on `code` and HTTP status. Do not parse `details` to invent copy. Product sentences live in [`error-copy.md`](error-copy.md).
 
 ## Envelope
 
@@ -13,11 +11,11 @@ Product sentences live in [`error-copy.md`](error-copy.md).
   "error": {
     "type": "invalid_request_error",
     "code": "VALIDATION_ERROR",
-    "message": "Name is required.",
+    "message": "Label is required.",
     "request_id": "abc-123",
     "details": {
       "fields": [
-        { "path": "name", "message": "Name is required." }
+        { "path": "label", "message": "Label is required." }
       ]
     }
   }
@@ -28,28 +26,28 @@ Product sentences live in [`error-copy.md`](error-copy.md).
 |-------|------|-------------|
 | `type` | `string` | `invalid_request_error`, `api_error` |
 | `code` | `string` | Machine-readable identifier (UPPER_SNAKE_CASE) |
-| `message` | `string` | Human-readable sentence. Safe to show in a UI. |
-| `request_id` | `string` | Correlation ID from `X-Request-ID`. Propagate it; do not generate it. |
-| `details` | `object \| null` | Type-specific context. Shape varies by `code`. Never the only place the human sentence lives. |
+| `message` | `string` | Human-readable sentence. Safe to show in a UI |
+| `request_id` | `string` | Correlation ID from `X-Request-ID`. Propagate it; do not generate it |
+| `details` | `object \| null` | Type-specific context. Shape varies by `code`. Never the only place the human sentence lives |
 
 `request_id` is also returned in the **`X-Request-ID`** response header on every public API response. The gateway handles this; services behind the gateway must not set it.
 
 **Not required on:** CORS preflight (`OPTIONS`) and internal health checks (`/health/live`, `/health/ready`).
 
-## Error Codes
+## Error codes
 
-The **Fallback message** column is used only when nothing more specific applies. `NOT_FOUND`, `INTERNAL_ERROR`, and `SERVICE_UNAVAILABLE` stay generic on purpose. The gateway's `UNAUTHORIZED` on a matched route names what the route takes ([`error-copy.md`](error-copy.md#gateway-401)), never why the credential sent failed.
+The **Fallback message** column is used only when nothing more specific applies.
 
 | Code | HTTP | Type | Fallback message | Details |
 |------|------|------|------------------|---------|
 | `INVALID_REQUEST` | 400 | `invalid_request_error` | Malformed request. | — |
 | `VALIDATION_ERROR` | 422 | `invalid_request_error` | That doesn't look right. | `{ fields: [{ path, message }] }` |
 | `UNAUTHORIZED` | 401 | `invalid_request_error` | Authentication required. | `{ reason }` |
-| `FORBIDDEN` | 403 | `invalid_request_error` | You don't have permission to do that. | `{ permission, resource, resource_id, required_labels }` |
+| `FORBIDDEN` | 403 | `invalid_request_error` | Permission denied, or it may not exist. | `{ required_labels }` |
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
-| `ORGANIZATION_HANDOFF_REQUIRED` | 409 | `invalid_request_error` | Hand off or delete your organizations first. | `{ organizations: [{ id, name }] }` |
-| `ROUTE_CONFLICT` | 409 | `invalid_request_error` | (control-plane apply, put, restore) Message lists each conflicting route (same method, same path shape) and its owner service. | — |
+| `ROUTE_CONFLICT` | 409 | `invalid_request_error` | (control plane) Message lists each conflicting route and its owner service. | — |
+| `PLAN_STALE` | 409 | `invalid_request_error` | The deployment changed since this plan was made. Plan again. | `{ revision_from, revision_now, identity_revision_from?, identity_revision_now? }` |
 | `PAYLOAD_TOO_LARGE` | 413 | `invalid_request_error` | Request body is too large. | `{ max_size_bytes }` |
 | `RATE_LIMITED` | 429 | `api_error` | Too many requests. Try again in a moment. | `{ retry_after_seconds }` |
 | `INTERNAL_ERROR` | 500 | `api_error` | An unexpected error occurred. | `null` |
@@ -57,36 +55,33 @@ The **Fallback message** column is used only when nothing more specific applies.
 
 ### `FORBIDDEN`
 
-Returned by the **gateway** when the member's role labels share no label with the route's `required_labels`. `details.required_labels` is the route's list. Any one of those labels would have admitted the request. The caller's own labels are not in the body; the gateway logs them on a `required_labels denied` line ([`telemetry.md`](telemetry.md#gateway-label-denied-line)).
+Returned by the **gateway** when the route's node doesn't exist, the caller isn't in its tree, or the caller's labels on the node share none with the route's `required_labels`. One body for all three, as Google Cloud answers "Permission denied on resource (or it may not exist)", so a 403 never says whether a node exists. `details.required_labels` is the route's list: any one of those labels would have admitted the request. The caller's own labels are never in the body; the gateway logs them on a `required_labels denied` line ([`telemetry.md`](telemetry.md#gateway-label-denied-line)).
 
-### `ORGANIZATION_HANDOFF_REQUIRED`
+### `NOT_FOUND`
 
-Returned by **identity** on account deletion while the person is the last member, or the last `creator_role` holder, of an org. `details.organizations` lists those orgs. The person hands them to someone else, or deletes them, first ([`identity.md`](identity.md#account-deletion)).
+From the gateway: no route matches. From a service's own API, called by id: the id isn't under the address given. Through the gateway, a missing node is a **403**, never a **404**.
 
 ### `UNAUTHORIZED`
 
-Returned by the **gateway**, not downstream services. See [`gateway-contract.md`](gateway-contract.md) and [`identity-boundary.md`](identity-boundary.md).
+Returned by the **gateway**, not downstream services: a bad, missing, revoked or suspended credential, or a service account key on a sign-in route. Identity unavailable is **503**. See [`gateway-contract.md`](gateway-contract.md#admit).
 
-### Organization admission (gateway)
+### `PLAN_STALE`
 
-Canonical policy: [`identity-boundary.md`](identity-boundary.md).
-
-Wrong credential for the scope, or an invalid key or session, is **`UNAUTHORIZED` (401)**. Credential validate unavailable → **`SERVICE_UNAVAILABLE` (503)**. A path param that is not one segment is **`INVALID_REQUEST` (400)**. The gateway does not **404** a wrong credential.
+Returned by the **control plane** when a confirmed plan's config revision has moved, or when a plan with a destructive change finds identity's data revision moved. Nothing is applied ([`control-plane.md`](control-plane.md#the-plan)).
 
 ### `RATE_LIMITED`
 
-Returned by the **gateway**. HTTP **429**. `Retry-After` (seconds) is set to the same value as `details.retry_after_seconds`.
-
-Two independent Valkey limiters (replicas share one budget). `VALKEY_URL` is required to boot. Valkey error or timeout → **503** `SERVICE_UNAVAILABLE`. The gateway opens a new connection when Valkey answers again. Named policies and buckets: [`routes.md`](routes.md). Admitted limited routes set `X-RateLimit-Limit` / `Remaining` / `Reset` on 2xx and 429. Failed-auth limiter sets `Retry-After` only.
+Returned by the **gateway**. `Retry-After` (seconds) is the same value as `details.retry_after_seconds`. Two independent Valkey limiters; Valkey error or timeout → **503**. Admitted limited routes set `X-RateLimit-Limit` / `Remaining` / `Reset` on 2xx and 429; the failed-auth limiter sets `Retry-After` only.
 
 | Limiter | When | Key |
 |---------|------|-----|
-| Admitted route | After match + admission (JWT, API key, and session). Omitted `rate_limit` inherits `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS`. `false` opts out. Inline object = this route+method. Policy name = service `rate_limits` entry (`shared: true` is opt-in cross-service). | Subject from route scope (`public`→ip, `user`→user, `organization`→org, `member`→member), plus method+path or policy name. |
-| Failed-auth IP | Unadmitted **401**s and unmatched **404**s. Not per-route. | Client IP. `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). `0` requests = off |
+| Admitted route | After admission, before the label check | A node at the policy's `count_at`, plus the policy or method + path ([`routes.md`](routes.md#buckets)) |
+| Failed-auth IP | Unadmitted **401**s, not-found **403**s, unmatched **404**s. Not per-route | Client IP. `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). `0` = off |
 
 ## Principles
 
-- **Consistent envelope** — Every error has the same top-level `error` object.
-- **`message` is for humans** — One sentence. No regex, no `code` names, no bind-error junk.
-- **Never leak internals** — `INTERNAL_ERROR` responses do not include stack traces. Log those server-side.
-- **Gateway handles authn** — Gateway returns `UNAUTHORIZED`. Downstream services must not.
+- **Consistent envelope.** Every error has the same top-level `error` object.
+- **`message` is for humans.** One sentence. No regex, no `code` names, no bind-error junk.
+- **Never leak internals.** `INTERNAL_ERROR` responses don't include stack traces. Log those server-side.
+- **Never leak existence.** Through the gateway, missing and forbidden are the same **403**.
+- **Gateway handles authn.** Gateway returns `UNAUTHORIZED`. Downstream services must not.

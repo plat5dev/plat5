@@ -1,128 +1,121 @@
 # Plat5 model
 
-> Plat5's model: what each concept is, where each decision lives, and why. The other docs are how it shows up on the wire; when they disagree with this page, they are wrong.
+> Plat5's model: what each concept is, the rules that hold everywhere, where each decision lives, and what Plat5 will not do. The other docs are how it shows up on the wire; when they disagree with this page, they are wrong. The reasons and references behind each decision: [`decisions.md`](decisions.md).
 
-Plat5 is the front door for multi-tenant APIs. On every request it answers three questions: who is calling, which realm the request belongs to, and whether this route allows it. It then forwards the request with the owner in the path. The service never learns who called.
+Plat5 is the front door for multi-tenant APIs. It owns a tree of nodes whose kinds the deployment declares, the principals who can reach each node, and the check at the gateway. Services own everything inside a node.
+
+On every request the gateway answers three questions: who is calling (the credential), which node the request is about (the path), and whether the caller's bindings on that node or its ancestors grant a label the route requires. It then forwards the request with node ids and the caller's member id. Slugs and person ids never reach a service.
 
 ## Concepts
 
 | Concept | What it is |
 |---|---|
-| **Identity** | A person or a service account. Holds what is true in every realm: IdP links, a person's global status, existence and deletion. |
-| **Realm** | A context that holds memberships. Identities are born in one, credentials belong to a membership in one, and each realm owns its audit log. There are two kinds: the **directory** and **organizations**. |
-| **Directory** | The one realm every person belongs to. Persons are born here, with an internal id linked to their IdP subjects. Its roster is private. It has no roles, admins, invites or sessions; the IdP's JWT does the session's job. |
-| **Organization** | The tenant: the isolation boundary. Service accounts are born here. It holds the roster, roles, invites and sessions. Everything inside belongs to exactly one. |
-| **Membership** | An identity's standing in a realm. In an organization it carries a role and a status. A person's directory membership is their anchor there: it holds their own resources and keys, and has no status or role of its own. |
-| **Credential** | A user JWT, an API key or a session. Always belongs to a membership. Carries exactly that membership's permissions. |
-| **Role** | The deployment's name for a set of labels, from its roles document in the control plane. Plat5 names no roles. |
-| **Label** | A permission a route can require. Only the gateway checks labels. |
-| **Scope** | Who owns what a route addresses: `public` (no one), `organization` (the org), or the caller's own membership: `user` in the directory, `member` in an organization. |
-| **Subject** | The owner's ids that the gateway fills into `upstream`. |
-| **Audit** | The record of who did what. |
-
-**Member** and **user** are the two everyday names for a membership: a member is a membership in an organization, and a user is a person in the directory.
+| **Kind** | A level of the tree, declared in the `kinds` document: `directory`, `organization`, `project`, … No kind is special to Plat5 code ([`control-plane.md`](control-plane.md#kinds)) |
+| **Node** | One instance of a kind: `id`, `kind`, `parent`, `root`, `slug`, `label`, `status`. Nothing else. Everything else about a node is service data keyed by its id |
+| **Root** | A node with no parent. Each root and the nodes under it are one **tree**: the isolation boundary. Organizations are roots |
+| **Sign-in node** | The one root of the kind marked `sign_in` (the directory). Every person has a member there. It has no slug and no bindings |
+| **Principal** | A person (born at first sign-in) or a service account (born at a node of an org's tree). Its id never leaves Plat5 |
+| **Member** | A principal's presence in one tree: one per principal per tree, kept after removal. The id services see as the caller (`X-Plat5-Member-Id`). In the directory it's the person's user id |
+| **Binding** | A role for a member on one node of the member's tree, optionally expiring. A member can have many |
+| **Guest** | A member with no binding on its tree's root, only on nodes below it. Created by redeeming an invite below the root. Derived, not stored |
+| **Role** | The deployment's name for a set of labels, bindable at some kinds ([`roles.md`](roles.md)). Plat5 names no roles |
+| **Label** | A permission a route can require. Only the gateway checks labels |
+| **Route scope** | `scope: <kind>` addresses a node of that kind; `scope: public` has no subject ([`routes.md`](routes.md)) |
+| **Subject** | What the gateway sends a service: each node's id in the chain, and the caller's member id in that tree |
+| **Credential** | An IdP token or a personal API key (people), or a service account key. Belongs to the principal, not to a tree |
+| **Front door** | Anything on the private network that calls services. Plat5's gateway is one; an operator plane is another |
+| **Audit log** | Per root. Who did what, for reporting and compliance ([`audit.md`](audit.md)) |
+| **Lifecycle event** | A birth, delete, restore or purge of a node, or a member joining or leaving a tree ([`identity.md`](identity.md#lifecycle-events)) |
 
 ## Principles
 
-1. **A scope names who owns the resource.** It never names who is calling.
-2. **Services see owners, never actors.** A service gets the subject in its path. It never learns which person or key called. There is no actor header.
-3. **Attribution belongs to audit.** Services store owners, never authors. Plat5 has no creator concept ([below](#who-did-it)).
-4. **Two front doors, one service contract.** The customer gateway and the staff gateway call the same service paths. A service can't depend on anything only one of them supplies.
-5. **The credential names the realm; the client doesn't.** The organization comes from the credential, never from a path the client chose.
-6. **Plat5 decides only over facts it stores: realms, memberships and roles.** The gateway decides which routes a membership may call, from its role's labels.
-7. **An optional policy engine decides access to individual resources.** The gateway asks it about one resource ("may this member touch this project?"), through a hook. A service may ask it to list what its subject can reach, on the member's own scope (below). Neither plat5 nor services decide it.
-8. **Services enforce only what holds no matter who asks.** That means state rules ("archived is read-only"), and scoping every lookup by the subject.
-9. **A credential is never narrower than its membership.** To give a machine less, give it a service account with a smaller role.
-10. **Everyone with access is on the organization's roster.** There are no outside members.
-11. **The deployment's data, not plat5's names.** Roles come from the deployment's roles document: a file the operator writes and applies to the control plane, like routes. Plat5 ships defaults and gives none of them special status.
-12. **An event goes in the log of the realm that owns what it changed.**
+1. **The tree is config; nodes are data; no scope is special.**
+2. **Plat5 owns the tree and who can reach each node; services own what's inside a node.**
+3. **Access is decided only at the gateway,** from the union of a member's bindings on the node and its ancestors.
+4. **The path names the node; the credential names the principal.**
+5. **Services see node ids and the caller's member id, never a person's id.**
+6. **Services do no auth, so any front door can call them.** A service's API is its paths and documented headers, reachable only on the private network. Plat5's gateway is one front door; others (an operator plane, an internal job, a custom gateway) bring their own rules and docs.
+7. **The deployment's data, not Plat5's names.** Kinds, roles, labels and routes are all config.
+8. **Dangerous changes are allowed once planned and confirmed; deletes are soft.**
+
+## Rules
+
+- **Ancestor rule.** A request is allowed when the caller holds one of the route's labels through a binding on the route's node or an ancestor. Access is the union of those bindings. There are no deny rules.
+- **Default-deny below the root.** Joining a root grants `default_role` there. With a default role that holds no labels for child kinds, members see no projects until a role is bound at a project, or at the org for all of them. A deployment that wants default-allow gives its default role those labels.
+- **People.** A person's credential (IdP token or personal API key) reaches every tree they're in; the gateway picks the member for the tree in the path, per request. A personal key acts as the person everywhere. Anything narrower is a service account.
+- **Service accounts.** Born at a node of an org's tree and deleted with it. They can hold bindings anywhere in their own tree, never outside it, and never in the directory.
+- **Joining.** People join the directory at first sign-in. A root is joined by invite or by an admin adding someone. Nodes below a root bind people already in the tree, or guests who redeem an invite below the root.
+- **Closed world.** A tree's data refers only to its own nodes and members. Plat5 guarantees half of this by never sending a person's principal id; the other half is a convention services follow. People cross trees; data doesn't.
+- **Denied or missing.** A node you can't use and a node that doesn't exist get the same **403** "permission denied, or it may not exist", as Google Cloud answers. There's no separate visibility rule.
+- **Node lists.** Plat5 filters node lists by the list route's own labels, so `GET /orgs/{organization}/projects` returns only the projects the caller can read. Services never filter by caller.
+- **Deletion.** Soft for `deletion_grace` (30 days by default), restorable, then purged. Ids and slugs are never reused.
+- **Removed is final.** Re-adding someone to a tree makes a new member id. The old member stays, and a lookup returns its name and `status: removed`.
 
 ## Where each decision lives
 
 | Question | Decided by |
 |---|---|
 | Who is this? | The IdP or identity, from the credential |
-| Which realm? | The credential |
-| May they call this route? | Role labels, at the gateway |
-| May they touch this resource id? | The optional policy engine, through the gateway hook |
-| Which of these resources can they reach? | The optional policy engine, asked by the service on a `member` route about its subject |
+| Which node? | The path, resolved by the gateway from slugs or ids |
+| May they call this route on this node? | The gateway: the route's labels against the union of the member's bindings on the node and its ancestors |
+| Which nodes can they see? | Plat5, filtering node lists by the list route's labels |
+| May they touch this record inside a node? | The service's state rules today; the deferred policy hook later ([`../TODO.md`](../TODO.md)) |
 | Is this valid for the resource's current state? | The service |
-| Who did it? | Audit |
+| Who did it? | The record, when logic needs it (the member id as author or owner); audit otherwise |
 
 ## Where a field goes
 
-When a service is tempted to store a reference to a member, ask what should happen to it if that member left tomorrow.
+When a service is tempted to store a member id, ask what should happen to it if that member left tomorrow.
 
 | Answer | It's… | It lives in |
 |---|---|---|
 | Nothing; it's a record of what happened | History | Audit |
 | Someone else takes it over | A relationship, like assignee or reporter | Service data. Set by the client, governed by edit permission |
-| It stays theirs and gives them rights | Member-owned, like a comment | `member` scope. Service data with a rule for departure |
-| It goes away with them | Member-owned, like an API key or a subscription | Identity, or `member` scope. Cleaned up on `member.removed` |
+| It stays theirs | Authored, like a comment, an approval or a published version | Service data with `X-Plat5-Member-Id` as its author. A lookup shows a former member's name |
+| It goes away with them | Owned, like a subscription or a notification setting | Service data keyed by the member id. Cleaned up on `member.removed` |
 
-Only principals are **owners**, and the scope names the owner. What a resource is removed along with is its **parent**, which is service data.
+**Record the member id when logic depends on who did it; never decide access from it.** The gateway already decided. Separation of duties ("you can't approve your own change") is a service comparing two member ids on two records: a state rule, not an access check. Product features never read audit.
 
-## What I can reach
+## What Plat5 is for
 
-The gateway can allow or deny a route, but it can't filter a list: it doesn't read bodies, and the service doesn't know who asked. So "the projects this member can see" is a route on the member's own scope: `GET /member/projects`. The service gets `member_id` as the subject and asks the engine which projects it can reach. Without an engine, the answer is every project in the org.
+Hierarchical B2B products whose tenancy boundary is a small, stable set of kinds (org, project, maybe environment). Nodes come and go freely by API; kinds rarely change.
 
-- **Precedent:** `/user/organizations` already lists the orgs a person can reach, on the person's own scope.
-- **It isn't member scope used to learn who called.** The answer is a fact about the member, and nothing is stamped with their id.
-- **It passes the front-door test.** Staff calling `/members/{member_id}/projects` get a meaningful answer: what that member can reach.
+Not for permissions on individual records inside a node, or hierarchies end users invent and reshape. For those, a flat tree plus the product's own tables is lighter, or the policy hook below nodes once it ships.
 
-`GET /org/projects` stays "every project in the org", for whoever its labels admit.
+## Not in Plat5
 
-## Who did it
+Do not add these because they would be convenient:
 
-Plat5 has no actor header and no creator concept. Every "created by" is one of three things:
+- Per-record permissions inside a node in the gateway, or a policy engine (Topaz, OPA, …) in the default stack. The hook is deferred and is for permissions below a node only
+- Deny rules, or any check other than the ancestor rule and route labels
+- Role or label names or meanings in Plat5 code. Generated labels are catalog defaults the team edits
+- Telling services a person's principal id, or the caller's labels or role
+- A tree's data naming another tree, a service account bound outside its own tree, or a service account in the directory
+- A customer route that lists or searches people, or SMTP in identity
+- Global or platform-admin service accounts
+- Operator headers, roles or rules in base Plat5. Each other front door owns its own, in its own repo
+- Hard deletes of nodes, or reusing an id or a slug
+- An org settings bag, or limits stored as per-org data
+- Credentials narrower than their principal. A narrower machine is a service account with fewer bindings
+- A second writer of the tree. A service that needs nodes creates them through the node API
+- Per-tree sessions. The IdP token works everywhere
+- Moving a node to another tree (an extension point, below)
 
-- **Owner:** logic depends on the maker, so the maker owns it.
-- **Relationship:** a settable link, like Jira's reporter. The client sets it; permission to edit is the only question.
-- **History:** a truthful fact about the past. Read it from audit.
+## Extension points
 
-**When who-did-it matters to logic, the act is itself a record owned by the member who did it.** The org resource (task, doc, expense) has no creator. Members' contributions to it (comments, approvals, revisions, subscriptions) are member-owned, created on `member` scope. That is not using member scope to learn who called: the member owns the record that is created. A contribution has two route families: create (and edit your own) on `member` scope; read and moderate on `organization` scope.
+None of these touches nodes, the ancestor rule, slugs, or what services see; they add principal types or change how admit unions bindings.
 
-**Product features never read audit.** Audit is for reporting and compliance. It can be off for a whole deployment, it is behind a label, and it may get retention. A feature that needs to know who did something needs an owner or a relationship.
+| Case | Today | Extension |
+|---|---|---|
+| One outside person on one project | Guest bindings | — |
+| A whole org shared into a project; an agency across client orgs | Not possible | Group principals: a binding whose principal is "members of org A" |
+| Anyone with a link, or any signed-in user | Not possible | Public principals, like `allUsers` and `allAuthenticatedUsers` |
+| Moving a project to another org | Refused | Cross-org move with a `<kind>.moved` event |
+| Folders inside folders | Not possible | A kind allowed as its own parent, with a depth cap |
+| Permissions on one record inside a node | Service state rules | The policy hook ([`../TODO.md`](../TODO.md)) |
 
-Why:
+## Costs accepted knowingly
 
-- **It produces better designs.** Every case that looked like it needed the actor came out better without it:
-  - A **subscription** instead of notifying `created_by`. A departed member stops getting notified, people can unsubscribe, and a task can have several watchers.
-  - An **approval record** instead of an actor check, for separation of duties. The service compares two owners (the expense's and the approval's), a rule that holds whoever asks. Several approvers, quorum, revoking and history come for free.
-  - **Member-owned revisions** instead of one creator per document. Authorship is per contribution, survives the member leaving, and doesn't depend on audit.
-- **Front-door test.** Something created through the staff gateway would have a `created_by` that is null, or an id that means nothing in the org. A field only one front door can fill isn't data.
-- **What an actor header would bring back:** access checks inside services, fields that are null through one door, personal data spread across services (audit keeps only a member id), and stale references to departed members.
-- **It locks out no business need.** The cost is modelling work, not a missing capability. For a trivial display ("last changed by Bob") it's more ceremony than a `created_by` column. That trade is accepted.
-
-## Examples
-
-| Thing | Owner | Parent | Notes |
-|---|---|---|---|
-| Project | Org | Org | `organization` scope. Who created it is in audit. |
-| Task | Org | Project | Collaborative: anyone who can reach the project can edit it. |
-| Assignee, reporter | – | – | Relationships. Service data. |
-| Comment, approval, revision | Its member | Task, expense, doc | Written on `member` scope. Stays, read-only, when the member leaves. |
-| Subscription | Its member | Task | Removed along with the member. |
-| API key | The membership | – | Removed along with it. A user key belongs to the directory membership, a member key to the org membership. |
-| Service account | Org | Org | Reaches the whole org, within its role. Less than that needs the engine, or a separate org. |
-| Contractor on one project | Org | – | An org member. Limiting them to one project is the engine's job. |
-| Private project | Org | Org | Org members can reach it unless the policy engine says no. Lists of "my projects" come from `GET /member/projects`. |
-
-## Audit
-
-- Each realm owns its log.
-- **Organization log:** events on `organization` and `member` routes, plus `user` routes that change something the org owns: creating it, joining it, minting a session for one of its members. The service names the org; the gateway never takes it from the path. Read with `org:audit:read`. Finer reads, like one project's history for non-admins, are a policy-engine question.
-- **Personal log:** user keys, profile, status, account deletion. Read only by the person and by staff.
-- **The id a create produced:** the service names it, and the event records it, so "who created X" can be looked up by X.
-- No retention.
-
-## Lifecycle
-
-Identity writes lifecycle events in the same transaction as the change. Services opt in by reading a pull feed. The events are births and ends of organizations and members: `organization.created`, `organization.deleted` (one per delete, not cascaded per member), `member.created`, and `member.removed`. An org create writes `organization.created`, then `member.created` for the founder. `removed` is final: re-adding someone creates a new member id and a new `member.created`. Deleting an account emits `member.removed` in each organization it touches, and nothing for the directory. Updates, suspends, and the directory are not events.
-
-People:
-
-- **First sign-in creates the person.** Admission resolves the IdP issuer and subject to an internal id, creating the person if needed. Cached.
-- **Adding a member takes the IdP subject**, which the deployer's backend knows. Identity resolves the person, creating them if needed. Internal ids stay internal, and the directory stays private.
-- **Former members keep a name.** A lookup by member id returns a removed member's display fields and `status: removed`, and nothing else, so clients can show "Alice (former member)" on contributions that outlive her. A deleted account comes back as a deleted user.
-- **Account deletion is refused while the person is the last `creator_role` holder, or the last member, of an org** (**409**, listing the orgs), as on GitHub. The person adds someone with `creator_role` or deletes those orgs first.
+- Adopting Plat5 means putting the tree under it: routes, path params and "whose data is this" line up with the `kinds` document.
+- Moving off Plat5 is a migration of nodes and bindings, not an auth-provider swap.
+- Services see a per-tree member id, never a person's id, so a person can't be correlated across orgs. That's the one property that's hard to reverse, and it's intended.

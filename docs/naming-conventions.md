@@ -13,27 +13,29 @@ Formats and terminology for labels, routes, metrics, and error codes across Plat
 
 ### Scope of Plat5
 
-Plat5 owns the directory of people (ids linked to IdP subjects, display names), organizations, members, service accounts, credentials (API keys and sessions), audit, the control plane (routes, roles, CORS origins), and the user-facing gateway. Login is the IdP. Access to individual resources is an optional policy engine's. See [`model.md`](model.md).
+Plat5 owns the tree of nodes (kinds from config), the principals who can reach them (people linked to IdP subjects, and service accounts), their members and bindings, API keys, audit, the control plane (kinds, roles, routes, CORS origins), and the user-facing gateway. Login is the IdP. Everything inside a node is the services'. See [`model.md`](model.md).
 
 ### Identity domain nouns
 
 | Concept | Formal name | Notes |
 |---------|-------------|--------|
-| Context that holds memberships | **Realm** | The **directory** or an **organization** |
-| Where every person lives | **Directory** | One. Private: customers cannot list or search people |
-| Global person | **User** | `user_id`, Plat5's id, linked to one or more IdP subjects |
-| Isolation boundary | **Organization** | Do not call it tenant. |
-| An identity's standing in a realm | **Membership** | A person's in the directory, or a member in an org |
-| Org principal | **Member** | User *or* service account in an org; wire id `member_id` |
-| What a member holds | **Role** | Deployment-defined slug on a member; its labels come from the roles document ([`roles.md`](roles.md)). Plat5 names no roles. |
-| Route requirement | **Label** | Opaque `[a-z0-9:._-]+`. Routes require them (`required_labels`); roles grant them. Keys and sessions carry their member's. Not `scope`: route `scope` is `public` / `user` / `organization` / `member`. |
-| Non-human org identity | **Service account** | Created under an organization; always has a member row |
-| Credential | **API key** | A user key (the person's own) or a member key. One credential table with sessions |
-| Short-lived org credential | **Session** | One active user member, one org. Kind `session` of the same credential |
+| A level of the tree | **Kind** | Declared in the `kinds` document: `organization`, `project`, … |
+| One instance of a kind | **Node** | Wire id `n_…`. Has a slug, a label and a status |
+| A node with no parent | **Root** | Its tree is the isolation boundary. An organization is a root. Do not call it tenant |
+| Where every person signs in | **Directory** | The sign-in kind's single node. Private: customers can't list or search people |
+| A person or a service account | **Principal** | Its id never leaves identity |
+| A principal in one tree | **Member** | Wire id `m_…`. In the directory, a person's member id is their **user id** |
+| A role on a member at a node | **Binding** | Wire id `b_…`. Access is the union of bindings on the node and its ancestors |
+| A member with no binding at its root | **Guest** | Derived, not stored |
+| What a binding holds | **Role** | Deployment-defined slug; its labels come from the roles document ([`roles.md`](roles.md)). Plat5 names no roles |
+| Route requirement | **Label** | Opaque `[a-z0-9:._-]+`. Routes require them (`required_labels`); roles grant them |
+| What a route addresses | **Scope** | A kind name, or `public` |
+| Non-human principal | **Service account** | Born at a node of an org's tree |
+| Credential | **API key** | A person's personal key, or a service account's key. No sessions |
 
-**Rejected service names:** `org-service`, `orgs`, `tenants`, `tenancy`, `memberships` (alone), `rbac`, `authz`, `accounts`, `api-keys` (as a standalone platform service).
+**Rejected service names:** `org-service`, `orgs`, `tenants`, `tenancy`, `memberships`, `rbac`, `authz`, `accounts`, `api-keys` (as a standalone platform service).
 
-The identity control-plane service is **`identity`** (`service.name: identity`).
+The identity service is **`identity`** (`service.name: identity`).
 
 ## Service Names
 
@@ -61,7 +63,7 @@ When changing labels: update compose labels and `OTEL_SERVICE_NAMESPACE` togethe
 - No path version segment. No `/api` prefix.
   - Public: `/public/...`
   - Internal (private network, not on the gateway): `/internal/...`
-- Resource names are plural nouns: `/widgets`, `/users`, `/organizations`, `/members`
+- Resource names are plural nouns: `/widgets`, `/nodes`, `/members`
 - Identity list query/body: [`lists.md`](lists.md). Business services may copy it; they are not required to.
 - Actions use HTTP methods, not verbs in paths:
   - `POST /widgets` — create
@@ -69,48 +71,37 @@ When changing labels: update compose labels and `OTEL_SERVICE_NAMESPACE` togethe
   - `PUT /widgets/{id}` — update
   - `DELETE /widgets/{id}` — delete
 
-### Path patterns (identity)
+### Path patterns
 
-The first path segment is the subject.
+Services address everything by id. Identity:
 
 | Surface | Pattern |
 |---------|---------|
-| User | `/users/{user_id}/...` |
-| Organization | `/organizations/{organization_id}/...` |
-| Member | `/members/{member_id}/...` |
-| Internal (not on the gateway) | `/internal/credentials/validate`, `/internal/lifecycle-events` |
+| A node | `/nodes/{node_id}/...` |
+| A new root | `/roots/{kind}` |
+| A person (their directory member) | `/members/{member_id}/...` |
+| Internal (not on the gateway) | `/internal/admit`, `/internal/plan`, `/internal/lifecycle-events` |
 
-Audit follows the same pattern: `/organizations/{organization_id}/audit-events` and `/users/{user_id}/audit-events` public, `/internal/events/{request_id}` internal ([`audit.md`](audit.md)).
+Audit follows the same pattern: `/nodes/{node_id}/audit-events` and `/members/{member_id}/audit-events` public, `/internal/events/{request_id}` internal ([`audit.md`](audit.md)).
 
-Those are identity's own URLs. The gateway edge does not put the subject in the path.
+Edge paths carry slugs, one param per kind named as the kind, and the kind's `segment`:
 
 | Edge | Scope | Upstream fills |
 |------|-------|----------------|
-| `/user/...` | `user` | `{subject.user_id}` |
-| `/org/...` | `organization` | `{subject.organization_id}` |
-| `/member/...` | `member` | `{subject.member_id}` (and `organization_id` if the template needs it) |
+| `/orgs/{organization}/...` | `organization` | `{subject.organization_id}`, `{subject.member_id}` |
+| `/orgs/{organization}/projects/{project}/...` | `project` | `{subject.organization_id}`, `{subject.project_id}`, `{subject.member_id}` |
+| `/me/...` | the sign-in kind | `{subject.member_id}`: the person's user id |
 
-There is no `/api` prefix. A route that needs the subject sets `upstream`. The match path does not contain a param whose name is a subject field of that scope.
+There is no `/api` prefix. Slugs never reach a service. Full contract: [`routes.md`](routes.md), [`gateway-contract.md`](gateway-contract.md).
 
-Scopes and subject fill: [`gateway-contract.md`](gateway-contract.md). Full identity API: [`identity.md`](identity.md).
+## Subject headers
 
-## Subject
-
-The route scope names the subject. `upstream` fills it. The client path does not. Full contract: [`gateway-contract.md`](gateway-contract.md).
-
-| Scope | Subject fields |
-|-------|----------------|
-| `public` | none |
-| `user` | `user_id` |
-| `organization` | `organization_id` |
-| `member` | `organization_id`, `member_id` |
-
-Always (all scopes): `X-Request-ID`, `traceparent`. Services are not told the caller's role or labels. See [`gateway-contract.md`](gateway-contract.md).
+`X-Plat5-<Kind>-Id` per node in the chain (title case, `_` → `-`), `X-Plat5-Member-Id`, `X-Plat5-Principal`. Always: `X-Request-ID`, `traceparent`. Services are never told a person's principal id, or the caller's role or labels.
 
 ## Log Fields
 
 - Format: `snake_case`
-- Common: `request_id`, `user_id`, `organization_id`, `member_id`, `duration_ms`, `error_kind`
+- Common: `request_id`, `root_id`, `node_id`, `member_id`, `duration_ms`, `error_kind`
 - Credential (gateway request line): `auth_type`, `key_prefix` (display prefix, never the key). See [`telemetry.md`](telemetry.md#gateway-request-line)
 - Service-specific fields should be namespaced: `auth_provider`, `db_operation`
 
@@ -133,18 +124,19 @@ Always (all scopes): `X-Request-ID`, `traceparent`. Services are not told the ca
 
 ## Database
 
-- Table names: `snake_case`, plural: `identities`, `memberships`, `credentials`, `organizations`
-- Column names: `snake_case`: `created_at`, `updated_at`, `user_id`, `organization_id`, `member_id`, `service_account_id`
+- Table names: `snake_case`, plural: `nodes`, `members`, `bindings`, `api_keys`
+- Column names: `snake_case`: `created_at`, `updated_at`, `node_id`, `root_id`, `member_id`
 - Foreign key columns: `<entity>_id`
-- New identity row IDs: **ULID** strings (`user_id`, `organization_id`, `member_id`, `service_account_id`, key ids)
+- New row ids: prefixed **ULID** strings (`n_`, `m_`, `b_`, `k_`, `i_`)
+- A service keys its data by node id (`project_id`), and authored records by member id
 
 ## Related
 
 | Doc | Role |
 |-----|------|
-| [`identity-boundary.md`](identity-boundary.md) | Authn vs org context vs resource authz |
+| [`model.md`](model.md) | Concepts, rules, what Plat5 won't do |
 | [`identity.md`](identity.md) | Identity service API |
 | [`container-labels.md`](container-labels.md) | Namespace values |
 | [`gateway-contract.md`](gateway-contract.md) | Headers and service rules |
-| [`routes.md`](routes.md) | Route scopes and publish |
+| [`routes.md`](routes.md) | Route scopes, chain params and publish |
 | [`lists.md`](lists.md) | Identity list pagination (optional for business APIs) |

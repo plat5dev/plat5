@@ -146,9 +146,9 @@ Write **JSON** to stdout always (including when OTLP is enabled). No OTLP log ex
 | `duration_ms` | Request duration |
 | `request_id` | Correlation ID |
 | `trace_id` / `span_id` | When a span is active |
-| `user_id` | Authenticated user ID (when known) |
-| `organization_id` | Organization ID (when in org context) |
-| `member_id` | Member ID (when in org context) |
+| `root_id` | The tree's root node id (when admitted on a kind route) |
+| `node_id` | The route's node id (when admitted on a kind route) |
+| `member_id` | The caller's member id in that tree, or their directory member on a sign-in route |
 
 Field names: [`naming-conventions.md`](naming-conventions.md).
 
@@ -158,33 +158,33 @@ The gateway writes one `request completed` (or `request failed`) line per reques
 
 | Field | When | Value |
 |-------|------|-------|
-| `auth_type` | A credential was recognized | `jwt`, `user_apikey`, `member_apikey`, `member_session` |
-| `key_prefix` | An `X-API-Key` of a known shape was presented, valid or not | Identity's display prefix: the wire prefix plus the first 4 characters after it, e.g. `plat5-k-2-AbC9`. Same value as `key_prefix` on identity's key list (or a session's `token_prefix`), so a line can be matched to a key |
-| `user_id` | Admitted on a `user` route (JWT or user key) | |
-| `organization_id`, `member_id` | Admitted on an `organization` or `member` route (member key or session) | |
+| `auth_type` | A credential was recognized | `jwt`, `apikey` |
+| `key_prefix` | An `X-API-Key` of a known shape was presented, valid or not | Identity's display prefix: the wire prefix plus the first 4 characters after it, e.g. `plat5-k-2-AbC9`. Same value as `key_prefix` on identity's key list, so a line can be matched to a key |
+| `principal` | Admitted | `person` or `service_account` |
+| `root_id`, `node_id`, `member_id` | Admitted | As above. Never a person's principal id |
 
 `key_prefix` is set before validation, so 401 and 403 lines carry it. A value of an unknown shape, or with nothing after the preview, is not logged. The key or token itself, and a JWT, are never logged. The request line has no labels or role; a label-denied 403 adds the [label-denied line](#gateway-label-denied-line).
 
 ```json
-{"timestamp":"2026-10-08T18:30:00Z","level":"info","message":"request completed","request_id":"…","route":"/widgets","method":"GET","status":403,"duration_ms":3.1,"auth_type":"member_apikey","key_prefix":"plat5-k-2-AbC9","organization_id":"01J…","member_id":"01J…"}
+{"timestamp":"2026-10-08T18:30:00Z","level":"info","message":"request completed","request_id":"…","route":"/widgets","method":"GET","status":403,"duration_ms":3.1,"auth_type":"apikey","key_prefix":"plat5-k-2-AbC9","principal":"service_account","root_id":"n_01J…","node_id":"n_01J…","member_id":"m_01J…"}
 ```
 
 ### Gateway label-denied line
 
-A **403** `FORBIDDEN` from `required_labels` also writes one `warn` line, `required_labels denied`, before the request line. It says why:
+A **403** `FORBIDDEN` from the label check also writes one `warn` line, `required_labels denied`, before the request line. It says why:
 
 | Field | Value |
 |-------|-------|
 | `request_id`, `route`, `method`, `status` | As on the request line. `route` is the route's path pattern |
-| `auth_type`, `key_prefix`, `organization_id`, `member_id` | As on the request line |
+| `auth_type`, `key_prefix`, `principal`, `root_id`, `node_id`, `member_id` | As on the request line |
 | `required_labels` | The route's list, e.g. `[subscribers:write]`. Any one would have admitted |
 | `missing_labels` | The labels the caller lacks. Any-of, so on a deny this is the whole route list |
-| `labels` | The labels the credential carried: its member's role labels, e.g. `[subscribers:read]`. `[]` for a role with none |
+| `labels` | The caller's labels on the node, from its bindings there and above, e.g. `[subscribers:read]`. `[]` when none |
 
-The gateway sees labels, never role names, so the line has no role; look the member up by `member_id` to get it. Org and member routes carry no `user_id`. The caller's labels go to this log line only, never to the 403 body or a service.
+The gateway sees labels, never roles or bindings, so the line has neither; look them up with `GET /nodes/{node_id}/access`. The caller's labels go to this log line only, never to the 403 body or a service. A not-found **403** writes no label-denied line: there's no node to report.
 
 ```json
-{"timestamp":"2026-10-20T14:02:11Z","level":"warn","message":"required_labels denied","request_id":"…","route":"/org/subscribers","method":"POST","status":403,"auth_type":"member_apikey","key_prefix":"plat5-k-2-AbC9","organization_id":"01J…","member_id":"01J…","required_labels":"[subscribers:write]","missing_labels":"[subscribers:write]","labels":"[subscribers:read]"}
+{"timestamp":"2026-10-20T14:02:11Z","level":"warn","message":"required_labels denied","request_id":"…","route":"/orgs/{organization}/projects/{project}/subscribers","method":"POST","status":403,"auth_type":"apikey","key_prefix":"plat5-k-2-AbC9","principal":"service_account","root_id":"n_01J…","node_id":"n_01J…","member_id":"m_01J…","required_labels":"[subscribers:write]","missing_labels":"[subscribers:write]","labels":"[subscribers:read]"}
 ```
 
 ### Error fields (5xx only)
@@ -213,7 +213,7 @@ Do not include `error_kind` for 4xx.
 | Attributes | `http.request.method`, `url.path`, `http.route` (template only, when matched), `http.response.status_code` (when known) |
 | Status | Unset on 4xx. `Error` on 5xx with **no** description. Unset on 1xx/2xx/3xx unless a non-HTTP error occurred. |
 
-`http.route` is the matched template (`/organizations/:organization_id/subscribers`). Do not put the raw path there. `url.path` is the actual path (IDs allowed).
+`http.route` is the matched template (`/orgs/{organization}/projects/{project}/subscribers`). Do not put the raw path there. `url.path` is the actual path (IDs allowed).
 
 Do not set `url.query`, `url.scheme`, or `error.type`. Frameworks may add extra stable HTTP attributes; do not copy those onto other services.
 
