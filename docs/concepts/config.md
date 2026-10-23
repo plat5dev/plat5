@@ -37,7 +37,7 @@ Two kinds of file, split by owner, kept in a repo:
 # plat5.yml
 version: 2
 deletion_grace: 30d
-reserved_slugs: [new, settings, api, admin, me]
+reserved_slugs: [new, settings, api, admin]
 kinds: { … }
 roles: { … }
 default_role: member
@@ -71,7 +71,7 @@ The documents' fields: [kinds](../reference/config/kinds.md), [roles](../referen
 The control plane refuses a config that breaks any of these. Its error names the field path, such as `services.e10s.routes[2].scope` or `kinds.project.parent`; the CLI adds the file, since `services.<name>` is that service's routes file and everything else is `plat5.yml`. They check `kinds`, `roles` and `services` together, which is why the config is applied as a whole.
 
 1. Exactly one kind has `sign_in`; it has no parent and nothing names it as parent.
-2. Every `parent` exists; no cycles; kind names are lowercase identifiers and not `public`.
+2. Every `parent` exists; no cycles; kind names are lowercase identifiers and not `public` or `member` (`member_id` is the caller's).
 3. Every `bindable_at` kind exists and isn't the sign-in kind.
 4. `default_role` is bindable at every root kind other than the sign-in kind; `creator_role` at every kind that can be created. Neither has a `max_duration`.
 5. Every route has a `scope`; its path holds exactly the kind params for its chain; its `upstream` uses only subject fields its scope provides.
@@ -96,15 +96,17 @@ Two calls on one endpoint. A dry run computes the plan and writes nothing; an ap
 
 ```
 POST /apply?dry_run=true
-{ "version": 2, "kinds": {…}, "roles": {…}, "cors": {…}, "services": {…} }
+{ "version": 2, "deletion_grace": "30d", "kinds": {…}, "roles": {…}, "default_role": "member", …, "services": {…} }
 → 200 the plan
 
 POST /apply
-{ "version": 2, "kinds": {…}, "roles": {…}, "cors": {…}, "services": {…},
+{ "version": 2, "deletion_grace": "30d", "kinds": {…}, "roles": {…}, "default_role": "member", …, "services": {…},
   "expect":  { "revision": 41 },
   "confirm": { "folder": { "nodes": 14 } } }
 → 200 { "revision": 42 }
 ```
+
+The body is the flat config [above](#the-config). A dry run ignores `expect` and `confirm`.
 
 This is Kubernetes' `dryRun=All` plus a `resourceVersion` precondition, with Terraform's rule that a stale plan is refused.
 
@@ -113,29 +115,34 @@ This is Kubernetes' `dryRun=All` plus a `resourceVersion` precondition, with Ter
 ```json
 {
   "revision": 41,
-  "summary": { "add": 2, "change": 1, "remove": 1 },
+  "summary": { "add": 2, "change": 1, "remove": 1, "blocked": 1 },
   "changes": [
     { "class": "safe",        "op": "add",    "what": "kind",    "name": "environment" },
-    { "class": "safe",        "op": "change", "what": "service", "name": "e10s", "routes": { "add": 1, "change": 0, "remove": 0 } },
+    { "class": "destructive", "op": "remove", "what": "kind",    "name": "folder",
+      "effects": { "nodes": 14, "bindings": 22, "service_accounts": 3, "keys": 9 } },
     { "class": "blocked",     "op": "change", "what": "kind",    "name": "project", "reason": "parent_narrowed",
       "in_the_way": { "nodes": 3, "sample": ["n_…"] } },
-    { "class": "destructive", "op": "remove", "what": "kind",    "name": "folder",
-      "effects": { "nodes": 14, "bindings": 22, "service_accounts": 3, "keys": 9 } }
+    { "class": "safe",        "op": "change", "what": "role",    "name": "admin" },
+    { "class": "safe",        "op": "change", "what": "service", "name": "e10s", "routes": { "add": 1, "change": 0, "remove": 0 } }
   ],
   "confirm": { "folder": { "nodes": 14 } }
 }
 ```
 
-- `revision` is the config revision the plan was made against. The apply sends it back as `expect.revision`.
+Changes are ordered kinds, settings, roles, CORS, services, then by name.
+
+- `revision` is the config revision the plan was made against, `0` before the first apply. The apply sends it back as `expect.revision`.
+- `what` is `kind`, `role`, `service`, `cors`, or `setting` (named `deletion_grace`, `reserved_slugs`, `default_role` or `creator_role`). `op` is `add`, `change` or `remove`.
+- `summary` counts what changes. A kind, role, setting or CORS line counts one. A service counts its routes, by method: adding or removing a service counts each of its routes, and a changed service counts its `routes` plus one change if its own `url`, `timeouts` or `rate_limits` changed. A `blocked` line counts only in `blocked`.
 - `confirm` is what the apply must send to allow the destructive changes: each removed kind with the number of nodes it will delete. `{}` when nothing is destructive.
-- Any `blocked` change stops the whole apply. The counts come from identity ([`reference/api/internal.md`](../reference/api/internal.md#plan-counts)).
+- Any `blocked` change stops the whole apply. The counts come from identity ([`reference/api/internal.md`](../reference/api/internal.md#plan-counts)), asked only when the plan removes a kind or narrows a parent. A plan that does neither needs no identity, so the first-boot seed applies before identity is up.
 
 ### Preconditions
 
 | Apply sends | Refused when | Response |
 |-------------|--------------|----------|
 | `expect.revision`, always | The config revision isn't that one: someone applied since the dry run | **409** `PLAN_STALE` |
-| `confirm`, when the plan is destructive | A destructive kind is missing from `confirm`, or its node count now differs | **409** `PLAN_STALE` |
+| `confirm`, when the plan is destructive | A destructive kind is missing from `confirm`, its node count now differs, or `confirm` names a kind the plan doesn't remove | **409** `PLAN_STALE` |
 | — | The recomputed plan has a `blocked` change | **422** |
 
 `details` names which precondition failed and the current value. Nothing is written; dry-run again and confirm again. The first apply of a deployment sends `expect.revision: 0`.
@@ -146,13 +153,17 @@ Confirming counts rather than a data revision means ordinary traffic (new projec
 
 | Change | Class |
 |--------|-------|
-| Kind added at the bottom; parents widened; `label` or `segment` changed; reserved slug added | Safe |
+| Kind added at the bottom; parents widened; `label`, `segment` or `name_claim` changed; reserved slug added or removed | Safe |
+| `deletion_grace` changed | Safe. It applies to new deletes only: identity stores `purge_after` on each node when it's deleted ([lifecycle](lifecycle.md#deleting-restoring-and-purging)) |
 | Role added, changed or removed; a kind added to or dropped from `bindable_at` | Safe. Bindings keep the role's name; a role that's gone, or not bindable at that kind, grants nothing until it's back, as with a deleted Google Cloud custom role |
 | Service or route added, changed or removed | Safe for Plat5. A removed service's routes stop matching; its data is the service's |
 | CORS changed | Safe |
-| Parents narrowed with nodes under the removed parent | Blocked |
+| Parents narrowed with nodes under the removed parent | Blocked. With none there, safe |
 | Kind removed | Destructive: its nodes and descendants are soft-deleted. Routes scoped to it, or with its param in their chain, must go in the same apply (rule 5), and show as route removals |
 | Kind renamed | Invalid: it reads as a remove plus an add |
+| A root kind given a parent, or a kind's parents all dropped | Invalid (**422**): a kind stays a root or stays under parents. Remove it and add a new kind |
+| `sign_in` moved to another kind | Invalid (**422**) once a revision exists: the sign-in node holds every person's directory member |
+| Anything else | Safe |
 
 Removing a kind is the only destructive change. What happens to its nodes, and how applying it again restores them: [lifecycle](lifecycle.md#removing-a-kind). Tightened rules (a shorter `max_duration`, a new reserved slug) apply to new values only, as Kubernetes validation ratcheting does.
 
@@ -160,7 +171,7 @@ Adding a kind in the middle (a `folder` between org and project) is two safe app
 
 ## Revisions
 
-Each apply writes one revision: the whole config, in one Postgres transaction, with the plan's summary. Revisions are kept. There's no restore endpoint: rolling back is applying an older revision's config ([CLI](../reference/cli.md#cli)).
+Each apply writes one revision: the whole config as sent, in one Postgres transaction, with the plan's summary. An apply whose plan has no changes writes nothing and answers the current revision. Revisions are kept. There's no restore endpoint: rolling back is applying an older revision's config ([CLI](../reference/cli.md#cli)).
 
 The current revision is the **head**. Writes are serialized on it, so head order is commit order, and readers long-poll it.
 

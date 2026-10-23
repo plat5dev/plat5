@@ -40,7 +40,7 @@ Identity's edge routes are generated from the kinds (`plat5 routes generate`, or
 | `GET, PATCH, DELETE …/service-accounts/{service_account}` | `project:bindings:read`, `project:service-accounts:write` | `/nodes/{subject.project_id}/service-accounts/{path.service_account}` | `{ name }`. Delete removes its member and revokes its keys |
 | `GET, POST …/service-accounts/{service_account}/keys` | `project:service-accounts:write` | `…/service-accounts/{path.service_account}/keys` | Plaintext once |
 | `DELETE …/keys/{key_id}` | `project:service-accounts:write` | `…/keys/{path.key_id}` | Revoke |
-| `GET, POST …/{project}/invites` | `organization:guests:write` | `/nodes/{subject.project_id}/invites` | `{ role, role_duration?, max_uses?, expires_at }`. Can admit a guest. To give someone already in the org a project role, bind them directly |
+| `GET, POST …/{project}/invites` | `organization:guests:write` | `/nodes/{subject.project_id}/invites` | `{ role, role_duration?, max_uses?, expires_at }`. Can admit a guest. To give someone already in the org a project role, bind them directly. `GET` has `audit: true`: it returns live tokens |
 | `DELETE …/invites/{invite_id}` | `organization:guests:write` | `/nodes/{subject.project_id}/invites/{path.invite_id}` | Revoke |
 | `GET …/{project}/roles` | `[]` | `GET /nodes/{subject.project_id}/roles` | Roles bindable here |
 
@@ -53,7 +53,7 @@ Roots get the same at `/orgs/{organization}`, with `organization:*` labels, exce
 | `GET /orgs/{organization}/members/{member}` | `[]` | `GET /nodes/{subject.organization_id}/members/{path.member}` | Name and status, a removed member too. So services and consoles can show "Dana (former member)" |
 | `DELETE /orgs/{organization}/members/{member}` | `organization:bindings:write` | `DELETE /nodes/{subject.organization_id}/members/{path.member}` | Remove |
 | `DELETE /orgs/{organization}/me` | `[]` | `DELETE /nodes/{subject.organization_id}/members/{subject.member_id}` | Leave the org |
-| `GET, POST /orgs/{organization}/invites` | `organization:bindings:write` | `/nodes/{subject.organization_id}/invites` | `{ role?, role_duration?, grants?, max_uses?, expires_at }`. `grants` are bindings below the root made on redeem |
+| `GET, POST /orgs/{organization}/invites` | `organization:bindings:write` | `/nodes/{subject.organization_id}/invites` | `{ role?, role_duration?, grants?, max_uses?, expires_at }`. `grants` are bindings below the root made on redeem. `GET` has `audit: true`: it returns live tokens |
 | `DELETE /orgs/{organization}/invites/{invite_id}` | `organization:bindings:write` | `/nodes/{subject.organization_id}/invites/{path.invite_id}` | Revoke |
 
 The caller's own routes, all `scope: directory` with `[]`:

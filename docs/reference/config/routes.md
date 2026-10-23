@@ -36,27 +36,31 @@ The versions route doesn't need the author in its path: the service reads `X-Pla
 
 ### Service fields
 
-| Field | Type | Description |
-|-------|------|-------------|
+<!-- generated from schema/v2 with types: routes.json#/$defs/service_name routes.json#/$defs/service/properties -->
+| Field | Type | Rule |
+|-------|------|------|
 | service name | `string` | The file's one top-level key: 1–128 of `[A-Za-z0-9._-]`. A rate-limit bucket prefix and the `service` on every audit event |
 | `url` | `string` | Upstream, exactly `http://host:port` (explicit port, no path, no query), from the **gateway's** network view. `https://` is **422**: TLS upstreams aren't supported yet. Credentials in the URL, a port outside 1–65535, or any other form is **422** |
-| `rate_limits` | `map<string, RateLimitPolicy>?` | Named policies this service's routes may reference ([below](#rate_limit)) |
-| `timeouts` | `{connect_ms?, read_ms?}?` | Upstream timeouts in ms, each 1–600000. One left out uses the gateway's `UPSTREAM_CONNECT_TIMEOUT_MS` / `UPSTREAM_READ_TIMEOUT_MS` |
+| `rate_limits` | `map<string, policy>?` | Named policies this service's routes may reference ([below](#rate_limit)) |
+| `timeouts` | `{connect_ms, read_ms}?` | Upstream timeouts in ms, each 1–600000. One left out uses the gateway's `UPSTREAM_CONNECT_TIMEOUT_MS` / `UPSTREAM_READ_TIMEOUT_MS` |
 | `route_prefix` | `string?` | Joined to every route `path` at apply. Not applied to `upstream` |
-| `routes` | `array<RouteConfig>` | At least one |
+| `routes` | `array<route>` | At least one |
+<!-- end generated -->
 
 ### Route fields
 
-| Field | Type | Description |
-|-------|------|-------------|
+<!-- generated from schema/v2 with types: routes.json#/$defs/route/properties -->
+| Field | Type | Rule |
+|-------|------|------|
 | `path` | `string` | Match path. Holds one param per kind in its scope's chain, named exactly as the kind ([below](#scope-and-path)) |
 | `scope` | `string` | Required. A kind name, or `public`. A route without `scope` is **422**, so nothing becomes public by omission |
 | `upstream` | `string?` | Absolute path template. Omitted means proxy `path` unchanged, which a path with chain params can't do: slugs never reach a service |
-| `methods` | `array<string>` \| `map<string, MethodConfig>` | List form: allowed methods, with route-level `required_labels` / `rate_limit` / `audit`. Map form: per-verb config. Do not mix them (**422**) |
-| `required_labels` | `string[]` | Required on every method of a route scoped to a kind other than the sign-in kind. `[]` is allowed and means any member of the tree. Omitted or `[]` on `public` and sign-in routes; anything else there is **422** |
-| `rate_limit` | `false` \| `string` \| `string[]` \| `{requests, window_seconds}` \| omitted | Omitted inherits the gateway fallback |
+| `methods` | `array<string> \| map<string, null \| method config>` | List form: allowed methods, with route-level `required_labels` / `rate_limit` / `audit`. Map form: per-verb config, with no route-level `required_labels`, `rate_limit` or `audit`. Do not mix them (**422**) |
+| `required_labels` | `array<string>?` | Required on every method of a route scoped to a kind other than the sign-in kind. `[]` is allowed and means any member of the tree. Omitted or `[]` on `public` and sign-in routes; anything else there is **422** |
+| `rate_limit` | `false \| string \| array<string> \| {requests, window_seconds}?` | Omitted inherits the gateway fallback |
 | `audit` | `bool?` | Omitted: the method default. Not on `public` routes |
-| `resolve_deleted` | `bool?` | Default `false`. `true` lets the last node in the chain be a deleted (not purged) node. Its bindings are kept until purge and still count here, as Google Cloud keeps a deleted project's policy so it can be undeleted. For identity's restore route; see [`reference/api/internal.md`](../api/internal.md#admit) |
+| `resolve_deleted` | `bool?` | Default `false`. `true` lets the last node in the chain be a deleted (not purged) node. Its bindings are kept until purge and still count here, as Google Cloud keeps a deleted project's policy so it can be undeleted. For identity's restore route; see [`reference/api/internal.md`](../api/internal.md#admit). Only on routes scoped to a kind other than the sign-in kind |
+<!-- end generated -->
 
 Unknown fields are **422**.
 
@@ -133,12 +137,15 @@ Fixed window: the first increment opens the window; the key's TTL is `window_sec
 
 ### Named policies (`rate_limits`)
 
+<!-- generated from schema/v2: routes.json#/$defs/policy_name routes.json#/$defs/policy/properties -->
 | Field | Rule |
 |-------|------|
-| map key | Policy name. `[a-z0-9:._-]+`, max 64. Unique in the service |
-| `requests` / `window_seconds` | Required. Both > 0 |
-| `count_at` | Optional. The kind whose node holds the bucket: the route's kind or an ancestor. Omitted: the route's own kind |
+| policy name | `[a-z0-9:._-]+`, max 64. Unique in the service |
+| `requests` | Required. Greater than 0 |
+| `window_seconds` | Required. Greater than 0 |
+| `count_at` | Optional. The kind whose node holds the bucket: the route's kind or an ancestor. Omitted: the route's own kind. A policy with `count_at` can't be used on a `public` route, and on a sign-in route only with the sign-in kind |
 | `shared` | Optional bool. `true`: the same bucket across services that declare the name |
+<!-- end generated -->
 
 ### Buckets
 

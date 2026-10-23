@@ -25,7 +25,7 @@ Admin API routes require `Authorization: Bearer <ADMIN_TOKEN>`. Local default: `
 |--------|------|-------|
 | `POST` | `/apply?dry_run=true` | The plan. Writes nothing |
 | `POST` | `/apply` | Apply, with `expect` and `confirm`. JSON or YAML |
-| `GET` | `/config` | The current config and its `revision` |
+| `GET` | `/config` | The current config, as applied, and its `revision`. **404** before the first apply |
 | `GET` | `/revisions` | History, newest first: `revision`, `created_at`, `request_id`, and the plan's `summary` |
 | `GET` | `/revisions/{rev}` | The config at that revision |
 | `POST` | `/catalog` | `{ version, kinds }` → the generated identity and audit routes for those kinds, as `services`. Writes nothing |
@@ -43,7 +43,7 @@ Validation, auth and empty-body failures use the Plat5 envelope ([`reference/err
 | A method + path shape owned by two services | **409** `ROUTE_CONFLICT` ([`reference/config/routes.md`](../config/routes.md#route-ownership)) |
 | A precondition failed | **409** `PLAN_STALE` |
 | `expect` missing | **422** |
-| Identity unreachable while computing the plan | **503**: the plan needs its counts |
+| Identity unreachable while computing a plan that removes a kind or narrows a parent | **503**: that plan needs its counts |
 | Postgres failure | **503**. Nothing written |
 
 ## Seeds
