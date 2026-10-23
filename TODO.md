@@ -2,7 +2,7 @@
 
 ## Policy hook below nodes (AuthZEN)
 
-Permissions on individual records inside a node ("may this member edit document D in this project?"). Who can reach a node is already Plat5's: the ancestor rule over bindings ([`docs/model.md`](docs/model.md#rules)). The hook is only for what's below that.
+Permissions on individual records inside a node ("may this member edit document D in this project?"). Who can reach a node is already Plat5's: the ancestor rule over bindings ([`docs/concepts/access.md`](docs/concepts/access.md#the-rule)). The hook is only for what's below that.
 
 - **One record, from the gateway.** An AuthZEN 1.0 evaluation after the label check. Subject is the member (`member_id` and the node chain, never a principal id). Action is the route label. Resource is the service, the route, and its non-chain path params. Cached on the admission TTL. Engine unreachable → **503**.
 - **A list, from a service.** The service asks which records the caller's member can reach (an AuthZEN search). Without an engine, the answer is everything in the node.
@@ -11,7 +11,7 @@ Ready: a deployment that needs a record-level decision its service can't make as
 
 ## Audit retention
 
-Audit events are kept, including after a node is purged. Partitions are monthly, so retention is dropping old partitions. Identity's `<kind>.purged` ([`docs/identity.md`](docs/identity.md#lifecycle-events)) is the signal for erasing a purged tree's events.
+Audit events are kept, including after a node is purged. Partitions are monthly, so retention is dropping old partitions. Identity's `<kind>.purged` ([`docs/concepts/lifecycle.md`](docs/concepts/lifecycle.md#lifecycle-events)) is the signal for erasing a purged tree's events.
 
 Ready: storage growth that hurts, or an org whose events must be erased on purge.
 
@@ -37,7 +37,7 @@ Every tree gets the deployment's roles. `GET /nodes/{node_id}/roles` already has
 
 ## Group principals, public principals, cross-org moves, self-nesting kinds
 
-The extension points in [`docs/model.md`](docs/model.md#extension-points). Ready: in order of likelihood, a customer who needs to share a project with a whole other org (group principals); a public link or "any signed-in user" grant (public principals); a project that must move to another org (cross-org move); user-built folder trees (self-nesting kinds).
+The extension points in [`docs/concepts/boundaries.md`](docs/concepts/boundaries.md#extension-points). Ready: in order of likelihood, a customer who needs to share a project with a whole other org (group principals); a public link or "any signed-in user" grant (public principals); a project that must move to another org (cross-org move); user-built folder trees (self-nesting kinds).
 
 ## Request-and-approve support access
 

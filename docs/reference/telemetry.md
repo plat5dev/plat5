@@ -150,7 +150,7 @@ Write **JSON** to stdout always (including when OTLP is enabled). No OTLP log ex
 | `node_id` | The route's node id (when admitted on a kind route) |
 | `member_id` | The caller's member id in that tree, or their directory member on a sign-in route |
 
-Field names: [`naming-conventions.md`](naming-conventions.md).
+Field names: [`reference/naming.md`](naming.md).
 
 ### Gateway request line
 
@@ -233,7 +233,7 @@ Logs and Prometheus metrics are **not** HTTP spans: log fields stay `snake_case`
 
 ### Scrape (always)
 
-Expose Prometheus text format at **`/metrics`** on the **internal** port (not public ingress). See [`health-checks.md`](health-checks.md) / service READMEs for ports. Optional discovery labels: [`container-labels.md`](container-labels.md) (`metrics.port`, `metrics.path`).
+Expose Prometheus text format at **`/metrics`** on the **internal** port (not public ingress). See [`reference/health.md`](health.md) / service READMEs for ports. Optional discovery labels: [`reference/container-labels.md`](container-labels.md) (`metrics.port`, `metrics.path`).
 
 ### OTLP (default when endpoint set)
 
@@ -257,7 +257,7 @@ When a metrics destination is set and `OTEL_METRICS_EXPORTER` is unset or includ
 | `db_operation_errors_total` | Counter | db_system_name, db_operation_name, db_namespace |
 | `db_operation_duration_seconds` | Histogram | db_system_name, db_operation_name, db_namespace |
 
-Gateway audit writes ([`audit.md`](audit.md)):
+Gateway audit writes ([`concepts/audit.md`](../concepts/audit.md)):
 
 | Metric | Type | Labels |
 |--------|------|--------|

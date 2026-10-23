@@ -13,7 +13,7 @@ Formats and terminology for labels, routes, metrics, and error codes across Plat
 
 ### Scope of Plat5
 
-Plat5 owns the tree of nodes (kinds from config), the principals who can reach them (people linked to IdP subjects, and service accounts), their members and bindings, API keys, audit, the control plane (kinds, roles, routes, CORS origins), and the user-facing gateway. Login is the IdP. Everything inside a node is the services'. See [`model.md`](model.md).
+Plat5 owns the tree of nodes (kinds from config), the principals who can reach them (people linked to IdP subjects, and service accounts), their members and bindings, API keys, audit, the control plane (kinds, roles, routes, CORS origins), and the user-facing gateway. Login is the IdP. Everything inside a node is the services'. See [`concepts/model.md`](../concepts/model.md).
 
 ### Identity domain nouns
 
@@ -27,7 +27,7 @@ Plat5 owns the tree of nodes (kinds from config), the principals who can reach t
 | A principal in one tree | **Member** | Wire id `m_…`. In the directory, a person's member id is their **user id** |
 | A role on a member at a node | **Binding** | Wire id `b_…`. Access is the union of bindings on the node and its ancestors |
 | A member with no binding at its root | **Guest** | Derived, not stored |
-| What a binding holds | **Role** | Deployment-defined slug; its labels come from the roles document ([`roles.md`](roles.md)). Plat5 names no roles |
+| What a binding holds | **Role** | Deployment-defined slug; its labels come from the roles document ([`concepts/access.md`](../concepts/access.md)). Plat5 names no roles |
 | Route requirement | **Label** | Opaque `[a-z0-9:._-]+`. Routes require them (`required_labels`); roles grant them |
 | What a route addresses | **Scope** | A kind name, or `public` |
 | Non-human principal | **Service account** | Born at a node of an org's tree |
@@ -46,7 +46,7 @@ The identity service is **`identity`** (`service.name: identity`).
 
 ## Service Namespaces
 
-Full table and labels: [`container-labels.md`](container-labels.md). Identity backend uses **`identity`**; gateway stays **`edge`**.
+Full table and labels: [`reference/container-labels.md`](container-labels.md). Identity backend uses **`identity`**; gateway stays **`edge`**.
 
 | Service | `service.namespace` |
 |---------|---------------------|
@@ -64,7 +64,7 @@ When changing labels: update compose labels and `OTEL_SERVICE_NAMESPACE` togethe
   - Public: `/public/...`
   - Internal (private network, not on the gateway): `/internal/...`
 - Resource names are plural nouns: `/widgets`, `/nodes`, `/members`
-- Identity list query/body: [`lists.md`](lists.md). Business services may copy it; they are not required to.
+- Identity list query/body: [`reference/lists.md`](lists.md). Business services may copy it; they are not required to.
 - Actions use HTTP methods, not verbs in paths:
   - `POST /widgets` — create
   - `GET /widgets/{id}` — read
@@ -82,7 +82,7 @@ Services address everything by id. Identity:
 | A person (their directory member) | `/members/{member_id}/...` |
 | Internal (not on the gateway) | `/internal/admit`, `/internal/plan`, `/internal/lifecycle-events` |
 
-Audit follows the same pattern: `/nodes/{node_id}/audit-events` and `/members/{member_id}/audit-events` public, `/internal/events/{request_id}` internal ([`audit.md`](audit.md)).
+Audit follows the same pattern: `/nodes/{node_id}/audit-events` and `/members/{member_id}/audit-events` public, `/internal/events/{request_id}` internal ([`concepts/audit.md`](../concepts/audit.md)).
 
 Edge paths carry slugs, one param per kind named as the kind, and the kind's `segment`:
 
@@ -92,7 +92,7 @@ Edge paths carry slugs, one param per kind named as the kind, and the kind's `se
 | `/orgs/{organization}/projects/{project}/...` | `project` | `{subject.organization_id}`, `{subject.project_id}`, `{subject.member_id}` |
 | `/me/...` | the sign-in kind | `{subject.member_id}`: the person's user id |
 
-There is no `/api` prefix. Slugs never reach a service. Full contract: [`routes.md`](routes.md), [`gateway-contract.md`](gateway-contract.md).
+There is no `/api` prefix. Slugs never reach a service. Full contract: [`reference/config/routes.md`](config/routes.md), [`reference/gateway.md`](gateway.md).
 
 ## Subject headers
 
@@ -102,7 +102,7 @@ There is no `/api` prefix. Slugs never reach a service. Full contract: [`routes.
 
 - Format: `snake_case`
 - Common: `request_id`, `root_id`, `node_id`, `member_id`, `duration_ms`, `error_kind`
-- Credential (gateway request line): `auth_type`, `key_prefix` (display prefix, never the key). See [`telemetry.md`](telemetry.md#gateway-request-line)
+- Credential (gateway request line): `auth_type`, `key_prefix` (display prefix, never the key). See [`reference/telemetry.md`](telemetry.md#gateway-request-line)
 - Service-specific fields should be namespaced: `auth_provider`, `db_operation`
 
 ## Metric Names
@@ -114,7 +114,7 @@ There is no `/api` prefix. Slugs never reach a service. Full contract: [`routes.
 ## Error Codes
 
 - Format: `UPPER_SNAKE_CASE`
-- Full list: [`api-errors.md`](api-errors.md)
+- Full list: [`reference/errors.md`](errors.md)
 
 ## Environment Variables
 
@@ -134,9 +134,9 @@ There is no `/api` prefix. Slugs never reach a service. Full contract: [`routes.
 
 | Doc | Role |
 |-----|------|
-| [`model.md`](model.md) | Concepts, rules, what Plat5 won't do |
-| [`identity.md`](identity.md) | Identity service API |
-| [`container-labels.md`](container-labels.md) | Namespace values |
-| [`gateway-contract.md`](gateway-contract.md) | Headers and service rules |
-| [`routes.md`](routes.md) | Route scopes, chain params and publish |
-| [`lists.md`](lists.md) | Identity list pagination (optional for business APIs) |
+| [`concepts/model.md`](../concepts/model.md) | Concepts, rules, what Plat5 won't do |
+| [`reference/api/identity.md`](api/identity.md) | Identity service API |
+| [`reference/container-labels.md`](container-labels.md) | Namespace values |
+| [`reference/gateway.md`](gateway.md) | Headers and service rules |
+| [`reference/config/routes.md`](config/routes.md) | Route scopes, chain params and publish |
+| [`reference/lists.md`](lists.md) | Identity list pagination (optional for business APIs) |

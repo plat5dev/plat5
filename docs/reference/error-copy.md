@@ -1,6 +1,6 @@
 # Error copy: Stripe-style `message`
 
-Copy appendix for [`api-errors.md`](api-errors.md).
+Copy appendix for [`reference/errors.md`](errors.md).
 
 ## Locked
 
@@ -9,7 +9,7 @@ Stripe's split, in our envelope:
 | Field | Owner | Use |
 |-------|--------|-----|
 | `type` | machine | `invalid_request_error` \| `api_error` |
-| `code` | machine | Closed set in `api-errors.md`. Clients branch on this + HTTP status |
+| `code` | machine | Closed set in [`errors.md`](errors.md). Clients branch on this + HTTP status |
 | `message` | human | One sentence. Safe to show in a UI. No regex, no `body/key must match`, no `VALIDATION_ERROR` |
 | `request_id` | support | Correlation. Not shown in product UI |
 | `details` | machine | Extra context. Optional. Never the only place the human sentence lives |

@@ -4,7 +4,7 @@
 
 ## Scope
 
-Plat5 v2 replaces the fixed realms (directory, organization) with a tree of kinds declared in config, and replaces memberships with members (one per principal per tree) holding bindings on any node of their tree. The contracts are the rest of `docs/`; the reasons are in [`decisions.md`](decisions.md). This page is only what's transitional: what changes from v1, what gets removed, and the build order. Delete it once v2 ships.
+Plat5 v2 replaces the fixed realms (directory, organization) with a tree of kinds declared in config, and replaces memberships with members (one per principal per tree) holding bindings on any node of their tree. The contracts are the rest of `docs/`; the reasons are in [`decisions/README.md`](decisions/README.md). This page is only what's transitional: what changes from v1, what gets removed, and the build order. Delete it once v2 ships.
 
 **Hard cutover.** v2 is a new major version: new identity tables, new route scopes, new wire names. Nothing reads v1 data or accepts v1 shapes. Data moves by hand into the new tables. Kyvera stays on v1 prod until then.
 
@@ -24,7 +24,7 @@ v2 restates Plat5's principles as eight, replacing v1's twelve. The table after 
 
 ### v2 principles
 
-Now in [`model.md`](model.md#principles).
+Now in [`concepts/model.md`](concepts/model.md#principles).
 
 ### Where v1's principles went
 
@@ -102,13 +102,13 @@ Outside this repo: the `template-*` service and console templates in plat5dev us
 
 One Claude Code session per step, each starting from the docs named in the step. `docs/` is law on this branch. Steps 1 and 2 can run in parallel; everything after needs both.
 
-1. **Control plane: config and plan** ([`control-plane.md`](control-plane.md), [`routes.md`](routes.md), [`roles.md`](roles.md)). The config directory with `version: 2`, the JSON Schema in `schema/v2/`, whole-config apply with dry run, `expect` and `confirm`, revisions, `POST /catalog`. The `kinds` document, roles in the new form, route `scope`, the seven validation rules, with identity's counts stubbed. The CLI's `validate`, `plan` (diff and `--detailed-exitcode`), `apply`, `routes generate` and `config pull` are the same step in the CLI repo. Done when a dry run classifies a set of fixture configs correctly, and a stale `expect` or a changed count is refused.
-2. **Identity: nodes** ([`identity.md`](identity.md)). The new schema, nodes with the closure table, slugs and tombstones, soft delete, restore, the purge sweeper (after `deletion_grace`), lifecycle events. Done when the invariants have tests.
-3. **Identity: principals, members and bindings.** People and IdP links, the directory member, service accounts born at a node, API keys, bindings with expiry and its sweeper, invites with grants, guest invites below a root, `/me`.
-4. **Identity: admit.** `POST /internal/admit` with the five-step resolution, plus the counts the control plane's plan needs. Done when admit has table tests for every row of the status table.
-5. **Identity: generated routes.** Node, binding, service account and invite routes generated per kind from `kinds`, with the generated labels.
-6. **Gateway** ([`gateway-contract.md`](gateway-contract.md)). Route scopes, the chain from the path, admit with its cache and `good_until`, the two 403s, subject fill and `X-Plat5-*` headers, several rate-limit policies per route.
-7. **Audit** ([`audit.md`](audit.md)). The node chain on events, logs per root, reads by node.
+1. **Control plane: config and plan** ([config](concepts/config.md); [kinds](reference/config/kinds.md), [roles](reference/config/roles.md), [routes](reference/config/routes.md), [cors](reference/config/cors.md); [admin API](reference/api/control-plane.md), [CLI](reference/cli.md)). The config directory with `version: 2`, the JSON Schema in `schema/v2/`, whole-config apply with dry run, `expect` and `confirm`, revisions, `POST /catalog`. The `kinds` document, roles in the new form, route `scope`, the seven validation rules, with identity's counts stubbed. The CLI's `validate`, `plan` (diff and `--detailed-exitcode`), `apply`, `routes generate` and `config pull` are the same step in the CLI repo. Then generate the four config reference pages from the schema, so they can't drift. Done when a dry run classifies a set of fixture configs correctly, and a stale `expect` or a changed count is refused.
+2. **Identity: nodes** ([model](concepts/model.md), [lifecycle](concepts/lifecycle.md), [identity schema](internals/identity-schema.md), [identity API](reference/api/identity.md)). The new schema, nodes with the closure table, slugs and tombstones, soft delete, restore, the purge sweeper (after `deletion_grace`), lifecycle events. Done when the invariants have tests.
+3. **Identity: principals, members and bindings** ([access](concepts/access.md), [lifecycle](concepts/lifecycle.md#members), [identity API](reference/api/identity.md)). People and IdP links, the directory member, service accounts born at a node, API keys, bindings with expiry and its sweeper, invites with grants, guest invites below a root, `/me`.
+4. **Identity: admit** ([access](concepts/access.md#roles-and-bindings), [internal APIs](reference/api/internal.md#admit)). `POST /internal/admit` with the five-step resolution, plus the counts the control plane's plan needs. Done when admit has table tests for every row of the status table.
+5. **Identity: generated routes** ([edge catalog](reference/api/edge-catalog.md), [lists](concepts/access.md#lists)). Node, binding, service account and invite routes generated per kind from `kinds`, with the generated labels.
+6. **Gateway** ([access](concepts/access.md#how-a-request-is-decided), [gateway](reference/gateway.md), [headers](reference/headers.md), [routes](reference/config/routes.md)). Route scopes, the chain from the path, admit with its cache and `good_until`, the two 403s, subject fill and `X-Plat5-*` headers, several rate-limit policies per route.
+7. **Audit** ([audit](concepts/audit.md), [audit API](reference/api/audit.md), [audit storage](internals/audit-storage.md)). The node chain on events, logs per root, reads by node.
 8. **Removals.** Sweep the removals table in code, compose and the CLI.
 9. **End to end.** A local stack with `organization` and `project` kinds, and e2e tests for the flows e10s needs: create an org and project, add a service account at the project, check through the gateway, delete and restore.
 

@@ -10,13 +10,13 @@ Plat5's gateway validates JWTs from **any** OIDC-compatible issuer.
 | JWKS | `AUTH_JWKS_URI` |
 | Allowed audiences | `AUTH_ALLOWED_AUDIENCES` (comma-separated; empty = skip `aud` check) |
 | Subject claim path | `AUTH_SUBJECT_CLAIM` (dotted JSON path) |
-| Name claim | `name_claim` on the sign-in kind in the `kinds` document ([`control-plane.md`](control-plane.md#kinds)). Default `name` |
+| Name claim | `name_claim` on the sign-in kind in the `kinds` document ([`reference/config/kinds.md`](config/kinds.md)). Default `name` |
 
 Also required on tokens: signature via JWKS, `exp`, and a `kid` in the JWT header.
 
 ## Subject claim
 
-`AUTH_SUBJECT_CLAIM` names the claim that holds the person's subject at the IdP. The gateway reads it and the token's issuer (`iss`), and admit resolves the pair to the person ([`identity.md`](identity.md#admit)). A new subject creates the person and their directory member. Services never see the IdP's subject: they see a member id per tree.
+`AUTH_SUBJECT_CLAIM` names the claim that holds the person's subject at the IdP. The gateway reads it and the token's issuer (`iss`), and admit resolves the pair to the person ([`reference/api/internal.md`](api/internal.md#admit)). A new subject creates the person and their directory member. Services never see the IdP's subject: they see a member id per tree.
 
 | `AUTH_SUBJECT_CLAIM` | Typical IdP |
 |----------------------|-------------|
@@ -28,7 +28,7 @@ Local compose defaults use `properties.user_id` and a host-published JWKS URL on
 
 Missing or empty claim → **401** (same as invalid token).
 
-A person is linked to their IdP subjects, and services hold member ids, never subjects. There's no API yet to link a second subject ([`../TODO.md`](../TODO.md)), so switching IdPs today means rewriting `idp_links` by hand; done that way, every member id services hold stays the same.
+A person is linked to their IdP subjects, and services hold member ids, never subjects. There's no API yet to link a second subject ([`TODO.md`](../../TODO.md)), so switching IdPs today means rewriting `idp_links` by hand; done that way, every member id services hold stays the same.
 
 ## Name claim
 

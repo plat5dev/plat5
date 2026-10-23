@@ -2,7 +2,7 @@
 
 How Plat5 **identity** public lists work. Business services behind the gateway may copy it.
 
-Control-plane admin lists (`GET /services`, revisions) return the full set. So does identity's `GET /nodes/{node_id}/roles`: it reads the roles document, not a table ([`roles.md`](roles.md#listing-roles)).
+Control-plane admin lists (`GET /services`, revisions) return the full set. So does identity's `GET /nodes/{node_id}/roles`: it reads the roles document, not a table ([`reference/api/identity.md`](api/identity.md#roles)).
 
 ## Query
 
@@ -35,12 +35,12 @@ When `has_more` is `true`, pass the last item's `id` as `starting_after`.
 
 ## Filtered lists
 
-Node lists through the gateway return only what the caller can read ([`identity.md`](identity.md#filtered-lists)). A page can come back with fewer than `limit` items while `has_more` is `true`; keep walking until it's `false`.
+Node lists through the gateway return only what the caller can read ([access](../concepts/access.md#lists)). A page can come back with fewer than `limit` items while `has_more` is `true`; keep walking until it's `false`.
 
 ## Audit events
 
-Audit's reads take the same `limit` and `starting_after`, but run `id` **descending** (newest first). See [`audit.md`](audit.md#reading).
+Audit's reads take the same `limit` and `starting_after`, but run `id` **descending** (newest first). See [`reference/api/audit.md`](api/audit.md#reading).
 
 ## Lifecycle events
 
-Identity's internal feed uses `starting_after` with a decimal sequence id, ascending ([`identity.md`](identity.md#lifecycle-events)).
+Identity's internal feed uses `starting_after` with a decimal sequence id, ascending ([`concepts/lifecycle.md`](../concepts/lifecycle.md#lifecycle-events)).
