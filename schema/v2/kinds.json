@@ -69,7 +69,7 @@
         },
         "segment": {
           "title": "segment",
-          "description": "The path segment for generated routes. Slug shape: lowercase letters, digits and hyphens, starting with a letter, max 63. Default: the kind name plus `s`.",
+          "description": "The path segment for generated routes. Slug shape: lowercase letters, digits and hyphens, starting with a letter, max 63. Default: the kind name with `_` as `-`, plus `s` (`service_area` → `service-areas`).",
           "type": "string",
           "pattern": "^[a-z][a-z0-9-]{0,62}$"
         }
