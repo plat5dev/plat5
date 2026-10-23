@@ -46,3 +46,9 @@ Today support access is a binding the customer adds, with the support role's `ma
 ## Audit event by request id
 
 Every error envelope gives the caller a `request_id`, but audit reads are by node, so a front door needs the node first. A read by `request_id` across roots, for other front doors only (not in the generated catalog). An event in both a person's log and a tree's comes back once. Ready: support that works from tickets carrying a `request_id`.
+
+## Rollout status
+
+Each gateway and identity replica reports the config revision it has loaded, and `plat5 apply --wait` returns once every replica has it, like `kubectl rollout status`. Today readers catch up within about a second, unconfirmed. Needs a report path from readers to the control plane, replica identities, and a rule for replicas that stop reporting.
+
+Ready: a deploy or a test that must know a config change is live everywhere before it continues.
