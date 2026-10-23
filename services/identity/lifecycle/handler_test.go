@@ -63,8 +63,8 @@ func strp(s string) *string { return &s }
 func TestListShapesEvents(t *testing.T) {
 	at := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
 	store := &fakeStore{events: []*Event{
-		{ID: 1, Type: TypeOrganizationDeleted, OccurredAt: at, OrganizationID: "org_1"},
-		{ID: 2, Type: TypeMemberRemoved, OccurredAt: at, OrganizationID: "org_2", MemberID: strp("mem_1"), Principal: strp("service_account")},
+		{ID: 1, Type: TypeNodeDeleted, Kind: strp("project"), NodeID: strp("n_1"), RootID: "n_0", OccurredAt: at},
+		{ID: 2, Type: TypeMemberRemoved, RootID: "n_2", MemberID: strp("m_1"), Principal: strp("service_account"), OccurredAt: at},
 	}}
 	status, body := get(t, testApp(store), "/lifecycle-events")
 	if status != 200 {
@@ -77,19 +77,21 @@ func TestListShapesEvents(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("events: %v", events)
 	}
-	org := events[0].(map[string]any)
-	if org["id"] != "1" || org["type"] != "organization.deleted" || org["organization_id"] != "org_1" || org["occurred_at"] != "2026-10-13T12:00:00Z" {
-		t.Fatalf("org event: %v", org)
+	node := events[0].(map[string]any)
+	if node["id"] != "1" || node["type"] != "project.deleted" || node["node_id"] != "n_1" || node["root_id"] != "n_0" || node["occurred_at"] != "2026-10-13T12:00:00Z" {
+		t.Fatalf("node event: %v", node)
 	}
-	if _, ok := org["member_id"]; ok {
-		t.Fatalf("org event must not carry member_id: %v", org)
+	for _, field := range []string{"member_id", "principal", "kind"} {
+		if _, ok := node[field]; ok {
+			t.Fatalf("node event must not carry %s: %v", field, node)
+		}
 	}
 	mem := events[1].(map[string]any)
-	if mem["id"] != "2" || mem["member_id"] != "mem_1" || mem["principal"] != "service_account" {
+	if mem["id"] != "2" || mem["type"] != "member.removed" || mem["member_id"] != "m_1" || mem["root_id"] != "n_2" || mem["principal"] != "service_account" {
 		t.Fatalf("member event: %v", mem)
 	}
-	if _, ok := mem["user_id"]; ok {
-		t.Fatalf("event must not carry user_id: %v", mem)
+	if _, ok := mem["node_id"]; ok {
+		t.Fatalf("member event must not carry node_id: %v", mem)
 	}
 	if store.lastAfter != 0 || store.lastLimit != 50 {
 		t.Fatalf("defaults: after %d limit %d", store.lastAfter, store.lastLimit)
@@ -109,7 +111,7 @@ func TestListEmptyIsArray(t *testing.T) {
 func TestListPages(t *testing.T) {
 	store := &fakeStore{}
 	for i := int64(1); i <= 3; i++ {
-		store.events = append(store.events, &Event{ID: i, Type: TypeOrganizationDeleted, OrganizationID: "org"})
+		store.events = append(store.events, &Event{ID: i, Type: TypeNodeCreated, Kind: strp("organization"), NodeID: strp("n_1"), RootID: "n_1"})
 	}
 	app := testApp(store)
 	_, body := get(t, app, "/lifecycle-events?limit=2")

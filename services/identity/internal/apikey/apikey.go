@@ -13,7 +13,7 @@ const (
 	RandomBytes      = 32
 	PrefixDisplayLen = 4
 	MaxNameLen       = 128
-	DefaultName      = "Unnamed Key"
+	DefaultName      = "Unnamed key"
 )
 
 // Generate returns prefix + base64url random secret.

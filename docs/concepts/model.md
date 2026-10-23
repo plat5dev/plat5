@@ -38,7 +38,7 @@ Every node except the sign-in node has a slug, fixed at creation. Fixed rules, n
 | Shape | Lowercase letters, digits and hyphens; starts with a letter, doesn't end with a hyphen; 3 to 63 characters. Never an id: ids contain `_` |
 | Uniqueness | Per parent and kind. Roots share one namespace, so org slugs are deployment-wide |
 | Reuse | Never, within the same parent. A purged node keeps its row as a tombstone (slug, id, kind, parent). A slug can be released by hand ([slug release](../reference/api/identity.md#slug-release)) |
-| Generation | Omitted on create: generated from the label, with `-2`, `-3` on collision |
+| Generation | Omitted on create: generated from the label, lowercased, with each run of other characters as `-`, trimmed. Prefixed with the kind name when it would start with a digit or be too short (`project-42`). `-2`, `-3` on collision; reserved slugs and tombstones count as taken |
 | Reserved | `reserved_slugs` in the `kinds` document. **422** |
 
 A path segment that contains `_` is read as a node id, anything else as a slug. Both resolve under the previous node.

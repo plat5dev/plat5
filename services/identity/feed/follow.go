@@ -1,4 +1,4 @@
-package roles
+package feed
 
 import (
 	"context"
@@ -20,10 +20,11 @@ const (
 	// poll ends with 204, not a client timeout.
 	pollTimeout   = 40 * time.Second
 	maxRetryDelay = 10 * time.Second
+	maxBody       = 8 << 20
 )
 
 // Follower keeps a Source current from the control plane:
-// GET {CONTROL_PLANE_URL}/internal/roles?after={revision}.
+// GET {CONTROL_PLANE_URL}/internal/identity?after={revision}.
 type Follower struct {
 	client   *http.Client
 	url      string
@@ -31,34 +32,35 @@ type Follower struct {
 	src      *Source
 	log      zerolog.Logger
 	revision int64
+	// OnChange runs after each new snapshot is stored.
+	OnChange func()
 }
 
 func NewFollower(baseURL, internalToken string, src *Source, log zerolog.Logger) *Follower {
 	return &Follower{
 		client: &http.Client{Timeout: pollTimeout},
-		url:    strings.TrimRight(baseURL, "/") + "/internal/roles",
+		url:    strings.TrimRight(baseURL, "/") + "/internal/identity",
 		token:  internalToken,
 		src:    src,
 		log:    log,
 	}
 }
 
-// Load waits until the first roles document is stored, retrying while the
-// control plane is down or has none. With roles on, identity does not serve
-// before this returns.
+// Load waits until the first snapshot is stored, retrying while the control
+// plane is down or has no config. Identity doesn't listen before this returns.
 func (f *Follower) Load(ctx context.Context) error {
 	delay := time.Second
 	for {
 		res, err := f.fetch(ctx, nil)
 		switch {
 		case err != nil:
-			f.log.Warn().Err(err).Msg("waiting for the control plane's roles")
+			f.log.Warn().Err(err).Msg("waiting for the control plane's config")
 		case res.missing:
-			f.log.Warn().Msg("waiting for a roles document: the control plane has none yet; apply roles.yml to it")
-		case res.set != nil:
-			f.src.Store(res.set)
+			f.log.Warn().Msg("waiting for a config: the control plane has none yet; apply plat5.yml to it")
+		case res.snap != nil:
+			f.src.Store(res.snap)
 			f.revision = res.revision
-			f.log.Info().Int64("revision", res.revision).Int("roles", len(res.set.List())).Msg("roles loaded")
+			f.log.Info().Int64("revision", res.revision).Int("kinds", len(res.snap.Kinds)).Msg("config loaded")
 			return nil
 		}
 		select {
@@ -70,8 +72,8 @@ func (f *Follower) Load(ctx context.Context) error {
 	}
 }
 
-// Follow long-polls for changes until ctx ends. A document identity cannot
-// use is skipped, and the current one stays.
+// Follow long-polls for changes until ctx ends. A snapshot identity can't use
+// is skipped, and the current one stays.
 func (f *Follower) Follow(ctx context.Context) {
 	delay := time.Second
 	for ctx.Err() == nil {
@@ -81,7 +83,7 @@ func (f *Follower) Follow(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			f.log.Warn().Err(err).Msg("roles poll failed; keeping current roles")
+			f.log.Warn().Err(err).Msg("config poll failed; keeping current config")
 			select {
 			case <-ctx.Done():
 				return
@@ -97,17 +99,20 @@ func (f *Follower) Follow(ctx context.Context) {
 		f.revision = res.revision
 		switch {
 		case res.missing:
-			f.log.Error().Msg("the control plane has no roles document; keeping current roles")
-		case res.set != nil:
-			f.src.Store(res.set)
-			f.log.Info().Int64("revision", res.revision).Int("roles", len(res.set.List())).Msg("roles reloaded")
+			f.log.Error().Msg("the control plane has no config; keeping current config")
+		case res.snap != nil:
+			f.src.Store(res.snap)
+			f.log.Info().Int64("revision", res.revision).Int("kinds", len(res.snap.Kinds)).Msg("config reloaded")
+			if f.OnChange != nil {
+				f.OnChange()
+			}
 		}
 	}
 }
 
 type fetched struct {
 	revision  int64
-	set       *Set
+	snap      *Snapshot
 	missing   bool
 	unchanged bool
 }
@@ -129,7 +134,7 @@ func (f *Follower) fetch(ctx context.Context, after *int64) (fetched, error) {
 		return fetched{}, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
 		return fetched{}, err
 	}
@@ -144,18 +149,15 @@ func (f *Follower) fetch(ctx context.Context, after *int64) (fetched, error) {
 		return fetched{}, fmt.Errorf("control plane answered %d", resp.StatusCode)
 	}
 
-	var feed struct {
-		Revision int64           `json:"revision"`
-		Roles    json.RawMessage `json:"roles"`
-	}
-	if err := json.Unmarshal(body, &feed); err != nil {
-		return fetched{}, fmt.Errorf("roles feed: %w", err)
-	}
-	set, err := ParseJSON(feed.Roles)
+	snap, err := Parse(body)
 	if err != nil {
 		// Move past it: the next change is still picked up.
-		f.log.Error().Err(err).Int64("revision", feed.Revision).Msg("roles document refused; keeping current roles")
-		return fetched{revision: feed.Revision}, nil
+		var head struct {
+			Revision int64 `json:"revision"`
+		}
+		_ = json.Unmarshal(body, &head)
+		f.log.Error().Err(err).Int64("revision", head.Revision).Msg("config refused; keeping current config")
+		return fetched{revision: head.Revision}, nil
 	}
-	return fetched{revision: feed.Revision, set: set}, nil
+	return fetched{revision: snap.Revision, snap: snap}, nil
 }

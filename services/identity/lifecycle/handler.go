@@ -24,12 +24,13 @@ func NewHandler(store *Store) *Handler {
 }
 
 type EventResponse struct {
-	ID             string  `json:"id"`
-	Type           string  `json:"type"`
-	OccurredAt     string  `json:"occurred_at"`
-	OrganizationID string  `json:"organization_id"`
-	MemberID       *string `json:"member_id,omitempty"`
-	Principal      *string `json:"principal,omitempty"`
+	ID         string  `json:"id"`
+	Type       string  `json:"type"`
+	NodeID     *string `json:"node_id,omitempty"`
+	MemberID   *string `json:"member_id,omitempty"`
+	RootID     string  `json:"root_id"`
+	Principal  *string `json:"principal,omitempty"`
+	OccurredAt string  `json:"occurred_at"`
 }
 
 type ListResponse struct {
@@ -41,7 +42,7 @@ func (h *Handler) MountInternal(r fiber.Router) {
 	r.Get("/lifecycle-events", h.List)
 }
 
-// List is the feed. Pagination as docs/lists.md, except starting_after is an
+// List is the feed. Pagination as docs/reference/lists.md, except starting_after is an
 // event id: a decimal string, not a ULID.
 func (h *Handler) List(c fiber.Ctx) error {
 	ctx := c.Context()
@@ -62,12 +63,13 @@ func (h *Handler) List(c fiber.Ctx) error {
 	out := ListResponse{LifecycleEvents: make([]EventResponse, 0, len(events)), HasMore: hasMore}
 	for _, e := range events {
 		out.LifecycleEvents = append(out.LifecycleEvents, EventResponse{
-			ID:             strconv.FormatInt(e.ID, 10),
-			Type:           e.Type,
-			OccurredAt:     httpx.FormatTime(e.OccurredAt),
-			OrganizationID: e.OrganizationID,
-			MemberID:       e.MemberID,
-			Principal:      e.Principal,
+			ID:         strconv.FormatInt(e.ID, 10),
+			Type:       e.WireType(),
+			NodeID:     e.NodeID,
+			MemberID:   e.MemberID,
+			RootID:     e.RootID,
+			Principal:  e.Principal,
+			OccurredAt: httpx.FormatTime(e.OccurredAt),
 		})
 	}
 	return c.JSON(out)

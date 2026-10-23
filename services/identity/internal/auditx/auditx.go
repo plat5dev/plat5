@@ -1,5 +1,5 @@
 // Package auditx says what an identity write changed, for the audit log
-// (docs/audit.md#what-a-service-adds). The gateway reads the headers on audited
+// (docs/concepts/audit.md#details). The gateway reads the headers on audited
 // routes, stores them as sent, and strips them. Identity does not know whether
 // a route is audited or who called; it only reports the change.
 package auditx
@@ -19,10 +19,10 @@ const (
 	Header = "X-Plat5-Audit-Details"
 	// CreatedHeader is the id a create produced.
 	CreatedHeader = "X-Plat5-Audit-Created"
-	// OrganizationHeader and MemberHeader name the org a user route changed,
-	// and the member in it. The event goes in that org's log too.
-	OrganizationHeader = "X-Plat5-Audit-Organization"
-	MemberHeader       = "X-Plat5-Audit-Member"
+	// RootHeader and MemberHeader name the tree a sign-in route changed, and
+	// the member in it. The event goes in that tree's log too.
+	RootHeader   = "X-Plat5-Audit-Root"
+	MemberHeader = "X-Plat5-Audit-Member"
 	// MaxBytes is the gateway's cap. Over it, the gateway drops the details.
 	MaxBytes = 4096
 )
@@ -69,10 +69,10 @@ func SetCreated(c fiber.Ctx, id string) {
 	c.Set(CreatedHeader, id)
 }
 
-// SetOrganization names the org a user route changed, and the member in it.
-// Only for user routes: elsewhere the route subject already names the org.
-func SetOrganization(c fiber.Ctx, organizationID, memberID string) {
-	c.Set(OrganizationHeader, organizationID)
+// SetRoot names the tree a sign-in route changed, and the member in it. Only
+// for sign-in routes: elsewhere the route's nodes already name the tree.
+func SetRoot(c fiber.Ctx, rootID, memberID string) {
+	c.Set(RootHeader, rootID)
 	c.Set(MemberHeader, memberID)
 }
 

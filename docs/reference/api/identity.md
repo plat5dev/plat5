@@ -12,10 +12,10 @@ Who may call is the front door. Identity doesn't know which front door called, a
 |--------|------|--------|
 | `GET` | `/nodes/{node_id}` | `{ id, kind, parent_id, root_id, slug, label, status, deleted_at, created_at, updated_at }` |
 | `PATCH` | `/nodes/{node_id}` | `{ label }` |
-| `DELETE` | `/nodes/{node_id}` | Soft delete. Cascades to descendants, parents before children. Revokes keys of service accounts born at the node or below |
-| `POST` | `/nodes/{node_id}/restore` | Within `deletion_grace`. Restores the node and the descendants that its delete cascaded to (same `deletion_id`). Keys stay revoked. **409** if the parent is deleted |
+| `DELETE` | `/nodes/{node_id}` | Soft delete. Cascades to descendants, parents before children. Revokes keys of service accounts born at the node or below. **204**. Already deleted or purged: **204**, no change. **422** on the sign-in node |
+| `POST` | `/nodes/{node_id}/restore` | Within `deletion_grace`. Restores the node and the descendants that its delete cascaded to (same `deletion_id`). Keys stay revoked. Returns the node. A live node: **200**, no change. **409** if the parent is deleted, the grace has passed, or the kind isn't in the config |
 | `GET` | `/nodes/{node_id}/children/{kind}` | [Filtered](../lists.md#filtered-lists) by `X-Plat5-Member-Id`; **400** without it. `?state=deleted` for deleted ones |
-| `POST` | `/nodes/{node_id}/children/{kind}` | `{ label, slug? }`. `{kind}` must allow this node's kind as parent (**422**). The member in `X-Plat5-Member-Id`, if any, gets `creator_role`, unless an inherited binding already holds it |
+| `POST` | `/nodes/{node_id}/children/{kind}` | `{ label, slug? }`. `{kind}` must allow this node's kind as parent (**422**). **409** if this node is deleted or purged. The member in `X-Plat5-Member-Id`, if any, gets `creator_role`, unless an inherited binding already holds it |
 | `POST` | `/roots/{kind}` | `{ label, slug? }`. A root kind other than the sign-in kind. `X-Plat5-Member-Id` is the caller's directory member; they get a member in the new tree with `creator_role` |
 | `GET` | `/nodes` | Every node, unfiltered: `?kind=`, `?parent_id=`, `?status=`. Not in the generated catalog; for other front doors |
 | `POST` | `/nodes/{node_id}/release-slug` | <a id="slug-release"></a>On a purged node: frees its slug for a new node. Not in the generated catalog |
@@ -119,7 +119,9 @@ Product sentences for each: [`reference/error-copy.md`](../error-copy.md#identit
 | Direct binding for someone who isn't in the tree | **422** |
 | Child kind not allowed under this node's kind | **422** |
 | A filtered list without `X-Plat5-Member-Id` | **400** |
-| Restore with a deleted parent, or past `deletion_grace` | **409** |
+| Restore with a deleted parent, past `deletion_grace`, or of a kind not in the config | **409** |
+| Create under a deleted or purged node | **409** |
+| Delete the sign-in node | **422** |
 
 ## Audit details
 

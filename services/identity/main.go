@@ -15,15 +15,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/plat5dev/plat5/identity/config"
-	"github.com/plat5dev/plat5/identity/credentials"
 	"github.com/plat5dev/plat5/identity/db"
-	"github.com/plat5dev/plat5/identity/directory"
 	apierrors "github.com/plat5dev/plat5/identity/errors"
+	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/lifecycle"
 	"github.com/plat5dev/plat5/identity/metrics"
 	"github.com/plat5dev/plat5/identity/middleware"
-	"github.com/plat5dev/plat5/identity/orgs"
-	"github.com/plat5dev/plat5/identity/roles"
+	"github.com/plat5dev/plat5/identity/nodes"
 	"github.com/plat5dev/plat5/identity/telemetry"
 )
 
@@ -56,38 +54,39 @@ func main() {
 	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Roles on: identity serves nothing until the control plane's roles document
-	// is loaded, so a missing document can never read as roles off.
-	roleSource := roles.Off()
-	if cfg.RolesEnabled {
-		roleSource = roles.On()
-		follower := roles.NewFollower(cfg.ControlPlaneURL, cfg.InternalAuthToken, roleSource, baseLogger)
-		if err := follower.Load(runCtx); err != nil {
-			pool.Close()
-			baseLogger.Info().Err(err).Msg("stopped before roles loaded")
-			return
-		}
-		go follower.Follow(runCtx)
-	} else {
-		baseLogger.Warn().Msg("ROLES_ENABLED=false: roles are off and every member holds every label")
+	// Identity serves nothing until it has the control plane's config, then
+	// makes sure the sign-in node exists (docs/concepts/config.md#how-a-change-reaches-readers).
+	src := &feed.Source{}
+	follower := feed.NewFollower(cfg.ControlPlaneURL, cfg.InternalAuthToken, src, baseLogger)
+	if err := follower.Load(runCtx); err != nil {
+		pool.Close()
+		baseLogger.Info().Err(err).Msg("stopped before config loaded")
+		return
+	}
+	nodeStore := nodes.NewStore(pool)
+	signIn, err := nodeStore.EnsureSignIn(runCtx, src.Current())
+	if err != nil {
+		pool.Close()
+		log.Fatalf("failed to create the sign-in node: %v", err)
 	}
 
-	dirStore := directory.NewStore(pool)
-	orgStore := orgs.NewStore(pool)
-	dirHandler := directory.NewHandler(dirStore)
-	orgHandler := orgs.NewHandler(orgStore, dirStore, roleSource)
-	credHandler := credentials.NewHandler(credentials.NewStore(pool), orgStore, dirStore, cfg.APIKeyBrand, roleSource)
+	sweeper := nodes.NewSweeper(nodeStore, src, baseLogger)
+	follower.OnChange = sweeper.Kick
+	go follower.Follow(runCtx)
+	go sweeper.Run(runCtx)
+
+	nodeHandler := nodes.NewHandler(nodeStore, src)
 	lifecycleHandler := lifecycle.NewHandler(lifecycle.NewStore(pool))
 
-	app := newPublicApp(telem, dirHandler, orgHandler, credHandler)
-	internalApp := newInternalApp(telem, pool, roleSource, cfg.InternalAuthToken, credHandler, lifecycleHandler)
+	app := newPublicApp(telem, nodeHandler)
+	internalApp := newInternalApp(telem, pool, src, cfg.InternalAuthToken, lifecycleHandler)
 
 	baseLogger.Info().
 		Str("port", cfg.Port).
 		Str("internal_port", cfg.InternalPort).
 		Str("apikey_brand", cfg.APIKeyBrand).
-		Bool("roles_enabled", roleSource.Enabled()).
-		Int("roles", len(roleSource.Set().List())).
+		Int64("revision", src.Current().Revision).
+		Str("sign_in_node", signIn.ID).
 		Msg("starting identity server")
 
 	errCh := make(chan error, 2)
@@ -124,12 +123,7 @@ func main() {
 	baseLogger.Info().Msg("shutdown complete")
 }
 
-func newPublicApp(
-	telem *telemetry.Telemetry,
-	dirHandler *directory.Handler,
-	orgHandler *orgs.Handler,
-	credHandler *credentials.Handler,
-) *fiber.App {
+func newPublicApp(telem *telemetry.Telemetry, nodeHandler *nodes.Handler) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName:      "identity",
 		ErrorHandler: apierrors.FiberErrorHandler,
@@ -143,26 +137,15 @@ func newPublicApp(
 	))
 	app.Use(middleware.RequestLogger(telem))
 
-	users := app.Group("/users")
-	dirHandler.Mount(users)
-	orgHandler.MountUser(users)
-	credHandler.MountUser(users)
-
-	orgHandler.MountOrganizations(app)
-	credHandler.MountServiceAccountKeys(app)
-
-	members := app.Group("/members")
-	orgHandler.MountMembers(members)
-	credHandler.MountMembers(members)
+	nodeHandler.Mount(app)
 	return app
 }
 
 func newInternalApp(
 	telem *telemetry.Telemetry,
 	pool *pgxpool.Pool,
-	roleSource *roles.Source,
+	src *feed.Source,
 	internalToken string,
-	credHandler *credentials.Handler,
 	lifecycleHandler *lifecycle.Handler,
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
@@ -177,7 +160,7 @@ func newInternalApp(
 	app.Get("/health/ready", func(c fiber.Ctx) error {
 		pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		if err := pool.Ping(pingCtx); err != nil || !roleSource.Loaded() {
+		if err := pool.Ping(pingCtx); err != nil || !src.Loaded() {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"status": "unhealthy"})
 		}
 		return c.JSON(fiber.Map{"status": "healthy"})
@@ -195,7 +178,6 @@ func newInternalApp(
 		middleware.RequestLogger(telem),
 		middleware.RequireInternalToken(internalToken),
 	)
-	credHandler.MountInternal(internalAPI)
 	lifecycleHandler.MountInternal(internalAPI)
 	return app
 }

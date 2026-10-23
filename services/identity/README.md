@@ -1,27 +1,28 @@
 # identity
 
-Plat5 **identity** service: the directory of people, organizations, members, invites, service accounts, credentials (API keys and sessions), internal credential validate for the gateway, and the internal lifecycle-events feed for services.
+Plat5 **identity**: the tree of nodes, and (from v2 step 3) the principals, members, bindings, keys and invites in it.
 
-Contract: [`docs/identity.md`](../../docs/identity.md)
-
-`routes.yml` is the gateway catalog. Apply it (or a subset). The process still serves unpublished paths on the public port.
+Contracts: [identity API](../../docs/reference/api/identity.md), [lifecycle](../../docs/concepts/lifecycle.md), [schema](../../docs/internals/identity-schema.md). Its gateway routes are generated per kind into the deployment's `routes/identity.yml` (`plat5 routes generate`).
 
 ## Layout
 
 | Package | Role |
 |---------|------|
-| `directory/` | People: IdP subject resolve (first sign-in creates the person), `GET` / `PATCH /users/{user_id}` |
-| `orgs/` | Organizations, members, invites, service accounts, account deletion |
-| `credentials/` | Every API key and session (`{brand}-k-2-`, `{brand}-s-2-`): user keys, member keys, the service-account address for the same rows, session mint, and the one internal validate |
-| `lifecycle/` | Lifecycle events (`organization.created`, `organization.deleted`, `member.created`, `member.removed`). Written in the change's transaction; read on the internal port. |
+| `feed/` | The config from the control plane's `GET /internal/identity`: kinds, `deletion_grace`, `reserved_slugs`. Identity doesn't listen until it has one, and long-polls for changes |
+| `nodes/` | Nodes, the closure table, slugs and tombstones, soft delete, restore, purge, kind removal, and the sweeper that runs reconcile and purge |
+| `lifecycle/` | The lifecycle-events feed on the internal port. Written in the change's transaction |
+| `db/` | The v2 schema. Boot refuses a database with v1 migrations: v2 is a hard cutover |
 
-`APIKEY_BRAND` (default `plat5`) is identity's alone. The gateway checks a key's shape, not its brand.
+Boot: wait for the first config, create the sign-in node if there is none, then listen. Each new config kicks the sweeper, which also runs every minute: nodes of a kind the config dropped are soft-deleted, a kind applied again gets its nodes back, and nodes past `purge_after` are purged.
 
-List includes `token` while the invite is active. The host sends any email.
+## Tests
 
-A key or session carries its principal's permissions. It has no labels of its own. Identity does not know the caller's labels and does not compare the caller to what it grants: whoever the gateway admits to a route may assign any role. Contract: [`docs/identity.md`](../../docs/identity.md).
+```bash
+docker run -d --rm --name identity-pg -e POSTGRES_PASSWORD=test -p 55999:5432 postgres:17
+TEST_DATABASE_URL=postgres://postgres:test@localhost:55999/postgres go test ./...
+```
 
-Roles are on unless `ROLES_ENABLED=false`. On, identity reads the roles document from the control plane (`CONTROL_PLANE_URL`), serves nothing until it has one, and picks up each change without a restart. Every member holds one of its roles, and validate returns that role's labels for a member's key or session. Off: no member has a role, and validate returns `["*"]` (every label). Contract: [`docs/roles.md`](../../docs/roles.md).
+Without `TEST_DATABASE_URL`, tests that need Postgres are skipped.
 
 ## Local
 

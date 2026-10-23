@@ -13,27 +13,16 @@ import (
 const (
 	dbSystemName = "postgresql"
 	dbNamespace  = "identity"
-
-	// KeyScope labels for api_keys_* metrics (separate products, shared counters).
-	KeyScopeUser   = "user"
-	KeyScopeMember = "member"
 )
 
 var (
-	initOnce          sync.Once
-	requestDuration   *prometheus.HistogramVec
-	requestsTotal     *prometheus.CounterVec
-	orgsCreated       prometheus.Counter
-	memberOps         *prometheus.CounterVec
-	inviteOps         *prometheus.CounterVec
-	keysCreated       *prometheus.CounterVec
-	keysRevoked       *prometheus.CounterVec
-	keysValidated     *prometheus.CounterVec
-	sessionsCreated   prometheus.Counter
-	sessionsValidated *prometheus.CounterVec
-	dbOpsTotal        *prometheus.CounterVec
-	dbOpsErrors       *prometheus.CounterVec
-	dbOpsDuration     *prometheus.HistogramVec
+	initOnce        sync.Once
+	requestDuration *prometheus.HistogramVec
+	requestsTotal   *prometheus.CounterVec
+	nodeOps         *prometheus.CounterVec
+	dbOpsTotal      *prometheus.CounterVec
+	dbOpsErrors     *prometheus.CounterVec
+	dbOpsDuration   *prometheus.HistogramVec
 )
 
 // Init registers service metrics on the default Prometheus registry.
@@ -51,45 +40,10 @@ func Init() {
 			Help: "Total HTTP requests handled by the identity service",
 		}, []string{"route", "method", "status"})
 
-		orgsCreated = prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "organizations_created_total",
-			Help: "Total organizations created",
-		})
-
-		memberOps = prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "member_operations_total",
-			Help: "Member mutations by operation",
+		nodeOps = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "node_operations_total",
+			Help: "Node lifecycle changes by operation, one per node",
 		}, []string{"operation"})
-
-		inviteOps = prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "invite_operations_total",
-			Help: "Organization invite mutations by operation",
-		}, []string{"operation"})
-
-		keysCreated = prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "api_keys_created_total",
-			Help: "Total API keys created",
-		}, []string{"key_scope"})
-
-		keysRevoked = prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "api_keys_revoked_total",
-			Help: "Total API keys revoked",
-		}, []string{"key_scope"})
-
-		keysValidated = prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "api_keys_validated_total",
-			Help: "API key validate outcomes",
-		}, []string{"key_scope", "valid"})
-
-		sessionsCreated = prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "member_sessions_created_total",
-			Help: "Total member sessions minted",
-		})
-
-		sessionsValidated = prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "member_sessions_validated_total",
-			Help: "Member session validate outcomes",
-		}, []string{"valid"})
 
 		dbLabels := []string{"db_system_name", "db_operation_name", "db_namespace"}
 
@@ -112,14 +66,7 @@ func Init() {
 		prometheus.MustRegister(
 			requestDuration,
 			requestsTotal,
-			orgsCreated,
-			memberOps,
-			inviteOps,
-			keysCreated,
-			keysRevoked,
-			keysValidated,
-			sessionsCreated,
-			sessionsValidated,
+			nodeOps,
 			dbOpsTotal,
 			dbOpsErrors,
 			dbOpsDuration,
@@ -144,44 +91,11 @@ func ObserveRequest(route, method string, status int, duration time.Duration) {
 	requestDuration.WithLabelValues(route, method).Observe(duration.Seconds())
 }
 
-func RecordOrgCreated() {
+// RecordNodeOps counts n nodes changed by operation: created, deleted,
+// restored, purged.
+func RecordNodeOps(operation string, n int) {
 	Init()
-	orgsCreated.Inc()
-}
-
-func RecordMemberOp(operation string) {
-	Init()
-	memberOps.WithLabelValues(operation).Inc()
-}
-
-func RecordInviteOp(operation string) {
-	Init()
-	inviteOps.WithLabelValues(operation).Inc()
-}
-
-func RecordKeyCreated(keyScope string) {
-	Init()
-	keysCreated.WithLabelValues(keyScope).Inc()
-}
-
-func RecordKeyRevoked(keyScope string) {
-	Init()
-	keysRevoked.WithLabelValues(keyScope).Inc()
-}
-
-func RecordKeyValidation(keyScope string, valid bool) {
-	Init()
-	keysValidated.WithLabelValues(keyScope, fmt.Sprintf("%t", valid)).Inc()
-}
-
-func RecordSessionCreated() {
-	Init()
-	sessionsCreated.Inc()
-}
-
-func RecordSessionValidation(valid bool) {
-	Init()
-	sessionsValidated.WithLabelValues(fmt.Sprintf("%t", valid)).Inc()
+	nodeOps.WithLabelValues(operation).Add(float64(n))
 }
 
 func RecordDBOperation(operation string, duration time.Duration, err error) {
