@@ -27,7 +27,7 @@ Every service's environment variables. Config that changes while the deployment 
 | `ADMIN_TOKEN` | required | Bearer token |
 | `INTERNAL_AUTH_TOKEN` | empty | Required on `/internal/*` when set; sent to identity |
 | `IDENTITY_INTERNAL_URL` | required | Identity's internal base URL, for plan counts, e.g. `http://identity:3001` |
-| `SEED_DIR` | empty | A config directory applied on first boot, when the head is `0`. Never read again |
+| `SEED_DIR` | empty | A directory holding a `plat5.yml` and the routes files it lists, applied on first boot, when the head is `0`. Errors name the file. Never read again |
 
 Ready is **503** unless Postgres answers.
 

@@ -1,36 +1,35 @@
 # Routes
 
-Each service's routes are a `services` document in the deployment's config ([config](../../concepts/config.md)). A route names its scope (a kind, or `public`), the labels it needs, and the upstream path the gateway writes. How the gateway uses them: [access](../../concepts/access.md#how-a-request-is-decided), [`reference/gateway.md`](../gateway.md).
+Each service's routes are one routes file, listed in `plat5.yml`'s `services` ([config](../../concepts/config.md#the-config)). A route names its scope (a kind, or `public`), the labels it needs, and the upstream path the gateway writes. How the gateway uses them: [access](../../concepts/access.md#how-a-request-is-decided), [`reference/gateway.md`](../gateway.md).
 
 ## Config format
 
 ```yaml
-version: 2
-services:
-  e10s:
-    url: http://e10s:3000
-    rate_limits:
-      evals-project: { requests: 100, window_seconds: 1, count_at: project }
-      evals-org:     { requests: 300, window_seconds: 1, count_at: organization }
-    routes:
-      - path: /orgs/{organization}/projects/{project}/subscribers/{subscriber_id}/entitlements/check
-        scope: project
-        upstream: /projects/{subject.project_id}/subscribers/{path.subscriber_id}/entitlements/check
-        methods:
-          POST: { required_labels: [check], rate_limit: [evals-project, evals-org], audit: false }
-      - path: /orgs/{organization}/projects/{project}/plans/{key}/versions
-        scope: project
-        upstream: /projects/{subject.project_id}/plans/{path.key}/versions
-        methods:
-          GET:  { required_labels: [project:read] }
-          POST: { required_labels: [catalog:write] }
-      - path: /me/notification-settings
-        scope: directory
-        upstream: /people/{subject.member_id}/notification-settings
-        methods: [GET, PUT]
-      - path: /health
-        scope: public
-        methods: [GET]
+# routes/e10s.yml
+e10s:
+  url: http://e10s:3000
+  rate_limits:
+    evals-project: { requests: 100, window_seconds: 1, count_at: project }
+    evals-org:     { requests: 300, window_seconds: 1, count_at: organization }
+  routes:
+    - path: /orgs/{organization}/projects/{project}/subscribers/{subscriber_id}/entitlements/check
+      scope: project
+      upstream: /projects/{subject.project_id}/subscribers/{path.subscriber_id}/entitlements/check
+      methods:
+        POST: { required_labels: [check], rate_limit: [evals-project, evals-org], audit: false }
+    - path: /orgs/{organization}/projects/{project}/plans/{key}/versions
+      scope: project
+      upstream: /projects/{subject.project_id}/plans/{path.key}/versions
+      methods:
+        GET:  { required_labels: [project:read] }
+        POST: { required_labels: [catalog:write] }
+    - path: /me/notification-settings
+      scope: directory
+      upstream: /people/{subject.member_id}/notification-settings
+      methods: [GET, PUT]
+    - path: /health
+      scope: public
+      methods: [GET]
 ```
 
 The versions route doesn't need the author in its path: the service reads `X-Plat5-Member-Id` ([`reference/headers.md`](../headers.md)). Rewriting `{subject.member_id}` into the path is there for services that prefer it.
@@ -39,7 +38,7 @@ The versions route doesn't need the author in its path: the service reads `X-Pla
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `services` | `map<string, ServiceConfig>` | Top-level wrapper. Keys are service names: 1–128 of `[A-Za-z0-9._-]`. A name is a rate-limit bucket prefix and the `service` on every audit event |
+| service name | `string` | The file's one top-level key: 1–128 of `[A-Za-z0-9._-]`. A rate-limit bucket prefix and the `service` on every audit event |
 | `url` | `string` | Upstream, exactly `http://host:port` (explicit port, no path, no query), from the **gateway's** network view. `https://` is **422**: TLS upstreams aren't supported yet. Credentials in the URL, a port outside 1–65535, or any other form is **422** |
 | `rate_limits` | `map<string, RateLimitPolicy>?` | Named policies this service's routes may reference ([below](#rate_limit)) |
 | `timeouts` | `{connect_ms?, read_ms?}?` | Upstream timeouts in ms, each 1–600000. One left out uses the gateway's `UPSTREAM_CONNECT_TIMEOUT_MS` / `UPSTREAM_READ_TIMEOUT_MS` |

@@ -36,7 +36,7 @@ On audited routes, set `X-Plat5-Audit-Details` and, on a create, `X-Plat5-Audit-
 
 ## Publishing routes
 
-Add a `services` file to the deployment's config and apply it ([routes](../reference/config/routes.md), [config](../concepts/config.md)).
+Add a routes file for the service, list it in `plat5.yml`'s `services`, and apply ([routes](../reference/config/routes.md), [config](../concepts/config.md)).
 
 ## Direct-exposed services
 
