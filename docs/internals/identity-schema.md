@@ -14,6 +14,7 @@ CREATE TABLE nodes (
     label       TEXT NOT NULL,
     status      TEXT NOT NULL CHECK (status IN ('active', 'deleted', 'purged')),
     deleted_at  TIMESTAMPTZ,
+    purge_after TIMESTAMPTZ,                           -- deleted_at + deletion_grace, fixed at delete
     deletion_id TEXT,                                  -- one per delete or kind removal; restore undoes exactly that one
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -114,4 +115,4 @@ Ids are ULIDs with a type prefix: `n_` nodes, `m_` members, `b_` bindings, `k_` 
 - **Expiry.** A binding past `expires_at` grants nothing; a sweeper deletes it.
 - **Suspension.** A suspended principal's credentials are all invalid. There's no per-member suspension: remove the member instead.
 - **Deletions.** Each delete, and each kind removal, stamps one `deletion_id` on every node it soft-deletes. A restore, or a kind applied again, restores exactly the nodes with that id. A node already deleted keeps its own id.
-- **Deletion.** A node with `status = 'deleted'` grants nothing on it or below, except on a `resolve_deleted` route (restore, listing deleted). Once `deletion_grace` has passed, the purge sweeper sets `status = 'purged'`, deletes bindings on it and below, removes members of a purged root, and keeps the row.
+- **Deletion.** A node with `status = 'deleted'` grants nothing on it or below, except on a `resolve_deleted` route (restore, listing deleted). Each deleted node stores `purge_after`, set from `deletion_grace` when it's deleted, so changing `deletion_grace` applies to new deletes only. Once `purge_after` has passed, the purge sweeper sets `status = 'purged'`, deletes bindings on it and below, removes members of a purged root, and keeps the row.

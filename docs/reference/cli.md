@@ -2,7 +2,7 @@
 
 The `plat5` CLI, for the deployment's config. What a plan and an apply mean: [config](../concepts/config.md#plan-and-apply).
 
-Every command takes the path to `plat5.yml`, default `./plat5.yml`, and follows its `services` list ([the config](../concepts/config.md#the-config)).
+Every command takes the path to `plat5.yml`, default `./plat5.yml`, and follows its `services` list ([the config](../concepts/config.md#the-config)). It reaches the control plane's admin API at `--control-plane-url` (or `PLAT5_CONTROL_PLANE_URL`) with `--admin-token` (or `PLAT5_ADMIN_TOKEN`); unset, the local stack's, `http://localhost:5402` and `dev-admin-token`.
 
 | Command | Does |
 |---------|------|

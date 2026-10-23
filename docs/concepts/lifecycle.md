@@ -10,13 +10,13 @@ A service never creates a node in its own tables first: it creates it through th
 
 ## Deleting, restoring and purging
 
-- **Soft deletes.** Soft for `deletion_grace` (30 days by default), restorable, then purged. Ids are never reused. Slugs aren't either, unless someone releases a purged node's slug by hand through identity's service API, which no generated route exposes.
+- **Soft deletes.** Soft for `deletion_grace` (30 days by default), restorable, then purged. The grace is fixed when the node is deleted (`purge_after`), so changing `deletion_grace` applies to new deletes only. Ids are never reused. Slugs aren't either, unless someone releases a purged node's slug by hand through identity's service API, which no generated route exposes.
 
 - **Deletion ids.** Each delete, and each kind removal, stamps one `deletion_id` on every node it soft-deletes. A restore, or a kind applied again, restores exactly the nodes with that id. A node already deleted keeps its own id.
 
-- **What a deleted node grants.** A node with `status = 'deleted'` grants nothing on it or below, except on a `resolve_deleted` route (restore, listing deleted). Once `deletion_grace` has passed, the purge sweeper sets `status = 'purged'`, deletes bindings on it and below, removes members of a purged root, and keeps the row.
+- **What a deleted node grants.** A node with `status = 'deleted'` grants nothing on it or below, except on a `resolve_deleted` route (restore, listing deleted). Once its `purge_after` has passed, the purge sweeper sets `status = 'purged'`, deletes bindings on it and below, removes members of a purged root, and keeps the row.
 
-- **Restore.** Within `deletion_grace`, by anyone who could delete the node: the node and the descendants its delete cascaded to come back. Keys revoked by the delete stay revoked, so a key that leaked near the deletion stays dead. A node whose parent is deleted can't be restored until the parent is.
+- **Restore.** Before `purge_after`, by anyone who could delete the node: the node and the descendants its delete cascaded to come back. Keys revoked by the delete stay revoked, so a key that leaked near the deletion stays dead. A node whose parent is deleted can't be restored until the parent is.
 
 - **Background work** checks node state itself; the gateway only guards requests.
 

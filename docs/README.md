@@ -36,7 +36,7 @@
 
 | Doc | |
 |-----|--|
-| [config/kinds](reference/config/kinds.md), [roles](reference/config/roles.md), [routes](reference/config/routes.md), [cors](reference/config/cors.md) | Config documents. To be generated from `schema/v2/` |
+| [config/kinds](reference/config/kinds.md), [roles](reference/config/roles.md), [routes](reference/config/routes.md), [cors](reference/config/cors.md) | Config documents. Field tables generated from `schema/v2/` |
 | [api/edge-catalog](reference/api/edge-catalog.md) | Generated edge routes and their default labels |
 | [api/identity](reference/api/identity.md) | Identity's service API |
 | [api/control-plane](reference/api/control-plane.md) | The admin API |

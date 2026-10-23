@@ -51,7 +51,7 @@ POST /internal/plan
 → { "kinds_removed": { "folder": { "nodes": 14, "bindings": 22, "service_accounts": 3, "keys": 9 } }, "parents_narrowed": { "project": { "nodes": 3, "sample": ["n_…"] } } }
 ```
 
-The control plane calls it on every dry run and again on every apply, to check the confirmed counts ([`concepts/config.md`](../../concepts/config.md#preconditions)). `nodes` counts the kind's nodes and their descendants, live and deleted, that the removal would delete.
+The control plane calls it on a dry run, and again on the apply to check the confirmed counts, only when the plan removes a kind or narrows a parent. A plan that does neither never calls identity ([`concepts/config.md`](../../concepts/config.md#preconditions)). `nodes` counts every node the removal would delete, live and deleted: the kind's nodes and all their descendants, of any kind (removing `folder` counts the projects under folders too). `bindings`, `service_accounts` and `keys` are those on, born at, or of service accounts born at any of them. A narrowed parent counts the kind's nodes, live and deleted, under a parent kind the config drops, except those a kind removal in the same plan deletes: removing `folder` and dropping it from `project`'s parents is one apply.
 
 ### Lifecycle events
 
@@ -63,10 +63,10 @@ On `INTERNAL_PORT`. Each is one read, at one head, in one Postgres snapshot.
 
 | Path | Reader | `200` body |
 |------|--------|------------|
-| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "cors" }` |
-| `GET /internal/identity` | identity | `{ "revision", "kinds", "roles", "services" }`. **404** before the first apply |
+| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "cors" }`. **404** before the first apply |
+| `GET /internal/identity` | identity | `{ "revision", "deletion_grace", "reserved_slugs", "kinds", "roles", "default_role", "creator_role", "services" }`. **404** before the first apply |
 
-`services` is in the stored form: full paths, list-form `methods` (`route_prefix` and nested `methods` maps already expanded). `cors` is the empty list when the config has none. Identity reads `services` to find the labels of its own read routes ([`reference/lists.md`](../lists.md#filtered-lists)).
+`services` is in the stored form: full paths, list-form `methods` (`route_prefix` and nested `methods` maps already expanded). Keys are the config's own ([config](../../concepts/config.md#the-config)), with defaults filled in: `deletion_grace` `30d`, `reserved_slugs` `[]`, and `cors` `{ "allowed_origins": [] }` when the config has none. Identity reads `services` to find the labels of its own read routes ([`reference/lists.md`](../lists.md#filtered-lists)).
 
 Without `after`, the answer is immediate. With `?after={revision}`, the control plane waits until the head is past `after`, for up to 25 seconds. Nothing newer in that time is **204**, and the reader asks again. A cursor ahead of the head (the store was reset) is answered at once.
 

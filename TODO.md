@@ -39,6 +39,12 @@ Every tree gets the deployment's roles. `GET /nodes/{node_id}/roles` already has
 
 The extension points in [`docs/concepts/boundaries.md`](docs/concepts/boundaries.md#extension-points). Ready: in order of likelihood, a customer who needs to share a project with a whole other org (group principals); a public link or "any signed-in user" grant (public principals); a project that must move to another org (cross-org move); user-built folder trees (self-nesting kinds).
 
+## Moving a node within its tree
+
+A node keeps its parent for life. There's no API to move one to another parent in the same tree, such as a project out of a folder into its org. So a team can't empty a `folder` kind before removing it: removing the kind deletes the projects under folders with it, and dropping `folder` from `project`'s parents is blocked while projects sit under folders ([config](docs/concepts/config.md#classification)). A move would rewrite the node's `parent_id` and its closure rows, keep its bindings, and emit an event so services can follow. It stays in one tree; moving across trees is the cross-org move above.
+
+Ready: a deployment that removes or reshapes a middle kind with nodes under it.
+
 ## Request-and-approve support access
 
 Today support access is a binding the customer adds, with the support role's `max_duration`. A flow where support requests and the customer approves, like Google Cloud's Access Approval, is later. Ready: a customer who requires approval per access.
