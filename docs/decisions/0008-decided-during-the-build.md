@@ -97,3 +97,15 @@ Each build session turns up questions the contracts don't answer. Every answer g
 | Each label-gated route is checked with a role holding only its label, bound where [generated labels](../reference/api/edge-catalog.md#generated-labels) says it's checked, and refused without it | Proves the generated names, the route scopes and the ancestor rule line up, for every chain |
 | The compose seed's `routes/identity.yml` and `routes/audit.yml` must equal what the generator writes for the seed's kinds | They say they're generated; a test keeps that true |
 | No gaps: every generated upstream is served, with the documented status, and the filtered lists read the generated read and delete labels | Recorded so step 6 starts from a checked catalog |
+
+## Step 6: gateway
+
+| Decision | Why |
+|----------|-----|
+| The admit cache key includes `resolve_deleted` | Otherwise a `found: false` cached by a read of a deleted node answers the restore route too, and the restore is **403** for up to the TTL |
+| The gateway writes v2 audit intents and outcomes now; audit accepts them in step 7. Until then the e2e runs with audit off | The v1 intent's fields (`organization_id`, `user_id`) are gone with v1 admission; keeping them would be a shim |
+| An event on a sign-in route has `root_id: null`; the person's log is keyed by `actor.member_id` | Admit returns no nodes on a sign-in route, so the gateway never knows the sign-in node's id, and the person's directory member already names the log |
+| Every rate-limit policy on a route is counted. "Tightest" is the policy with the fewest requests remaining; a **429** carries the longest `Retry-After` among the policies exceeded | Each bucket sees every admitted request, so one policy's budget doesn't depend on another's. The longest wait is the one after which every policy passes again |
+| A snapshot the gateway can't build (schema, a scope or `count_at` that isn't a kind, chain params that aren't the scope's chain) is refused whole | v1 skipped the bad route and served the rest. A partial route table is a state nobody applied |
+| The gateway checks each snapshot against `schema/v2/`, compiled in as the control plane does, and keeps no copy of the route config code | The removals table drops the hand-aligned `route_config.rs` copies; the schema is the one definition of shape |
+| The compose e2e lives in `e2e/` (its own Go module, opt-in), serves its own JWKS on host `:5401` and mints tokens; compose's `APIKEY_CACHE_TTL_SECS` is overridable and the e2e sets it low | No IdP needed to run it. With a 300s cache, "refused after delete" would wait on the documented TTL |

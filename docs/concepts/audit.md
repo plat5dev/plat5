@@ -1,6 +1,6 @@
 # Audit
 
-Who did what. Each root owns a log: every org has one, and the sign-in node's log holds each person's own. The gateway records each audited request into the log of the root whose tree it touched, with the chain of nodes it addressed. The **audit** service stores it and serves it back by node.
+Who did what. Each root owns a log: every org has one. Each person also has their own, keyed by their directory member (`actor.member_id`), not by a node. The gateway records each audited request into the log of the root whose tree it touched, with the chain of nodes it addressed. The **audit** service stores it and serves it back by node.
 
 ## The model
 
@@ -37,7 +37,7 @@ Audit is for reporting and compliance. A product feature never reads it: audit c
 |-------|-------|-----|
 | `public` | Never | — |
 | A kind | When audited | The root of the chain: the org |
-| The sign-in kind | When audited | The person's own, keyed by their directory member. Also the tree the service names, on a success |
+| The sign-in kind | When audited | The person's own, keyed by their directory member (`actor.member_id`; the event has no `root_id`). Also the tree the service names, on a success |
 
 **The person's log** holds what they did to their own account: personal keys, account deletion, invite redeems. Only the person and other front doors read it.
 

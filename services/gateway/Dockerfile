@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 #
-# Build context: services/gateway/
+# Build context: services/gateway/, plus a named context `schema`: the
+# repo's schema/v2/ (compose: additional_contexts; CI: build-contexts).
 
 FROM rust:1 AS local
 
@@ -12,7 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN cargo install cargo-watch
 
-COPY Cargo.toml Cargo.lock ./
+ENV PLAT5_SCHEMA_DIR=/schema/v2
+COPY --from=schema . /schema/v2
+COPY Cargo.toml Cargo.lock build.rs ./
 RUN mkdir -p src \
     && echo "" > src/lib.rs \
     && echo "fn main() {}" > src/main.rs \
@@ -31,7 +34,7 @@ FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
 WORKDIR /app
 
 FROM chef AS planner
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
 RUN cargo chef prepare --recipe-path recipe.json
 
@@ -48,7 +51,9 @@ RUN cargo install cargo-chef --locked
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 
-COPY Cargo.toml Cargo.lock ./
+ENV PLAT5_SCHEMA_DIR=/schema/v2
+COPY --from=schema . /schema/v2
+COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
 RUN find src -name "*.rs" -exec touch {} + \
     && cargo build --release

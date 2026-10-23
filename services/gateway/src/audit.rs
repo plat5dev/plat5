@@ -1,8 +1,8 @@
-//! Audit log writes (docs/audit.md). On an audited route the gateway writes an
-//! intent before forward and waits on it, then an outcome after, in the background.
-//! An event is in the log of the realm that owns what it changed: the org's on
-//! `organization` and `member` routes, the person's on `user` routes. Audit is on or
-//! off for the whole deployment.
+//! Audit log writes (docs/concepts/audit.md). On an audited route the gateway writes
+//! an intent before forward and waits on it, then an outcome after, in the background.
+//! An event is in the log of the chain's root on a kind route, and in the person's
+//! own (keyed by their directory member) on a sign-in route. Audit is on or off for
+//! the whole deployment. Wire: docs/reference/api/internal.md#audit.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,6 +15,7 @@ use tokio::sync::{mpsc, Semaphore};
 use tracing::{error, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::auth::admit::NodeRef;
 use crate::error::ErrorKind;
 use crate::internal_http::InternalHttpClient;
 use crate::metrics;
@@ -24,16 +25,11 @@ use crate::metrics;
 pub const DETAILS_HEADER: &str = "X-Plat5-Audit-Details";
 /// The id a create produced.
 pub const CREATED_HEADER: &str = "X-Plat5-Audit-Created";
-/// On a `user` route, the org the service changed and the member in it.
-pub const ORGANIZATION_HEADER: &str = "X-Plat5-Audit-Organization";
+/// On a sign-in route, the root of the tree the service changed and the member in it.
+pub const ROOT_HEADER: &str = "X-Plat5-Audit-Root";
 pub const MEMBER_HEADER: &str = "X-Plat5-Audit-Member";
-/// Every header a service uses to talk to the audit log. Stripped both ways, always.
-pub const SERVICE_HEADERS: &[&str] = &[
-    DETAILS_HEADER,
-    CREATED_HEADER,
-    ORGANIZATION_HEADER,
-    MEMBER_HEADER,
-];
+/// Every header a service uses to talk to the audit log. Stripped from every response.
+pub const SERVICE_HEADERS: &[&str] = &[DETAILS_HEADER, CREATED_HEADER, ROOT_HEADER, MEMBER_HEADER];
 pub const MAX_DETAILS_BYTES: usize = 4096;
 /// An id from a service header: one path segment of visible ASCII.
 pub const MAX_ID_BYTES: usize = 128;
@@ -60,28 +56,27 @@ const OUTCOME_BACKOFF: &[Duration] = &[
     Duration::from_secs(60),
 ];
 
-/// The credential that acted. On a person's event there is no member until the
-/// service names one; a JWT has no key prefix.
+/// The member whose credential was admitted, and which credential. A JWT has no
+/// key prefix.
 #[derive(Debug, Serialize)]
 pub struct Actor {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub member_id: Option<String>,
+    pub member_id: String,
+    /// `person` or `service_account`.
+    pub principal: String,
     pub auth_type: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub key_prefix: Option<String>,
 }
 
 /// Everything the gateway knows before forward. `request_id` is in the URL.
-/// Exactly one of `organization_id` (an org's event) or `user_id` (a person's).
+/// On a sign-in route `root_id` is null and `nodes` empty: the person's log is
+/// keyed by `actor.member_id`.
 #[derive(Debug, Serialize)]
 pub struct Intent {
     #[serde(skip)]
     pub request_id: String,
     pub occurred_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub organization_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
+    pub root_id: Option<String>,
+    pub nodes: Vec<NodeRef>,
     pub actor: Actor,
     pub service: String,
     pub method: String,
@@ -110,9 +105,9 @@ pub struct Outcome {
     pub details: Option<Box<RawValue>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_id: Option<String>,
-    /// On a `user` route, the org the service named and the member in it.
+    /// On a sign-in route, the root the service named and the member in it.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub organization_id: Option<String>,
+    pub root_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member_id: Option<String>,
 }
@@ -124,7 +119,7 @@ pub struct AuditState {
     pub upstream_status: Option<u16>,
     pub details: Option<Box<RawValue>>,
     pub created_id: Option<String>,
-    /// The org and member a service named on a `user` route's 2xx.
+    /// The root and member a service named on a sign-in route's 2xx.
     pub named: Option<(String, String)>,
 }
 
@@ -142,17 +137,17 @@ pub fn outcome_for(state: AuditState, forwarded: bool, written_status: Option<u1
             status,
             details: None,
             created_id: None,
-            organization_id: None,
+            root_id: None,
             member_id: None,
         };
     }
-    let (organization_id, member_id) = state.named.unzip();
+    let (root_id, member_id) = state.named.unzip();
     Outcome {
         outcome,
         status,
         details: state.details,
         created_id: state.created_id,
-        organization_id,
+        root_id,
         member_id,
     }
 }
@@ -481,7 +476,7 @@ mod tests {
         assert_eq!(responded.status, Some(201));
         assert!(responded.details.is_some());
         assert_eq!(responded.created_id.as_deref(), Some("org-9"));
-        assert_eq!(responded.organization_id.as_deref(), Some("org-9"));
+        assert_eq!(responded.root_id.as_deref(), Some("org-9"));
         assert_eq!(responded.member_id.as_deref(), Some("m-9"));
 
         // What a service said counts only when it answered.
@@ -495,7 +490,7 @@ mod tests {
             true,
             Some(502),
         );
-        assert!(cut.created_id.is_none() && cut.organization_id.is_none());
+        assert!(cut.created_id.is_none() && cut.root_id.is_none());
 
         let no_response = outcome_for(AuditState::default(), true, Some(502));
         assert_eq!(no_response.outcome, OutcomeKind::NoResponse);
@@ -528,47 +523,82 @@ mod tests {
         let intent = Intent {
             request_id: "req-1".into(),
             occurred_at: "2026-10-08T18:30:00.123Z".into(),
-            organization_id: Some("org-1".into()),
-            user_id: None,
+            root_id: Some("n_org".into()),
+            nodes: vec![
+                NodeRef {
+                    kind: "organization".into(),
+                    id: "n_org".into(),
+                },
+                NodeRef {
+                    kind: "project".into(),
+                    id: "n_proj".into(),
+                },
+            ],
             actor: Actor {
-                member_id: Some("m-1".into()),
-                auth_type: "member_apikey",
+                member_id: "m_1".into(),
+                principal: "service_account".into(),
+                auth_type: "apikey",
                 key_prefix: Some("plat5-k-2-AbC9".into()),
             },
             service: "identity".into(),
             method: "PATCH".into(),
-            route: "/org/members/{member_id}".into(),
-            params: HashMap::from([("member_id".into(), "m-2".into())]),
+            route: "/orgs/{organization}/projects/{project}/bindings/{binding_id}".into(),
+            params: HashMap::from([("binding_id".into(), "b_2".into())]),
             ip: "203.0.113.7".into(),
             user_agent: None,
         };
         let v = serde_json::to_value(&intent).unwrap();
         assert!(v.get("request_id").is_none(), "request_id is in the URL");
-        assert!(v.get("user_id").is_none(), "an org's event has no user_id");
-        assert_eq!(v["actor"]["auth_type"], "member_apikey");
+        assert_eq!(v["root_id"], "n_org");
+        assert_eq!(
+            v["nodes"][1],
+            serde_json::json!({ "kind": "project", "id": "n_proj" })
+        );
+        assert_eq!(
+            v["actor"],
+            serde_json::json!({ "member_id": "m_1", "principal": "service_account",
+                                "auth_type": "apikey", "key_prefix": "plat5-k-2-AbC9" })
+        );
         assert!(v["user_agent"].is_null());
 
         let person = Intent {
-            organization_id: None,
-            user_id: Some("u-1".into()),
+            root_id: None,
+            nodes: vec![],
             actor: Actor {
-                member_id: None,
+                member_id: "m_dir".into(),
+                principal: "person".into(),
                 auth_type: "jwt",
                 key_prefix: None,
             },
             ..intent
         };
         let v = serde_json::to_value(&person).unwrap();
-        assert_eq!(v["user_id"], "u-1");
-        assert!(v.get("organization_id").is_none());
-        assert_eq!(v["actor"], serde_json::json!({ "auth_type": "jwt" }));
+        assert!(
+            v["root_id"].is_null(),
+            "a sign-in route's event has no root"
+        );
+        assert_eq!(v["nodes"], serde_json::json!([]));
+        assert!(v["actor"]["key_prefix"].is_null());
+
+        let named = outcome_for(
+            AuditState {
+                upstream_status: Some(201),
+                named: Some(("n_org".into(), "m_org".into())),
+                ..AuditState::default()
+            },
+            true,
+            Some(201),
+        );
+        let v = serde_json::to_value(&named).unwrap();
+        assert_eq!(v["root_id"], "n_org");
+        assert_eq!(v["member_id"], "m_org");
 
         let out = Outcome {
             outcome: OutcomeKind::NoResponse,
             status: None,
             details: None,
             created_id: None,
-            organization_id: None,
+            root_id: None,
             member_id: None,
         };
         assert_eq!(
@@ -613,11 +643,15 @@ mod tests {
         Intent {
             request_id: "req-1".into(),
             occurred_at: rfc3339_millis(SystemTime::now()),
-            organization_id: Some("org-1".into()),
-            user_id: None,
+            root_id: Some("n_org".into()),
+            nodes: vec![NodeRef {
+                kind: "organization".into(),
+                id: "n_org".into(),
+            }],
             actor: Actor {
-                member_id: Some("m-1".into()),
-                auth_type: "member_apikey",
+                member_id: "m_1".into(),
+                principal: "person".into(),
+                auth_type: "apikey",
                 key_prefix: Some("plat5-k-2-AbC9".into()),
             },
             service: "s".into(),

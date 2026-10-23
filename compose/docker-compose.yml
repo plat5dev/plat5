@@ -94,6 +94,8 @@ services:
   gateway:
     build:
       context: ../services/gateway
+      additional_contexts:
+        schema: ../schema/v2
       target: local
     # cargo-watch as PID 1 ignores SIGTERM; tini forwards stop signals.
     init: true
@@ -110,21 +112,21 @@ services:
       AUTH_ISSUER: ${AUTH_ISSUER:-http://localhost:5401}
       AUTH_JWKS_URI: ${AUTH_JWKS_URI:-http://host.docker.internal:5401/.well-known/jwks.json}
       AUTH_ALLOWED_AUDIENCES: ${AUTH_ALLOWED_AUDIENCES:-plat5}
-      AUTH_USER_ID_CLAIM: ${AUTH_USER_ID_CLAIM:-properties.user_id}
-      CREDENTIAL_VALIDATE_URL: http://identity:3001/internal/credentials/validate
+      AUTH_SUBJECT_CLAIM: ${AUTH_SUBJECT_CLAIM:-properties.user_id}
+      ADMIT_URL: http://identity:3001/internal/admit
       # Audit is on unless AUDIT_ENABLED=false (then audit need not run).
       AUDIT_ENABLED: ${AUDIT_ENABLED:-true}
       AUDIT_URL: http://audit:3003
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN:-dev-internal-token}
       RUST_LOG: info
-      APIKEY_CACHE_TTL_SECS: "300"
+      APIKEY_CACHE_TTL_SECS: ${APIKEY_CACHE_TTL_SECS:-300}
       RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-60}
       RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
       RATE_LIMIT_AUTH_FAILURE_REQUESTS: ${RATE_LIMIT_AUTH_FAILURE_REQUESTS:-60}
       RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS: ${RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS:-60}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       VALKEY_URL: redis://valkey:6379
-      # Routes and CORS origins (docs/control-plane.md).
+      # Kinds, routes and CORS origins (docs/reference/gateway.md#control-plane).
       CONTROL_PLANE_URL: http://control-plane:5003
       OTEL_SERVICE_NAME: gateway
       OTEL_SERVICE_NAMESPACE: edge
@@ -132,6 +134,7 @@ services:
       DEPLOYMENT_ENV: docker
     volumes:
       - ../services/gateway/src:/app/src
+      - ../schema/v2:/schema/v2:ro
     networks:
       - plat5
     depends_on:

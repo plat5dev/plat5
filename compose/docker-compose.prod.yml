@@ -98,8 +98,8 @@ services:
       AUTH_ISSUER: ${AUTH_ISSUER}
       AUTH_JWKS_URI: ${AUTH_JWKS_URI}
       AUTH_ALLOWED_AUDIENCES: ${AUTH_ALLOWED_AUDIENCES:-}
-      AUTH_USER_ID_CLAIM: ${AUTH_USER_ID_CLAIM:-properties.user_id}
-      CREDENTIAL_VALIDATE_URL: http://identity:3001/internal/credentials/validate
+      AUTH_SUBJECT_CLAIM: ${AUTH_SUBJECT_CLAIM:-properties.user_id}
+      ADMIT_URL: http://identity:3001/internal/admit
       # Audit is on unless AUDIT_ENABLED=false (then audit need not run).
       AUDIT_ENABLED: ${AUDIT_ENABLED:-true}
       AUDIT_URL: http://audit:3003
@@ -111,7 +111,7 @@ services:
       RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS: ${RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS:-60}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       VALKEY_URL: redis://valkey:6379
-      # Routes and CORS origins (docs/control-plane.md).
+      # Kinds, routes and CORS origins (docs/reference/gateway.md#control-plane).
       CONTROL_PLANE_URL: http://control-plane:5003
       OTEL_SERVICE_NAME: gateway
       OTEL_SERVICE_NAMESPACE: edge

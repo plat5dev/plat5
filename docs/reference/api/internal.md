@@ -101,6 +101,8 @@ PUT /internal/events/{request_id}
 | Malformed, or `occurred_at` more than 24h from audit's clock | **422** |
 | Postgres unavailable | **503**. The gateway retries |
 
+`root_id` is `null` and `nodes` is `[]` on a sign-in route; `actor.member_id` is the person's directory member.
+
 Unknown fields are ignored, so a newer gateway can send more.
 
 ### Outcome

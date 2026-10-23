@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::fmt;
 
-use crate::route_map::RouteScope;
+use crate::route_map::Scope;
 
 /// Standard error kinds for telemetry.
 /// Used in span attributes and log fields.
@@ -71,28 +71,28 @@ impl ApiError {
         }
     }
 
-    /// A 401 on a matched route: the message names what the route's scope takes.
-    /// It never says why the credential sent failed, so it tells a caller nothing
-    /// about a key they hold.
-    pub fn unauthorized_for(scope: RouteScope, details: Option<serde_json::Value>) -> Self {
+    /// A 401 on a matched route: the message names what the route's scope takes
+    /// (docs/reference/error-copy.md#gateway-401). It never says why the credential
+    /// sent failed, so it tells a caller nothing about a key they hold.
+    pub fn unauthorized_for(scope: &Scope, details: Option<serde_json::Value>) -> Self {
         let mut err = Self::unauthorized(details);
         err.message = match scope {
-            RouteScope::User => "Authentication required: a user sign-in token or user API key.",
-            RouteScope::Organization | RouteScope::Member => {
-                "Authentication required: a member API key or member session."
-            }
-            RouteScope::Public => "Authentication required.",
+            Scope::Kind(_) => "Authentication required: a sign-in token or an API key.",
+            Scope::SignIn(_) => "Authentication required: a sign-in token or a personal API key.",
+            Scope::Public => "Authentication required.",
         }
         .to_string();
         err
     }
 
-    pub fn forbidden(details: Option<serde_json::Value>) -> Self {
+    /// The one 403 body: a node that doesn't exist, a caller outside its tree, and a
+    /// missing label all answer this, with the route's `required_labels`.
+    pub fn forbidden(required_labels: &[String]) -> Self {
         Self {
             error_type: "invalid_request_error".to_string(),
             code: "FORBIDDEN".to_string(),
-            message: "You don't have permission to do that.".to_string(),
-            details,
+            message: "Permission denied, or it may not exist.".to_string(),
+            details: Some(serde_json::json!({ "required_labels": required_labels })),
         }
     }
 
@@ -180,19 +180,17 @@ mod tests {
 
     #[test]
     fn test_unauthorized_names_what_the_scope_takes() {
-        let user = ApiError::unauthorized_for(RouteScope::User, None);
+        let sign_in = ApiError::unauthorized_for(&Scope::SignIn("directory".into()), None);
         assert_eq!(
-            user.message,
-            "Authentication required: a user sign-in token or user API key."
+            sign_in.message,
+            "Authentication required: a sign-in token or a personal API key."
         );
-        for scope in [RouteScope::Organization, RouteScope::Member] {
-            let member = ApiError::unauthorized_for(scope, None);
-            assert_eq!(
-                member.message,
-                "Authentication required: a member API key or member session."
-            );
-            assert_eq!(member.code, "UNAUTHORIZED");
-        }
+        let kind = ApiError::unauthorized_for(&Scope::Kind("project".into()), None);
+        assert_eq!(
+            kind.message,
+            "Authentication required: a sign-in token or an API key."
+        );
+        assert_eq!(kind.code, "UNAUTHORIZED");
     }
 
     #[test]
@@ -255,18 +253,18 @@ mod tests {
 
     #[test]
     fn test_forbidden_serialization() {
-        let err = ApiError::forbidden(Some(serde_json::json!({
-            "permission": "required_labels",
-            "resource": "route",
-            "resource_id": "/api/widgets"
-        })));
+        let err = ApiError::forbidden(&["project:read".to_string()]);
         let json = String::from_utf8(err.to_json_bytes(None)).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["error"]["type"], "invalid_request_error");
         assert_eq!(parsed["error"]["code"], "FORBIDDEN");
         assert_eq!(
             parsed["error"]["message"],
-            "You don't have permission to do that."
+            "Permission denied, or it may not exist."
+        );
+        assert_eq!(
+            parsed["error"]["details"],
+            serde_json::json!({ "required_labels": ["project:read"] })
         );
     }
 

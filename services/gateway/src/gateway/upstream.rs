@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::time::Duration;
 
 use http::header::HeaderName;
@@ -11,69 +10,85 @@ use pingora::upstreams::peer::HttpPeer;
 use tracing::{debug, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::admission::Admission;
 use crate::error::ErrorKind;
+use crate::pipeline::{path_and_query, Admitted, Forward};
 use crate::route_map::Route;
 
 use super::context::GatewayContext;
-use super::rewrite::{self, RewriteError, SubjectRef};
 
 const CLIENT_CREDENTIAL_HEADERS: &[&str] = &["Authorization", "X-API-Key"];
 
+/// Consumed by the gateway; never leaked to services.
 pub fn strip_client_credentials(req: &mut RequestHeader) {
     for name in CLIENT_CREDENTIAL_HEADERS {
         req.remove_header(*name);
     }
 }
 
-pub fn record_admission_span(ctx: &GatewayContext, admission: &Admission) {
-    let Some(ref span) = ctx.root_span else {
-        return;
-    };
-    match admission {
-        Admission::Public => {}
-        Admission::User { user_id, kid, .. } => {
-            span.record("user.id", user_id.as_str());
-            if let Some(kid) = kid {
-                span.record("jwt.kid", kid.as_str());
-            }
-        }
-        Admission::Organization {
-            organization_id, ..
-        } => {
-            span.record("organization.id", organization_id.as_str());
-        }
-        Admission::Member {
-            organization_id,
-            member_id,
-            ..
-        } => {
-            span.record("organization.id", organization_id.as_str());
-            span.record("member.id", member_id.as_str());
-        }
+/// Every `X-Plat5-*` a client sent: a client can't name a node or a member
+/// (docs/reference/headers.md#stripped).
+pub fn strip_plat5_headers(req: &mut RequestHeader) {
+    let names: Vec<HeaderName> = req
+        .headers
+        .keys()
+        .filter(|name| name.as_str().starts_with("x-plat5-"))
+        .cloned()
+        .collect();
+    for name in names {
+        req.remove_header(&name);
     }
 }
 
-/// Build the upstream peer for a matched route and store it in context.
+pub fn record_admission_span(ctx: &GatewayContext, admitted: &Admitted) {
+    let (Some(span), Admitted::Caller(caller)) = (&ctx.root_span, admitted) else {
+        return;
+    };
+    span.record("plat5.member_id", caller.member_id.as_str());
+    if let Some(root) = caller.root_id() {
+        span.record("plat5.root_id", root);
+    }
+    if let Some(node) = caller.node_id() {
+        span.record("plat5.node_id", node);
+    }
+    if let Some(kid) = &caller.kid {
+        span.record("jwt.kid", kid.as_str());
+    }
+}
+
+#[derive(Debug)]
+pub enum UpstreamError {
+    /// The rewritten path didn't make a URI. The load check should have refused it.
+    Internal,
+    /// Route base URL is not a usable `host:port`.
+    BadUpstream,
+}
+
+/// Rewrite the request for the service and store the upstream peer in context.
 pub async fn build_and_store_upstream_peer(
     session: &mut Session,
     ctx: &mut GatewayContext,
     route: &Route,
-    params: &HashMap<String, String>,
-    admission: &Admission,
+    forward: Forward,
     connect_timeout: Duration,
     read_timeout: Duration,
-) -> std::result::Result<(), RewriteError> {
-    strip_client_credentials(session.req_header_mut());
-    // Only a service sets audit headers, on its response. Never pass a client's on.
-    for name in crate::audit::SERVICE_HEADERS {
-        session.req_header_mut().remove_header(*name);
+) -> std::result::Result<(), UpstreamError> {
+    let req = session.req_header_mut();
+    strip_client_credentials(req);
+    strip_plat5_headers(req);
+    for (name, value) in forward.headers {
+        if let Err(err) = req.insert_header(name, value) {
+            warn!(
+                error_kind = ErrorKind::Internal.as_str(),
+                error_message = %err,
+                "failed to set a subject header"
+            );
+            return Err(UpstreamError::Internal);
+        }
     }
 
-    if let Some(template) = route.upstream.as_deref() {
-        let upstream_path = rewrite::substitute(template, params, subject_ref(admission))?;
+    if let Some(upstream_path) = forward.path {
         let query = session.req_header().uri.query().map(str::to_string);
-        let path_and_query = rewrite::path_and_query(&upstream_path, query.as_deref());
+        let path_and_query = path_and_query(&upstream_path, query.as_deref());
         let new_uri = http::Uri::builder()
             .path_and_query(path_and_query.as_str())
             .build()
@@ -83,7 +98,7 @@ pub async fn build_and_store_upstream_peer(
                     error_message = %err,
                     "failed to build upstream URI"
                 );
-                RewriteError::Internal
+                UpstreamError::Internal
             })?;
         session.req_header_mut().set_uri(new_uri);
         debug!(
@@ -111,7 +126,7 @@ pub async fn build_and_store_upstream_peer(
             upstream = %peer_addr,
             "upstream address is not a resolvable host:port"
         );
-        return Err(RewriteError::BadUpstream);
+        return Err(UpstreamError::BadUpstream);
     };
     info!(route = %route.path, upstream = %peer_addr, "forwarding request to upstream");
     let mut peer = HttpPeer::new(socket_addr, false, String::new());
@@ -119,37 +134,6 @@ pub async fn build_and_store_upstream_peer(
     peer.options.read_timeout = Some(read_timeout);
     ctx.upstream_peer = Some(Box::new(peer));
     Ok(())
-}
-
-fn subject_ref(admission: &Admission) -> SubjectRef<'_> {
-    match admission {
-        Admission::Public => SubjectRef {
-            user_id: None,
-            organization_id: None,
-            member_id: None,
-        },
-        Admission::User { user_id, .. } => SubjectRef {
-            user_id: Some(user_id.as_str()),
-            organization_id: None,
-            member_id: None,
-        },
-        Admission::Organization {
-            organization_id, ..
-        } => SubjectRef {
-            user_id: None,
-            organization_id: Some(organization_id.as_str()),
-            member_id: None,
-        },
-        Admission::Member {
-            organization_id,
-            member_id,
-            ..
-        } => SubjectRef {
-            user_id: None,
-            organization_id: Some(organization_id.as_str()),
-            member_id: Some(member_id.as_str()),
-        },
-    }
 }
 
 /// Gateway peers are host:port. Strip accidental scheme/path from route config.
@@ -225,7 +209,7 @@ mod tests {
         let mut req = RequestHeader::build("GET", b"/api/x", None).unwrap();
         req.insert_header("Authorization", "Bearer secret-jwt")
             .unwrap();
-        req.insert_header("X-API-Key", "plat5-sk-1-test").unwrap();
+        req.insert_header("X-API-Key", "plat5-k-2-test").unwrap();
         req.insert_header("X-Request-ID", "req-1").unwrap();
 
         strip_client_credentials(&mut req);
@@ -238,6 +222,18 @@ mod tests {
                 .and_then(|v| v.to_str().ok()),
             Some("req-1")
         );
+    }
+
+    #[test]
+    fn strips_every_plat5_header_a_client_sent() {
+        let mut req = RequestHeader::build("GET", b"/x", None).unwrap();
+        req.insert_header("X-Plat5-Member-Id", "m_forged").unwrap();
+        req.insert_header("x-plat5-project-id", "n_forged").unwrap();
+        req.insert_header("X-Plat5-Audit-Details", "{}").unwrap();
+        req.insert_header("X-Request-ID", "req-1").unwrap();
+        strip_plat5_headers(&mut req);
+        assert_eq!(req.headers.len(), 1);
+        assert!(req.headers.get("X-Request-ID").is_some());
     }
 
     #[test]

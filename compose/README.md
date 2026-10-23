@@ -32,7 +32,7 @@ curl -sS -X POST http://localhost:5402/apply \
 
 Dev compose seeds identity and audit routes only when that service has no history yet (does not overwrite). Prod does not seed — apply `services/identity/routes.yml` (or a subset) and `services/audit/routes.yml` yourself.
 
-Audit: the gateway records audited `organization` and `member` requests through the `audit` service (`AUDIT_URL`). It is on by default. `AUDIT_ENABLED=false` turns it off for the deployment; then audit need not run and its catalog is not applied. See [`../docs/audit.md`](../docs/audit.md).
+Audit: the gateway records audited requests on kind and sign-in routes through the `audit` service (`AUDIT_URL`). It is on by default. `AUDIT_ENABLED=false` turns it off for the deployment; then audit need not run. Until v2 step 7 the audit service still takes v1 events, so run the v2 stack with `AUDIT_ENABLED=false`. See [`../docs/concepts/audit.md`](../docs/concepts/audit.md).
 
 ## JWT / IdP
 
@@ -42,18 +42,18 @@ Set env (or defaults) for any IdP reachable from the gateway container:
 |----------|---------------|--------|
 | `AUTH_ISSUER` | `http://localhost:5401` | Token `iss` as clients see it |
 | `AUTH_JWKS_URI` | `http://host.docker.internal:5000/.well-known/jwks.json` | Fetch JWKS via host port |
-| `AUTH_USER_ID_CLAIM` | `properties.user_id` | Use `sub` for many OIDC providers |
+| `AUTH_SUBJECT_CLAIM` | `properties.user_id` | Use `sub` for many OIDC providers |
 | `AUTH_ALLOWED_AUDIENCES` | `plat5` | Plat5 API audience; match your IdP client/`aud` |
 
 Gateway uses `host.docker.internal` so a host-published IdP does not need a shared Docker network. API keys are an alternative to JWT; the IdP is still required.
 
 Config: kinds, roles, routes and CORS origins live in the control plane, applied as one config ([`../docs/concepts/config.md`](../docs/concepts/config.md)). On first boot it applies a seed (`SEED_DIR`): dev compose mounts [`seed/`](seed/) (`plat5.yml` and the generated identity and audit routes), prod compose mounts [`seed-prod/`](seed-prod/) (kinds and roles, no services). After that, editing the seed does nothing: change the config with `plat5 plan` and `plat5 apply`. CORS answers `*` until `plat5.yml` lists origins.
 
-`APIKEY_BRAND` (default `plat5`) is identity's alone: keys are `{brand}-k-2-…`. The gateway checks a key's shape and sends it to identity's one validate (`CREDENTIAL_VALIDATE_URL`), which says whose it is: a user key passes on `user` routes, a member key or session on `organization` and `member` routes. See [`../docs/identity.md`](../docs/identity.md#credential-format).
+`APIKEY_BRAND` (default `plat5`) is identity's alone: keys are `{brand}-k-2-…`. The gateway checks a key's shape and sends it, or a JWT's issuer and subject, to identity's admit (`ADMIT_URL`) with the route's node chain; admit answers the member and labels for that request. Answers are cached for `APIKEY_CACHE_TTL_SECS` (default 300). See [`../docs/reference/gateway.md`](../docs/reference/gateway.md#admit).
 
-Gateway rate limits (Valkey; replicas share one budget): `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` (default 60/60; `0` requests = unlimited fallback). Named policies on the service; `shared: true` is opt-in cross-service. Subject follows route scope (`public`→ip, `user`→user, `organization`→org, `member`→member). Failed-auth IP limiter: `RATE_LIMIT_AUTH_FAILURE_*` (default 60/60). `VALKEY_URL` is required. See [`../docs/routes.md`](../docs/routes.md) and [`../docs/gateway-contract.md`](../docs/gateway-contract.md).
+Gateway rate limits (Valkey; replicas share one budget): `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` (default 60/60; `0` requests = unlimited fallback), counted at the route's own node. Named policies on the service count at their `count_at` kind; a route can carry several. Failed-auth IP limiter: `RATE_LIMIT_AUTH_FAILURE_*` (default 60/60). `VALKEY_URL` is required. See [`../docs/reference/config/routes.md`](../docs/reference/config/routes.md#rate_limit) and [`../docs/reference/gateway.md`](../docs/reference/gateway.md).
 
-See [`../docs/idp-contract.md`](../docs/idp-contract.md).
+See [`../docs/reference/idp.md`](../docs/reference/idp.md).
 
 ## Telemetry
 

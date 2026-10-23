@@ -1,16 +1,18 @@
-pub mod admission;
 pub mod audit;
 pub mod auth;
+pub mod clock;
 pub mod config;
 pub mod control_plane;
 pub mod error;
 pub mod gateway;
 pub mod health;
 pub mod internal_http;
+pub mod kinds;
 pub mod metrics;
+pub mod pipeline;
 pub mod rate_limit;
-pub mod route_config;
 pub mod route_map;
+pub mod schema;
 pub mod telemetry;
 
-pub use crate::gateway::{parse_user_id_claim, UserGateway};
+pub use crate::gateway::Gateway;

@@ -1,37 +1,131 @@
-use std::collections::HashMap;
-use std::collections::HashSet;
+//! The routes the gateway serves, built from the control plane's stored form
+//! (docs/reference/config/routes.md): full paths, list-form `methods`, each
+//! route with its scope. A snapshot the gateway can't build is refused whole.
+
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
 use regex::Regex;
-use tracing::warn;
+use serde::Deserialize;
 
-use crate::route_config::{Config, RateLimitPolicy, RouteRateLimit, TimeoutsConfig};
+use crate::kinds::Kinds;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RouteScope {
-    Public,
-    User,
-    Organization,
-    Member,
+/// A service in the gateway feed, in the stored form. The schema has checked
+/// the shape; these are the fields the gateway reads.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ServiceDoc {
+    pub url: String,
+    #[serde(default)]
+    pub rate_limits: BTreeMap<String, PolicyDoc>,
+    #[serde(default)]
+    pub timeouts: Option<TimeoutsDoc>,
+    #[serde(default)]
+    pub route_prefix: Option<String>,
+    pub routes: Vec<RouteDoc>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Deserialize)]
+pub struct TimeoutsDoc {
+    pub connect_ms: Option<u64>,
+    pub read_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct PolicyDoc {
+    pub requests: u64,
+    pub window_seconds: u64,
+    #[serde(default)]
+    pub count_at: Option<String>,
+    #[serde(default)]
+    pub shared: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RouteDoc {
+    pub path: String,
+    pub scope: String,
+    #[serde(default)]
+    pub upstream: Option<String>,
+    /// The stored form is always a list; a methods map is refused at decode.
+    pub methods: Vec<String>,
+    #[serde(default)]
+    pub required_labels: Option<Vec<String>>,
+    #[serde(default)]
+    pub rate_limit: Option<RateLimitDoc>,
+    #[serde(default)]
+    pub audit: Option<bool>,
+    #[serde(default)]
+    pub resolve_deleted: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum RateLimitDoc {
+    Off(bool),
+    Name(String),
+    Names(Vec<String>),
+    Inline { requests: u64, window_seconds: u64 },
+}
+
+/// What a route addresses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Scope {
+    /// No subject, no admit.
+    Public,
+    /// The sign-in kind: an empty chain, the person's directory member.
+    SignIn(String),
+    /// A kind: a node of it, through its chain of ancestors.
+    Kind(String),
+}
+
+impl Scope {
+    /// The scope's name as a route writes it, and as admit takes it.
+    pub fn name(&self) -> &str {
+        match self {
+            Scope::Public => "public",
+            Scope::SignIn(k) | Scope::Kind(k) => k,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Route {
-    /// The service name in `routes.yml`.
+    /// The service name in the config.
     pub service: String,
     pub base_url: String,
     pub path: String,
     pub methods: HashSet<String>,
     /// Absolute upstream template. None means proxy `path` unchanged.
     pub upstream: Option<String>,
-    /// The auth scope for this route
-    pub scope: RouteScope,
-    pub required_labels: Option<Vec<String>>,
+    pub scope: Scope,
+    /// The kinds in the path, root first; each is also its param's name. Empty on
+    /// `public` and sign-in routes.
+    pub chain: Vec<String>,
+    /// Any one admits. Empty: any member of the tree, or no check at all.
+    pub required_labels: Vec<String>,
     pub limiter: RouteLimiter,
     /// The route's `audit` override. None = method default.
     pub audit: Option<bool>,
+    pub resolve_deleted: bool,
     /// The service's `timeouts`. None = the gateway's `UPSTREAM_*_TIMEOUT_MS`.
     pub timeouts: UpstreamTimeouts,
+}
+
+impl Route {
+    /// Whether a request with `method` goes in an audit log (docs/concepts/audit.md#which-log).
+    /// `public` has no log. Writes are audited by default; the route's `audit` overrides.
+    pub fn audited(&self, method: &str) -> bool {
+        if self.scope == Scope::Public {
+            return false;
+        }
+        self.audit
+            .unwrap_or(matches!(method, "POST" | "PUT" | "PATCH" | "DELETE"))
+    }
+
+    /// Whether `param` is one of the chain's: its value is a slug or id, never sent on.
+    pub fn is_chain_param(&self, param: &str) -> bool {
+        self.chain.iter().any(|k| k == param)
+    }
 }
 
 /// A service's upstream timeouts. Each one left out uses the gateway default.
@@ -41,53 +135,30 @@ pub struct UpstreamTimeouts {
     pub read: Option<Duration>,
 }
 
-impl UpstreamTimeouts {
-    fn from_config(cfg: Option<&TimeoutsConfig>) -> Self {
-        let Some(cfg) = cfg else {
-            return Self::default();
-        };
-        Self {
-            connect: cfg.connect_ms.map(Duration::from_millis),
-            read: cfg.read_ms.map(Duration::from_millis),
-        }
-    }
-}
-
-impl Route {
-    /// Whether a request with `method` goes in an audit log (docs/audit.md#which-log):
-    /// the org's on `organization` and `member` routes, the person's on `user` routes.
-    /// `public` has no realm to log into. Writes are audited by default; the route's
-    /// `audit` overrides.
-    pub fn audited(&self, method: &str) -> bool {
-        if self.scope == RouteScope::Public {
-            return false;
-        }
-        self.audit
-            .unwrap_or(matches!(method, "POST" | "PUT" | "PATCH" | "DELETE"))
-    }
-}
-
-/// Resolved at load from `rate_limit` + service `rate_limits`.
+/// Resolved at load from `rate_limit` and the service's `rate_limits`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RouteLimiter {
-    /// Inherit gateway fallback (`RATE_LIMIT_*`).
+    /// The gateway fallback (`RATE_LIMIT_*`), counted at the route's own node.
     Inherit,
     Unlimited,
-    Limited(ResolvedLimiter),
+    /// Every one must pass.
+    Policies(Vec<Policy>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResolvedLimiter {
+pub struct Policy {
     pub requests: u64,
     pub window_seconds: u64,
     pub bucket: LimitBucket,
+    /// The kind whose node holds the bucket. None = the route's own.
+    pub count_at: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LimitBucket {
-    /// `{METHOD} {path} {subject}`
+    /// `{METHOD} {path} {node_id}`
     MethodPath,
-    /// `{prefix}:{subject}` (`service:name` or shared `name`)
+    /// `{prefix}:{node_id}`: `service:name`, or a shared `name`.
     Named(String),
 }
 
@@ -100,181 +171,62 @@ struct CompiledRoute {
     param_count: usize,
 }
 
+#[derive(Default)]
 pub struct RouteMap {
     routes: Vec<CompiledRoute>,
 }
 
-impl Default for RouteMap {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl RouteMap {
-    pub fn new() -> Self {
-        RouteMap { routes: Vec::new() }
-    }
-
-    /// Build RouteMap from parsed config. Skips routes whose paths contain
-    /// invalid patterns and logs a warning.
+    /// Build from the feed's services. Err names the first thing that can't be
+    /// built: the caller refuses the whole snapshot.
     ///
-    /// Services are processed in sorted name order. Routes are sorted by
-    /// specificity (more static segments, fewer params, longer path, path string)
-    /// so first-match is deterministic. Exact (path, method) duplicates are skipped
-    /// after the first with a warning.
-    pub fn from_config(config: &Config) -> Self {
-        let mut route_map = RouteMap::new();
-
-        let mut service_names: Vec<&String> = config.services.keys().collect();
-        service_names.sort();
-
-        for service_name in service_names {
-            let service_config = &config.services[service_name];
-            let base_url = &service_config.url;
-            let timeouts = UpstreamTimeouts::from_config(service_config.timeouts.as_ref());
-
-            let scopes = [
-                (service_config.public.as_ref(), RouteScope::Public),
-                (service_config.user.as_ref(), RouteScope::User),
-                (
-                    service_config.organization.as_ref(),
-                    RouteScope::Organization,
-                ),
-                (service_config.member.as_ref(), RouteScope::Member),
-            ];
-
-            for (scope_cfg, scope) in scopes {
-                let Some(scope_cfg) = scope_cfg else {
-                    continue;
-                };
-                for route_config in &scope_cfg.routes {
-                    let methods: Vec<&str> =
-                        route_config.methods.iter().map(|s| s.as_str()).collect();
-
-                    let limiter = match bind_limiter(
-                        service_name,
-                        service_config.rate_limits.as_ref(),
-                        route_config.rate_limit.as_ref(),
-                    ) {
-                        Ok(l) => l,
-                        Err(e) => {
-                            warn!(
-                                service = %service_name,
-                                path = %route_config.path,
-                                error = %e,
-                                "skipping invalid route"
-                            );
-                            continue;
-                        }
-                    };
-
-                    if let Err(e) = route_map.add_route(
-                        service_name,
-                        base_url,
-                        &route_config.path,
-                        &methods,
-                        route_config.upstream.clone(),
-                        scope,
-                        route_config.required_labels.clone(),
-                        limiter,
-                        route_config.audit,
-                    ) {
-                        warn!(
-                            service = %service_name,
-                            path = %route_config.path,
-                            error = %e,
-                            "skipping invalid route"
-                        );
-                        continue;
-                    }
-                    if let Some(added) = route_map.routes.last_mut() {
-                        added.route.timeouts = timeouts;
-                    }
-                }
+    /// Routes are sorted by specificity (more static segments, fewer params,
+    /// longer path, path string, service) so first-match is deterministic.
+    pub fn from_feed(
+        services: &BTreeMap<String, ServiceDoc>,
+        kinds: &Kinds,
+    ) -> Result<Self, String> {
+        let mut routes = Vec::new();
+        for (name, service) in services {
+            if service.route_prefix.is_some() {
+                return Err(format!(
+                    "services.{name}: route_prefix in the stored form (it is expanded at apply)"
+                ));
+            }
+            let timeouts = UpstreamTimeouts {
+                connect: service
+                    .timeouts
+                    .as_ref()
+                    .and_then(|t| t.connect_ms)
+                    .map(Duration::from_millis),
+                read: service
+                    .timeouts
+                    .as_ref()
+                    .and_then(|t| t.read_ms)
+                    .map(Duration::from_millis),
+            };
+            for (i, doc) in service.routes.iter().enumerate() {
+                let route = build_route(name, service, doc, kinds, timeouts)
+                    .map_err(|e| format!("services.{name}.routes[{i}] ({}): {e}", doc.path))?;
+                let (static_segments, param_count) = path_specificity(&route.path);
+                routes.push(CompiledRoute {
+                    regex: path_to_regex(&route.path)
+                        .map_err(|e| format!("services.{name}.routes[{i}]: {e}"))?,
+                    route,
+                    static_segments,
+                    param_count,
+                });
             }
         }
-
-        route_map.finalize();
-        route_map
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn add_route(
-        &mut self,
-        service: &str,
-        base_url: &str,
-        path: &str,
-        methods: &[&str],
-        upstream: Option<String>,
-        scope: RouteScope,
-        required_labels: Option<Vec<String>>,
-        limiter: RouteLimiter,
-        audit: Option<bool>,
-    ) -> Result<(), String> {
-        let re = path_to_regex(path).map_err(|e| e.to_string())?;
-        let (static_segments, param_count) = path_specificity(path);
-
-        let route = Route {
-            service: service.to_string(),
-            base_url: base_url.to_string(),
-            path: path.to_string(),
-            methods: methods.iter().map(|m| m.to_string()).collect(),
-            upstream,
-            scope,
-            required_labels,
-            limiter,
-            audit,
-            timeouts: UpstreamTimeouts::default(),
-        };
-
-        self.routes.push(CompiledRoute {
-            regex: re,
-            route,
-            static_segments,
-            param_count,
-        });
-        Ok(())
-    }
-
-    /// Sort by specificity and drop exact (path, method) duplicates.
-    fn finalize(&mut self) {
-        self.routes.sort_by(|a, b| {
+        routes.sort_by(|a, b| {
             b.static_segments
                 .cmp(&a.static_segments)
                 .then_with(|| a.param_count.cmp(&b.param_count))
                 .then_with(|| b.route.path.len().cmp(&a.route.path.len()))
                 .then_with(|| a.route.path.cmp(&b.route.path))
+                .then_with(|| a.route.service.cmp(&b.route.service))
         });
-
-        let mut seen: HashSet<(String, String)> = HashSet::new();
-        let mut cleaned = Vec::with_capacity(self.routes.len());
-        for mut compiled in self.routes.drain(..) {
-            let methods: HashSet<String> = compiled
-                .route
-                .methods
-                .iter()
-                .filter(|method| {
-                    let key = (compiled.route.path.clone(), (*method).clone());
-                    if seen.insert(key) {
-                        true
-                    } else {
-                        warn!(
-                            path = %compiled.route.path,
-                            method = %method,
-                            "duplicate route path+method; keeping first (most specific / sorted)"
-                        );
-                        false
-                    }
-                })
-                .cloned()
-                .collect();
-            if methods.is_empty() {
-                continue;
-            }
-            compiled.route.methods = methods;
-            cleaned.push(compiled);
-        }
-        self.routes = cleaned;
+        Ok(Self { routes })
     }
 
     pub fn find_route(
@@ -283,20 +235,20 @@ impl RouteMap {
         method: &str,
     ) -> Option<(&Route, HashMap<String, String>)> {
         for compiled in &self.routes {
+            if !compiled.route.methods.contains(method) {
+                continue;
+            }
             if let Some(caps) = compiled.regex.captures(external_path) {
-                if !compiled.route.methods.contains(method) {
-                    continue;
-                }
-
-                let mut path_params = HashMap::new();
-                compiled.regex.capture_names().for_each(|key| {
-                    if let Some(key) = key {
-                        if let Some(value) = caps.name(key) {
-                            path_params.insert(key.to_string(), value.as_str().to_string());
-                        }
-                    }
-                });
-                return Some((&compiled.route, path_params));
+                let params = compiled
+                    .regex
+                    .capture_names()
+                    .flatten()
+                    .filter_map(|key| {
+                        caps.name(key)
+                            .map(|v| (key.to_string(), v.as_str().to_string()))
+                    })
+                    .collect();
+                return Some((&compiled.route, params));
             }
         }
         None
@@ -305,37 +257,207 @@ impl RouteMap {
     pub fn route_count(&self) -> usize {
         self.routes.len()
     }
+
+    /// Every route, in match order.
+    pub fn routes(&self) -> impl Iterator<Item = &Route> {
+        self.routes.iter().map(|c| &c.route)
+    }
+}
+
+fn build_route(
+    service_name: &str,
+    service: &ServiceDoc,
+    doc: &RouteDoc,
+    kinds: &Kinds,
+    timeouts: UpstreamTimeouts,
+) -> Result<Route, String> {
+    let scope = if doc.scope == "public" {
+        Scope::Public
+    } else if doc.scope == kinds.sign_in() {
+        Scope::SignIn(doc.scope.clone())
+    } else if kinds.contains(&doc.scope) {
+        Scope::Kind(doc.scope.clone())
+    } else {
+        return Err(format!("scope {} is not a kind", doc.scope));
+    };
+
+    let params = path_params(&doc.path)?;
+    let chain: Vec<String> = params
+        .iter()
+        .filter(|p| kinds.contains(p))
+        .cloned()
+        .collect();
+    match &scope {
+        Scope::Kind(kind) => {
+            if chain.last() != Some(kind) || !kinds.is_chain(&chain) {
+                return Err(format!(
+                    "path params [{}] are not a chain down to {kind}",
+                    chain.join(", ")
+                ));
+            }
+        }
+        _ => {
+            if !chain.is_empty() {
+                return Err(format!("chain params on a {} route", scope.name()));
+            }
+        }
+    }
+
+    let required_labels = doc.required_labels.clone().unwrap_or_default();
+    match &scope {
+        Scope::Kind(_) if doc.required_labels.is_none() => {
+            return Err("required_labels missing".to_string());
+        }
+        Scope::Public | Scope::SignIn(_) if !required_labels.is_empty() => {
+            return Err(format!("required_labels on a {} route", scope.name()));
+        }
+        _ => {}
+    }
+    if doc.resolve_deleted && !matches!(scope, Scope::Kind(_)) {
+        return Err(format!("resolve_deleted on a {} route", scope.name()));
+    }
+
+    match &doc.upstream {
+        Some(template) => check_upstream(template, &scope, &chain, &params)?,
+        None if !chain.is_empty() => {
+            return Err("no upstream on a path with chain params".to_string());
+        }
+        None => {}
+    }
+
+    let limiter = bind_limiter(service_name, service, doc, &scope, &chain, kinds)?;
+
+    Ok(Route {
+        service: service_name.to_string(),
+        base_url: service.url.clone(),
+        path: doc.path.clone(),
+        methods: doc.methods.iter().cloned().collect(),
+        upstream: doc.upstream.clone(),
+        scope,
+        chain,
+        required_labels,
+        limiter,
+        audit: doc.audit,
+        resolve_deleted: doc.resolve_deleted,
+        timeouts,
+    })
+}
+
+/// Every `{subject.*}` names a field the scope provides; every `{path.*}` a
+/// non-chain param of the path.
+fn check_upstream(
+    template: &str,
+    scope: &Scope,
+    chain: &[String],
+    params: &[String],
+) -> Result<(), String> {
+    for placeholder in placeholders(template)? {
+        let ok = match placeholder.split_once('.') {
+            Some(("subject", "member_id")) => *scope != Scope::Public,
+            Some(("subject", field)) => field
+                .strip_suffix("_id")
+                .is_some_and(|kind| chain.iter().any(|k| k == kind)),
+            Some(("path", name)) => {
+                params.iter().any(|p| p == name) && !chain.iter().any(|k| k == name)
+            }
+            _ => false,
+        };
+        if !ok {
+            return Err(format!("upstream placeholder {{{placeholder}}}"));
+        }
+    }
+    Ok(())
+}
+
+fn placeholders(template: &str) -> Result<Vec<&str>, String> {
+    let mut out = Vec::new();
+    let mut rest = template;
+    while let Some(start) = rest.find('{') {
+        let after = &rest[start + 1..];
+        let end = after
+            .find('}')
+            .ok_or_else(|| "unclosed { in upstream".to_string())?;
+        out.push(&after[..end]);
+        rest = &after[end + 1..];
+    }
+    Ok(out)
 }
 
 fn bind_limiter(
     service_name: &str,
-    policies: Option<&HashMap<String, RateLimitPolicy>>,
-    rate_limit: Option<&RouteRateLimit>,
+    service: &ServiceDoc,
+    doc: &RouteDoc,
+    scope: &Scope,
+    chain: &[String],
+    kinds: &Kinds,
 ) -> Result<RouteLimiter, String> {
-    match rate_limit {
-        None => Ok(RouteLimiter::Inherit),
-        Some(RouteRateLimit::Unlimited) => Ok(RouteLimiter::Unlimited),
-        Some(RouteRateLimit::Limit(cfg)) => Ok(RouteLimiter::Limited(ResolvedLimiter {
-            requests: cfg.requests,
-            window_seconds: cfg.window_seconds,
-            bucket: LimitBucket::MethodPath,
-        })),
-        Some(RouteRateLimit::Named(name)) => {
-            let policy = policies
-                .and_then(|p| p.get(name))
-                .ok_or_else(|| format!("rate_limit '{name}' is not defined on this service"))?;
-            let prefix = if policy.shared {
+    let names: Vec<&String> = match &doc.rate_limit {
+        None => return Ok(RouteLimiter::Inherit),
+        Some(RateLimitDoc::Off(false)) => return Ok(RouteLimiter::Unlimited),
+        Some(RateLimitDoc::Off(true)) => return Err("rate_limit: true".to_string()),
+        Some(RateLimitDoc::Inline {
+            requests,
+            window_seconds,
+        }) => {
+            return Ok(RouteLimiter::Policies(vec![Policy {
+                requests: *requests,
+                window_seconds: *window_seconds,
+                bucket: LimitBucket::MethodPath,
+                count_at: None,
+            }]))
+        }
+        Some(RateLimitDoc::Name(name)) => vec![name],
+        Some(RateLimitDoc::Names(names)) => names.iter().collect(),
+    };
+    let mut policies = Vec::with_capacity(names.len());
+    for name in names {
+        let policy = service
+            .rate_limits
+            .get(name)
+            .ok_or_else(|| format!("rate_limit {name} is not defined on this service"))?;
+        if let Some(count_at) = &policy.count_at {
+            let ok = match scope {
+                Scope::Public => false,
+                Scope::SignIn(kind) => count_at == kind,
+                Scope::Kind(_) => chain.iter().any(|k| k == count_at),
+            };
+            if !ok || !kinds.contains(count_at) {
+                return Err(format!(
+                    "rate_limit {name} counts at {count_at}, not in this route's chain"
+                ));
+            }
+        }
+        policies.push(Policy {
+            requests: policy.requests,
+            window_seconds: policy.window_seconds,
+            bucket: LimitBucket::Named(if policy.shared {
                 name.clone()
             } else {
                 format!("{service_name}:{name}")
-            };
-            Ok(RouteLimiter::Limited(ResolvedLimiter {
-                requests: policy.requests,
-                window_seconds: policy.window_seconds,
-                bucket: LimitBucket::Named(prefix),
-            }))
+            }),
+            count_at: policy.count_at.clone(),
+        });
+    }
+    Ok(RouteLimiter::Policies(policies))
+}
+
+/// The `{param}` names in a path, in order.
+fn path_params(path: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for segment in path.split('/') {
+        if let Some(name) = segment.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+            if name.is_empty() {
+                return Err("empty path parameter name".to_string());
+            }
+            if out.iter().any(|p| p == name) {
+                return Err(format!("path param {{{name}}} twice"));
+            }
+            out.push(name.to_string());
+        } else if segment.contains('{') || segment.contains('}') {
+            return Err(format!("path segment {segment} mixes text and a param"));
         }
     }
+    Ok(out)
 }
 
 /// Static segment count and path-param count for specificity ranking.
@@ -356,26 +478,15 @@ fn path_specificity(path: &str) -> (usize, usize) {
 /// matches the literal segments and captures path parameters.
 fn path_to_regex(path: &str) -> Result<Regex, regex::Error> {
     let mut pattern = String::from("^");
-    let mut chars = path.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '{' {
-            let mut name = String::new();
-            for c in chars.by_ref() {
-                if c == '}' {
-                    break;
-                }
-                name.push(c);
-            }
-            if name.is_empty() {
-                return Err(regex::Error::Syntax("empty path parameter name".into()));
-            }
-            pattern.push_str(&format!("(?P<{}>[^/]+)", regex::escape(&name)));
-        } else {
-            pattern.push_str(&regex::escape(&ch.to_string()));
+    for (i, segment) in path.split('/').enumerate() {
+        if i > 0 {
+            pattern.push('/');
+        }
+        match segment.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+            Some(name) => pattern.push_str(&format!("(?P<{}>[^/]+)", regex::escape(name))),
+            None => pattern.push_str(&regex::escape(segment)),
         }
     }
-
     pattern.push('$');
     Regex::new(&pattern)
 }
@@ -383,271 +494,225 @@ fn path_to_regex(path: &str) -> Result<Regex, regex::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::route_config::{
-        Config, RateLimitPolicy, RouteConfig, RouteRateLimit, ScopeConfig, ServiceConfig,
-    };
+    use serde_json::json;
 
-    fn route(path: &str, methods: &[&str]) -> RouteConfig {
-        RouteConfig {
-            path: path.to_string(),
-            methods: methods.iter().map(|m| m.to_string()).collect(),
-            upstream: None,
-            required_labels: None,
-            rate_limit: None,
-            ..Default::default()
-        }
+    fn kinds() -> Kinds {
+        let docs = serde_json::from_value(json!({
+            "directory": { "sign_in": "idp" },
+            "organization": {},
+            "project": { "parent": "organization" }
+        }))
+        .unwrap();
+        Kinds::from_feed(&docs).unwrap()
+    }
+
+    fn build(services: serde_json::Value) -> Result<RouteMap, String> {
+        let services: BTreeMap<String, ServiceDoc> = serde_json::from_value(services).unwrap();
+        RouteMap::from_feed(&services, &kinds())
+    }
+
+    fn one_route(route: serde_json::Value) -> Result<RouteMap, String> {
+        build(json!({ "svc": { "url": "http://svc:3000", "routes": [route] } }))
     }
 
     #[test]
     fn specificity_prefers_static_over_param() {
-        let mut services = HashMap::new();
-        services.insert(
-            "b".to_string(),
-            ServiceConfig {
-                url: "http://b".into(),
-                rate_limits: None,
-                timeouts: None,
-                public: Some(ScopeConfig {
-                    route_prefix: None,
-                    routes: vec![route("/api/{id}", &["GET"])],
-                }),
-                user: None,
-                organization: None,
-                member: None,
-            },
-        );
-        services.insert(
-            "a".to_string(),
-            ServiceConfig {
-                url: "http://a".into(),
-                rate_limits: None,
-                timeouts: None,
-                public: Some(ScopeConfig {
-                    route_prefix: None,
-                    routes: vec![route("/api/health", &["GET"])],
-                }),
-                user: None,
-                organization: None,
-                member: None,
-            },
-        );
-        let map = RouteMap::from_config(&Config { services });
+        let map = build(json!({
+            "b": { "url": "http://b:1", "routes": [{ "path": "/api/{id}", "scope": "public", "methods": ["GET"] }] },
+            "a": { "url": "http://a:1", "routes": [{ "path": "/api/health", "scope": "public", "methods": ["GET"] }] }
+        }))
+        .unwrap();
         let (r, _) = map.find_route("/api/health", "GET").unwrap();
-        assert_eq!(r.base_url, "http://a");
-        assert_eq!(r.path, "/api/health");
+        assert_eq!(r.service, "a");
+        let (r, params) = map.find_route("/api/x", "GET").unwrap();
+        assert_eq!(r.service, "b");
+        assert_eq!(params["id"], "x");
+    }
+
+    #[test]
+    fn a_kind_route_knows_its_chain() {
+        let map = one_route(json!({
+            "path": "/orgs/{organization}/projects/{project}/plans/{key}",
+            "scope": "project",
+            "upstream": "/projects/{subject.project_id}/plans/{path.key}",
+            "methods": ["GET"],
+            "required_labels": ["project:read"]
+        }))
+        .unwrap();
+        let (r, params) = map
+            .find_route("/orgs/acme/projects/web/plans/pro", "GET")
+            .unwrap();
+        assert_eq!(r.scope, Scope::Kind("project".into()));
+        assert_eq!(r.chain, vec!["organization", "project"]);
+        assert!(r.is_chain_param("organization") && !r.is_chain_param("key"));
+        assert_eq!(params["key"], "pro");
+        assert!(map
+            .find_route("/orgs/acme/projects/web/plans/pro", "POST")
+            .is_none());
     }
 
     #[test]
     fn service_timeouts_reach_its_routes() {
-        let mut services = HashMap::new();
-        for (name, path, timeouts) in [
-            (
-                "slow",
-                "/slow",
-                Some(TimeoutsConfig {
-                    connect_ms: None,
-                    read_ms: Some(120_000),
-                }),
-            ),
-            ("plain", "/plain", None),
-        ] {
-            services.insert(
-                name.to_string(),
-                ServiceConfig {
-                    url: "http://s".into(),
-                    rate_limits: None,
-                    timeouts,
-                    public: Some(ScopeConfig {
-                        route_prefix: None,
-                        routes: vec![route(path, &["GET"])],
-                    }),
-                    user: None,
-                    organization: None,
-                    member: None,
-                },
-            );
-        }
-        let map = RouteMap::from_config(&Config { services });
-        let (slow, _) = map.find_route("/slow", "GET").unwrap();
-        assert_eq!(
-            slow.timeouts,
-            UpstreamTimeouts {
-                connect: None,
-                read: Some(Duration::from_secs(120)),
-            }
-        );
-        let (plain, _) = map.find_route("/plain", "GET").unwrap();
-        assert_eq!(plain.timeouts, UpstreamTimeouts::default());
-    }
-
-    #[test]
-    fn deterministic_service_order() {
-        // Same specificity: path string order decides
-        let mut services = HashMap::new();
-        for (name, path, url) in [("z", "/x/z", "http://z"), ("a", "/x/a", "http://a")] {
-            services.insert(
-                name.to_string(),
-                ServiceConfig {
-                    url: url.into(),
-                    rate_limits: None,
-                    timeouts: None,
-                    public: Some(ScopeConfig {
-                        route_prefix: None,
-                        routes: vec![route(path, &["GET"])],
-                    }),
-                    user: None,
-                    organization: None,
-                    member: None,
-                },
-            );
-        }
-        let map = RouteMap::from_config(&Config { services });
-        assert_eq!(
-            map.find_route("/x/a", "GET").unwrap().0.base_url,
-            "http://a"
-        );
-        assert_eq!(
-            map.find_route("/x/z", "GET").unwrap().0.base_url,
-            "http://z"
-        );
-    }
-
-    #[test]
-    fn empty_param_name_rejected() {
-        assert!(path_to_regex("/api/{}").is_err());
-    }
-
-    #[test]
-    fn named_policy_binds_service_and_shared_buckets() {
-        let mut local = route("/api/w", &["POST"]);
-        local.rate_limit = Some(RouteRateLimit::Named("writes".into()));
-        let mut shared = route("/api/s", &["DELETE"]);
-        shared.rate_limit = Some(RouteRateLimit::Named("org-writes".into()));
-        let mut services = HashMap::new();
-        services.insert(
-            "projects".into(),
-            ServiceConfig {
-                url: "http://p".into(),
-                rate_limits: Some(HashMap::from([
-                    (
-                        "writes".into(),
-                        RateLimitPolicy {
-                            requests: 30,
-                            window_seconds: 60,
-                            shared: false,
-                        },
-                    ),
-                    (
-                        "org-writes".into(),
-                        RateLimitPolicy {
-                            requests: 10,
-                            window_seconds: 60,
-                            shared: true,
-                        },
-                    ),
-                ])),
-                timeouts: None,
-                public: None,
-                user: Some(ScopeConfig {
-                    route_prefix: None,
-                    routes: vec![local, shared],
-                }),
-                organization: None,
-                member: None,
-            },
-        );
-        let map = RouteMap::from_config(&Config { services });
-        let (w, _) = map.find_route("/api/w", "POST").unwrap();
-        match &w.limiter {
-            RouteLimiter::Limited(b) => {
-                assert_eq!(b.requests, 30);
-                assert_eq!(b.bucket, LimitBucket::Named("projects:writes".into()));
-            }
-            other => panic!("{other:?}"),
-        }
-        let (s, _) = map.find_route("/api/s", "DELETE").unwrap();
-        match &s.limiter {
-            RouteLimiter::Limited(b) => {
-                assert_eq!(b.bucket, LimitBucket::Named("org-writes".into()));
-            }
-            other => panic!("{other:?}"),
-        }
-    }
-
-    #[test]
-    fn member_scope_route_loads() {
-        let mut map = RouteMap::new();
-        assert!(map
-            .add_route(
-                "identity",
-                "http://x",
-                "/member/api-keys",
-                &["GET"],
-                Some("/members/{subject.member_id}/api-keys".into()),
-                RouteScope::Member,
-                None,
-                RouteLimiter::Inherit,
-                None,
-            )
-            .is_ok());
-        let (route, _) = map.find_route("/member/api-keys", "GET").unwrap();
-        assert_eq!(route.scope, RouteScope::Member);
-        assert_eq!(
-            route.upstream.as_deref(),
-            Some("/members/{subject.member_id}/api-keys")
-        );
-    }
-
-    fn audit_route(scope: RouteScope, audit: Option<bool>) -> Route {
-        let mut map = RouteMap::new();
-        map.add_route(
-            "svc",
-            "http://x",
-            "/r",
-            &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
-            None,
-            scope,
-            None,
-            RouteLimiter::Inherit,
-            audit,
-        )
+        let map = build(json!({
+            "slow": { "url": "http://s:1", "timeouts": { "read_ms": 120000 },
+                      "routes": [{ "path": "/slow", "scope": "public", "methods": ["GET"] }] }
+        }))
         .unwrap();
-        map.find_route("/r", "GET").unwrap().0.clone()
+        let (slow, _) = map.find_route("/slow", "GET").unwrap();
+        assert_eq!(slow.timeouts.read, Some(Duration::from_secs(120)));
+        assert_eq!(slow.timeouts.connect, None);
     }
 
     #[test]
-    fn writes_are_audited_by_default_on_user_org_and_member_routes() {
-        for scope in [
-            RouteScope::User,
-            RouteScope::Organization,
-            RouteScope::Member,
+    fn policies_bind_buckets_and_count_at() {
+        let map = build(json!({
+            "e10s": {
+                "url": "http://e10s:3000",
+                "rate_limits": {
+                    "per-project": { "requests": 100, "window_seconds": 1, "count_at": "project" },
+                    "per-org": { "requests": 300, "window_seconds": 1, "count_at": "organization", "shared": true }
+                },
+                "routes": [{
+                    "path": "/orgs/{organization}/projects/{project}/check",
+                    "scope": "project",
+                    "upstream": "/projects/{subject.project_id}/check",
+                    "methods": ["POST"],
+                    "required_labels": ["check"],
+                    "rate_limit": ["per-project", "per-org"]
+                }, {
+                    "path": "/orgs/{organization}/projects/{project}/inline",
+                    "scope": "project",
+                    "upstream": "/projects/{subject.project_id}/inline",
+                    "methods": ["POST"],
+                    "required_labels": ["check"],
+                    "rate_limit": { "requests": 5, "window_seconds": 60 }
+                }]
+            }
+        }))
+        .unwrap();
+        let (r, _) = map.find_route("/orgs/a/projects/b/check", "POST").unwrap();
+        assert_eq!(
+            r.limiter,
+            RouteLimiter::Policies(vec![
+                Policy {
+                    requests: 100,
+                    window_seconds: 1,
+                    bucket: LimitBucket::Named("e10s:per-project".into()),
+                    count_at: Some("project".into()),
+                },
+                Policy {
+                    requests: 300,
+                    window_seconds: 1,
+                    bucket: LimitBucket::Named("per-org".into()),
+                    count_at: Some("organization".into()),
+                },
+            ])
+        );
+        let (r, _) = map.find_route("/orgs/a/projects/b/inline", "POST").unwrap();
+        assert!(
+            matches!(&r.limiter, RouteLimiter::Policies(p) if p[0].bucket == LimitBucket::MethodPath)
+        );
+    }
+
+    #[test]
+    fn refuses_what_it_cannot_build() {
+        let kind_route = |path: &str, upstream: &str| {
+            json!({ "path": path, "scope": "project", "upstream": upstream,
+                    "methods": ["GET"], "required_labels": [] })
+        };
+        for (route, why) in [
+            (
+                json!({ "path": "/x", "scope": "folder", "methods": ["GET"] }),
+                "not a kind",
+            ),
+            (
+                kind_route("/projects/{project}", "/p/{subject.project_id}"),
+                "not a chain",
+            ),
+            (
+                kind_route("/p/{project}/o/{organization}", "/p/{subject.project_id}"),
+                "not a chain",
+            ),
+            (
+                kind_route("/o/{organization}/p/{project}", "/p/{subject.folder_id}"),
+                "placeholder",
+            ),
+            (
+                kind_route("/o/{organization}/p/{project}", "/p/{path.project}"),
+                "placeholder",
+            ),
+            (
+                kind_route("/o/{organization}/p/{project}", "/p/{project}"),
+                "placeholder",
+            ),
+            (
+                json!({ "path": "/o/{organization}/p/{project}", "scope": "project", "methods": ["GET"], "required_labels": [] }),
+                "no upstream",
+            ),
+            (
+                json!({ "path": "/o/{organization}/p/{project}", "scope": "project", "upstream": "/p", "methods": ["GET"] }),
+                "required_labels missing",
+            ),
+            (
+                json!({ "path": "/me", "scope": "directory", "methods": ["GET"], "required_labels": ["x"] }),
+                "required_labels on",
+            ),
+            (
+                json!({ "path": "/me", "scope": "directory", "methods": ["GET"], "resolve_deleted": true }),
+                "resolve_deleted",
+            ),
+            (
+                json!({ "path": "/x/{organization}", "scope": "public", "methods": ["GET"] }),
+                "chain params",
+            ),
+            (
+                json!({ "path": "/x", "scope": "public", "upstream": "/{subject.member_id}", "methods": ["GET"] }),
+                "placeholder",
+            ),
+            (
+                json!({ "path": "/x", "scope": "public", "methods": ["GET"], "rate_limit": "nope" }),
+                "not defined",
+            ),
         ] {
-            let route = audit_route(scope, None);
-            for m in ["POST", "PUT", "PATCH", "DELETE"] {
-                assert!(route.audited(m), "{scope:?} {m}");
-            }
-            for m in ["GET", "HEAD"] {
-                assert!(!route.audited(m), "{scope:?} {m}");
-            }
+            let err = one_route(route.clone())
+                .err()
+                .unwrap_or_else(|| panic!("built {route}"));
+            assert!(err.contains(why), "{route}: {err}");
         }
+
+        let count_at_outside = build(json!({ "svc": {
+            "url": "http://svc:1",
+            "rate_limits": { "p": { "requests": 1, "window_seconds": 1, "count_at": "project" } },
+            "routes": [{ "path": "/o/{organization}", "scope": "organization",
+                         "upstream": "/o/{subject.organization_id}", "methods": ["GET"],
+                         "required_labels": [], "rate_limit": "p" }]
+        }}));
+        assert!(count_at_outside
+            .err()
+            .unwrap()
+            .contains("not in this route's chain"));
+
+        let prefixed = build(json!({ "svc": {
+            "url": "http://svc:1", "route_prefix": "/v1",
+            "routes": [{ "path": "/x", "scope": "public", "methods": ["GET"] }]
+        }}));
+        assert!(prefixed.err().unwrap().contains("route_prefix"));
     }
 
     #[test]
-    fn audit_override_applies_to_every_method_of_the_route() {
-        let on = audit_route(RouteScope::Organization, Some(true));
-        assert!(on.audited("GET"));
-        let off = audit_route(RouteScope::Organization, Some(false));
-        assert!(!off.audited("POST"));
-    }
-
-    #[test]
-    fn public_routes_are_never_audited() {
-        assert!(!audit_route(RouteScope::Public, None).audited("POST"));
-        assert!(!audit_route(RouteScope::Public, Some(true)).audited("POST"));
-    }
-
-    #[test]
-    fn route_keeps_its_service_name() {
-        assert_eq!(audit_route(RouteScope::Organization, None).service, "svc");
+    fn audit_defaults_by_method_and_never_on_public() {
+        let map = build(json!({ "svc": { "url": "http://svc:1", "routes": [
+            { "path": "/me", "scope": "directory", "methods": ["GET", "POST"] },
+            { "path": "/me/quiet", "scope": "directory", "methods": ["POST"], "audit": false },
+            { "path": "/me/loud", "scope": "directory", "methods": ["GET"], "audit": true },
+            { "path": "/open", "scope": "public", "methods": ["POST"] }
+        ]}}))
+        .unwrap();
+        let route = |p: &str, m: &str| map.find_route(p, m).unwrap().0.audited(m);
+        assert!(route("/me", "POST"));
+        assert!(!route("/me", "GET"));
+        assert!(!route("/me/quiet", "POST"));
+        assert!(route("/me/loud", "GET"));
+        assert!(!route("/open", "POST"));
     }
 }

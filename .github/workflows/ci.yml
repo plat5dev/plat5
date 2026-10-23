@@ -31,6 +31,8 @@ jobs:
             gateway:
               - '.github/workflows/ci.yml'
               - 'services/gateway/**'
+              - 'schema/**'
+              - 'services/control-plane/fixtures/catalog/**'
             control-plane:
               - '.github/workflows/ci.yml'
               - 'services/control-plane/**'

@@ -16,11 +16,11 @@ pub struct GatewayContext {
     pub body_bytes: u64,
     pub rate_limit: Option<crate::rate_limit::RateLimitInfo>,
     /// Who presented the request, for the request log. Never a secret.
-    pub credential: crate::admission::RequestCredential,
+    pub credential: crate::pipeline::RequestCredential,
     /// Set once an audit intent is attempted. The logging phase turns it into the outcome.
     pub audit: Option<crate::audit::AuditState>,
-    /// The audited route is a `user` route: a service may name the org it changed.
-    pub audit_user_route: bool,
+    /// The audited route is a sign-in route: a service may name the tree it changed.
+    pub audit_sign_in_route: bool,
     /// The upstream peer was handed to Pingora: the service may have been called.
     pub forwarded: bool,
 }
@@ -46,7 +46,7 @@ impl GatewayContext {
             rate_limit: None,
             credential: Default::default(),
             audit: None,
-            audit_user_route: false,
+            audit_sign_in_route: false,
             forwarded: false,
         }
     }
@@ -71,9 +71,9 @@ impl GatewayContext {
             http.request.method = %method,
             url.path = %path,
             http.route = tracing::field::Empty,
-            user.id = tracing::field::Empty,
-            organization.id = tracing::field::Empty,
-            member.id = tracing::field::Empty,
+            plat5.member_id = tracing::field::Empty,
+            plat5.root_id = tracing::field::Empty,
+            plat5.node_id = tracing::field::Empty,
             request_id = tracing::field::Empty,
             http.response.status_code = tracing::field::Empty,
             jwt.kid = tracing::field::Empty,
