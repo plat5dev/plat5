@@ -222,7 +222,7 @@ Gateway creates the root span **before** route match: name starts as `{method}`,
 ### Plat5 span attributes (not HTTP semconv)
 
 - `request_id` on HTTP request spans (if present). Do not rename it to `request.id`.
-- `user.id` on HTTP request spans when the route subject is the person — set at the gateway for ops. Gateway may also set `organization.id` / `member.id` / `jwt.kid`. Spans may record ids the route subject does not include. A service does not invent `user.id`.
+- `plat5.member_id`, `plat5.root_id` and `plat5.node_id` on HTTP request spans once admitted, and `jwt.kid` for a JWT, set at the gateway for ops. Never a person's principal id. A service sets only ids it was given.
 - `error.kind` on **error spans** (5xx only): `auth`, `network`, `db`, `io`, `internal`, `validation`
 - 4xx responses are normal business outcomes — do not set `error.kind` and do not mark the span as failed
 - Record exceptions via `span.recordException(err)` / `span.record_exception(err)`
@@ -296,6 +296,7 @@ When OTLP metrics are enabled, the same series should appear there too. Extra pr
 | gateway | `edge` | Internal `/metrics`; gateway sets edge span identity attrs |
 | control-plane | `edge` | Internal `/metrics` |
 | identity | `identity` | Internal `/metrics` |
+| audit | `audit` | Internal `/metrics` |
 
 ## Non-goals
 

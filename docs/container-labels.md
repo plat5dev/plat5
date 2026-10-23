@@ -32,10 +32,10 @@ Services expose Prometheus `/metrics` on the internal port ([`telemetry.md`](tel
 
 | Service | `service.namespace` | Notes |
 |---------|---------------------|--------|
-| `identity` | **`identity`** | Orgs, members, service accounts, API keys |
+| `identity` | **`identity`** | Nodes, people, service accounts, members, bindings, keys, admit |
 | `gateway` | **`edge`** | Gateway hop |
-| `control-plane` | **`edge`** | Admin API for routes, roles, CORS; feeds for gateway and identity |
-| `audit` | **`audit`** | Org audit log |
+| `control-plane` | **`edge`** | Admin API for the config (kinds, roles, routes, CORS); feeds for gateway and identity |
+| `audit` | **`audit`** | Audit log per root |
 
 When changing namespaces: update Docker Compose labels and `OTEL_SERVICE_NAMESPACE` together.
 

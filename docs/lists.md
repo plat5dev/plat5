@@ -11,7 +11,7 @@ Control-plane admin lists (`GET /services`, revisions) return the full set. So d
 | `limit` | Optional. Default **50**, max **100**. Over-max is **clamped**, not 422. `< 1` or non-integer → **422** `VALIDATION_ERROR` |
 | `starting_after` | Optional. Exclusive cursor: the `id` of the last item on the previous page. Omit on the first page |
 
-`starting_after` must have the collection's id form (a prefixed ULID, such as `n_01J…`). Invalid → **422**. A well-formed id that isn't in the collection is not an error: the walk continues after that point in `id` order.
+`starting_after` must have the collection's id form: a prefixed ULID for identity (`n_01J…`), a bare ULID for audit events. Invalid → **422**. A well-formed id that isn't in the collection is not an error: the walk continues after that point in `id` order.
 
 ## Order
 

@@ -48,7 +48,7 @@ On every request the gateway answers three questions: who is calling (the creden
 - **Closed world.** A tree's data refers only to its own nodes and members. Plat5 guarantees half of this by never sending a person's principal id; the other half is a convention services follow. People cross trees; data doesn't.
 - **Denied or missing.** A node you can't use and a node that doesn't exist get the same **403** "permission denied, or it may not exist", as Google Cloud answers. There's no separate visibility rule.
 - **Node lists.** Plat5 filters node lists by the list route's own labels, so `GET /orgs/{organization}/projects` returns only the projects the caller can read. Services never filter by caller.
-- **Deletion.** Soft for `deletion_grace` (30 days by default), restorable, then purged. Ids and slugs are never reused.
+- **Deletion.** Soft for `deletion_grace` (30 days by default), restorable, then purged. Ids are never reused. Slugs aren't either, unless someone releases a purged node's slug by hand through identity's service API, which no generated route exposes.
 - **Removed is final.** Re-adding someone to a tree makes a new member id. The old member stays, and a lookup returns its name and `status: removed`.
 
 ## Where each decision lives
@@ -94,7 +94,7 @@ Do not add these because they would be convenient:
 - A customer route that lists or searches people, or SMTP in identity
 - Global or platform-admin service accounts
 - Operator headers, roles or rules in base Plat5. Each other front door owns its own, in its own repo
-- Hard deletes of nodes, or reusing an id or a slug
+- Hard deletes of nodes, reusing an id, or reusing a slug automatically
 - An org settings bag, or limits stored as per-org data
 - Credentials narrower than their principal. A narrower machine is a service account with fewer bindings
 - A second writer of the tree. A service that needs nodes creates them through the node API

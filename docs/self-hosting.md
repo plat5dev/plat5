@@ -186,8 +186,8 @@ Static hosting (Cloudflare Pages, object storage, nginx) is fine. The console is
 curl -sS -o /dev/null -w '%{http_code}\n' https://auth.example.com/.well-known/jwks.json
 # 200
 
-curl -sS https://api.example.com/org
-# 401 UNAUTHORIZED — route exists, no member credential
+curl -sS https://api.example.com/me
+# 401 UNAUTHORIZED: route exists, no credential
 ```
 
 Empty route map → 404. After apply, missing JWT → 401.
@@ -198,8 +198,8 @@ The gateway starts serving once it has loaded routes from the control plane. Gat
 
 - Choose `AUTH_SUBJECT_CLAIM` before the first sign-in. Identity links each person by issuer and that claim's value, so changing the claim later signs everyone in as a new person. With Plat5 Auth use `properties.user_id` (the template default); use `sub` for generic OIDC IdPs.
 - `plat5.yml` / `plat5 start` do not operate this stack.
-- `docker compose down -v` wipes identity orgs/keys and Auth users.
-- Wiping Postgres loses the applied config. Re-apply it from your repo. A wiped deployment re-seeds from the seed folder first.
+- `docker compose down -v` on this stack wipes identity (nodes, people, keys), audit, and the applied config. Plat5 Auth runs as its own stack; its users go only with its own volumes.
+- Wiping Postgres loses the applied config (kinds, roles, routes, CORS) along with identity and audit. Re-apply the config from your repo. A wiped deployment re-seeds from the seed folder first.
 - After first boot, editing the seed folder does nothing. Change your config directory and `plat5 apply`.
 - Audience and SPA client id are one string if you customize them. The brand is identity's alone.
 

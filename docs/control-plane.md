@@ -83,7 +83,7 @@ The control plane refuses a config that breaks any of these; the error names the
 1. Exactly one kind has `sign_in`; it has no parent and nothing names it as parent.
 2. Every `parent` exists; no cycles; kind names are lowercase identifiers and not `public`.
 3. Every `bindable_at` kind exists and isn't the sign-in kind.
-4. `default_role` is bindable at every root kind other than the sign-in kind; `creator_role` at every kind that can be created.
+4. `default_role` is bindable at every root kind other than the sign-in kind; `creator_role` at every kind that can be created. Neither has a `max_duration`.
 5. Every route has a `scope`; its path holds exactly the kind params for its chain; its `upstream` uses only subject fields its scope provides.
 6. Every route scoped to a kind other than the sign-in kind states `required_labels` for every method. `[]` is allowed and means any member of the tree. On `public` and sign-in routes it's omitted or `[]`.
 7. Every `rate_limit` name exists on the service, and its `count_at` is the route's kind or an ancestor.
@@ -161,10 +161,10 @@ Confirming counts rather than a data revision means ordinary traffic (new projec
 | Service or route added, changed or removed | Safe for Plat5. A removed service's routes stop matching; its data is the service's |
 | CORS changed | Safe |
 | Parents narrowed with nodes under the removed parent | Blocked |
-| Kind removed | Destructive: its nodes and descendants are soft-deleted |
+| Kind removed | Destructive: its nodes and descendants are soft-deleted. Routes scoped to it, or with its param in their chain, must go in the same apply (rule 5), and show as route removals |
 | Kind renamed | Invalid: it reads as a remove plus an add |
 
-Removing a kind is the only destructive change. It soft-deletes through the normal node lifecycle, so it emits the same events and is restorable within the grace period by applying the kind again. Tightened rules (a shorter `max_duration`, a new reserved slug) apply to new values only, as Kubernetes validation ratcheting does.
+Removing a kind is the only destructive change. Identity soft-deletes its nodes when the new config reaches it, through the normal node lifecycle, so the same events are emitted. Applying the kind again within the grace period restores the nodes that removal deleted (not ones deleted separately before it), with `<kind>.restored` events; after it, the kind comes back empty. Tightened rules (a shorter `max_duration`, a new reserved slug) apply to new values only, as Kubernetes validation ratcheting does.
 
 Adding a kind in the middle (a `folder` between org and project) is two safe applies: add `folder` under `organization`, then widen `project`'s parent to `[organization, folder]`.
 

@@ -41,8 +41,8 @@ creator_role: admin
 | `labels` | `[a-z0-9:._-]+`, max 64 chars, unique, max 64 labels. `[]` grants nothing. `["*"]` grants every label; `*` is valid only alone |
 | `bindable_at` | Required. The kinds this role can be bound at. Never the sign-in kind |
 | `max_duration` | Optional. A binding with this role must have an `expires_at` no further away than this |
-| `default_role` | Required. What joining a root grants. Bindable at every root kind other than the sign-in kind |
-| `creator_role` | Required. What the creator of a node gets on it. Bindable at every kind that can be created |
+| `default_role` | Required. What joining a root grants. Bindable at every root kind other than the sign-in kind. No `max_duration`: joining without a stated end must grant something that doesn't need one |
+| `creator_role` | Required. What the creator of a node gets on it. Bindable at every kind that can be created. No `max_duration` |
 
 `default_role` sets default-deny or default-allow below the root. With `member` above, org members see no projects until a role is bound at a project, or at the org for all of them.
 
@@ -85,7 +85,11 @@ So the labels that reach binding routes are as strong as the strongest role. Giv
 
 ## Listing roles
 
-`GET /orgs/{organization}/roles`, and the same at each kind, returns the roles bindable there, for role pickers.
+`GET /orgs/{organization}/roles`, and the same at each kind, returns the roles bindable there, for role pickers. At a project, with the roles above:
+
+```
+GET /orgs/{organization}/projects/{project}/roles
+```
 
 ```json
 {
@@ -94,12 +98,12 @@ So the labels that reach binding routes are as strong as the strongest role. Giv
     { "slug": "developer", "labels": ["project:read", "catalog:write", "subscribers:write"], "max_duration": null },
     { "slug": "runtime", "labels": ["check"], "max_duration": null }
   ],
-  "default_role": "member",
+  "default_role": null,
   "creator_role": "admin"
 }
 ```
 
-Sorted by slug. Not paginated: the document is the whole list. `default_role` is `null` below a root.
+Sorted by slug. Not paginated: the document is the whole list. `default_role` is `null` below a root. At the org, the same call lists `admin`, `developer`, `member`, `runtime` and `support`, with `default_role: "member"`.
 
 ## Generated labels
 
