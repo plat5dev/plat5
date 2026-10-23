@@ -19,4 +19,5 @@ Splitting the spec into contracts, and the review after it, turned up gaps the s
 | Restore and kind re-apply undoing the right nodes | A `deletion_id` per delete or kind removal | A node deleted separately earlier must stay deleted |
 | A service account whose last binding expires | Its member stays until the service account is deleted | Otherwise its principal and keys are orphaned |
 | Time-limited roles at join | `expires_at` on member add; `role_duration` on invites; `default_role` and `creator_role` have no `max_duration` | A `max_duration` role was otherwise impossible to grant at join |
+| Config file layout | `plat5.yml` holds the deployment's shape (settings, kinds, roles, defaults, CORS) and lists one routes file per service; every route stays explicit, generated ones included | Split by owner: whoever runs Plat5, and each service's team. One entry point, and the CLI never guesses at a layout |
 | Smaller wiring | `route_prefix` on the service; sign-in routes rate-limit per directory member; `AUTH_SUBJECT_CLAIM`, `ADMIT_URL`, `IDENTITY_INTERNAL_URL` | Scope blocks are gone; the sign-in node is one node for everyone |

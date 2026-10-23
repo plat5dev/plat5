@@ -1,9 +1,9 @@
 # CORS document
 
-The origins the gateway allows. Request-time behavior: [`reference/gateway.md`](../gateway.md#cors).
+The origins the gateway allows, in `plat5.yml`. Request-time behavior: [`reference/gateway.md`](../gateway.md#cors).
 
 ```yaml
-version: 2
+# in plat5.yml
 cors:
   allowed_origins: ["https://app.example.com", "http://localhost:5173"]
 ```

@@ -1,11 +1,9 @@
 # Kinds document
 
-The tree's levels. Concept: [the model](../../concepts/model.md), [config](../../concepts/config.md).
-
-The tree's levels. Every node in identity is one of these kinds.
+The tree's levels, in `plat5.yml`. Every node in identity is one of these kinds. Concept: [the model](../../concepts/model.md), [config](../../concepts/config.md).
 
 ```yaml
-version: 2
+# in plat5.yml
 deletion_grace: 30d
 reserved_slugs: [new, settings, api, admin, me]
 kinds:

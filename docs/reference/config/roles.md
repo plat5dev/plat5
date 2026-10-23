@@ -2,10 +2,10 @@
 
 What each role grants and where it can be bound. Concept: [access](../../concepts/access.md#roles-and-bindings).
 
-It's a document in the deployment's config, applied with the rest of it ([`concepts/config.md`](../../concepts/config.md#plan-and-apply)). Identity follows each change without a restart.
+In `plat5.yml`, applied with the rest of the config ([`concepts/config.md`](../../concepts/config.md#plan-and-apply)). Identity follows each change without a restart.
 
 ```yaml
-version: 2
+# in plat5.yml
 roles:
   admin:     { labels: ["*"], bindable_at: [organization, project] }
   member:    { labels: [organization:read], bindable_at: [organization] }

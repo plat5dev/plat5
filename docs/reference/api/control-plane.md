@@ -48,4 +48,4 @@ Validation, auth and empty-body failures use the Plat5 envelope ([`reference/err
 
 ## Seeds
 
-On first boot there's nothing to destroy, so the seed applies without `confirm`. Dev compose mounts `compose/seed/` (kinds, roles, and the generated catalog) and sets `SEED_DIR`. Prod compose mounts a folder with `kinds.yml` and `roles.yml` only, so identity can start; apply the rest yourself. After the first apply the folder is never read again.
+On first boot there's nothing to destroy, so the seed applies without `confirm`. Dev compose mounts `compose/seed/` (`plat5.yml` and the generated `routes/identity.yml` and `routes/audit.yml`) and sets `SEED_DIR`. Prod compose mounts a `plat5.yml` with kinds and roles and an empty `services`, so identity can start; apply the rest yourself. After the first apply the folder is never read again.

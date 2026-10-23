@@ -2,11 +2,11 @@
 
 The routes identity and audit expose at the gateway, generated per kind. Concept: [access](../../concepts/access.md).
 
-Identity's edge routes, and the audit service's read routes, are generated from `kinds` ([generated routes](#generated-routes)). `POST /catalog` takes the kinds in the body, so the catalog for a new kind can be generated before that kind is applied, and both go in one apply. `plat5 routes generate` writes it to `catalog.yml`. The team edits it like any routes file (renames labels, drops routes) and keeps it in the config. Omitting a route hides it from the gateway; the identity process still serves that path on the network.
+Identity's edge routes, and the audit service's read routes, are generated from `kinds` ([generated routes](#generated-routes)). `POST /catalog` takes the kinds in the body, so the catalog for a new kind can be generated before that kind is applied, and both go in one apply. `plat5 routes generate` writes it to `routes/identity.yml` and `routes/audit.yml`. The team edits them like any routes file (renames labels, drops routes) and keeps them in `plat5.yml`'s `services`. Omitting a route hides it from the gateway; the identity process still serves that path on the network.
 
 ## Generated routes
 
-Identity's edge routes are generated from the `kinds` document (`plat5 routes generate`, or `POST /catalog` on the control plane) and kept in the config like any routes file ([`reference/api/edge-catalog.md`](edge-catalog.md)). A new kind gets its API without code. Each kind gets a path segment (its `segment`, or its name plus `s`) and the labels below. Leaving a route out of the applied catalog, such as `POST /orgs`, is how a deployment restricts it.
+Identity's edge routes are generated from the kinds (`plat5 routes generate`, or `POST /catalog` on the control plane) and kept as routes files like any other. A new kind gets its API without code. Each kind gets a path segment (its `segment`, or its name plus `s`) and the labels below. Leaving a route out of the applied catalog, such as `POST /orgs`, is how a deployment restricts it.
 
 ## Generated labels
 
