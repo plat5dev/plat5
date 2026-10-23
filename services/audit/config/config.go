@@ -13,7 +13,7 @@ const (
 
 // Config is process-level audit service configuration.
 // OTEL_* stays in the telemetry package (standard env contract).
-// There is no retention setting: events are kept (docs/audit.md).
+// There is no retention setting: events are kept (docs/internals/audit-storage.md).
 type Config struct {
 	Port              string
 	InternalPort      string

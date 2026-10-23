@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	stderrors "errors"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -11,10 +12,11 @@ import (
 	"github.com/plat5dev/plat5/audit/errors"
 )
 
-// Limits on what the gateway sends (docs/audit.md#event). Over a limit is 422:
+// Limits on what the gateway sends (docs/reference/api/audit.md#event). Over a limit is 422:
 // the gateway truncates or caps before it sends, so an overrun is a bug.
 const (
 	maxIDLen         = 128
+	maxKindLen       = 32
 	maxKeyPrefixLen  = 64
 	maxServiceLen    = 128
 	maxRouteLen      = 1024
@@ -34,31 +36,37 @@ var auditedMethods = map[string]bool{
 }
 
 type intentRequest struct {
-	OccurredAt     *string           `json:"occurred_at"`
-	OrganizationID *string           `json:"organization_id"`
-	UserID         *string           `json:"user_id"`
-	Actor          *actorRequest     `json:"actor"`
-	Service        *string           `json:"service"`
-	Method         *string           `json:"method"`
-	Route          *string           `json:"route"`
-	Params         map[string]string `json:"params"`
-	IP             *string           `json:"ip"`
-	UserAgent      *string           `json:"user_agent"`
+	OccurredAt *string           `json:"occurred_at"`
+	RootID     *string           `json:"root_id"`
+	Nodes      *[]nodeRequest    `json:"nodes"`
+	Actor      *actorRequest     `json:"actor"`
+	Service    *string           `json:"service"`
+	Method     *string           `json:"method"`
+	Route      *string           `json:"route"`
+	Params     map[string]string `json:"params"`
+	IP         *string           `json:"ip"`
+	UserAgent  *string           `json:"user_agent"`
+}
+
+type nodeRequest struct {
+	Kind *string `json:"kind"`
+	ID   *string `json:"id"`
 }
 
 type actorRequest struct {
 	MemberID  *string `json:"member_id"`
+	Principal *string `json:"principal"`
 	AuthType  *string `json:"auth_type"`
 	KeyPrefix *string `json:"key_prefix"`
 }
 
 type outcomeRequest struct {
-	Outcome        *string         `json:"outcome"`
-	Status         *int            `json:"status"`
-	Details        json.RawMessage `json:"details"`
-	CreatedID      *string         `json:"created_id"`
-	OrganizationID *string         `json:"organization_id"`
-	MemberID       *string         `json:"member_id"`
+	Outcome   *string         `json:"outcome"`
+	Status    *int            `json:"status"`
+	Details   json.RawMessage `json:"details"`
+	CreatedID *string         `json:"created_id"`
+	RootID    *string         `json:"root_id"`
+	MemberID  *string         `json:"member_id"`
 }
 
 type fieldErrs []errors.Field
@@ -124,42 +132,61 @@ func ParseIntent(requestID string, body []byte, now time.Time) (*Intent, error) 
 		in.OccurredAt = t.UTC().Truncate(time.Millisecond)
 	}
 
-	// An org's event: the org and member come from the credential. A person's
-	// event: the person; the member comes later, if the service names one.
-	orgEvent := req.OrganizationID != nil
-	ownerKnown := orgEvent != (req.UserID != nil)
-	switch {
-	case !ownerKnown:
-		bad.add("organization_id")
-	case orgEvent:
-		in.OrganizationID = optText(&bad, "organization_id", req.OrganizationID, maxIDLen)
-	default:
-		in.UserID = optText(&bad, "user_id", req.UserID, maxIDLen)
+	// A kind route's event: the chain, root first, and the root names the
+	// log. A sign-in route's: no root and no nodes; the person's log is keyed
+	// by the actor, their directory member.
+	if req.Nodes == nil {
+		bad.add("nodes")
+	} else {
+		in.Nodes = make([]Node, 0, len(*req.Nodes))
+		for i, n := range *req.Nodes {
+			path := "nodes[" + strconv.Itoa(i) + "]"
+			kind := text(&bad, path+".kind", n.Kind, maxKindLen)
+			if kind != "" && !validKindName(kind) {
+				bad.add(path + ".kind")
+			}
+			in.Nodes = append(in.Nodes, Node{Kind: kind, ID: text(&bad, path+".id", n.ID, maxIDLen)})
+		}
 	}
+	if req.RootID != nil {
+		in.RootID = optText(&bad, "root_id", req.RootID, maxIDLen)
+	}
+	signIn := req.RootID == nil
+	if req.Nodes != nil && (signIn != (len(in.Nodes) == 0) || !signIn && in.RootID != nil && in.Nodes[0].ID != *in.RootID) {
+		bad.add("root_id")
+	}
+
 	if req.Actor == nil {
 		bad.add("actor")
 	} else {
-		in.Actor.AuthType = text(&bad, "actor.auth_type", req.Actor.AuthType, maxIDLen)
-		member := in.Actor.AuthType == AuthMemberAPIKey || in.Actor.AuthType == AuthMemberSession
-		person := in.Actor.AuthType == AuthUserAPIKey || in.Actor.AuthType == AuthJWT
-		switch {
-		case in.Actor.AuthType == "":
-		case !member && !person, ownerKnown && member != orgEvent:
-			bad.add("actor.auth_type")
-		case member:
-			in.Actor.MemberID = optText(&bad, "actor.member_id", req.Actor.MemberID, maxIDLen)
-			in.Actor.KeyPrefix = optText(&bad, "actor.key_prefix", req.Actor.KeyPrefix, maxKeyPrefixLen)
-		default:
-			// A person's credential: no member until the service names one,
-			// and no key prefix for a JWT.
-			if req.Actor.MemberID != nil {
-				bad.add("actor.member_id")
+		in.Actor.MemberID = text(&bad, "actor.member_id", req.Actor.MemberID, maxIDLen)
+		in.Actor.Principal = text(&bad, "actor.principal", req.Actor.Principal, maxIDLen)
+		switch in.Actor.Principal {
+		case "":
+		case PrincipalPerson:
+		case PrincipalServiceAccount:
+			// A service account has no directory member, so no sign-in route.
+			if signIn && req.Nodes != nil && len(in.Nodes) == 0 {
+				bad.add("actor.principal")
 			}
-			if in.Actor.AuthType == AuthUserAPIKey {
-				in.Actor.KeyPrefix = optText(&bad, "actor.key_prefix", req.Actor.KeyPrefix, maxKeyPrefixLen)
-			} else if req.Actor.KeyPrefix != nil {
+		default:
+			bad.add("actor.principal")
+		}
+		in.Actor.AuthType = text(&bad, "actor.auth_type", req.Actor.AuthType, maxIDLen)
+		switch in.Actor.AuthType {
+		case "":
+		case AuthAPIKey:
+			in.Actor.KeyPrefix = optText(&bad, "actor.key_prefix", req.Actor.KeyPrefix, maxKeyPrefixLen)
+		case AuthJWT:
+			// Only a person signs in with the IdP, and a JWT has no key prefix.
+			if in.Actor.Principal == PrincipalServiceAccount {
+				bad.add("actor.auth_type")
+			}
+			if req.Actor.KeyPrefix != nil {
 				bad.add("actor.key_prefix")
 			}
+		default:
+			bad.add("actor.auth_type")
 		}
 	}
 	in.Service = text(&bad, "service", req.Service, maxServiceLen)
@@ -247,15 +274,15 @@ func ParseOutcome(requestID string, body []byte) (*Outcome, error) {
 	if req.CreatedID != nil {
 		out.CreatedID = optText(&bad, "created_id", req.CreatedID, maxIDLen)
 	}
-	if (req.OrganizationID == nil) != (req.MemberID == nil) {
+	if (req.RootID == nil) != (req.MemberID == nil) {
 		bad.add("member_id")
-	} else if req.OrganizationID != nil {
+	} else if req.RootID != nil {
 		out.Named = &Named{
-			OrganizationID: text(&bad, "organization_id", req.OrganizationID, maxIDLen),
-			MemberID:       text(&bad, "member_id", req.MemberID, maxIDLen),
+			RootID:   text(&bad, "root_id", req.RootID, maxIDLen),
+			MemberID: text(&bad, "member_id", req.MemberID, maxIDLen),
 		}
 	}
-	if out.Outcome != OutcomeResponded && (req.CreatedID != nil || req.OrganizationID != nil) {
+	if out.Outcome != OutcomeResponded && (req.CreatedID != nil || req.RootID != nil) {
 		bad.add("outcome")
 	}
 
@@ -308,6 +335,20 @@ func validParamName(s string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// validKindName is a kind's name: [a-z][a-z0-9_]*, at most 32 (kinds.md).
+func validKindName(s string) bool {
+	if len(s) == 0 || len(s) > maxKindLen || s[0] < 'a' || s[0] > 'z' {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_') {
 			return false
 		}
 	}

@@ -109,3 +109,15 @@ Each build session turns up questions the contracts don't answer. Every answer g
 | A snapshot the gateway can't build (schema, a scope or `count_at` that isn't a kind, chain params that aren't the scope's chain) is refused whole | v1 skipped the bad route and served the rest. A partial route table is a state nobody applied |
 | The gateway checks each snapshot against `schema/v2/`, compiled in as the control plane does, and keeps no copy of the route config code | The removals table drops the hand-aligned `route_config.rs` copies; the schema is the one definition of shape |
 | The compose e2e lives in `e2e/` (its own Go module, opt-in), serves its own JWKS on host `:5401` and mints tokens; compose's `APIKEY_CACHE_TTL_SECS` is overridable and the e2e sets it low | No IdP needed to run it. With a 300s cache, "refused after delete" would wait on the documented TTL |
+
+## Step 7: audit
+
+| Decision | Why |
+|----------|-----|
+| In a root's read, a sign-in event the service named shows the named member as `actor.member_id`, and `actor_member_id` filters on it; the person's log keeps the directory member | The directory member id is never sent to other trees. "With the named member as the actor there" in the concept says the same |
+| An intent's `root_id` is `nodes[0].id`, `null` exactly when `nodes` is `[]`; `key_prefix` is set exactly for `apikey`; a service account has no `jwt` and no sign-in event. Anything else is **422**, and check constraints hold the same in the table | Each is a row that can't describe one request. The gateway never sends one, so a refusal is a bug caught early |
+| A named root and member on a kind route's outcome are ignored, not **422** | The event's log is fixed by its chain. Refusing would leave it `pending` forever over a field that changes nothing, as v1 ignored the org on an org event |
+| One fresh `001_init.sql`; boot refuses a schema that records migrations this build doesn't know | Same as identity in step 2: hard cutover, no v1 events read |
+| The chain is stored twice: `nodes` as sent, and `node_ids` (`text[]`) for the GIN index | Reads return the chain with kinds; the index only needs ids, and an array containment is the plainest GIN query |
+| The catalog check is split: audit's test serves every audit upstream in the step 5 fixture with the ids the gateway fills, and checks what each read returns; identity's label test also walks the audit routes | Labels are decided by admit and the gateway, so they're tested where admit lives. Audit only has to serve the paths, which its own test does against Postgres |
+| The e2e has its own audit test, skipped when `AUDIT_ENABLED=false`; the step 6 test runs unchanged with audit on | The step 6 flow must still pass with audit on; the audit test adds what only audit can show (logs per root, reads by node, the person's log, label refusals) without coupling the two |

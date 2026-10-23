@@ -39,8 +39,8 @@ func (r catalogRoute) labels() []string {
 }
 
 // catalog reads the fixture feed, letting edit change it first, and returns
-// the body and identity's routes in it.
-func catalog(t *testing.T, edit func(feed map[string]any)) (string, []catalogRoute) {
+// the body and identity's and audit's routes in it.
+func catalog(t *testing.T, edit func(feed map[string]any)) (string, []catalogRoute, []catalogRoute) {
 	t.Helper()
 	raw, err := os.ReadFile(catalogFeed)
 	if err != nil {
@@ -62,52 +62,57 @@ func catalog(t *testing.T, edit func(feed map[string]any)) (string, []catalogRou
 	if err := json.Unmarshal(body, &w); err != nil {
 		t.Fatal(err)
 	}
-	return string(body), w.Services["identity"].Routes
+	return string(body), w.Services["identity"].Routes, w.Services["audit"].Routes
 }
 
 // edgeEnv is an env with the catalog's routes and a record of which route
-// methods were forwarded and succeeded.
+// methods were forwarded and succeeded. audit is the audit service's read
+// routes: identity admits them, and audit serves them (audit's own tests).
 type edgeEnv struct {
 	*env
 	routes []catalogRoute
+	audit  []catalogRoute
 	served map[string]bool
 }
 
 func setupCatalog(t *testing.T, edit func(feed map[string]any)) *edgeEnv {
-	body, routes := catalog(t, edit)
-	return &edgeEnv{env: setupWith(t, body), routes: routes, served: map[string]bool{}}
+	body, routes, audit := catalog(t, edit)
+	return &edgeEnv{env: setupWith(t, body), routes: routes, audit: audit, served: map[string]bool{}}
 }
 
 var paramRe = regexp.MustCompile(`\{([a-z_.]+)\}`)
 
-// match finds the route for method and path, and the path's params.
+// match finds identity's route for method and path, and the path's params.
 func (e *edgeEnv) match(method, path string) (catalogRoute, map[string]string) {
 	e.t.Helper()
-	got := strings.Split(path, "/")
 	for _, r := range e.routes {
-		if !slices.Contains(r.Methods, method) {
-			continue
-		}
-		want := strings.Split(r.Path, "/")
-		if len(want) != len(got) {
-			continue
-		}
-		params := map[string]string{}
-		ok := true
-		for i, seg := range want {
-			if m := paramRe.FindStringSubmatch(seg); m != nil && m[0] == seg {
-				params[m[1]] = got[i]
-			} else if seg != got[i] {
-				ok = false
-				break
-			}
-		}
-		if ok {
+		if params, ok := r.match(method, path); ok {
 			return r, params
 		}
 	}
 	e.t.Fatalf("no generated route for %s %s", method, path)
 	return catalogRoute{}, nil
+}
+
+// match is the path's params when r serves method and path.
+func (r catalogRoute) match(method, path string) (map[string]string, bool) {
+	if !slices.Contains(r.Methods, method) {
+		return nil, false
+	}
+	got := strings.Split(path, "/")
+	want := strings.Split(r.Path, "/")
+	if len(want) != len(got) {
+		return nil, false
+	}
+	params := map[string]string{}
+	for i, seg := range want {
+		if m := paramRe.FindStringSubmatch(seg); m != nil && m[0] == seg {
+			params[m[1]] = got[i]
+		} else if seg != got[i] {
+			return nil, false
+		}
+	}
+	return params, true
 }
 
 // admitFor admits subject (an IdP subject) on route r with params: the chain
@@ -310,9 +315,10 @@ func roleForEachLabel(feed map[string]any) {
 	feed["default_role"] = "nobody"
 }
 
-// Every label-gated route in the catalog admits a member whose only grant is
-// a role with that label, bound where edge-catalog.md#generated-labels says
-// it's checked, and refuses the same member without it.
+// Every label-gated route in the catalog, identity's and audit's, admits a
+// member whose only grant is a role with that label, bound where
+// edge-catalog.md#generated-labels says it's checked, and refuses the same
+// member without it.
 func TestCatalogGeneratedLabelsReachTheirRoutes(t *testing.T) {
 	e := setupCatalog(t, roleForEachLabel)
 	e.want(201, "alice", "POST", "/orgs", `{"label": "Gruow", "slug": "gruow"}`)
@@ -321,8 +327,8 @@ func TestCatalogGeneratedLabelsReachTheirRoutes(t *testing.T) {
 	e.want(201, "alice", "POST", "/orgs/gruow/folders/eng/projects", `{"label": "Api", "slug": "api"}`)
 	org := e.want(200, "alice", "GET", "/orgs/gruow", "").str("id")
 
-	n := 0
-	for _, r := range e.routes {
+	n, audited := 0, 0
+	for _, r := range append(slices.Clone(e.routes), e.audit...) {
 		if len(r.labels()) == 0 {
 			continue
 		}
@@ -349,7 +355,13 @@ func TestCatalogGeneratedLabelsReachTheirRoutes(t *testing.T) {
 		}
 		for _, method := range r.Methods {
 			n++
-			_, params := e.match(method, path)
+			if strings.HasSuffix(label, ":audit:read") {
+				audited++
+			}
+			params, ok := r.match(method, path)
+			if !ok {
+				t.Fatalf("%s %s doesn't match its own route %s", method, path, r.Path)
+			}
 			without, with := fmt.Sprintf("without%d", n), fmt.Sprintf("with%d", n)
 			e.join(e.nodeByID(org), without, "nobody")
 			if got := gatewayStatus(e.admitFor(without, r, params), r.labels()); got != 403 {
@@ -365,8 +377,8 @@ func TestCatalogGeneratedLabelsReachTheirRoutes(t *testing.T) {
 			}
 		}
 	}
-	if n == 0 {
-		t.Fatal("no label-gated routes")
+	if n == 0 || audited != len(e.audit)-1 {
+		t.Fatalf("label-gated routes: %d, audit reads: %d of %d", n, audited, len(e.audit))
 	}
 }
 

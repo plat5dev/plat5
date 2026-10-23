@@ -101,7 +101,7 @@ PUT /internal/events/{request_id}
 | Malformed, or `occurred_at` more than 24h from audit's clock | **422** |
 | Postgres unavailable | **503**. The gateway retries |
 
-`root_id` is `null` and `nodes` is `[]` on a sign-in route; `actor.member_id` is the person's directory member.
+`root_id` is `nodes[0].id` on a kind route. It's `null`, and `nodes` is `[]`, exactly on a sign-in route; `actor.member_id` is then the person's directory member, and the principal a `person`. `key_prefix` is set for `apikey` and `null` for `jwt`, and only a `person` has a `jwt`. Anything else is malformed.
 
 Unknown fields are ignored, so a newer gateway can send more.
 
@@ -112,7 +112,7 @@ PATCH /internal/events/{request_id}
 { "outcome": "responded", "status": 200, "details": { … }, "created_id": "…", "root_id": "…", "member_id": "…" }
 ```
 
-`root_id` and `member_id` only for a sign-in-route event, from the service's pair.
+`root_id` and `member_id` only for a sign-in-route event, from the service's pair: both or neither, and only with `responded`. Sent for a kind route's event, they're ignored; its log is its chain's root.
 
 | Result | Response |
 |--------|----------|
