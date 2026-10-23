@@ -20,9 +20,10 @@ A credential carries its principal's bindings in the tree it's used in. Keys hav
 
 ## The roles document
 
-The operator writes it to the control plane, planned like any document ([`control-plane.md`](control-plane.md#the-plan)). Identity follows each change without a restart.
+It's a document in the deployment's config, applied with the rest of it ([`control-plane.md`](control-plane.md#plan-and-apply)). Identity follows each change without a restart.
 
 ```yaml
+version: 2
 roles:
   admin:     { labels: ["*"], bindable_at: [organization, project] }
   member:    { labels: [organization:read], bindable_at: [organization] }

@@ -88,7 +88,7 @@ No compatibility layer: these go in the same release that adds their replacement
 | Roles | The `ROLES_ENABLED=false` mode; the plain `role: [labels]` form; `service_account_default_role` | Roles always on; `{ labels, bindable_at, max_duration }` |
 | Env | `CREDENTIAL_VALIDATE_URL`, `AUTH_USER_ID_CLAIM`, `ROLES_ENABLED`, `SEED_ROUTES_DIR`, `SEED_ROLES_FILE` | `ADMIT_URL`, `AUTH_SUBJECT_CLAIM`, `SEED_DIR`; the control plane gains `IDENTITY_INTERNAL_URL` |
 | Catalogs | `services/identity/routes.yml`, `services/audit/routes.yml` | Generated from `kinds` (`plat5 routes generate`) |
-| Control plane | `GET /internal/roles` | `GET /internal/identity` |
+| Control plane | `GET /internal/roles`; `PUT /services/{name}`, `DELETE /services/{name}`, `PUT /roles`, `PUT /cors`, per-service and per-document revisions and restore; upsert of services; the two hand-aligned copies of `route_config.rs` | `GET /internal/identity`; one `POST /apply` of the whole config with dry run and preconditions; one revision per apply; `schema/v2/` |
 | Lifecycle | `organization.created`, `organization.deleted`, `member.created`, `member.removed` | `<kind>.created/.deleted/.restored/.purged`, `member.created/.removed` |
 | Operator console | Fixed organization and user pages | Out of this spec: the operator plane's own v2 work, in its repo |
 | Docs | v1 docs, `identity-boundary.md` | Done on this branch: `docs/` is the v2 contract. "Realm" and "user" as wire names go; "member" now means one principal in one tree |
@@ -101,7 +101,7 @@ Outside this repo: the `template-*` service and console templates in plat5dev us
 
 One Claude Code session per step, each starting from the docs named in the step. `docs/` is law on this branch. Steps 1 and 2 can run in parallel; everything after needs both.
 
-1. **Control plane: config and plan** ([`control-plane.md`](control-plane.md), [`routes.md`](routes.md), [`roles.md`](roles.md)). The `kinds` document, roles in the new form, route `scope`, the seven validation rules, and plan and confirm with stubbed counts. Done when `plat5 apply --plan` classifies a set of fixture configs correctly.
+1. **Control plane: config and plan** ([`control-plane.md`](control-plane.md), [`routes.md`](routes.md), [`roles.md`](roles.md)). The config directory with `version: 2`, the JSON Schema in `schema/v2/`, whole-config apply with dry run, `expect` and `confirm`, revisions, `POST /catalog`. The `kinds` document, roles in the new form, route `scope`, the seven validation rules, with identity's counts stubbed. The CLI's `validate`, `plan` (diff and `--detailed-exitcode`), `apply`, `routes generate` and `config pull` are the same step in the CLI repo. Done when a dry run classifies a set of fixture configs correctly, and a stale `expect` or a changed count is refused.
 2. **Identity: nodes** ([`identity.md`](identity.md)). The new schema, nodes with the closure table, slugs and tombstones, soft delete, restore, the purge sweeper (after `deletion_grace`), lifecycle events. Done when the invariants have tests.
 3. **Identity: principals, members and bindings.** People and IdP links, the directory member, service accounts born at a node, API keys, bindings with expiry and its sweeper, invites with grants, guest invites below a root, `/me`.
 4. **Identity: admit.** `POST /internal/admit` with the five-step resolution, plus the counts the control plane's plan needs. Done when admit has table tests for every row of the status table.

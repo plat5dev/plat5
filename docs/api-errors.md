@@ -47,7 +47,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
 | `ROUTE_CONFLICT` | 409 | `invalid_request_error` | (control plane) Message lists each conflicting route and its owner service. | — |
-| `PLAN_STALE` | 409 | `invalid_request_error` | The deployment changed since this plan was made. Plan again. | `{ revision_from, revision_now, identity_revision_from?, identity_revision_now? }` |
+| `PLAN_STALE` | 409 | `invalid_request_error` | The deployment changed since this plan was made. Plan again. | `{ precondition, expected, actual }` |
 | `PAYLOAD_TOO_LARGE` | 413 | `invalid_request_error` | Request body is too large. | `{ max_size_bytes }` |
 | `RATE_LIMITED` | 429 | `api_error` | Too many requests. Try again in a moment. | `{ retry_after_seconds }` |
 | `INTERNAL_ERROR` | 500 | `api_error` | An unexpected error occurred. | `null` |
@@ -67,7 +67,7 @@ Returned by the **gateway**, not downstream services: a bad, missing, revoked or
 
 ### `PLAN_STALE`
 
-Returned by the **control plane** when a confirmed plan's config revision has moved, or when a plan with a destructive change finds identity's data revision moved. Nothing is applied ([`control-plane.md`](control-plane.md#the-plan)).
+Returned by the **control plane** when an apply's preconditions fail: `precondition` is `revision` (someone applied since the dry run) or `confirm.<kind>` (a destructive kind is unconfirmed, or its node count changed). Nothing is applied; dry-run again ([`control-plane.md`](control-plane.md#preconditions)).
 
 ### `RATE_LIMITED`
 

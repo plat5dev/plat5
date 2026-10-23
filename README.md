@@ -57,10 +57,10 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_SUBJECT_CLAIM` (see compose defau
 
 1. Implement against Plat5 contracts (reference apps: [`plat5dev/template-*`](https://github.com/orgs/plat5dev/repositories)).
 2. Set `url` in `routes.yml` to an address the **gateway** can reach.
-3. Apply routes (shows the plan first):
+3. Add its routes file to your config directory and apply the whole config (shows the plan first):
 
 ```bash
-plat5 apply routes.yml
+plat5 apply ./plat5
 ```
 
 4. Trust the path and `X-Plat5-*` headers the gateway wrote; do not validate JWTs or decide access in the service. They're authentic only if nothing but a front door can reach the app ([`docs/gateway-contract.md`](docs/gateway-contract.md)).

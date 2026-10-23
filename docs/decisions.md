@@ -141,6 +141,16 @@ Tightened rules (a shorter `max_duration`, a new reserved slug) apply to new val
 | Change `label`, add a reserved slug | Safe |
 | Remove `bindable_at` kinds from a role, or remove a role | Safe. Bindings keep the role's name and grant nothing until it's back, as with a deleted Google Cloud custom role |
 
+### How an apply is checked
+
+Decided after the first draft: no stored plans. A dry run returns the plan; the apply recomputes it and carries two preconditions, the config revision the dry run saw and the node count of each kind it destroys. This is Kubernetes' server-side dry run ([dryRun](https://kubernetes.io/docs/reference/using-api/api-concepts/#dry-run)) and `resourceVersion` precondition ([concurrency control](https://kubernetes.io/docs/reference/using-api/api-concepts/#resource-versions)), with Terraform's rule that a stale saved plan is refused ([saved plans](https://developer.hashicorp.com/terraform/cli/commands/plan#out-filename)).
+
+- **Counts, not a data revision.** A counter bumped by every node or binding write would make a destructive plan stale forever on a busy deployment. Confirming "14 nodes" only goes stale when the thing being destroyed changes.
+- **The whole config, every apply.** The cross-document rules already tie kinds, roles and routes together, so a partial apply had to be checked against everything else anyway. Terraform's model: what's not in the config is removed, and the plan says so. Cost: a service team can't push its routes alone. Kubernetes' ApplySets are the pattern if separate owners are ever needed.
+- **One schema, `version: 2`.** A published JSON Schema replaces hand-aligned copies of validation, as a CRD's schema does. The version key lets the next format be a migration.
+- **The CLI owns the saved plan and the diff**, with `--detailed-exitcode` for drift checks in CI ([Terraform](https://developer.hashicorp.com/terraform/cli/commands/plan#detailed-exitcode)). Rollback is applying an old revision's config through the same plan.
+- **Deferred:** rollout status, like `kubectl rollout status` (`TODO.md`).
+
 ### Deleting nodes
 
 - **Soft for deletion\_grace, 30 days by default.** The gateway refuses the node at once. Children cascade.

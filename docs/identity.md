@@ -41,7 +41,7 @@ A path segment that contains `_` is read as a node id, anything else as a slug. 
 
 ### Generated routes
 
-Identity's edge routes are generated from the `kinds` document (`plat5 routes generate`, or `GET /kinds/catalog` on the control plane) and applied like any routes file ([`control-plane.md`](control-plane.md#generated-catalog)). A new kind gets its API without code. Each kind gets a path segment (its `segment`, or its name plus `s`) and the labels below. Leaving a route out of the applied catalog, such as `POST /orgs`, is how a deployment restricts it.
+Identity's edge routes are generated from the `kinds` document (`plat5 routes generate`, or `POST /catalog` on the control plane) and kept in the config like any routes file ([`control-plane.md`](control-plane.md#generated-catalog)). A new kind gets its API without code. Each kind gets a path segment (its `segment`, or its name plus `s`) and the labels below. Leaving a route out of the applied catalog, such as `POST /orgs`, is how a deployment restricts it.
 
 ### Generated labels
 
@@ -253,10 +253,10 @@ On a sign-in-kind route, `chain` is empty, the member is the person's directory 
 ```
 POST /internal/plan
 { "kinds_removed": ["folder"], "parents_narrowed": [{ "kind": "project", "removed": ["folder"] }] }
-→ { "identity_revision": 9813, "kinds_removed": { "folder": { "nodes": 14, "bindings": 22, "service_accounts": 3, "keys": 9 } }, "parents_narrowed": { "project": { "nodes": 3, "sample": ["n_…"] } } }
+→ { "kinds_removed": { "folder": { "nodes": 14, "bindings": 22, "service_accounts": 3, "keys": 9 } }, "parents_narrowed": { "project": { "nodes": 3, "sample": ["n_…"] } } }
 ```
 
-The control plane calls it while planning ([`control-plane.md`](control-plane.md#the-plan)). `identity_revision` is the counter bumped by every write to nodes, members or bindings.
+The control plane calls it on every dry run and again on every apply, to check the confirmed counts ([`control-plane.md`](control-plane.md#preconditions)). `nodes` counts the kind's nodes and their descendants, live and deleted, that the removal would delete.
 
 ### Lifecycle events
 
@@ -403,11 +403,6 @@ CREATE TABLE lifecycle_events (                       -- append-only; outlives w
     principal   TEXT CHECK (principal IN ('person', 'service_account')),
     occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
-CREATE TABLE identity_revision (                      -- one row; bumped by any write to nodes, members or bindings
-    id        INT PRIMARY KEY CHECK (id = 1),
-    revision  BIGINT NOT NULL
-);
 ```
 
 Ids are ULIDs with a type prefix: `n_` nodes, `m_` members, `b_` bindings, `k_` keys, `i_` invites. Principal ids never leave identity.
@@ -422,7 +417,6 @@ Ids are ULIDs with a type prefix: `n_` nodes, `m_` members, `b_` bindings, `k_` 
 - **Expiry.** A binding past `expires_at` grants nothing; a sweeper deletes it.
 - **Suspension.** A suspended principal's credentials are all invalid. There's no per-member suspension: remove the member instead.
 - **Deletion.** A node with `status = 'deleted'` grants nothing on it or below. Once `deletion_grace` has passed, the purge sweeper sets `status = 'purged'`, deletes bindings on it and below, removes members of a purged root, and keeps the row.
-- **Revision.** Every write to nodes, members or bindings bumps `identity_revision` in the same transaction.
 
 ## Runtime
 

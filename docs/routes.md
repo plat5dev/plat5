@@ -1,26 +1,27 @@
 # Route publishing
 
-Publish routes for the Plat5 gateway to discover and proxy traffic. A route names its scope (a kind, or `public`), the labels it needs, and the upstream path the gateway writes.
+Publish routes for the Plat5 gateway to discover and proxy traffic. Each service's routes are a `services` document in the deployment's config ([`control-plane.md`](control-plane.md#the-config)), applied with the rest of it. A route names its scope (a kind, or `public`), the labels it needs, and the upstream path the gateway writes.
 
 ## Pipeline
 
 ```
-Service (routes.yml) → control plane (plan, Postgres desired state + revision)
-                    → GET /internal/gateway (long-poll) → Gateway
+config dir (e10s.yml, catalog.yml, …) → control plane (dry run, apply, revision)
+                                      → GET /internal/gateway (long-poll) → Gateway
 ```
 
 Postgres is the source of truth. The gateway long-polls the control plane and swaps its whole route map on each change. Apply while gateways are down; they load the current map when they start. Write path, plans and feeds: [`control-plane.md`](control-plane.md).
 
 ```bash
-plat5 apply ./routes.yml          # shows the plan, asks to confirm
-plat5 apply --plan ./routes.yml   # prints the plan only, for CI
+plat5 plan ./plat5    # dry run; prints the diff
+plat5 apply ./plat5   # shows the diff, asks to confirm
 ```
 
-Identity's own routes are a generated catalog the team applies like any routes file ([`identity.md`](identity.md#generated-routes)).
+Identity's own routes are a generated catalog the team keeps in the config like any routes file ([`identity.md`](identity.md#generated-routes)).
 
-## Config format (`routes.yml`)
+## Config format
 
 ```yaml
+version: 2
 services:
   e10s:
     url: http://e10s:3000
@@ -168,7 +169,7 @@ Fixed window: the first increment opens the window; the key's TTL is `window_sec
 
 A `count_at: project` bucket means a sandbox project can't spend a live project's budget; a `count_at: organization` bucket caps the org as a whole. A route can carry both.
 
-**`shared: true`** is an opt-in join across services. Every service that uses the name declares the same entry (`requests`, `window_seconds`, `count_at`, `shared: true`). Apply validates against **all** current services, not only the payload: the same shared name with different numbers, or one shared and one local, is **422**.
+**`shared: true`** is an opt-in join across services. Every service that uses the name declares the same entry (`requests`, `window_seconds`, `count_at`, `shared: true`). The config holds every service, so apply checks them together: the same shared name with different numbers, or one shared and one local, is **422**.
 
 Exceed: **429** `RATE_LIMITED`, `Retry-After`, `details.retry_after_seconds`. Limited admitted routes set `X-RateLimit-Limit` / `Remaining` / `Reset` on success and on 429.
 
@@ -190,11 +191,11 @@ On `public` → **422**. `OPTIONS` is answered as a preflight and never audited.
 
 ## Route ownership
 
-A route belongs to one service, compared by **shape**: each `{param}` matches any other `{param}`, a literal segment matches only the same literal. A method + shape already owned by a **different** service rejects the whole apply with **409** `ROUTE_CONFLICT`, listing each conflicting route and its owner. Only the same method conflicts; literal vs param never conflicts; shapes inside one service never conflict. Re-applying a service's own routes replaces them.
+A route belongs to one service, compared by **shape**: each `{param}` matches any other `{param}`, a literal segment matches only the same literal. Two services in the config with the same method + shape reject the whole apply with **409** `ROUTE_CONFLICT`, listing each conflicting route and both services. Only the same method conflicts; literal vs param never conflicts; shapes inside one service never conflict.
 
 ## Validation
 
-The control plane validates before storing, and the gateway again at load. Cross-document rules (scope, chain params, labels stated, `count_at`) are in [`control-plane.md`](control-plane.md#validation-at-apply). Shape rules:
+The [schema](control-plane.md#schema) defines the shape, and the control plane checks it on every apply; the gateway checks each snapshot against it at load. Cross-document rules (scope, chain params, labels stated, `count_at`) are in [`control-plane.md`](control-plane.md#validation-at-apply). Shape rules:
 
 - Paths are canonical and rejected, not rewritten: no trailing `/` (except `/`), no uppercase outside `{params}`. Applies after `route_prefix` is joined
 - A path is visible ASCII, at most 1024 bytes, at most 32 params
@@ -204,8 +205,6 @@ The control plane validates before storing, and the gateway again at load. Cross
 - `timeouts`: `connect_ms` and `read_ms` each 1–600000
 - Unknown fields **422**
 - A snapshot that fails the gateway's validation is not loaded; the gateway keeps its current routes
-
-The two copies of `route_config.rs` (gateway and control plane) stay aligned.
 
 ## Gateway behavior
 
