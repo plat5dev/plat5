@@ -1,22 +1,6 @@
-# Route publishing
+# Routes
 
-Publish routes for the Plat5 gateway to discover and proxy traffic. Each service's routes are a `services` document in the deployment's config ([`control-plane.md`](control-plane.md#the-config)), applied with the rest of it. A route names its scope (a kind, or `public`), the labels it needs, and the upstream path the gateway writes.
-
-## Pipeline
-
-```
-config dir (e10s.yml, catalog.yml, …) → control plane (dry run, apply, revision)
-                                      → GET /internal/gateway (long-poll) → Gateway
-```
-
-Postgres is the source of truth. The gateway long-polls the control plane and swaps its whole route map on each change. Apply while gateways are down; they load the current map when they start. Write path, plans and feeds: [`control-plane.md`](control-plane.md).
-
-```bash
-plat5 plan ./plat5    # dry run; prints the diff
-plat5 apply ./plat5   # shows the diff, asks to confirm
-```
-
-Identity's own routes are a generated catalog the team keeps in the config like any routes file ([`identity.md`](identity.md#generated-routes)).
+Each service's routes are a `services` document in the deployment's config ([config](../../concepts/config.md)). A route names its scope (a kind, or `public`), the labels it needs, and the upstream path the gateway writes. How the gateway uses them: [access](../../concepts/access.md#how-a-request-is-decided), [`reference/gateway.md`](../gateway.md).
 
 ## Config format
 
@@ -49,7 +33,7 @@ services:
         methods: [GET]
 ```
 
-The versions route doesn't need the author in its path: the service reads `X-Plat5-Member-Id` ([`gateway-contract.md`](gateway-contract.md#headers-to-services)). Rewriting `{subject.member_id}` into the path is there for services that prefer it.
+The versions route doesn't need the author in its path: the service reads `X-Plat5-Member-Id` ([`reference/headers.md`](../headers.md)). Rewriting `{subject.member_id}` into the path is there for services that prefer it.
 
 ### Service fields
 
@@ -73,7 +57,7 @@ The versions route doesn't need the author in its path: the service reads `X-Pla
 | `required_labels` | `string[]` | Required on every method of a route scoped to a kind other than the sign-in kind. `[]` is allowed and means any member of the tree. Omitted or `[]` on `public` and sign-in routes; anything else there is **422** |
 | `rate_limit` | `false` \| `string` \| `string[]` \| `{requests, window_seconds}` \| omitted | Omitted inherits the gateway fallback |
 | `audit` | `bool?` | Omitted: the method default. Not on `public` routes |
-| `resolve_deleted` | `bool?` | Default `false`. `true` lets the last node in the chain be a deleted (not purged) node. Its bindings are kept until purge and still count here, as Google Cloud keeps a deleted project's policy so it can be undeleted. For identity's restore route; see [`identity.md`](identity.md#admit) |
+| `resolve_deleted` | `bool?` | Default `false`. `true` lets the last node in the chain be a deleted (not purged) node. Its bindings are kept until purge and still count here, as Google Cloud keeps a deleted project's policy so it can be undeleted. For identity's restore route; see [`reference/api/internal.md`](../api/internal.md#admit) |
 
 Unknown fields are **422**.
 
@@ -102,7 +86,7 @@ Nested maps are an apply-time convenience. The control plane expands each verb i
 | The sign-in kind, e.g. `directory` | None: the sign-in node has no slug | `member_id`: the person's directory member, their user id | Omitted or `[]` |
 
 - **Chain params.** A kind's param is named exactly as the kind, and the chain's params appear in order, root first. A path for a kind with several allowed parents picks one chain per route: `/orgs/{organization}/projects/{project}` and `/orgs/{organization}/folders/{folder}/projects/{project}` are two routes. A param named after a kind outside the chain is **422**.
-- **Values.** Each chain param takes a slug or a node id. The gateway resolves it under the previous node ([`gateway-contract.md`](gateway-contract.md#pipeline)).
+- **Values.** Each chain param takes a slug or a node id. The gateway resolves it under the previous node ([`concepts/access.md`](../../concepts/access.md#how-a-request-is-decided)).
 - **Other params** are free: letters, digits and `_`, not starting with a digit, at most 64 characters. They can't be a kind name.
 - **Literal segments** are free: `/orgs/{organization}/projects/{project}/…` uses each kind's `segment`, but nothing requires it.
 
@@ -132,7 +116,7 @@ Substituted values are one path segment. A `{path.*}` value with `/`, `?` or `#`
 
 Labels follow role hygiene: `[a-z0-9:._-]+`, max 64 chars, max 32 per route, unique. Labels are opaque: `catalog:write` does not imply `project:read`.
 
-After the rate limit, the caller's labels on the node (the union of the roles of its bindings on the node and its ancestors) must hold `*` or share one label with the route, or the gateway answers **403** "permission denied, or it may not exist". `[a, b]` means a or b. `[]` admits any member of the tree, guests included. A route can't require `*` itself. Roles and bindings: [`roles.md`](roles.md).
+After the rate limit, the caller's labels on the node (the union of the roles of its bindings on the node and its ancestors) must hold `*` or share one label with the route, or the gateway answers **403** "permission denied, or it may not exist". `[a, b]` means a or b. `[]` admits any member of the tree, guests included. A route can't require `*` itself. Roles and bindings: [`concepts/access.md`](../../concepts/access.md).
 
 ## `rate_limit`
 
@@ -179,7 +163,7 @@ The limiter runs before the label check, so a label-denied **403** counts agains
 
 ## `audit`
 
-Whether the gateway records this route + method in the audit log of the root whose tree it touched ([`audit.md`](audit.md)).
+Whether the gateway records this route + method in the audit log of the root whose tree it touched ([`concepts/audit.md`](../../concepts/audit.md)).
 
 | YAML | Effect |
 |------|--------|
@@ -195,7 +179,7 @@ A route belongs to one service, compared by **shape**: each `{param}` matches an
 
 ## Validation
 
-The [schema](control-plane.md#schema) defines the shape, and the control plane checks it on every apply; the gateway checks each snapshot against it at load. Cross-document rules (scope, chain params, labels stated, `count_at`) are in [`control-plane.md`](control-plane.md#validation-at-apply). Shape rules:
+The [schema](../../concepts/config.md#schema) defines the shape, and the control plane checks it on every apply; the gateway checks each snapshot against it at load. Cross-document rules (scope, chain params, labels stated, `count_at`) are in [`concepts/config.md`](../../concepts/config.md#validation-at-apply). Shape rules:
 
 - Paths are canonical and rejected, not rewritten: no trailing `/` (except `/`), no uppercase outside `{params}`. Applies after `route_prefix` is joined
 - A path is visible ASCII, at most 1024 bytes, at most 32 params
@@ -205,11 +189,3 @@ The [schema](control-plane.md#schema) defines the shape, and the control plane c
 - `timeouts`: `connect_ms` and `read_ms` each 1–600000
 - Unknown fields **422**
 - A snapshot that fails the gateway's validation is not loaded; the gateway keeps its current routes
-
-## Gateway behavior
-
-**Startup.** `GET {CONTROL_PLANE_URL}/internal/gateway`, validate, build the route map and the CORS policy. Retry while the control plane is down; don't listen until there's a snapshot.
-
-**Updates.** Long-poll `?after={revision}`; on a newer revision, a full reload of routes, kinds and CORS, swapped whole. A reload failure keeps the current routes, logs, and moves past that revision.
-
-**Service health vs route existence.** Decoupled. A service down is **502** `SERVICE_UNAVAILABLE`; an unregistered path is **404**.

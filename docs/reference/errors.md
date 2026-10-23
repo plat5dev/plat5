@@ -2,7 +2,7 @@
 
 Standard envelope across Plat5 services.
 
-Clients show `error.message`. Branch on `code` and HTTP status. Do not parse `details` to invent copy. Product sentences live in [`error-copy.md`](error-copy.md).
+Clients show `error.message`. Branch on `code` and HTTP status. Do not parse `details` to invent copy. Product sentences live in [`reference/error-copy.md`](error-copy.md).
 
 ## Envelope
 
@@ -55,7 +55,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 
 ### `FORBIDDEN`
 
-Returned by the **gateway** when the route's node doesn't exist, the caller isn't in its tree, or the caller's labels on the node share none with the route's `required_labels`. One body for all three, as Google Cloud answers "Permission denied on resource (or it may not exist)", so a 403 never says whether a node exists. `details.required_labels` is the route's list: any one of those labels would have admitted the request. The caller's own labels are never in the body; the gateway logs them on a `required_labels denied` line ([`telemetry.md`](telemetry.md#gateway-label-denied-line)).
+Returned by the **gateway** when the route's node doesn't exist, the caller isn't in its tree, or the caller's labels on the node share none with the route's `required_labels`. One body for all three, as Google Cloud answers "Permission denied on resource (or it may not exist)", so a 403 never says whether a node exists. `details.required_labels` is the route's list: any one of those labels would have admitted the request. The caller's own labels are never in the body; the gateway logs them on a `required_labels denied` line ([`reference/telemetry.md`](telemetry.md#gateway-label-denied-line)).
 
 ### `NOT_FOUND`
 
@@ -63,11 +63,11 @@ From the gateway: no route matches. From a service's own API, called by id: the 
 
 ### `UNAUTHORIZED`
 
-Returned by the **gateway**, not downstream services: a bad, missing, revoked or suspended credential, or a service account key on a sign-in route. Identity unavailable is **503**. See [`gateway-contract.md`](gateway-contract.md#admit).
+Returned by the **gateway**, not downstream services: a bad, missing, revoked or suspended credential, or a service account key on a sign-in route. Identity unavailable is **503**. See [`reference/gateway.md`](gateway.md#admit).
 
 ### `PLAN_STALE`
 
-Returned by the **control plane** when an apply's preconditions fail: `precondition` is `revision` (someone applied since the dry run) or `confirm.<kind>` (a destructive kind is unconfirmed, or its node count changed). Nothing is applied; dry-run again ([`control-plane.md`](control-plane.md#preconditions)).
+Returned by the **control plane** when an apply's preconditions fail: `precondition` is `revision` (someone applied since the dry run) or `confirm.<kind>` (a destructive kind is unconfirmed, or its node count changed). Nothing is applied; dry-run again ([`concepts/config.md`](../concepts/config.md#preconditions)).
 
 ### `RATE_LIMITED`
 
@@ -75,7 +75,7 @@ Returned by the **gateway**. `Retry-After` (seconds) is the same value as `detai
 
 | Limiter | When | Key |
 |---------|------|-----|
-| Admitted route | After admission, before the label check | A node at the policy's `count_at`, plus the policy or method + path ([`routes.md`](routes.md#buckets)) |
+| Admitted route | After admission, before the label check | A node at the policy's `count_at`, plus the policy or method + path ([`reference/config/routes.md`](config/routes.md#buckets)) |
 | Failed-auth IP | Unadmitted **401**s, not-found **403**s, unmatched **404**s. Not per-route | Client IP. `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). `0` = off |
 
 ## Principles

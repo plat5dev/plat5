@@ -4,7 +4,7 @@ Operator guide: run Plat5 (and optionally [Plat5 Auth](https://github.com/plat5d
 
 This is **not** the CLI. `plat5 start` is laptop-only. On a server you pull GHCR images, fill `.env`, and apply routes yourself.
 
-Local contracts stay in this repo (`idp-contract.md`, `routes.md`, `control-plane.md`, `gateway-contract.md`). Auth env/OIDC live in the Auth repo. This page is the cross-product operator path those READMEs already link.
+Local contracts stay in this repo (see the [docs map](../README.md)). Auth env/OIDC live in the Auth repo. This page is the cross-product operator path those READMEs already link.
 
 ## What you run
 
@@ -24,7 +24,7 @@ Your app:
 
 | Piece | Image pin | Compose |
 |-------|-----------|---------|
-| Runtime (gateway, identity, audit, control-plane) | `PLAT5_VERSION` | [`compose/docker-compose.prod.yml`](../compose/docker-compose.prod.yml) |
+| Runtime (gateway, identity, audit, control-plane) | `PLAT5_VERSION` | [`compose/docker-compose.prod.yml`](../../compose/docker-compose.prod.yml) |
 | Auth (optional IdP) | `AUTH_VERSION` (independent) | [auth `compose/docker-compose.prod.yml`](https://github.com/plat5dev/auth/blob/master/compose/docker-compose.prod.yml) |
 | Your API | your image | your compose; join plat5’s network |
 | TLS | — | Cloudflare tunnel, Caddy, … — **not** in the gateway |
@@ -71,7 +71,7 @@ Env reference: [auth `docs/env.md`](https://github.com/plat5dev/auth/blob/master
 
 ### Other IdP
 
-Point Plat5 at it. Typical `AUTH_SUBJECT_CLAIM` is `sub`. See [`idp-contract.md`](idp-contract.md).
+Point Plat5 at it. Typical `AUTH_SUBJECT_CLAIM` is `sub`. See [`reference/idp.md`](../reference/idp.md).
 
 ## 2. Plat5 runtime
 
@@ -94,9 +94,9 @@ AUTH_SUBJECT_CLAIM=properties.user_id   # Plat5 Auth; use sub for many OIDC IdPs
 # APIKEY_BRAND=plat5                    # optional; identity only; keys {brand}-k-2-…
 ```
 
-The tree's kinds and the roles live in the control plane, as part of one config directory you keep in a repo ([`control-plane.md`](control-plane.md#the-config)). Compose seeds `kinds.yml` and `roles.yml` from its seed folder on first boot, so edit them before first boot. After that the seed is not read again: change the config with `plat5 apply`, which shows the plan first, and identity picks it up without a restart. Identity doesn't start serving until it has both. Formats and rules: [`control-plane.md`](control-plane.md#kinds), [`roles.md`](roles.md).
+The tree's kinds and the roles live in the control plane, as part of one config directory you keep in a repo ([`concepts/config.md`](../concepts/config.md#the-config)). Compose seeds `kinds.yml` and `roles.yml` from its seed folder on first boot, so edit them before first boot. After that the seed is not read again: change the config with `plat5 apply`, which shows the plan first, and identity picks it up without a restart. Identity doesn't start serving until it has both. Formats and rules: [`reference/config/kinds.md`](../reference/config/kinds.md), [`concepts/access.md`](../concepts/access.md).
 
-Audit is on by default: the gateway records each audited request in its tree's audit log, through the `audit` service. While audit is down, audited requests are **503**. `AUDIT_ENABLED=false` on the gateway turns it off for the whole deployment; then you may stop the `audit` service and skip its catalog. Model and guarantees: [`audit.md`](audit.md).
+Audit is on by default: the gateway records each audited request in its tree's audit log, through the `audit` service. While audit is down, audited requests are **503**. `AUDIT_ENABLED=false` on the gateway turns it off for the whole deployment; then you may stop the `audit` service and skip its catalog. Model and guarantees: [`concepts/audit.md`](../concepts/audit.md).
 
 `POSTGRES_PASSWORD` is interpolated into `DATABASE_URL`. Use a **URL-safe** value (hex). `+` / `/` from raw base64 break the URL (`invalid port`).
 
@@ -112,7 +112,7 @@ cors:
   allowed_origins: ["https://app.example.com"]
 ```
 
-Roles change the same way: edit `roles.yml`, then `plat5 apply`. Every apply is a revision; rolling back is applying an older one ([`control-plane.md`](control-plane.md#cli)).
+Roles change the same way: edit `roles.yml`, then `plat5 apply`. Every apply is a revision; rolling back is applying an older one ([`reference/cli.md`](../reference/cli.md#cli)).
 
 JWKS must be a URL the **gateway container** can fetch. Public HTTPS is the usual case — no `host.docker.internal` on the gateway.
 
@@ -130,7 +130,7 @@ Do not put SMTP submission on a tunnel.
 ## 4. Attach your API
 
 1. Run the process on **`plat5_plat5`** (external network). Hostname = the service name in `routes.yml` (e.g. `api` → `url: http://api:3000`).
-2. Trust the path and `X-Plat5-*` headers the gateway wrote. Do not validate JWTs. [`gateway-contract.md`](gateway-contract.md).
+2. Trust the path and `X-Plat5-*` headers the gateway wrote. Do not validate JWTs. [`reference/gateway.md`](../reference/gateway.md).
 3. Generate the identity and audit catalog from your kinds, then apply it and your routes (prod does **not** seed routes):
 
 ```yaml
@@ -153,11 +153,11 @@ plat5 routes generate ./plat5    # writes catalog.yml: identity and audit routes
 plat5 apply ./plat5              # the whole config; shows the plan, asks to confirm
 ```
 
-Identity's edge routes are a catalog you apply, generated from your kinds ([`identity.md`](identity.md#generated-routes)). Omitting a route hides it from the gateway; the identity process still runs. Skip the audit routes with `AUDIT_ENABLED=false`.
+Identity's edge routes are a catalog you apply, generated from your kinds ([`reference/api/edge-catalog.md`](../reference/api/edge-catalog.md#generated-routes)). Omitting a route hides it from the gateway; the identity process still runs. Skip the audit routes with `AUDIT_ENABLED=false`.
 
-Your writes are in their tree's audit log by default. Set `audit: false` on a write nobody needs there, and `audit: true` on a read worth recording ([`routes.md`](routes.md#audit)).
+Your writes are in their tree's audit log by default. Set `audit: false` on a write nobody needs there, and `audit: true` on a read worth recording ([`reference/config/routes.md`](../reference/config/routes.md#audit)).
 
-An apply is the whole config: a service missing from the directory is removed, and the plan shows it. Format: [`routes.md`](routes.md), [`control-plane.md`](control-plane.md).
+An apply is the whole config: a service missing from the directory is removed, and the plan shows it. Format: [`reference/config/routes.md`](../reference/config/routes.md), [`concepts/config.md`](../concepts/config.md).
 
 Local CLI `upstreams:` (bare port → `host.docker.internal`) is for laptop Docker. On a shared compose network, put `url:` in the file.
 

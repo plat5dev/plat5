@@ -1,38 +1,61 @@
-# Plat5 contracts
+# Plat5 docs
 
-`docs/` is law. **Start here:** [`model.md`](model.md): concepts, the rules that hold everywhere, where each decision lives, and what Plat5 won't do. The rest of this directory is how the model shows up on the wire. When a page disagrees with `model.md`, the page is wrong.
+`docs/` is law. Concepts hold the rules, reference holds the shapes, guides walk through tasks and restate nothing. When two disagree, the concept doc wins, and [`concepts/model.md`](concepts/model.md) wins over the rest.
 
-Why each decision was made, with references: [`decisions.md`](decisions.md). That's a record, not a contract.
+## Start here, by what you're doing
 
-Operator path (images + compose, not the CLI): [`self-hosting.md`](self-hosting.md). Per-service details live in each service's `README.md`.
+| You're | Read |
+|--------|------|
+| Learning Plat5 | [model](concepts/model.md), then [access](concepts/access.md) |
+| Running a deployment | [deploy](guides/deploy.md), [change the config](guides/change-the-config.md) |
+| Writing a service behind it | [write a service](guides/write-a-service.md) |
+| Building a console or client | [build a console](guides/build-a-console.md) |
+| Working on Plat5 itself | the concepts, then [internals](#internals) |
 
-## Model and edge
+## Concepts
 
-| Document | Purpose |
-|----------|---------|
-| [`model.md`](model.md) | **Start here.** Concepts, principles, rules, what's not in Plat5, extension points |
-| [`control-plane.md`](control-plane.md) | Kinds, the plan, validation across documents, the admin API and feeds |
-| [`routes.md`](routes.md) | Route config: scopes, chain params, `upstream`, labels, rate limits, audit |
-| [`roles.md`](roles.md) | Roles, bindings, resolution, who may assign |
-| [`gateway-contract.md`](gateway-contract.md) | The pipeline, admit, headers to services, rules for services, perimeter |
-| [`identity.md`](identity.md) | Nodes, members, bindings, service accounts, keys, invites, the generated catalog, admit, lifecycle events |
-| [`idp-contract.md`](idp-contract.md) | BYO IdP, subject and name claims |
-| [`audit.md`](audit.md) | Audit log per root: what's recorded, delivery, details headers, reads by node |
+| Doc | What it decides |
+|-----|-----------------|
+| [model](concepts/model.md) | Kinds, nodes, principals, members, bindings; ids and slugs; the principles |
+| [access](concepts/access.md) | The ancestor rule, who can be in a tree, roles and bindings, credentials, how a request is decided, lists |
+| [lifecycle](concepts/lifecycle.md) | Creating, deleting, restoring and purging; members; lifecycle events |
+| [config](concepts/config.md) | The config directory, validation, plan and apply, revisions |
+| [audit](concepts/audit.md) | What's recorded, in which log, and the delivery guarantee |
+| [boundaries](concepts/boundaries.md) | What Plat5 is for, what it won't do, extension points |
 
-## Conventions
+## Guides
 
-| Document | Purpose |
-|----------|---------|
-| [`api-errors.md`](api-errors.md) | Error envelope and codes |
-| [`error-copy.md`](error-copy.md) | Stripe-style `message`: product copy |
-| [`lists.md`](lists.md) | List pagination |
-| [`naming-conventions.md`](naming-conventions.md) | Terms, paths, headers, fields |
-| [`health-checks.md`](health-checks.md) | Health check endpoints |
-| [`telemetry.md`](telemetry.md) | Logs, traces, metrics (stdout, scrape, OTLP) |
-| [`container-labels.md`](container-labels.md) | Docker labels (optional collector scrape) |
+| Doc | |
+|-----|--|
+| [deploy](guides/deploy.md) | Images, compose, TLS, attaching an app |
+| [change the config](guides/change-the-config.md) | Add or remove kinds, change roles, roll back, CI drift checks |
+| [write a service](guides/write-a-service.md) | What a service receives, stores, and must not do |
+| [build a console](guides/build-a-console.md) | Signing in, navigating, access, invites, restore |
 
-## Transitional
+## Reference
 
-| Document | Purpose |
-|----------|---------|
-| [`v2-cutover.md`](v2-cutover.md) | What changes from v1, what gets removed, build order. Deleted once v2 ships |
+| Doc | |
+|-----|--|
+| [config/kinds](reference/config/kinds.md), [roles](reference/config/roles.md), [routes](reference/config/routes.md), [cors](reference/config/cors.md) | Config documents. To be generated from `schema/v2/` |
+| [api/edge-catalog](reference/api/edge-catalog.md) | Generated edge routes and their default labels |
+| [api/identity](reference/api/identity.md) | Identity's service API |
+| [api/control-plane](reference/api/control-plane.md) | The admin API |
+| [api/audit](reference/api/audit.md) | Audit events and reads |
+| [api/internal](reference/api/internal.md) | Admit, plan counts, feeds, audit writes |
+| [cli](reference/cli.md) | The `plat5` CLI |
+| [gateway](reference/gateway.md) | Gateway behavior: admit, cache, rate limits, CORS, client IP, boot |
+| [headers](reference/headers.md) | Every `X-Plat5-*` header |
+| [env](reference/env.md) | Every service's environment |
+| [idp](reference/idp.md), [errors](reference/errors.md), [error copy](reference/error-copy.md), [lists](reference/lists.md), [naming](reference/naming.md), [telemetry](reference/telemetry.md), [health](reference/health.md), [container labels](reference/container-labels.md) | Conventions |
+
+## Internals
+
+| Doc | |
+|-----|--|
+| [identity schema](internals/identity-schema.md) | Tables and invariants |
+| [audit storage](internals/audit-storage.md) | Partitions, roles, runtime |
+
+## Decisions and transition
+
+- [Decision records](decisions/README.md): why, with references.
+- [v2 cutover](v2-cutover.md): transitional; deleted once v2 ships.

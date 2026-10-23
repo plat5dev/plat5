@@ -11,7 +11,7 @@ Optional container labels for operators who scrape logs/metrics (e.g. their own 
 
 ## Metrics scrape (recommended)
 
-Services expose Prometheus `/metrics` on the internal port ([`telemetry.md`](telemetry.md)). Label the container so operators can discover scrape targets:
+Services expose Prometheus `/metrics` on the internal port ([`reference/telemetry.md`](telemetry.md)). Label the container so operators can discover scrape targets:
 
 | Label | Example | Purpose |
 |-------|---------|---------|
@@ -69,4 +69,4 @@ services:
 
 ## Service Naming
 
-See [`naming-conventions.md`](naming-conventions.md).
+See [`reference/naming.md`](naming.md).
