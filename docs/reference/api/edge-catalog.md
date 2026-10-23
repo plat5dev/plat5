@@ -6,7 +6,7 @@ Identity's edge routes, and the audit service's read routes, are generated from 
 
 ## Generated routes
 
-Identity's edge routes are generated from the kinds (`plat5 routes generate`, or `POST /catalog` on the control plane) and kept as routes files like any other. A new kind gets its API without code. Each kind gets a path segment (its `segment`, or its name plus `s`) and the labels below. Leaving a route out of the applied catalog, such as `POST /orgs`, is how a deployment restricts it.
+Identity's edge routes are generated from the kinds (`plat5 routes generate`, or `POST /catalog` on the control plane) and kept as routes files like any other. A new kind gets its API without code. Each kind gets a path segment (its `segment`, or the default from its name: [kinds](../config/kinds.md)) and the labels below. Leaving a route out of the applied catalog, such as `POST /orgs`, is how a deployment restricts it.
 
 ## Generated labels
 

@@ -26,7 +26,7 @@ kinds:
 | `label` | What consoles show. Changes any time |
 | `sign_in` | `idp`. Marks the one kind people sign in to: a single-node root (the directory), created at boot. Exactly one kind has it |
 | `name_claim` | On the sign-in kind only. The IdP claim holding a person's name. Default `name` |
-| `segment` | The path segment for generated routes. Slug shape: lowercase letters, digits and hyphens, starting with a letter, max 63. Default: the kind name plus `s` |
+| `segment` | The path segment for generated routes. Slug shape: lowercase letters, digits and hyphens, starting with a letter, max 63. Default: the kind name with `_` as `-`, plus `s` (`service_area` → `service-areas`) |
 | `reserved_slugs` | Slugs no node may take, deployment-wide |
 | `deletion_grace` | How long a deleted node stays restorable before it's purged. One value for every kind. A duration: a whole number and `s`, `m`, `h` or `d` (`30d`, `12h`). Default `30d`. A change applies to new deletes only |
 <!-- end generated -->

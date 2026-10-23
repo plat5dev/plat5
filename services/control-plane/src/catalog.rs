@@ -427,6 +427,17 @@ mod tests {
                 "POST": { "required_labels": ["organization:bindings:write"] }
             })
         );
+        // A derived segment has the slug shape.
+        let kinds: BTreeMap<String, Kind> = serde_json::from_value(json!({
+            "directory": { "sign_in": "idp" },
+            "service_area": {}
+        }))
+        .unwrap();
+        route(
+            &generate(&kinds),
+            "identity",
+            "/service-areas/{service_area}",
+        );
         // Only roots get members.
         let paths: Vec<&str> = s["identity"]["routes"]
             .as_array()

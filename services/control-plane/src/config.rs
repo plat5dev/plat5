@@ -71,9 +71,12 @@ impl Kind {
         self.sign_in.is_some()
     }
 
-    /// The path segment for generated routes: `segment`, or the name plus `s`.
+    /// The path segment for generated routes: `segment`, or the name with `_`
+    /// as `-`, plus `s`, so a derived segment has the slug shape too.
     pub fn segment(&self, name: &str) -> String {
-        self.segment.clone().unwrap_or_else(|| format!("{name}s"))
+        self.segment
+            .clone()
+            .unwrap_or_else(|| format!("{}s", name.replace('_', "-")))
     }
 }
 
