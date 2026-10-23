@@ -1,10 +1,10 @@
 # Plat5
 
-Open-source **platform runtime**. Every route declares which subject exists — none, the person, or the member-in-org. Those do not mix. The gateway authenticates and admits; services get exactly that subject, never who called. Access to individual resources belongs to an optional policy engine.
+Open-source **platform runtime** for multi-tenant APIs. You declare the tree's kinds in config (organization, project, …); Plat5 owns the nodes, who can reach each one, and the check at the gateway. A role bound at an org reaches every project under it; a role bound at one project reaches only that project. Services get node ids and the caller's member id, never a person's id, and do no auth themselves.
 
-Point the gateway at any OIDC IdP ([`docs/idp-contract.md`](docs/idp-contract.md)), including Plat5 Auth if you run it separately. User-scope APIs (memberships, user keys, identity itself) are `user` scope.
+Point the gateway at any OIDC IdP ([`docs/idp-contract.md`](docs/idp-contract.md)), including Plat5 Auth if you run it separately.
 
-The model: [`docs/model.md`](docs/model.md). Subjects and layers: [`docs/identity-boundary.md`](docs/identity-boundary.md).
+The model: [`docs/model.md`](docs/model.md).
 
 ## Try it
 
@@ -20,18 +20,18 @@ docker compose up --build
 | Service | URL | Notes |
 |---------|-----|--------|
 | Gateway | `http://localhost:5400` | API edge; internal metrics on `:8000` |
-| Control plane | `http://localhost:5402` | Admin API for routes, roles, CORS origins (Bearer `ADMIN_TOKEN`, default `dev-admin-token`) |
+| Control plane | `http://localhost:5402` | Admin API for kinds, roles, routes, CORS origins (Bearer `ADMIN_TOKEN`, default `dev-admin-token`) |
 
-JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defaults). API keys are an alternative credential; the IdP is still required.
+JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_SUBJECT_CLAIM` (see compose defaults). API keys are an alternative credential; the IdP is still required.
 
 ## Layout
 
 | Path | Purpose |
 |------|---------|
 | `services/gateway/` | Reverse proxy, auth, routing (Rust / Pingora) |
-| `services/control-plane/` | The deployment's routes, roles, and CORS origins: admin API, revisions, feeds (Rust) |
-| `services/identity/` | People, orgs, members, credentials (Go) |
-| `services/audit/` | Org audit log store and read API (Go) |
+| `services/control-plane/` | The deployment's kinds, roles, routes, and CORS origins: plans, admin API, revisions, feeds (Rust) |
+| `services/identity/` | Nodes, people, service accounts, members, bindings, keys, admit (Go) |
+| `services/audit/` | Audit log store and read API, per root and by node (Go) |
 | `compose/` | Self-contained Plat5 stack |
 | `docs/` | Contracts |
 
@@ -39,17 +39,17 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defau
 
 | Doc | Contents |
 |-----|----------|
-| [`docs/identity-boundary.md`](docs/identity-boundary.md) | **Start here.** Subjects, layers, what not to mix |
-| [`AGENTS.md`](AGENTS.md) | Locked invariants and stop conditions (for agents) |
+| [`docs/model.md`](docs/model.md) | **Start here.** Concepts, rules, what Plat5 won't do |
+| [`AGENTS.md`](AGENTS.md) | How to work in this repo (for agents) |
 | [`docs/README.md`](docs/README.md) | Contract index |
 | [`docs/self-hosting.md`](docs/self-hosting.md) | Production: images, TLS, attach an app |
-| [`docs/idp-contract.md`](docs/idp-contract.md) | BYO IdP / JWT user-id claim |
-| [`docs/gateway-contract.md`](docs/gateway-contract.md) | Auth delegation, subject fill, perimeter |
+| [`docs/idp-contract.md`](docs/idp-contract.md) | BYO IdP, subject and name claims |
+| [`docs/gateway-contract.md`](docs/gateway-contract.md) | Pipeline, admit, headers to services, perimeter |
 | [`docs/routes.md`](docs/routes.md) | Route config format |
-| [`docs/control-plane.md`](docs/control-plane.md) | Apply routes, roles, and CORS origins via admin API |
-| [`docs/identity.md`](docs/identity.md) | Identity service API |
-| [`docs/roles.md`](docs/roles.md) | Deployment-defined roles and the labels they grant |
-| [`docs/audit.md`](docs/audit.md) | Org audit log: what the gateway records and how orgs read it |
+| [`docs/control-plane.md`](docs/control-plane.md) | Kinds, plans, and applying documents via the admin API |
+| [`docs/identity.md`](docs/identity.md) | Nodes, members, bindings, the generated catalog, admit |
+| [`docs/roles.md`](docs/roles.md) | Roles, bindings, and how labels resolve |
+| [`docs/audit.md`](docs/audit.md) | Audit log: what the gateway records and how it's read by node |
 | [`docs/api-errors.md`](docs/api-errors.md) | Error envelope |
 | [`docs/telemetry.md`](docs/telemetry.md) | Logs, traces, metrics |
 
@@ -57,16 +57,13 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_USER_ID_CLAIM` (see compose defau
 
 1. Implement against Plat5 contracts (reference apps: [`plat5dev/template-*`](https://github.com/orgs/plat5dev/repositories)).
 2. Set `url` in `routes.yml` to an address the **gateway** can reach.
-3. Apply routes:
+3. Apply routes (shows the plan first):
 
 ```bash
-curl -sS -X POST http://localhost:5402/apply \
-  -H "Authorization: Bearer dev-admin-token" \
-  -H "Content-Type: application/yaml" \
-  --data-binary @routes.yml
+plat5 apply routes.yml
 ```
 
-4. Trust the path the gateway wrote; do not validate JWTs in the service. That path is authentic only if nothing else can reach the app — [`docs/gateway-contract.md`](docs/gateway-contract.md).
+4. Trust the path and `X-Plat5-*` headers the gateway wrote; do not validate JWTs or decide access in the service. They're authentic only if nothing but a front door can reach the app ([`docs/gateway-contract.md`](docs/gateway-contract.md)).
 
 ## Telemetry
 

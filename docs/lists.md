@@ -1,44 +1,46 @@
 # List pagination
 
-How Plat5 **identity** public lists work.
+How Plat5 **identity** public lists work. Business services behind the gateway may copy it.
 
-Business services behind the gateway may copy this. Identity public lists use it.
-
-Control-plane admin lists (`GET /services`, revisions) return the full set. So does identity's `GET /organizations/{organization_id}/roles`: it reads the roles document, not a table ([`roles.md`](roles.md#listing-roles)).
+Control-plane admin lists (`GET /services`, revisions) return the full set. So does identity's `GET /nodes/{node_id}/roles`: it reads the roles document, not a table ([`roles.md`](roles.md#listing-roles)).
 
 ## Query
 
 | Param | |
 |-------|--|
-| `limit` | Optional. Default **50**, max **100**. Over-max is **clamped**, not 422. `< 1` or non-integer → **422** `VALIDATION_ERROR`. |
-| `starting_after` | Optional. Exclusive cursor: the `id` of the last item on the previous page. Omit on the first page. |
+| `limit` | Optional. Default **50**, max **100**. Over-max is **clamped**, not 422. `< 1` or non-integer → **422** `VALIDATION_ERROR` |
+| `starting_after` | Optional. Exclusive cursor: the `id` of the last item on the previous page. Omit on the first page |
 
-`starting_after` must be a ULID (same form as resource `id`). Invalid → **422** `VALIDATION_ERROR` (fallback sentence). A well-formed ULID that is not in the collection is **not** an error — the walk continues after that point in `id` order.
+`starting_after` must have the collection's id form (a prefixed ULID, such as `n_01J…`). Invalid → **422**. A well-formed id that isn't in the collection is not an error: the walk continues after that point in `id` order.
 
 ## Order
 
-Always **`id` ascending**. IDs are ULIDs (time-sortable).
+Always **`id` ascending**. Ids are ULIDs (time-sortable) behind a type prefix.
 
 ## Body
 
 ```json
 {
-  "organizations": [ ... ],
+  "nodes": [ ... ],
   "has_more": false
 }
 ```
 
 | Field | |
 |-------|--|
-| named collection | Plural resource key (`organizations`, `memberships`, `members`, `invites`, `service_accounts`, `keys`). |
-| `has_more` | `true` if another page exists. Always present. |
+| named collection | Plural resource key: `nodes`, `members`, `bindings`, `access`, `service_accounts`, `keys`, `invites` |
+| `has_more` | `true` if another page exists. Always present |
 
-When `has_more` is `true`, pass the last item’s `id` as `starting_after` on the following request.
+When `has_more` is `true`, pass the last item's `id` as `starting_after`.
+
+## Filtered lists
+
+Node lists through the gateway return only what the caller can read ([`identity.md`](identity.md#filtered-lists)). A page can come back with fewer than `limit` items while `has_more` is `true`; keep walking until it's `false`.
 
 ## Audit events
 
-Audit's `GET /organizations/{organization_id}/audit-events` takes the same `limit` and `starting_after`, but runs `id` **descending** (newest first). See [`audit.md`](audit.md#reading).
+Audit's reads take the same `limit` and `starting_after`, but run `id` **descending** (newest first). See [`audit.md`](audit.md#reading).
 
-## Identity lists
+## Lifecycle events
 
-All of: list orgs, memberships, members, invites, service accounts, user API keys, member API keys (member path and service-account path).
+Identity's internal feed uses `starting_after` with a decimal sequence id, ascending ([`identity.md`](identity.md#lifecycle-events)).

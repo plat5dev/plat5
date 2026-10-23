@@ -1,37 +1,38 @@
 # Plat5 contracts
 
-**Start here:** [`model.md`](model.md) — Plat5's concepts, where each decision lives, and why. Then [`identity-boundary.md`](identity-boundary.md) — which subject exists on a request, why the layers do not mix, what you own vs what Plat5 owns.
+`docs/` is law. **Start here:** [`model.md`](model.md): concepts, the rules that hold everywhere, where each decision lives, and what Plat5 won't do. The rest of this directory is how the model shows up on the wire. When a page disagrees with `model.md`, the page is wrong.
 
-The rest of this directory is the wire: subject, routes, errors, identity APIs. `model.md` is the model; the other pages are how it shows up on the network. They should agree.
+Why each decision was made, with references: [`decisions.md`](decisions.md). That's a record, not a contract.
 
-Locked product invariants (what not to grow into): [`../AGENTS.md`](../AGENTS.md).
+Operator path (images + compose, not the CLI): [`self-hosting.md`](self-hosting.md). Per-service details live in each service's `README.md`.
 
-Operator path (images + compose, not the CLI): [`self-hosting.md`](self-hosting.md).
-
-Per-service details live in each service's `README.md`.
-
-## Contracts
+## Model and edge
 
 | Document | Purpose |
 |----------|---------|
-| [`api-errors.md`](api-errors.md) | Error response envelope and error codes |
-| [`lists.md`](lists.md) | Identity list pagination; optional shape for business APIs |
-| [`error-copy.md`](error-copy.md) | Stripe-style `message` — product copy appendix |
-| [`container-labels.md`](container-labels.md) | Docker labels (optional collector scrape) |
+| [`model.md`](model.md) | **Start here.** Concepts, principles, rules, what's not in Plat5, extension points |
+| [`control-plane.md`](control-plane.md) | Kinds, the plan, validation across documents, the admin API and feeds |
+| [`routes.md`](routes.md) | Route config: scopes, chain params, `upstream`, labels, rate limits, audit |
+| [`roles.md`](roles.md) | Roles, bindings, resolution, who may assign |
+| [`gateway-contract.md`](gateway-contract.md) | The pipeline, admit, headers to services, rules for services, perimeter |
+| [`identity.md`](identity.md) | Nodes, members, bindings, service accounts, keys, invites, the generated catalog, admit, lifecycle events |
+| [`idp-contract.md`](idp-contract.md) | BYO IdP, subject and name claims |
+| [`audit.md`](audit.md) | Audit log per root: what's recorded, delivery, details headers, reads by node |
+
+## Conventions
+
+| Document | Purpose |
+|----------|---------|
+| [`api-errors.md`](api-errors.md) | Error envelope and codes |
+| [`error-copy.md`](error-copy.md) | Stripe-style `message`: product copy |
+| [`lists.md`](lists.md) | List pagination |
+| [`naming-conventions.md`](naming-conventions.md) | Terms, paths, headers, fields |
 | [`health-checks.md`](health-checks.md) | Health check endpoints |
-| [`naming-conventions.md`](naming-conventions.md) | Service names, terminology, paths, subject |
 | [`telemetry.md`](telemetry.md) | Logs, traces, metrics (stdout, scrape, OTLP) |
+| [`container-labels.md`](container-labels.md) | Docker labels (optional collector scrape) |
 
-## Identity and edge
+## Transitional
 
 | Document | Purpose |
 |----------|---------|
-| [`model.md`](model.md) | **Start here.** Concepts, principles, where each decision lives |
-| [`identity-boundary.md`](identity-boundary.md) | Subjects, layers, what not to mix |
-| [`gateway-contract.md`](gateway-contract.md) | Auth delegation, subject fill, perimeter, TLS, service rules |
-| [`idp-contract.md`](idp-contract.md) | BYO IdP, JWKS, user-id claim mapping |
-| [`routes.md`](routes.md) | Route publishing, scopes, `route_prefix`, rate-limit policies |
-| [`control-plane.md`](control-plane.md) | The deployment's desired state: routes, roles, CORS origins; admin API and the feeds the gateway and identity read |
-| [`identity.md`](identity.md) | Identity service: orgs, members, service accounts, API keys, sessions, internal validate |
-| [`roles.md`](roles.md) | Deployment-defined roles: the roles document, what credentials carry, who may assign, catalog labels |
-| [`audit.md`](audit.md) | Org audit log: which requests, intent and outcome delivery, details header, read API, audit service |
+| [`v2-cutover.md`](v2-cutover.md) | What changes from v1, what gets removed, build order. Deleted once v2 ships |

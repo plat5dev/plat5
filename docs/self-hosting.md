@@ -65,13 +65,13 @@ Also set:
 | `AUTH_ALLOWED_REDIRECT_URIS` | Exact callback URLs (`https://app.example.com/callback`) |
 | `AUTH_ALLOWED_ORIGINS` | Browser CORS for the SPA origin |
 | `AUTH_DISPLAY_NAME` | Login title + verification email copy |
-| `AUTH_USER_ID_CLAIM` on Plat5 | `properties.user_id` for this issuer |
+| `AUTH_SUBJECT_CLAIM` on Plat5 | `properties.user_id` for this issuer |
 
 Env reference: [auth `docs/env.md`](https://github.com/plat5dev/auth/blob/master/docs/env.md).
 
 ### Other IdP
 
-Point Plat5 at it. Typical `AUTH_USER_ID_CLAIM` is `sub`. See [`idp-contract.md`](idp-contract.md).
+Point Plat5 at it. Typical `AUTH_SUBJECT_CLAIM` is `sub`. See [`idp-contract.md`](idp-contract.md).
 
 ## 2. Plat5 runtime
 
@@ -90,16 +90,13 @@ Pin `PLAT5_VERSION` to a released tag (see `.env.template`).
 AUTH_ISSUER=https://auth.example.com
 AUTH_JWKS_URI=https://auth.example.com/.well-known/jwks.json
 AUTH_ALLOWED_AUDIENCES=<same as AUTH_ALLOWED_CLIENTS>
-AUTH_USER_ID_CLAIM=properties.user_id   # Plat5 Auth; use sub for many OIDC IdPs
-# APIKEY_BRAND=plat5                    # optional; identity only; keys {brand}-k-2-…, sessions {brand}-s-2-…
-# ROLES_ENABLED=true                    # the default; identity. false = roles off
+AUTH_SUBJECT_CLAIM=properties.user_id   # Plat5 Auth; use sub for many OIDC IdPs
+# APIKEY_BRAND=plat5                    # optional; identity only; keys {brand}-k-2-…
 ```
 
-With roles on, every member holds one of its roles, and the identity catalog's labels decide who manages the org. The roles live in the control plane. Compose seeds [`compose/roles.yml`](../compose/roles.yml) as the first roles document, so edit it before first boot. After that, the file is not read again: change roles with `PUT /roles` (below), and identity picks them up without a restart. Identity does not start serving until it has a roles document. Format and rules: [`roles.md`](roles.md).
+The tree's kinds and the roles live in the control plane. Compose seeds `kinds.yml` and `roles.yml` from its seed folder as the first documents, so edit them before first boot. After that the files are not read again: change them with `plat5 apply`, which shows a plan first, and identity picks them up without a restart. Identity doesn't start serving until it has both. Formats and rules: [`control-plane.md`](control-plane.md#kinds), [`roles.md`](roles.md).
 
-`ROLES_ENABLED=false` turns roles off: no member has a role, every member holds every label, and route labels block no one. Use it when something else decides authorization. Identity logs a warning at boot. It is a boot switch: turning roles on later leaves existing members without a role.
-
-Audit is on by default: the gateway records each audited `organization` and `member` request in the org's audit log, through the `audit` service. While audit is down, audited requests are **503**. `AUDIT_ENABLED=false` on the gateway turns it off for the whole deployment; then you may stop the `audit` service and skip its catalog. Model and guarantees: [`audit.md`](audit.md).
+Audit is on by default: the gateway records each audited request in its tree's audit log, through the `audit` service. While audit is down, audited requests are **503**. `AUDIT_ENABLED=false` on the gateway turns it off for the whole deployment; then you may stop the `audit` service and skip its catalog. Model and guarantees: [`audit.md`](audit.md).
 
 `POSTGRES_PASSWORD` is interpolated into `DATABASE_URL`. Use a **URL-safe** value (hex). `+` / `/` from raw base64 break the URL (`invalid port`).
 
@@ -143,45 +140,33 @@ Do not put SMTP submission on a tunnel.
 ## 4. Attach your API
 
 1. Run the process on **`plat5_plat5`** (external network). Hostname = the service name in `routes.yml` (e.g. `api` → `url: http://api:3000`).
-2. Trust the path the gateway wrote. Do not validate JWTs. [`gateway-contract.md`](gateway-contract.md).
-3. Apply identity catalog + your routes (prod does **not** seed):
+2. Trust the path and `X-Plat5-*` headers the gateway wrote. Do not validate JWTs. [`gateway-contract.md`](gateway-contract.md).
+3. Generate the identity and audit catalog from your kinds, then apply it and your routes (prod does **not** seed routes):
 
 ```yaml
 # your-api/routes.yml — set url to what the gateway can reach
 services:
   api:
     url: http://api:3000
-    organization:
-      route_prefix: /api
-      routes:
-        - path: /widgets
-          upstream: /organizations/{subject.organization_id}/widgets
-          methods: [GET, POST]
+    routes:
+      - path: /orgs/{organization}/projects/{project}/widgets
+        scope: project
+        upstream: /projects/{subject.project_id}/widgets
+        methods:
+          GET:  { required_labels: [project:read] }
+          POST: { required_labels: [widgets:write] }
 ```
 
 ```bash
-# from a throwaway client on plat5_plat5
-curl -sS -X POST http://control-plane:5002/apply \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/yaml" \
-  --data-binary @services/identity/routes.yml
-
-curl -sS -X POST http://control-plane:5002/apply \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/yaml" \
-  --data-binary @services/audit/routes.yml   # skip with AUDIT_ENABLED=false
-
-curl -sS -X POST http://control-plane:5002/apply \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/yaml" \
-  --data-binary @routes.yml
+plat5 routes generate > catalog.yml          # identity and audit routes for your kinds; edit as needed
+plat5 apply catalog.yml routes.yml           # shows the plan, asks to confirm
 ```
 
-Identity public paths are operator-owned. Catalog: [`services/identity/routes.yml`](../services/identity/routes.yml). Omitting a path hides it from the gateway; the identity process still runs. The audit catalog ([`services/audit/routes.yml`](../services/audit/routes.yml)) publishes `GET /org/audit-events`, labeled `org:audit:read`.
+Identity's edge routes are a catalog you apply, generated from your kinds ([`identity.md`](identity.md#generated-routes)). Omitting a route hides it from the gateway; the identity process still runs. Skip the audit routes with `AUDIT_ENABLED=false`.
 
-Your `organization` and `member` writes are in the org's audit log by default. Set `audit: false` on a write nobody needs there, and `audit: true` on a read worth recording ([`routes.md`](routes.md#audit)).
+Your writes are in their tree's audit log by default. Set `audit: false` on a write nobody needs there, and `audit: true` on a read worth recording ([`routes.md`](routes.md#audit)).
 
-Apply is **upsert**. Format: [`routes.md`](routes.md), [`control-plane.md`](control-plane.md).
+Services in an apply are an **upsert**. Format: [`routes.md`](routes.md), [`control-plane.md`](control-plane.md).
 
 Local CLI `upstreams:` (bare port → `host.docker.internal`) is for laptop Docker. On a shared compose network, put `url:` in the file.
 
@@ -220,7 +205,7 @@ The gateway starts serving once it has loaded routes from the control plane. Gat
 
 ## Footguns
 
-- Choose `AUTH_USER_ID_CLAIM` before the first sign-in. Identity links each person by issuer and that claim's value, so changing the claim later signs everyone in as a new person. With Plat5 Auth use `properties.user_id` (the template default); use `sub` for generic OIDC IdPs.
+- Choose `AUTH_SUBJECT_CLAIM` before the first sign-in. Identity links each person by issuer and that claim's value, so changing the claim later signs everyone in as a new person. With Plat5 Auth use `properties.user_id` (the template default); use `sub` for generic OIDC IdPs.
 - `plat5.yml` / `plat5 start` do not operate this stack.
 - `docker compose down -v` wipes identity orgs/keys and Auth users.
 - Wiping Postgres loses routes, roles, and CORS origins — re-apply. A wiped deployment re-seeds roles from `compose/roles.yml`.

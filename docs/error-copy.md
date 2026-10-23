@@ -1,86 +1,81 @@
-# Error copy — Stripe-style `message`
+# Error copy: Stripe-style `message`
 
 Copy appendix for [`api-errors.md`](api-errors.md).
 
 ## Locked
 
-Stripe’s split, in our envelope:
+Stripe's split, in our envelope:
 
 | Field | Owner | Use |
 |-------|--------|-----|
 | `type` | machine | `invalid_request_error` \| `api_error` |
-| `code` | machine | Closed set in `api-errors.md`. Clients branch on this + HTTP status. |
-| `message` | human | One sentence. Safe to show in a UI. No regex, no `body/key must match`, no `VALIDATION_ERROR`. |
-| `request_id` | support | Correlation. Not shown in product UI. |
-| `details` | machine | Extra context. Optional. Never the only place the human sentence lives. |
+| `code` | machine | Closed set in `api-errors.md`. Clients branch on this + HTTP status |
+| `message` | human | One sentence. Safe to show in a UI. No regex, no `body/key must match`, no `VALIDATION_ERROR` |
+| `request_id` | support | Correlation. Not shown in product UI |
+| `details` | machine | Extra context. Optional. Never the only place the human sentence lives |
 
-Clients show `error.message`.
-
-`details.fields` is for multi-field 422s. `message` is still a complete sentence (first / most specific field).
+Clients show `error.message`. `details.fields` is for multi-field 422s; `message` is still a complete sentence (the first or most specific field).
 
 ## Writing `message`
 
-- Show `error.message`. Do not build a sentence from `details` or field paths.
+- Show `error.message`. Don't build a sentence from `details` or field paths.
 - Product UI shows the sentence, not `request_id`, HTTP status, or `code`.
-- `message` does not include SQL, stack traces, or bind-error text. Bind failures use a fallback sentence.
-- Unknown org, non-member, and inactive member are **404** `Resource not found.`
+- `message` never includes SQL, stack traces, or bind-error text. Bind failures use a fallback sentence.
+- Through the gateway, a missing node and a forbidden one are the same **403** sentence. Never write copy that tells them apart.
 
 ## Fallback `message` per `code`
-
-Use these only when a more specific sentence does not apply.
 
 | Code | HTTP | Fallback `message` |
 |------|------|-------------------|
 | `INVALID_REQUEST` | 400 | Malformed request. |
 | `VALIDATION_ERROR` | 422 | That doesn't look right. |
 | `UNAUTHORIZED` | 401 | Authentication required. |
-| `FORBIDDEN` | 403 | You don't have permission to do that. |
+| `FORBIDDEN` | 403 | Permission denied, or it may not exist. |
 | `NOT_FOUND` | 404 | Resource not found. |
 | `CONFLICT` | 409 | That already exists. |
-| `ORGANIZATION_HANDOFF_REQUIRED` | 409 | Hand off or delete your organizations first. |
+| `PLAN_STALE` | 409 | The deployment changed since this plan was made. Plan again. |
 | `PAYLOAD_TOO_LARGE` | 413 | Request body is too large. |
 | `RATE_LIMITED` | 429 | Too many requests. Try again in a moment. |
 | `INTERNAL_ERROR` | 500 | An unexpected error occurred. |
 | `SERVICE_UNAVAILABLE` | 503 | Service temporarily unavailable. |
 
-`NOT_FOUND` / `INTERNAL_ERROR` / `SERVICE_UNAVAILABLE` stay generic on purpose. `UNAUTHORIZED` from the gateway is specific only to the route ([below](#gateway-401)).
+`NOT_FOUND`, `INTERNAL_ERROR` and `SERVICE_UNAVAILABLE` stay generic on purpose. `RATE_LIMITED` stays this sentence: don't interpolate seconds (`details.retry_after_seconds`, `Retry-After` and `X-RateLimit-*` carry that).
 
-`RATE_LIMITED` stays this sentence. Do not interpolate remaining seconds into `message` (`details.retry_after_seconds` / `Retry-After` / `X-RateLimit-*` carry that).
+## Identity: specific `message`
 
-## Identity — specific `message`
+`FieldError(path, message)` sets `message` as the product sentence. `details.fields[0]` repeats it.
 
-`FieldError(path, message)` sets `message` as the product sentence. `details.fields[0]` repeats that sentence (path stays machine).
-
-### Orgs
+### Nodes
 
 | When | `message` |
 |------|-----------|
-| Name empty | Name is required. |
-| Name > 128 | Name is too long. |
+| Label empty | Label is required. |
+| Label > 128 | Label is too long. |
+| Slug malformed | Use 3 to 63 lowercase letters, digits and hyphens, starting with a letter. |
+| Slug reserved | That name is reserved. |
+| Slug taken, live or tombstone | That name is taken. |
+| Child kind not allowed here | A {kind} can't go here. |
+| Restore with a deleted parent | Restore the {parent kind} first. |
+| Restore past the grace period | This can no longer be restored. |
 
-### Members
+### Members and bindings
 
 | When | `message` |
 |------|-----------|
-| `user_id` empty | Choose someone to add. |
-| `user_id` > 128 | That user ID is too long. |
-| PATCH status missing | Status is required. |
-| PATCH status not `active` or `suspended` | Status must be active or suspended. |
-| Duplicate user in org | This person is already a member. |
-| Remove last member | Delete the organization instead of its last member. |
-| PATCH at the org address with no fields | Nothing to update. |
+| Add with no IdP subject | Choose someone to add. |
+| Already a member | This person is already a member. |
+| Direct binding for someone not in the tree | Add this person to the {root kind} first, or invite them. |
+| Already bound on this node | This member already has a role here. |
 
 ### Roles
 
-Members, invites, and service accounts.
-
 | When | `message` |
 |------|-----------|
-| `role` not a slug in the roles document | That role doesn't exist. |
-| `role` sent while roles are off | Roles aren't set up for this deployment. |
-| Demote, remove, or delete the last `creator_role` holder | Keep at least one member with the {creator_role} role. |
+| `role` not in the roles document | That role doesn't exist. |
+| `role` not bindable at this kind | That role can't be given on a {kind}. |
+| `expires_at` missing or past `max_duration` | This role can be given for at most {max_duration}. |
 
-All are **422** `VALIDATION_ERROR` with `path` `role`, except the last-holder rule on a remove, whose `path` matches the last-member rule (`member_id`, or `service_account_id` on a service-account delete).
+All are **422** `VALIDATION_ERROR` with `path` `role` or `expires_at`.
 
 ### Service accounts
 
@@ -88,47 +83,47 @@ All are **422** `VALIDATION_ERROR` with `path` `role`, except the last-holder ru
 |------|-----------|
 | Name empty | Name is required. |
 | Name > 128 | Name is too long. |
+| Create with no `role` | Choose a role. |
 | PATCH with no name | Nothing to update. |
-| Delete last member via the service account | Delete the organization instead of its last member. |
 
 ### Invites
 
 | When | `message` |
 |------|-----------|
-| `expires_in_seconds` out of range | Expiry must be between 60 seconds and 30 days. |
-| `email` > 320 | That email is too long. |
+| `expires_at` not between 60 seconds and 30 days away | Expiry must be between 60 seconds and 30 days. |
 | `max_uses` 0 or negative | Max uses must be at least 1. |
+| `grants` on an invite below a root | Only an invite to the {root kind} can grant more. |
 | Redeem of a redeemed invite | This invite has already been used. |
 | Redeem of a revoked invite | This invite is no longer valid. |
 | Redeem of an expired invite | This invite has expired. |
 
-Unknown tokens use the generic **404** `Resource not found.` (existence policy; do not name the org). Redeemed / revoked / expired tokens are **409** `CONFLICT` with `{ "field": "status", "value": "redeemed" | "revoked" | "expired" }`. Already a member on a still-`active` token is **200**, not 409.
+Unknown tokens use the generic **404** `Resource not found.` Redeemed, revoked and expired tokens are **409** `CONFLICT` with `{ "field": "status", "value": "redeemed" | "revoked" | "expired" }`.
 
-### API keys (user + member)
+### API keys
 
 | When | `message` |
 |------|-----------|
 | Name > 128 | Name is too long. |
 
-Internal validate (`credential` or `idp` required) is not product UI. Fallback 422 is enough.
-
-### Pagination (`limit` / `starting_after`)
-
-Fallback 422 is enough.
+Internal admit is not product UI. Fallback 422 is enough. So is pagination (`limit`, `starting_after`).
 
 ## Control plane
 
-`AppError::validation` puts the validation text in `message`. Operator-facing.
+`AppError::validation` puts the validation text in `message`, naming the field. Operator-facing.
 
-Gateway-owned 403/404/413/429/500/503 keep the fallback table.
+## Gateway
 
 ### Gateway 401
 
-A 401 on a matched route says what the route's scope takes. The same sentence for no credential, an invalid one, and one of the wrong kind: it names the route's requirement, never the state of the credential sent, so it can't be used to test a key. `details.reason` on a JWT failure is unchanged.
+A 401 on a matched route says what the route takes. The same sentence for no credential, an invalid one, and one of the wrong kind: it names the route's requirement, never the state of the credential sent, so it can't be used to test a key. `details.reason` on a JWT failure is unchanged.
 
 | Route scope | `message` |
 |-------------|-----------|
-| `user` | Authentication required: a user sign-in token or user API key. |
-| `organization`, `member` | Authentication required: a member API key or member session. |
+| A kind | Authentication required: a sign-in token or an API key. |
+| The sign-in kind | Authentication required: a sign-in token or a personal API key. |
 
-Siblings (`cli`, `template-*`): update only if they snapshot exact plat5 `message` strings.
+### Gateway 403
+
+Always the fallback sentence, `Permission denied, or it may not exist.`, with the route's `required_labels` in `details`.
+
+Siblings (`cli`, `template-*`): update only if they snapshot exact Plat5 `message` strings.
