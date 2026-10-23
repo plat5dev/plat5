@@ -1,0 +1,31 @@
+# The kinds and roles the generated catalog is checked against: a kind with
+# two parents, so every chain shape is in it. catalog.rs generates
+# identity-feed.json from this (UPDATE_FIXTURES=1 cargo test catalog), and
+# identity's tests walk every route in it (services/identity/members/catalog_test.go).
+version: 2
+kinds:
+  directory:
+    sign_in: idp
+    name_claim: name
+  organization:
+    label: Organization
+    segment: orgs
+  folder:
+    label: Folder
+    parent: organization
+  project:
+    label: Project
+    parent: [organization, folder]
+roles:
+  owner:
+    labels: ["*"]
+    bindable_at: [organization, folder, project]
+  member:
+    labels: [organization:read]
+    bindable_at: [organization]
+  editor:
+    labels: [folder:read, project:read, project:write]
+    bindable_at: [organization, folder, project]
+default_role: member
+creator_role: owner
+services: {}

@@ -325,6 +325,54 @@ mod tests {
         })
     }
 
+    fn read_yaml(path: &std::path::Path) -> Value {
+        let yaml: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        serde_json::to_value(yaml).unwrap()
+    }
+
+    fn repo(path: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
+    }
+
+    /// Identity's tests read the feed identity would get for a config holding
+    /// the generated catalog, so they check the real thing. The fixture fails
+    /// when stale; `UPDATE_FIXTURES=1 cargo test catalog` rewrites it.
+    #[test]
+    fn identity_feed_fixture_is_fresh() {
+        let dir = repo("fixtures/catalog");
+        let mut config = read_yaml(&dir.join("plat5.yml"));
+        let kinds: BTreeMap<String, Kind> =
+            serde_json::from_value(config["kinds"].clone()).unwrap();
+        config["services"] = generate(&kinds);
+        crate::schema::check_config(&config).unwrap();
+        let checked: Config = serde_json::from_value(config.clone()).unwrap();
+        crate::rules::check(&checked).unwrap();
+        let feed = crate::apply::identity_feed(1, &config).unwrap();
+        let fresh = serde_json::to_string_pretty(&feed).unwrap() + "\n";
+        let path = dir.join("identity-feed.json");
+        if std::env::var("UPDATE_FIXTURES").is_ok_and(|v| v == "1") {
+            std::fs::write(&path, &fresh).unwrap();
+        }
+        assert!(
+            std::fs::read_to_string(&path).is_ok_and(|f| f == fresh),
+            "fixtures/catalog/identity-feed.json is stale; run UPDATE_FIXTURES=1 cargo test catalog"
+        );
+    }
+
+    /// The local seed's routes files are what `plat5 routes generate` writes
+    /// for its kinds.
+    #[test]
+    fn the_compose_seed_holds_the_generated_catalog() {
+        let seed = read_yaml(&repo("../../compose/seed/plat5.yml"));
+        let kinds: BTreeMap<String, Kind> = serde_json::from_value(seed["kinds"].clone()).unwrap();
+        let services = generate(&kinds);
+        for name in ["identity", "audit"] {
+            let file = read_yaml(&repo(&format!("../../compose/seed/routes/{name}.yml")));
+            assert_eq!(file[name], services[name], "compose/seed/routes/{name}.yml");
+        }
+    }
+
     fn generated() -> Value {
         let kinds: BTreeMap<String, Kind> = serde_json::from_value(kinds()).unwrap();
         generate(&kinds)

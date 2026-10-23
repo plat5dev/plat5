@@ -87,3 +87,13 @@ Each build session turns up questions the contracts don't answer. Every answer g
 | An empty name claim is treated as missing: the name stays | An IdP that sends `""` hasn't told us a name. Blanking someone's name on every request would be worse |
 | Plan counts are what would be lost: deleted nodes count, expired bindings and revoked keys don't, purged nodes never do. `sample` is up to five ids in id order. Every requested kind has an entry. The counts come from one read-only, repeatable-read snapshot | A deleted node can still be restored, so removing its kind loses it. An expired binding or a revoked key never works again. The control plane refuses an answer missing a requested kind. One snapshot keeps the numbers consistent with each other |
 | Admit lives in `members/` and plan counts in `nodes/`, each with a `MountInternal` beside lifecycle's | Admit reads people, keys, members and bindings; the counts are about kind removal. Same pattern as the lifecycle feed |
+
+## Step 5: identity, generated routes
+
+| Decision | Why |
+|----------|-----|
+| The check is a test over the control plane's own output: `fixtures/catalog/` holds kinds with a two-parent kind, and the identity feed for that config with its generated catalog. A control-plane test fails when the feed is stale (`UPDATE_FIXTURES=1` rewrites it); identity's tests read that file | The generator is Rust and identity is Go. One generated file both sides test against can't drift silently, as the docs' field tables can't drift from the schema |
+| Identity's test sends each request the way the gateway will: match the route, admit with the path's chain, check labels, fill `upstream`, forward with `X-Plat5-Member-Id`. Every route method in the catalog must be served with a 2xx, or the test names it | "Served" means reachable through the catalog with the ids the gateway fills, not just mounted. A route the generator adds and identity doesn't serve fails by name |
+| Each label-gated route is checked with a role holding only its label, bound where [generated labels](../reference/api/edge-catalog.md#generated-labels) says it's checked, and refused without it | Proves the generated names, the route scopes and the ancestor rule line up, for every chain |
+| The compose seed's `routes/identity.yml` and `routes/audit.yml` must equal what the generator writes for the seed's kinds | They say they're generated; a test keeps that true |
+| No gaps: every generated upstream is served, with the documented status, and the filtered lists read the generated read and delete labels | Recorded so step 6 starts from a checked catalog |

@@ -24,6 +24,7 @@ Contract: [`../../docs/concepts/config.md`](../../docs/concepts/config.md), [`..
 | `src/catalog.rs` | Identity's and audit's generated routes (`POST /catalog`) |
 | `src/apply.rs`, `src/store.rs` | Apply with the head locked; revisions in Postgres |
 | `fixtures/plans/` | Fixture configs and the plan each must produce |
+| `fixtures/catalog/` | Kinds and roles, and the identity feed holding their generated catalog, which identity's tests walk |
 | `src/docgen.rs` | Test: `docs/reference/config/` field tables match the schema |
 
 ## Telemetry
@@ -84,4 +85,5 @@ export IDENTITY_INTERNAL_URL=http://localhost:3001
 cargo run
 cargo test                                   # TEST_DATABASE_URL=… also runs the API against Postgres
 UPDATE_DOCS=1 cargo test docs                # rewrite the docs' generated field tables
+UPDATE_FIXTURES=1 cargo test catalog         # rewrite fixtures/catalog/identity-feed.json
 ```

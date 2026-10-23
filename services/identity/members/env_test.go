@@ -89,9 +89,14 @@ type env struct {
 }
 
 func setup(t *testing.T) *env {
+	return setupWith(t, testConfig)
+}
+
+// setupWith is setup on another feed body.
+func setupWith(t *testing.T, config string) *env {
 	pool := testdb.Pool(t, testSchema)
 	c := &clock{t: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)}
-	snap := parseConfig(t, testConfig)
+	snap := parseConfig(t, config)
 	nodeStore := nodes.NewStore(pool).WithClock(c.now)
 	signIn, err := nodeStore.EnsureSignIn(context.Background(), snap)
 	if err != nil {
