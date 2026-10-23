@@ -6,7 +6,7 @@ use gateway::control_plane::ControlPlane;
 use gateway::health;
 use gateway::metrics;
 use gateway::telemetry;
-use gateway::UserGateway;
+use gateway::Gateway;
 use tracing::info;
 
 use pingora::server::configuration::Opt;
@@ -60,12 +60,12 @@ fn main() {
     if let Some(url) = cfg.audit_url.as_deref() {
         info!(audit_url = %url, "audit on");
     } else {
-        tracing::warn!("AUDIT_ENABLED=false: audit is off and no org audit log is recorded");
+        tracing::warn!("AUDIT_ENABLED=false: audit is off and no audit log is recorded");
     }
 
     let mut my_proxy = pingora::proxy::http_proxy_service(
         &my_server.configuration,
-        UserGateway::new(
+        Gateway::new(
             &cfg,
             jwt_validator.clone(),
             snapshot,

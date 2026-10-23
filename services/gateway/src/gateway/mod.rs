@@ -1,9 +1,7 @@
 mod client_ip;
 mod context;
 mod cors;
-mod labels;
 mod response;
-mod rewrite;
 mod upstream;
 
 use std::collections::HashMap;
@@ -23,45 +21,40 @@ use tracing::{debug, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
-use crate::admission::{Admissor, RequestCredential};
 use crate::audit::{self, Audit, AuditState};
+use crate::auth::admit::{AdmitCache, HttpAdmit};
 use crate::auth::jwt::JwtValidatorState;
-use crate::auth::{AuthStack, AuthType};
+use crate::auth::{AuthError, Authenticator};
 use crate::config::GatewayConfig;
 use crate::control_plane::Snapshot;
 use crate::error::{ApiError, ErrorKind};
+use crate::internal_http::InternalHttpClient;
 use crate::metrics;
-use crate::rate_limit::{RateLimitError, RateLimiter};
-use crate::route_map::{LimitBucket, Route, RouteLimiter, RouteScope};
-use labels::satisfies_required_labels;
+use crate::pipeline::{
+    authorize, forward, Admitted, Caller, GatewayPipeline, Limit, Pipeline, Rejection,
+    RequestCredential,
+};
+use crate::rate_limit::RateLimiter;
+use crate::route_map::{Route, Scope};
 
-pub use crate::admission::parse_user_id_claim;
 pub use client_ip::TrustedProxies;
 pub use context::GatewayContext;
 pub use cors::CorsPolicy;
 
 const MAX_BODY_SIZE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 
-struct RateLimitFallback {
-    requests: u64,
-    window_seconds: u64,
-}
-
-pub struct UserGateway {
-    admissor: Admissor,
-    /// Routes and CORS from the control plane, swapped whole on each change.
+pub struct Gateway {
+    authenticator: Authenticator,
+    pipeline: GatewayPipeline,
+    /// Kinds, routes and CORS from the control plane, swapped whole on each change.
     snapshot: Arc<ArcSwap<Snapshot>>,
     connect_timeout: Duration,
     read_timeout: Duration,
-    limiter: RateLimiter,
-    rate_limit_fallback: RateLimitFallback,
-    auth_failure_requests: u64,
-    auth_failure_window_seconds: u64,
     audit: Audit,
     trusted_proxies: TrustedProxies,
 }
 
-impl UserGateway {
+impl Gateway {
     pub fn new(
         cfg: &GatewayConfig,
         jwt_validator: JwtValidatorState,
@@ -69,18 +62,27 @@ impl UserGateway {
         limiter: RateLimiter,
         audit: Audit,
     ) -> Self {
+        let admit = HttpAdmit::new(
+            cfg.admit_url.clone(),
+            InternalHttpClient::new(cfg.internal_auth_token.clone()),
+        );
         Self {
-            admissor: Admissor::new(AuthStack::from_config(cfg, jwt_validator)),
+            authenticator: Authenticator::new(jwt_validator, cfg.auth_subject_claim.clone()),
+            pipeline: Pipeline::new(
+                AdmitCache::new(admit, Duration::from_secs(cfg.apikey_cache_ttl_secs)),
+                limiter,
+                Limit {
+                    requests: cfg.rate_limit_requests,
+                    window_seconds: cfg.rate_limit_window_seconds,
+                },
+                Limit {
+                    requests: cfg.rate_limit_auth_failure_requests,
+                    window_seconds: cfg.rate_limit_auth_failure_window_seconds,
+                },
+            ),
             snapshot,
             connect_timeout: cfg.upstream_connect_timeout,
             read_timeout: cfg.upstream_read_timeout,
-            limiter,
-            rate_limit_fallback: RateLimitFallback {
-                requests: cfg.rate_limit_requests,
-                window_seconds: cfg.rate_limit_window_seconds,
-            },
-            auth_failure_requests: cfg.rate_limit_auth_failure_requests,
-            auth_failure_window_seconds: cfg.rate_limit_auth_failure_window_seconds,
             audit,
             trusted_proxies: cfg.trusted_proxies.clone(),
         }
@@ -139,43 +141,23 @@ impl UserGateway {
         ))
     }
 
-    fn resolve_route(&self, path: &str, method: &str) -> Option<(Route, HashMap<String, String>)> {
+    /// The matched route, its params, and the sign-in kind's name claim, from one snapshot.
+    fn resolve_route(
+        &self,
+        path: &str,
+        method: &str,
+    ) -> Option<(Route, HashMap<String, String>, String)> {
         let snapshot = self.snapshot.load();
         snapshot
             .routes
             .find_route(path, method)
-            .map(|(route, params)| (route.clone(), params))
-    }
-
-    async fn note_unadmitted(
-        &self,
-        session: &mut Session,
-        ctx: &GatewayContext,
-    ) -> Result<Option<bool>> {
-        match self
-            .limiter
-            .allow(
-                &format!("ip:{}", client_ip(session, &self.trusted_proxies)),
-                self.auth_failure_requests,
-                self.auth_failure_window_seconds,
-            )
-            .await
-        {
-            Ok(_) => Ok(None),
-            Err(RateLimitError::Exceeded { retry_after, .. }) => Ok(Some(
-                response::write_rate_limited(&self.cors(), session, ctx, retry_after, None).await?,
-            )),
-            Err(RateLimitError::Unavailable) => Ok(Some(
-                response::write_json_error(
-                    &self.cors(),
-                    session,
-                    ctx,
-                    503,
-                    ApiError::service_unavailable(),
+            .map(|(route, params)| {
+                (
+                    route.clone(),
+                    params,
+                    snapshot.kinds.name_claim().to_string(),
                 )
-                .await?,
-            )),
-        }
+            })
     }
 
     async fn prepare_upstream(
@@ -184,6 +166,7 @@ impl UserGateway {
         ctx: &mut GatewayContext,
         route: &Route,
         params: &HashMap<String, String>,
+        name_claim: &str,
         request_id: &str,
     ) -> Result<bool> {
         if let Err(err) = session
@@ -205,137 +188,90 @@ impl UserGateway {
             .await;
         }
 
-        let root_span = ctx.root_span();
-        let admission = match self
-            .admissor
-            .admit(
-                session.req_header(),
-                route,
-                root_span.as_ref(),
-                &mut ctx.credential,
-            )
-            .await
-        {
-            Ok(a) => a,
-            Err(err) => {
-                if err.is_unadmitted_401() {
-                    if let Some(done) = self.note_unadmitted(session, ctx).await? {
-                        return Ok(done);
-                    }
-                }
-                return response::write_admit_error(&self.cors(), session, ctx, err, route.scope)
-                    .await;
+        let ip = client_ip(session, &self.trusted_proxies);
+        let presented = match route.scope {
+            // No credential is read on a public route.
+            Scope::Public => Err(AuthError::MissingAuthorization),
+            _ => {
+                self.authenticator
+                    .present(session.req_header(), name_claim)
+                    .await
             }
         };
-
-        if let Some((limit, window, bucket)) = limit_plan(
-            route,
-            &self.rate_limit_fallback,
-            ctx.method_label(),
-            &admission,
-            &client_ip(session, &self.trusted_proxies),
-        ) {
-            match self.limiter.allow(&bucket, limit, window).await {
-                Ok(info) => {
-                    ctx.rate_limit = Some(info);
-                }
-                Err(RateLimitError::Exceeded { retry_after, info }) => {
-                    return response::write_rate_limited(
-                        &self.cors(),
-                        session,
-                        ctx,
-                        retry_after,
-                        Some(&info),
-                    )
-                    .await;
-                }
-                Err(RateLimitError::Unavailable) => {
-                    return response::write_json_error(
-                        &self.cors(),
-                        session,
-                        ctx,
-                        503,
-                        ApiError::service_unavailable(),
-                    )
-                    .await;
-                }
+        // request_filter has entered the root span: a JWT's kid is recorded on it.
+        let method = ctx.method_label().to_string();
+        let decided = self
+            .pipeline
+            .admit_and_limit(route, params, &method, &ip, presented, &mut ctx.credential)
+            .await;
+        let passed = match decided {
+            Ok(passed) => passed,
+            Err(rejection) => {
+                return response::write_rejection(&self.cors(), session, ctx, route, rejection)
+                    .await
             }
-        }
+        };
+        ctx.rate_limit = passed.rate_limit;
+        let admitted = passed.admitted;
+        upstream::record_admission_span(ctx, &admitted);
 
         // Audited: the intent is written before anything past the limiter can answer,
-        // and nothing reaches the service unless it is (docs/audit.md#delivery).
-        if self.audit.enabled() && route.audited(ctx.method_label()) {
-            ctx.audit = Some(AuditState::default());
-            let written = match audit_intent(
-                session,
-                ctx,
-                route,
-                params,
-                request_id,
-                &self.trusted_proxies,
-            ) {
-                Some(intent) => self.audit.write_intent(&intent).await.is_ok(),
-                None => {
-                    warn!(
-                        error_kind = ErrorKind::Internal.as_str(),
-                        "admitted credential is missing a field the audit intent needs"
-                    );
-                    false
+        // and nothing reaches the service unless it is (docs/concepts/audit.md#delivery).
+        if let Admitted::Caller(caller) = &admitted {
+            if self.audit.enabled() && route.audited(ctx.method_label()) {
+                ctx.audit = Some(AuditState::default());
+                ctx.audit_sign_in_route = matches!(route.scope, Scope::SignIn(_));
+                let intent = audit_intent(session, ctx, route, params, caller, request_id, &ip);
+                if self.audit.write_intent(&intent).await.is_err() {
+                    return response::write_rejection(
+                        &self.cors(),
+                        session,
+                        ctx,
+                        route,
+                        Rejection::Unavailable,
+                    )
+                    .await;
                 }
-            };
-            ctx.audit_user_route = route.scope == RouteScope::User;
-            if !written {
-                return response::write_json_error(
-                    &self.cors(),
-                    session,
-                    ctx,
-                    503,
-                    ApiError::service_unavailable(),
-                )
-                .await;
             }
         }
 
         // After the limiter, so a label-denied request still spends budget.
-        if !satisfies_required_labels(route.required_labels.as_deref(), admission.labels()) {
-            log_label_denied(ctx, route, &admission);
-            return response::write_json_error(
-                &self.cors(),
-                session,
-                ctx,
-                403,
-                ApiError::forbidden(Some(serde_json::json!({
-                    "permission": "required_labels",
-                    "resource": "route",
-                    "resource_id": route.path,
-                    // Any one of these would have admitted the request.
-                    "required_labels": route.required_labels,
-                }))),
-            )
-            .await;
+        if let Err(rejection) = authorize(route, &admitted) {
+            if let Admitted::Caller(caller) = &admitted {
+                log_label_denied(ctx, route, caller);
+            }
+            return response::write_rejection(&self.cors(), session, ctx, route, rejection).await;
         }
 
-        upstream::record_admission_span(ctx, &admission);
-
+        let forwarding = match forward(route, params, &admitted) {
+            Ok(f) => f,
+            Err(rejection) => {
+                return response::write_rejection(&self.cors(), session, ctx, route, rejection)
+                    .await
+            }
+        };
         if let Err(err) = upstream::build_and_store_upstream_peer(
             session,
             ctx,
             route,
-            params,
-            &admission,
+            forwarding,
             route.timeouts.connect.unwrap_or(self.connect_timeout),
             route.timeouts.read.unwrap_or(self.read_timeout),
         )
         .await
         {
-            let (status, body) = match err {
-                rewrite::RewriteError::PathParam => (400, ApiError::invalid_request()),
-                rewrite::RewriteError::Subject | rewrite::RewriteError::Internal => {
-                    (500, ApiError::internal_error())
-                }
-                rewrite::RewriteError::BadUpstream => (502, ApiError::internal_error()),
+            let status = match err {
+                upstream::UpstreamError::Internal => 500,
+                upstream::UpstreamError::BadUpstream => 502,
             };
-            return response::write_json_error(&self.cors(), session, ctx, status, body).await;
+            return response::write_json_error(
+                &self.cors(),
+                session,
+                ctx,
+                status,
+                ApiError::internal_error(),
+            )
+            .await;
         }
         Ok(false)
     }
@@ -360,106 +296,43 @@ fn client_ip(session: &Session, trusted: &TrustedProxies) -> String {
     ip.to_string()
 }
 
-/// The intent for an audited request, in the log of the realm the route's subject
-/// is in: the org's on `organization` and `member` routes, the person's on `user`
-/// routes. None if the admitted credential is missing a field it needs.
+/// The intent for an audited request: the chain and who acted. Chain params'
+/// values are slugs or ids as typed, so they stay out of `params`: their nodes are
+/// in `nodes`.
 fn audit_intent(
     session: &Session,
     ctx: &GatewayContext,
     route: &Route,
     params: &HashMap<String, String>,
+    caller: &Caller,
     request_id: &str,
-    trusted_proxies: &TrustedProxies,
-) -> Option<audit::Intent> {
-    let cred = &ctx.credential;
-    let auth_type = cred.auth_type?;
-    let (organization_id, user_id, member_id) = match route.scope {
-        RouteScope::User => (None, Some(cred.user_id.clone()?), None),
-        _ => (
-            Some(cred.organization_id.clone()?),
-            None,
-            Some(cred.member_id.clone()?),
-        ),
-    };
-    // A key has a prefix; a JWT does not.
-    let key_prefix = cred.key_prefix.clone();
-    if auth_type != AuthType::Jwt && key_prefix.is_none() {
-        return None;
-    }
-    Some(audit::Intent {
+    ip: &str,
+) -> audit::Intent {
+    audit::Intent {
         request_id: request_id.to_string(),
         occurred_at: audit::rfc3339_millis(ctx.received_at),
-        organization_id,
-        user_id,
+        root_id: caller.root_id().map(str::to_string),
+        nodes: caller.nodes.clone(),
         actor: audit::Actor {
-            member_id,
-            auth_type: auth_type.as_str(),
-            key_prefix,
+            member_id: caller.member_id.clone(),
+            principal: caller.principal.clone(),
+            auth_type: caller.auth_type.as_str(),
+            key_prefix: caller.key_prefix.clone(),
         },
         service: route.service.clone(),
         method: ctx.method_label().to_string(),
         route: route.path.clone(),
-        params: params.clone(),
-        ip: client_ip(session, trusted_proxies),
+        params: params
+            .iter()
+            .filter(|(name, _)| !route.is_chain_param(name))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+        ip: ip.to_string(),
         user_agent: session
             .req_header()
             .headers
             .get("user-agent")
             .map(|v| audit::user_agent(v.as_bytes())),
-    })
-}
-
-fn limit_plan(
-    route: &Route,
-    fallback: &RateLimitFallback,
-    method: &str,
-    admission: &crate::admission::Admission,
-    ip: &str,
-) -> Option<(u64, u64, String)> {
-    let subject = limit_subject(route.scope, admission, ip);
-    match &route.limiter {
-        RouteLimiter::Unlimited => None,
-        RouteLimiter::Limited(bound) => {
-            let bucket = match &bound.bucket {
-                LimitBucket::MethodPath => {
-                    format!("{} {} {}", method, route.path, subject)
-                }
-                LimitBucket::Named(prefix) => format!("{prefix}:{subject}"),
-            };
-            Some((bound.requests, bound.window_seconds, bucket))
-        }
-        RouteLimiter::Inherit => {
-            if fallback.requests == 0 {
-                None
-            } else {
-                Some((
-                    fallback.requests,
-                    fallback.window_seconds,
-                    format!("{} {} {}", method, route.path, subject),
-                ))
-            }
-        }
-    }
-}
-
-fn limit_subject(scope: RouteScope, admission: &crate::admission::Admission, ip: &str) -> String {
-    use crate::admission::Admission;
-    match scope {
-        RouteScope::Public => format!("ip:{ip}"),
-        RouteScope::User => match admission {
-            Admission::User { user_id, .. } => format!("user:{user_id}"),
-            _ => format!("ip:{ip}"),
-        },
-        RouteScope::Organization => match admission {
-            Admission::Organization {
-                organization_id, ..
-            } => format!("org:{organization_id}"),
-            _ => format!("ip:{ip}"),
-        },
-        RouteScope::Member => match admission {
-            Admission::Member { member_id, .. } => format!("member:{member_id}"),
-            _ => format!("ip:{ip}"),
-        },
     }
 }
 
@@ -494,13 +367,14 @@ fn label_list(labels: &[String]) -> String {
     format!("[{}]", labels.join(","))
 }
 
-/// The why of a label-denied 403, next to the request line. Any one of
+/// The why of a label-denied 403, next to the request line
+/// (docs/reference/telemetry.md#gateway-label-denied-line). Any one of
 /// `required_labels` would have admitted, so all of them are missing. `labels` is
-/// what the credential carried (its member's role labels); the gateway never sees
-/// the role name. Log only: services and the 403 body never get the caller's labels.
-fn log_label_denied(ctx: &GatewayContext, route: &Route, admission: &crate::admission::Admission) {
-    let required = label_list(route.required_labels.as_deref().unwrap_or_default());
-    let labels = label_list(admission.labels().unwrap_or_default());
+/// the caller's on the node; the gateway never sees roles or bindings. Log only:
+/// services and the 403 body never get the caller's labels.
+fn log_label_denied(ctx: &GatewayContext, route: &Route, caller: &Caller) {
+    let required = label_list(&route.required_labels);
+    let labels = label_list(&caller.labels);
     let cred = &ctx.credential;
     warn!(
         request_id = ctx.request_id.as_deref(),
@@ -509,7 +383,9 @@ fn log_label_denied(ctx: &GatewayContext, route: &Route, admission: &crate::admi
         status = 403u16,
         auth_type = cred.auth_type.map(|t| t.as_str()),
         key_prefix = cred.key_prefix.as_deref(),
-        organization_id = cred.organization_id.as_deref(),
+        principal = cred.principal.as_deref(),
+        root_id = cred.root_id.as_deref(),
+        node_id = cred.node_id.as_deref(),
         member_id = cred.member_id.as_deref(),
         required_labels = %required,
         missing_labels = %required,
@@ -518,9 +394,10 @@ fn log_label_denied(ctx: &GatewayContext, route: &Route, admission: &crate::admi
     );
 }
 
-/// One line per request. Credential fields are present only when known: `key_prefix`
-/// as soon as an `X-API-Key` with a known wire prefix is presented (so 401 and 403
-/// carry it), the principal ids once admitted. Never the key or token itself.
+/// One line per request (docs/reference/telemetry.md#gateway-request-line). Credential
+/// fields are present only when known: `key_prefix` as soon as an `X-API-Key` of the
+/// right shape is presented (so 401 and 403 carry it), the ids once admitted. Never
+/// the key or token itself, never a person's principal id.
 fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
     let RequestLog {
         request_id,
@@ -534,8 +411,9 @@ fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
     } = log;
     let auth_type = credential.auth_type.map(|t| t.as_str());
     let key_prefix = credential.key_prefix.as_deref();
-    let user_id = credential.user_id.as_deref();
-    let organization_id = credential.organization_id.as_deref();
+    let principal = credential.principal.as_deref();
+    let root_id = credential.root_id.as_deref();
+    let node_id = credential.node_id.as_deref();
     let member_id = credential.member_id.as_deref();
 
     match error {
@@ -550,8 +428,9 @@ fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
                 duration_ms,
                 auth_type,
                 key_prefix,
-                user_id,
-                organization_id,
+                principal,
+                root_id,
+                node_id,
                 member_id,
                 error = %err,
                 "request failed"
@@ -568,8 +447,9 @@ fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
                 duration_ms,
                 auth_type,
                 key_prefix,
-                user_id,
-                organization_id,
+                principal,
+                root_id,
+                node_id,
                 member_id,
                 "request completed"
             );
@@ -578,7 +458,7 @@ fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
 }
 
 #[async_trait]
-impl ProxyHttp for UserGateway {
+impl ProxyHttp for Gateway {
     type CTX = GatewayContext;
 
     fn new_ctx(&self) -> Self::CTX {
@@ -615,10 +495,26 @@ impl ProxyHttp for UserGateway {
             return Ok(done);
         }
 
-        let Some((route, params)) = self.resolve_route(&path, &method) else {
+        let Some((route, params, name_claim)) = self.resolve_route(&path, &method) else {
             warn!("no matching route");
-            if let Some(done) = self.note_unadmitted(session, ctx).await? {
-                return Ok(done);
+            let ip = client_ip(session, &self.trusted_proxies);
+            if let Some(limited) = self.pipeline.note_unadmitted(&ip).await {
+                return match limited {
+                    Rejection::RateLimited { retry_after, .. } => {
+                        response::write_rate_limited(&self.cors(), session, ctx, retry_after, None)
+                            .await
+                    }
+                    other => {
+                        response::write_json_error(
+                            &self.cors(),
+                            session,
+                            ctx,
+                            other.status(),
+                            ApiError::service_unavailable(),
+                        )
+                        .await
+                    }
+                };
             }
             return response::write_json_error(
                 &self.cors(),
@@ -637,7 +533,7 @@ impl ProxyHttp for UserGateway {
                 .span()
                 .update_name(format!("{} {}", method, route.path));
         }
-        self.prepare_upstream(session, ctx, &route, &params, &request_id)
+        self.prepare_upstream(session, ctx, &route, &params, &name_claim, &request_id)
             .await
     }
 
@@ -749,13 +645,13 @@ impl ProxyHttp for UserGateway {
         };
         let details = header(audit::DETAILS_HEADER);
         let created = header(audit::CREATED_HEADER);
-        let named_org = header(audit::ORGANIZATION_HEADER);
+        let named_root = header(audit::ROOT_HEADER);
         let named_member = header(audit::MEMBER_HEADER);
         for name in audit::SERVICE_HEADERS {
             upstream_response.remove_header(*name);
         }
         let route_label = ctx.route_label().to_string();
-        let user_route = ctx.audit_user_route;
+        let sign_in_route = ctx.audit_sign_in_route;
         if let Some(state) = ctx.audit.as_mut() {
             let status = upstream_response.status.as_u16();
             state.upstream_status = Some(status);
@@ -774,19 +670,19 @@ impl ProxyHttp for UserGateway {
                     warn!(route = %route_label, "ignoring an invalid audit created id");
                 }
             }
-            // The org pair adds a log only on a user route's success, and only as a pair.
-            if named_org.is_some() || named_member.is_some() {
-                let pair = named_org
+            // The root pair adds a log only on a sign-in route's success, and only as a pair.
+            if named_root.is_some() || named_member.is_some() {
+                let pair = named_root
                     .as_deref()
                     .and_then(audit::parse_id)
                     .zip(named_member.as_deref().and_then(audit::parse_id));
-                if user_route && (200..300).contains(&status) && pair.is_some() {
+                if sign_in_route && (200..300).contains(&status) && pair.is_some() {
                     state.named = pair;
                 } else {
                     warn!(
                         route = %route_label,
                         status,
-                        "ignoring audit organization and member: not a pair on a user route's success"
+                        "ignoring audit root and member: not a pair on a sign-in route's success"
                     );
                 }
             }
@@ -856,62 +752,5 @@ impl ProxyHttp for UserGateway {
         }
 
         ctx.finish_root_span();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::admission::Admission;
-    use crate::auth::AuthType;
-
-    fn org_admission(org: &str) -> Admission {
-        Admission::Organization {
-            organization_id: org.into(),
-            labels: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn public_scope_limits_by_ip() {
-        assert_eq!(
-            limit_subject(RouteScope::Public, &Admission::Public, "1.2.3.4"),
-            "ip:1.2.3.4"
-        );
-    }
-
-    #[test]
-    fn user_scope_limits_by_user_id() {
-        let admission = Admission::User {
-            user_id: "user-9".into(),
-            auth_type: AuthType::Jwt,
-            kid: None,
-        };
-        assert_eq!(
-            limit_subject(RouteScope::User, &admission, "1.2.3.4"),
-            "user:user-9"
-        );
-    }
-
-    #[test]
-    fn organization_scope_limits_by_org_id() {
-        let admission = org_admission("org-1");
-        assert_eq!(
-            limit_subject(RouteScope::Organization, &admission, "1.2.3.4"),
-            "org:org-1"
-        );
-    }
-
-    #[test]
-    fn member_scope_limits_by_member_id() {
-        let admission = Admission::Member {
-            organization_id: "org-1".into(),
-            member_id: "mem-9".into(),
-            labels: Vec::new(),
-        };
-        assert_eq!(
-            limit_subject(RouteScope::Member, &admission, "1.2.3.4"),
-            "member:mem-9"
-        );
     }
 }

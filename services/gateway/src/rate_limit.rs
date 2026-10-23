@@ -27,7 +27,7 @@ struct Inner {
     reconnecting: AtomicBool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RateLimitInfo {
     pub limit: u64,
     pub remaining: u64,

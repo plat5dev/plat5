@@ -4,7 +4,6 @@ use jsonwebtoken::TokenData;
 use moka::future::Cache;
 use serde_json::Value;
 
-use crate::auth::cache::hash_secret;
 use crate::auth::AuthType;
 use crate::metrics;
 
@@ -44,6 +43,10 @@ impl JwtCache {
     pub async fn put(&self, token: &str, claims: TokenData<Value>) {
         self.inner.insert(hash_secret(token), claims).await;
     }
+}
+
+fn hash_secret(secret: &str) -> String {
+    blake3::hash(secret.as_bytes()).to_hex().to_string()
 }
 
 #[derive(Clone)]

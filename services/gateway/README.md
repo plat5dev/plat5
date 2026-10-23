@@ -1,6 +1,6 @@
 # Gateway
 
-Rust reverse proxy built on Pingora. Handles request routing, JWT / API key / member session authentication, subject fill into `upstream`, route labels (`required_labels`) against the member's role labels, stripping of `Authorization` / `X-API-Key` before upstream, rate limits (Valkey), the org audit log's intent and outcome writes, trace propagation, CORS, and security headers. TLS is terminated at the edge (not in this process).
+Rust reverse proxy built on Pingora. It matches a route, reads the node chain from the path, authenticates (JWT or `X-API-Key`), and calls identity's admit (cached) for the caller's member and labels on that node. Then it applies the route's rate-limit policies (Valkey), writes the audit intent, checks `required_labels`, and fills the subject into `upstream` and the `X-Plat5-*` headers. It strips `Authorization`, `X-API-Key` and any client `X-Plat5-*`, and handles trace propagation, CORS and security headers. TLS is terminated at the edge (not in this process). How a request is decided: [`docs/concepts/access.md`](../../docs/concepts/access.md#how-a-request-is-decided); the contract: [`docs/reference/gateway.md`](../../docs/reference/gateway.md).
 
 ## Local Development
 
@@ -14,28 +14,30 @@ cargo clippy --all-targets -- -Dwarnings
 cargo test --all-targets
 ```
 
+The config schema is compiled in from the repo's `schema/v2/` (`build.rs`; the Docker build takes it as the `schema` named context). The pipeline tests (`src/pipeline/tests.rs`) run every route of step 5's catalog fixture, `../control-plane/fixtures/catalog/identity-feed.json`, through match, admit, limits, labels and the subject fill.
+
 ## Environment Variables
 
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `5001` | Public HTTP proxy port |
 | `INTERNAL_PORT` | `8000` | Internal port for `/health` and `/metrics` |
-| `CONTROL_PLANE_URL` | (required) | Control plane's internal base URL, e.g. `http://control-plane:5003`. Routes and CORS origins come from `…/internal/gateway` |
+| `CONTROL_PLANE_URL` | (required) | Control plane's internal base URL, e.g. `http://control-plane:5003`. Kinds, routes and CORS origins come from `…/internal/gateway` |
 | `VALKEY_URL` | (required) | Valkey for rate-limit counters. Replicas share one budget |
 | `AUTH_ISSUER` | (required) | JWT `iss` |
 | `AUTH_JWKS_URI` | (required) | JWKS URL |
 | `AUTH_ALLOWED_AUDIENCES` | (empty) | Comma-separated allowed `aud` values |
-| `AUTH_USER_ID_CLAIM` | `properties.user_id` | Dotted claim path for the person's IdP subject (`sub` for many OIDC IdPs). Identity resolves issuer + subject to a `user_id` |
-| `CREDENTIAL_VALIDATE_URL` | (required) | Identity's one validate (`…/internal/credentials/validate`): every `X-API-Key`, and every JWT's issuer and subject |
-| `APIKEY_CACHE_TTL_SECS` | `300` | Credential and IdP subject cache TTL (valid and invalid results) |
-| `INTERNAL_AUTH_TOKEN` | unset | Sent as `X-Plat5-Internal-Token` to validate, audit, and the control plane when set |
+| `AUTH_SUBJECT_CLAIM` | `properties.user_id` | Dotted claim path for the person's IdP subject (`sub` for many OIDC IdPs). The name claim is the sign-in kind's `name_claim` |
+| `ADMIT_URL` | (required) | Identity's admit (`…/internal/admit`): every credential, with the route's node chain |
+| `APIKEY_CACHE_TTL_SECS` | `300` | Admit cache TTL, capped by each answer's `good_until` |
+| `INTERNAL_AUTH_TOKEN` | unset | Sent as `X-Plat5-Internal-Token` to identity, audit, and the control plane when set |
 | `AUDIT_ENABLED` | `true` | `false` turns audit off for the deployment. Anything but `true` / `false` refuses boot |
-| `AUDIT_URL` | (required unless audit is off) | Audit's internal base URL, e.g. `http://audit:3003` ([`docs/audit.md`](../../docs/audit.md)) |
+| `AUDIT_URL` | (required unless audit is off) | Audit's internal base URL, e.g. `http://audit:3003` ([`docs/concepts/audit.md`](../../docs/concepts/audit.md)) |
 | `RATE_LIMIT_REQUESTS` | `60` | Fallback per-route limit. `0` = unlimited fallback |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Fallback window |
 | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` | `60` | Failed-auth IP limiter. `0` = off |
 | `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` | `60` | Failed-auth IP window |
-| `TRUSTED_PROXIES` | (empty) | Comma-separated addresses and CIDRs of proxies in front of the gateway. Their `X-Forwarded-For` names the client. Empty = the TCP peer is the client ([`docs/gateway-contract.md`](../../docs/gateway-contract.md#client-ip)) |
+| `TRUSTED_PROXIES` | (empty) | Comma-separated addresses and CIDRs of proxies in front of the gateway. Their `X-Forwarded-For` names the client. Empty = the TCP peer is the client ([`docs/reference/gateway.md`](../../docs/reference/gateway.md#client-ip)) |
 | `UPSTREAM_CONNECT_TIMEOUT_MS` | `10000` | Upstream connection timeout, for a service whose route config sets no `timeouts.connect_ms` |
 | `UPSTREAM_READ_TIMEOUT_MS` | `30000` | Upstream read timeout, for a service whose route config sets no `timeouts.read_ms` |
 | `OTEL_SERVICE_NAME` | `gateway` | Resource `service.name` |
@@ -52,13 +54,13 @@ cargo test --all-targets
 | `OTEL_TRACES_SAMPLER_RATIO` | `1` | Trace sampling ratio |
 | `OTEL_SDK_DISABLED` | unset | `true` → no OTLP; stdout + `/metrics` remain |
 
-Audit: on an audited `organization` or `member` route, the intent is written before forward (up to 3 attempts in 1s) or the request is **503** and not forwarded. The outcome is queued after the response and retried for about five minutes; a full queue drops it and the event stays `pending`. `X-Plat5-Audit-Details` is stripped from every request and response. Audit is not part of `/health/ready`.
+Audit: on an audited kind or sign-in route, the intent (the node chain, and the member who acted) is written before forward (up to 3 attempts in 1s) or the request is **503** and not forwarded. The outcome is queued after the response and retried for about five minutes; a full queue drops it and the event stays `pending`. Client `X-Plat5-*` headers are stripped from every request, and `X-Plat5-Audit-*` from every response. Audit is not part of `/health/ready`.
 
-Limiter subject follows route scope: `public`→ip, `user`→user, `organization`→org, `member`→member. Valkey error or timeout on a limited request → **503**. The gateway reconnects when Valkey answers again. Admitted limited routes set `X-RateLimit-Limit` / `Remaining` / `Reset`.
+Rate limits: each policy on a route counts in the bucket of the node at its `count_at` (the fallback at the route's own node, `public` by client IP, sign-in routes by the directory member), and every one must pass. Valkey error or timeout on a limited request → **503**. The gateway reconnects when Valkey answers again. Admitted limited routes set `X-RateLimit-Limit` / `Remaining` / `Reset` for the tightest policy.
 
 ## Telemetry
 
-Contract: [`docs/telemetry.md`](../../docs/telemetry.md).
+Contract: [`docs/reference/telemetry.md`](../../docs/reference/telemetry.md).
 
 | Signal | Path |
 |--------|------|
@@ -79,7 +81,7 @@ Do not include `service_name` or `service_namespace` labels in Prometheus metric
 
 ## Control plane
 
-Routes and CORS origins come from the **control plane**. The gateway waits for the first snapshot at boot, then long-polls for changes and keeps the last snapshot while the control plane is down. CORS origins are not env: set them with `PUT /cors`. See [`docs/routes.md`](../../docs/routes.md) and [`docs/control-plane.md`](../../docs/control-plane.md).
+Kinds, routes and CORS origins come from the **control plane**. The gateway waits for the first snapshot at boot, then long-polls for changes and keeps the last snapshot while the control plane is down. Each snapshot is checked against `schema/v2/` and built whole; one that fails either is refused and the current one stays. CORS origins are not env: they're `cors` in `plat5.yml`. See [`docs/reference/gateway.md`](../../docs/reference/gateway.md#control-plane) and [`docs/reference/config/routes.md`](../../docs/reference/config/routes.md).
 
 ## Health
 

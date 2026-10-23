@@ -1,23 +1,36 @@
 use std::collections::HashMap;
 
-/// Subject ids the route scope is allowed to see. Dropped ids are absent.
+use crate::auth::admit::NodeRef;
+
+/// What the gateway sends a service: each chain node's id, and the caller's member
+/// id in that tree. Never a slug, never a person's id.
 #[derive(Clone, Copy)]
-pub struct SubjectRef<'a> {
-    pub user_id: Option<&'a str>,
-    pub organization_id: Option<&'a str>,
+pub struct Subject<'a> {
+    pub nodes: &'a [NodeRef],
     pub member_id: Option<&'a str>,
 }
 
-#[derive(Debug)]
+impl Subject<'_> {
+    fn field(&self, name: &str) -> Option<&str> {
+        if name == "member_id" {
+            return self.member_id;
+        }
+        let kind = name.strip_suffix("_id")?;
+        self.nodes
+            .iter()
+            .find(|n| n.kind == kind)
+            .map(|n| n.id.as_str())
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum RewriteError {
     /// Client path param is not one segment.
     PathParam,
     /// Subject id is not one segment. Platform bug.
     Subject,
-    /// Template or URI the apply-time check should have rejected.
+    /// Template the gateway's own load check should have refused.
     Internal,
-    /// Route base URL is not a usable `host:port`.
-    BadUpstream,
 }
 
 /// Substitute `{subject.*}` and `{path.*}` in an absolute upstream template.
@@ -25,7 +38,7 @@ pub enum RewriteError {
 pub fn substitute(
     template: &str,
     path_params: &HashMap<String, String>,
-    subject: SubjectRef<'_>,
+    subject: Subject<'_>,
 ) -> Result<String, RewriteError> {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
@@ -40,7 +53,7 @@ pub fn substitute(
             return Err(RewriteError::Internal);
         };
         let value = match namespace {
-            "subject" => subject_value(name, subject).ok_or(RewriteError::Internal)?,
+            "subject" => subject.field(name).ok_or(RewriteError::Internal)?,
             "path" => path_params
                 .get(name)
                 .map(String::as_str)
@@ -58,15 +71,6 @@ pub fn substitute(
     }
     out.push_str(rest);
     Ok(out)
-}
-
-fn subject_value<'a>(name: &str, subject: SubjectRef<'a>) -> Option<&'a str> {
-    match name {
-        "user_id" => subject.user_id,
-        "organization_id" => subject.organization_id,
-        "member_id" => subject.member_id,
-        _ => None,
-    }
 }
 
 fn one_segment(value: &str) -> bool {
@@ -91,19 +95,29 @@ mod tests {
             .collect()
     }
 
+    fn nodes(pairs: &[(&str, &str)]) -> Vec<NodeRef> {
+        pairs
+            .iter()
+            .map(|(kind, id)| NodeRef {
+                kind: kind.to_string(),
+                id: id.to_string(),
+            })
+            .collect()
+    }
+
     #[test]
     fn substitutes_subject_and_path() {
+        let chain = nodes(&[("organization", "n_o"), ("project", "n_p")]);
         let got = substitute(
-            "/users/{subject.user_id}/organizations/{path.organization_id}/session",
-            &params(&[("organization_id", "org_1")]),
-            SubjectRef {
-                user_id: Some("user_1"),
-                organization_id: None,
-                member_id: None,
+            "/projects/{subject.project_id}/plans/{path.key}/by/{subject.member_id}",
+            &params(&[("key", "pro"), ("project", "web")]),
+            Subject {
+                nodes: &chain,
+                member_id: Some("m_1"),
             },
         )
         .unwrap();
-        assert_eq!(got, "/users/user_1/organizations/org_1/session");
+        assert_eq!(got, "/projects/n_p/plans/pro/by/m_1");
     }
 
     #[test]
@@ -111,37 +125,50 @@ mod tests {
         let err = substitute(
             "/widgets/{path.widget_id}",
             &params(&[("widget_id", "a/b")]),
-            SubjectRef {
-                user_id: None,
-                organization_id: None,
+            Subject {
+                nodes: &[],
                 member_id: None,
             },
         )
         .unwrap_err();
-        assert!(matches!(err, RewriteError::PathParam));
+        assert_eq!(err, RewriteError::PathParam);
     }
 
     #[test]
     fn subject_slash_is_platform_error() {
+        let chain = nodes(&[("organization", "n/1")]);
         let err = substitute(
-            "/organizations/{subject.organization_id}",
+            "/nodes/{subject.organization_id}",
             &params(&[]),
-            SubjectRef {
-                user_id: None,
-                organization_id: Some("org/1"),
+            Subject {
+                nodes: &chain,
                 member_id: None,
             },
         )
         .unwrap_err();
-        assert!(matches!(err, RewriteError::Subject));
+        assert_eq!(err, RewriteError::Subject);
+    }
+
+    #[test]
+    fn a_field_the_subject_lacks_is_internal() {
+        let err = substitute(
+            "/nodes/{subject.folder_id}",
+            &params(&[]),
+            Subject {
+                nodes: &[],
+                member_id: Some("m_1"),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err, RewriteError::Internal);
     }
 
     #[test]
     fn preserves_query() {
         assert_eq!(
-            path_and_query("/users/u1/memberships", Some("limit=10")),
-            "/users/u1/memberships?limit=10"
+            path_and_query("/members/m1/nodes", Some("kind=project")),
+            "/members/m1/nodes?kind=project"
         );
-        assert_eq!(path_and_query("/org", None), "/org");
+        assert_eq!(path_and_query("/me", None), "/me");
     }
 }

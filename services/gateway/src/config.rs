@@ -1,12 +1,12 @@
 use std::env;
 use std::time::Duration;
 
-use crate::admission::parse_user_id_claim;
+use crate::auth::parse_subject_claim;
 use crate::gateway::TrustedProxies;
 
 const DEFAULT_PORT: &str = "5001";
 const DEFAULT_INTERNAL_PORT: &str = "8000";
-const DEFAULT_USER_ID_CLAIM: &str = "properties.user_id";
+const DEFAULT_SUBJECT_CLAIM: &str = "properties.user_id";
 const DEFAULT_APIKEY_CACHE_TTL_SECS: u64 = 300;
 const DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_UPSTREAM_READ_TIMEOUT_MS: u64 = 30_000;
@@ -29,16 +29,15 @@ pub struct GatewayConfig {
     pub auth_issuer: String,
     pub auth_jwks_uri: String,
     pub auth_allowed_audiences: Vec<String>,
-    /// Dotted claim path segments for Plat5 user id.
-    pub auth_user_id_claim: Vec<String>,
+    /// Dotted claim path segments for the person's IdP subject (`AUTH_SUBJECT_CLAIM`).
+    pub auth_subject_claim: Vec<String>,
 
-    /// Identity's one credential validate (`CREDENTIAL_VALIDATE_URL`): every
-    /// `X-API-Key`, and every JWT's issuer and subject. The gateway does not
-    /// know the brand; identity does.
-    pub credential_validate_url: String,
+    /// Identity's admit (`ADMIT_URL`): every credential, with the route's chain.
+    /// The gateway does not know the brand; identity does.
+    pub admit_url: String,
     pub internal_auth_token: Option<String>,
 
-    /// TTL for every credential and IdP subject resolve (`APIKEY_CACHE_TTL_SECS`).
+    /// TTL for every cached admit answer (`APIKEY_CACHE_TTL_SECS`).
     pub apikey_cache_ttl_secs: u64,
 
     /// Defaults for a service whose route config sets no `timeouts`.
@@ -80,7 +79,7 @@ impl GatewayConfig {
     pub fn from_env() -> Result<Self, GatewayConfigError> {
         let auth_issuer = require_env("AUTH_ISSUER")?;
         let auth_jwks_uri = require_env("AUTH_JWKS_URI")?;
-        let credential_validate_url = require_env("CREDENTIAL_VALIDATE_URL")?;
+        let admit_url = require_env("ADMIT_URL")?;
         let control_plane_url = require_env("CONTROL_PLANE_URL")?
             .trim()
             .trim_end_matches('/')
@@ -132,12 +131,12 @@ impl GatewayConfig {
             auth_issuer,
             auth_jwks_uri,
             auth_allowed_audiences: csv_env("AUTH_ALLOWED_AUDIENCES"),
-            auth_user_id_claim: parse_user_id_claim(
-                &env::var("AUTH_USER_ID_CLAIM")
-                    .unwrap_or_else(|_| DEFAULT_USER_ID_CLAIM.to_string()),
+            auth_subject_claim: parse_subject_claim(
+                &env::var("AUTH_SUBJECT_CLAIM")
+                    .unwrap_or_else(|_| DEFAULT_SUBJECT_CLAIM.to_string()),
             ),
 
-            credential_validate_url,
+            admit_url,
             internal_auth_token: optional_nonempty_env("INTERNAL_AUTH_TOKEN"),
 
             apikey_cache_ttl_secs: parse_u64_env(

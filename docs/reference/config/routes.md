@@ -133,7 +133,7 @@ Fixed window: the first increment opens the window; the key's TTL is `window_sec
 | `false` | Unlimited for this route or verb |
 | `{requests, window_seconds}` | Its own bucket for this route + method, counted at the route's own node. Both > 0 |
 | a policy name | That policy, defined on this service |
-| a list of names | Every policy must pass. `X-RateLimit-*` report the tightest |
+| a list of names | Every policy is counted, and every one must pass. `X-RateLimit-*` report the tightest: the policy with the fewest requests remaining. A **429** carries the longest `Retry-After` among the policies exceeded |
 
 ### Named policies (`rate_limits`)
 

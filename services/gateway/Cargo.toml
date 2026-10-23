@@ -9,6 +9,7 @@ async-trait = "0.1"
 blake3 = "1.5"
 bytes = "1"
 http = "1.1.0"
+jsonschema = { version = "0.60", default-features = false }
 jsonwebtoken = { version = "10.2.0", default-features = false, features = ["rust_crypto"] }
 moka = { version = "0.12", features = ["future"] }
 uuid = { version = "1", features = ["v4"] }

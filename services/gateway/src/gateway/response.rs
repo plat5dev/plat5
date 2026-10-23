@@ -3,14 +3,13 @@ use opentelemetry::trace::Status;
 use pingora::http::ResponseHeader;
 use pingora::proxy::Session;
 use pingora::Result;
-use tracing::{info, warn, Span};
+use tracing::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::admission::{AdmitError, AuthError};
-use crate::error::{ApiError, ErrorKind};
-use crate::metrics;
+use crate::error::ApiError;
+use crate::pipeline::Rejection;
 use crate::rate_limit::RateLimitInfo;
-use crate::route_map::RouteScope;
+use crate::route_map::Route;
 
 use super::context::GatewayContext;
 use super::cors::CorsPolicy;
@@ -125,96 +124,18 @@ pub fn apply_rate_limit_headers(header: &mut ResponseHeader, info: &RateLimitInf
     Ok(())
 }
 
-async fn write_credential_failure(
+/// Answer a [`Rejection`] for `route`.
+pub async fn write_rejection(
     cors: &CorsPolicy,
     session: &mut Session,
     ctx: &GatewayContext,
-    scope: RouteScope,
-    auth_type: &str,
-    reason: &'static str,
+    route: &Route,
+    rejection: Rejection,
 ) -> Result<bool> {
-    metrics::record_auth_failure(auth_type, reason);
-    info!(
-        error_kind = ErrorKind::Auth.as_str(),
-        auth_type,
-        error_message = reason,
-        "authentication failed"
-    );
-    write_json_error(
-        cors,
-        session,
-        ctx,
-        401,
-        ApiError::unauthorized_for(scope, None),
-    )
-    .await
-}
-
-pub async fn write_admit_error(
-    cors: &CorsPolicy,
-    session: &mut Session,
-    ctx: &GatewayContext,
-    err: AdmitError,
-    scope: RouteScope,
-) -> Result<bool> {
-    match err {
-        AdmitError::Auth(auth_err) => write_auth_error(cors, session, ctx, auth_err, scope).await,
-        AdmitError::CredentialInvalid => {
-            write_credential_failure(
-                cors,
-                session,
-                ctx,
-                scope,
-                "credential",
-                "invalid_credential",
-            )
-            .await
+    match rejection {
+        Rejection::RateLimited { retry_after, info } => {
+            write_rate_limited(cors, session, ctx, retry_after, info.as_ref()).await
         }
-        AdmitError::WrongCredential => {
-            write_credential_failure(cors, session, ctx, scope, "credential", "wrong_credential")
-                .await
-        }
-        AdmitError::Unavailable => {
-            write_json_error(cors, session, ctx, 503, ApiError::service_unavailable()).await
-        }
-        AdmitError::Internal(msg) => {
-            warn!(reason = msg, "admission internal error (config bug)");
-            write_json_error(cors, session, ctx, 500, ApiError::internal_error()).await
-        }
-    }
-}
-
-async fn write_auth_error(
-    cors: &CorsPolicy,
-    session: &mut Session,
-    ctx: &GatewayContext,
-    err: AuthError,
-    scope: RouteScope,
-) -> Result<bool> {
-    let auth_type = err.auth_type().as_str();
-    if err.is_client_error() {
-        metrics::record_auth_failure(auth_type, err.as_str());
-        info!(
-            error_kind = ErrorKind::Auth.as_str(),
-            auth_type,
-            error_message = err.as_str(),
-            "authentication failed"
-        );
-        write_json_error(
-            cors,
-            session,
-            ctx,
-            401,
-            ApiError::unauthorized_for(scope, err.details()),
-        )
-        .await
-    } else {
-        warn!(
-            error_kind = ErrorKind::Network.as_str(),
-            auth_type,
-            error_message = err.as_str(),
-            "authentication infrastructure unavailable"
-        );
-        write_json_error(cors, session, ctx, 503, ApiError::service_unavailable()).await
+        other => write_json_error(cors, session, ctx, other.status(), other.body(route)).await,
     }
 }

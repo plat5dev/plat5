@@ -38,7 +38,7 @@ In-process per replica.
 
 | | |
 |--|--|
-| Key | Hash of the credential, the route's scope, and the chain refs as written in the path |
+| Key | Hash of the credential, the route's scope, `resolve_deleted`, and the chain refs as written in the path |
 | TTL | The lesser of `APIKEY_CACHE_TTL_SECS` (default 300) and the result's `good_until` |
 | Negative entries | For invalid credentials and not-found chains. Never for identity errors |
 | Singleflight | Concurrent misses for one key share a single identity call |
@@ -54,7 +54,7 @@ Routes, kinds and CORS origins come from the control plane: `CONTROL_PLANE_URL` 
 - **Boot.** Waits for its first snapshot, retrying while the control plane is down, and doesn't listen until it has one.
 - **Running.** Long-polls with `?after={revision}` and swaps routes, kinds and CORS whole on each change.
 - **Control plane down.** Keeps serving the last snapshot.
-- **A snapshot it can't validate.** Keeps the current one and logs an error.
+- **A snapshot it can't validate.** One that fails the [schema](../concepts/config.md#schema), or that it can't build (a route's scope or `count_at` that isn't a kind in the snapshot, a chain param that isn't the scope's chain). Refused whole: it keeps the current one and logs an error.
 
 Contract: [`reference/api/internal.md`](api/internal.md#control-plane-feeds).
 
