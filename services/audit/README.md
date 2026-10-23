@@ -17,7 +17,7 @@ The gateway is the only writer. It sends the intent before forward (`PUT /intern
 
 Reads: `GET /nodes/{node_id}/audit-events` is the node and everything below it, plus the sign-in events that named it as their root; `GET /members/{member_id}/audit-events` is a person's own log, keyed by their directory member.
 
-Partitions run from last month to two months ahead, checked at boot and hourly. An intent outside them creates its month. Boot refuses a v1 audit schema.
+Partitions run from last month to two months ahead, checked at boot and hourly. An intent outside them creates its month. Boot refuses a schema that records migrations this build doesn't know.
 
 ## Tests
 

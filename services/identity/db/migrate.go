@@ -102,9 +102,8 @@ func MigrateSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error
 }
 
 // refuseUnknown stops boot on a database that recorded migrations this build
-// doesn't have: a v1 identity schema, or one from a newer build. v2 is a hard
-// cutover, so a v1 database is reset or moved by hand, never migrated
-// (docs/v2-cutover.md).
+// doesn't have: one from another build. Such a database is reset or moved by
+// hand, never migrated.
 func refuseUnknown(ctx context.Context, pool *pgxpool.Pool, migrations string, files []string) error {
 	known := make(map[string]bool, len(files))
 	for _, name := range files {
@@ -120,7 +119,7 @@ func refuseUnknown(ctx context.Context, pool *pgxpool.Pool, migrations string, f
 	}
 	for _, v := range applied {
 		if !known[v] {
-			return fmt.Errorf("schema has migration %q that this build doesn't know (a v1 identity schema?); drop the schema or use a fresh database", v)
+			return fmt.Errorf("schema has migration %q that this build doesn't know; drop the schema or use a fresh database", v)
 		}
 	}
 	return nil

@@ -1,13 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://plat5.com/schema/v2/config.json",
+  "$id": "https://plat5.com/schema/config.json",
   "title": "Config",
   "description": "The whole config, as the CLI sends it and the control plane stores it: plat5.yml's keys, with services as a map of service name to service.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "kinds", "roles", "default_role", "creator_role"],
+  "required": ["kinds", "roles", "default_role", "creator_role"],
   "properties": {
-    "version": { "title": "version", "description": "The config format. `2`.", "const": 2 },
     "deletion_grace": { "$ref": "kinds.json#/properties/deletion_grace" },
     "reserved_slugs": { "$ref": "kinds.json#/properties/reserved_slugs" },
     "kinds": { "$ref": "kinds.json#/properties/kinds" },

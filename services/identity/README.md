@@ -12,7 +12,7 @@ Contracts: [identity API](../../docs/reference/api/identity.md), [lifecycle](../
 | `nodes/` | Nodes, the closure table, slugs and tombstones, soft delete, restore, purge, kind removal, and the sweeper that runs reconcile and purge. `POST /internal/plan` on the internal port: the control plane's counts for a plan that removes a kind or narrows a parent |
 | `members/` | People and IdP links, directory members, members of each tree, bindings with expiry, the access list, service accounts, API keys, invites and redeem; creating nodes with the creator's binding, and filtered node lists. Its sweep deletes expired bindings. `POST /internal/admit` on the internal port: the member and labels for a credential on a node chain |
 | `lifecycle/` | The lifecycle-events feed on the internal port. Written in the change's transaction |
-| `db/` | The v2 schema. Boot refuses a database with v1 migrations: v2 is a hard cutover |
+| `db/` | The schema, one migration. Boot refuses a database that records migrations this build doesn't know |
 
 Boot: wait for the first config, create the sign-in node if there is none, then listen. Each new config kicks the sweeper, which also runs every minute: nodes of a kind the config dropped are soft-deleted, a kind applied again gets its nodes back, nodes past `purge_after` are purged, and expired bindings are deleted.
 

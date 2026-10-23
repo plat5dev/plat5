@@ -146,7 +146,6 @@ mod tests {
     }
 
     const PLAT5: &str = "
-version: 2
 kinds:
   directory: { sign_in: idp }
   organization: { segment: orgs }

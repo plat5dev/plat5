@@ -48,7 +48,7 @@ services:
     build:
       context: ../services/control-plane
       additional_contexts:
-        schema: ../schema/v2
+        schema: ../schema
       target: local
     # cargo-watch as PID 1 ignores SIGTERM; tini forwards stop signals.
     init: true
@@ -76,7 +76,7 @@ services:
     volumes:
       - ../services/control-plane/src:/app/src
       - ../services/control-plane/migrations:/app/migrations:ro
-      - ../schema/v2:/schema/v2:ro
+      - ../schema:/schema:ro
       - ./seed:/seed:ro
     networks:
       - plat5
@@ -95,7 +95,7 @@ services:
     build:
       context: ../services/gateway
       additional_contexts:
-        schema: ../schema/v2
+        schema: ../schema
       target: local
     # cargo-watch as PID 1 ignores SIGTERM; tini forwards stop signals.
     init: true
@@ -134,7 +134,7 @@ services:
       DEPLOYMENT_ENV: docker
     volumes:
       - ../services/gateway/src:/app/src
-      - ../schema/v2:/schema/v2:ro
+      - ../schema:/schema:ro
     networks:
       - plat5
     depends_on:

@@ -2,7 +2,6 @@
 # so identity can start, and no services. Edit it before first boot; after that
 # it's never read again. Keep your config in a repo and change it with
 # plat5 plan and plat5 apply, which add the routes files.
-version: 2
 deletion_grace: 30d
 reserved_slugs: [new, settings, api, admin]
 kinds:

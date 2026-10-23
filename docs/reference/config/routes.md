@@ -36,7 +36,7 @@ The versions route doesn't need the author in its path: the service reads `X-Pla
 
 ### Service fields
 
-<!-- generated from schema/v2 with types: routes.json#/$defs/service_name routes.json#/$defs/service/properties -->
+<!-- generated from schema with types: routes.json#/$defs/service_name routes.json#/$defs/service/properties -->
 | Field | Type | Rule |
 |-------|------|------|
 | service name | `string` | The file's one top-level key: 1–128 of `[A-Za-z0-9._-]`. A rate-limit bucket prefix and the `service` on every audit event |
@@ -49,7 +49,7 @@ The versions route doesn't need the author in its path: the service reads `X-Pla
 
 ### Route fields
 
-<!-- generated from schema/v2 with types: routes.json#/$defs/route/properties -->
+<!-- generated from schema with types: routes.json#/$defs/route/properties -->
 | Field | Type | Rule |
 |-------|------|------|
 | `path` | `string` | Match path. Holds one param per kind in its scope's chain, named exactly as the kind ([below](#scope-and-path)) |
@@ -137,7 +137,7 @@ Fixed window: the first increment opens the window; the key's TTL is `window_sec
 
 ### Named policies (`rate_limits`)
 
-<!-- generated from schema/v2: routes.json#/$defs/policy_name routes.json#/$defs/policy/properties -->
+<!-- generated from schema: routes.json#/$defs/policy_name routes.json#/$defs/policy/properties -->
 | Field | Rule |
 |-------|------|
 | policy name | `[a-z0-9:._-]+`, max 64. Unique in the service |

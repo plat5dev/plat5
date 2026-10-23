@@ -1,4 +1,3 @@
-version: 2
 kinds:
   directory:
     sign_in: idp

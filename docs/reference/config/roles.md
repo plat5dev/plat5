@@ -16,7 +16,7 @@ default_role: member
 creator_role: admin
 ```
 
-<!-- generated from schema/v2: roles.json#/properties/roles roles.json#/$defs/role_slug roles.json#/$defs/role/properties roles.json#/properties/default_role roles.json#/properties/creator_role -->
+<!-- generated from schema: roles.json#/properties/roles roles.json#/$defs/role_slug roles.json#/$defs/role/properties roles.json#/properties/default_role roles.json#/properties/creator_role -->
 | Field | Rule |
 |-------|------|
 | `roles` | Map of slug → role. At least one role |

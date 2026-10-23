@@ -306,7 +306,7 @@ func TestAdmit(t *testing.T) {
 	}
 }
 
-// Step 2 of resolution drops bindings whose role is gone from the document
+// Resolution drops bindings whose role is gone from the document
 // or no longer bindable at the node's kind.
 func TestAdmitRoleChanges(t *testing.T) {
 	e := setup(t)

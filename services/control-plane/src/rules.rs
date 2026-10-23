@@ -639,7 +639,6 @@ mod tests {
 
     pub(crate) fn base() -> Value {
         json!({
-            "version": 2,
             "kinds": {
                 "directory": { "sign_in": "idp" },
                 "organization": { "label": "Organization", "segment": "orgs" },

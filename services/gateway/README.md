@@ -14,7 +14,7 @@ cargo clippy --all-targets -- -Dwarnings
 cargo test --all-targets
 ```
 
-The config schema is compiled in from the repo's `schema/v2/` (`build.rs`; the Docker build takes it as the `schema` named context). The pipeline tests (`src/pipeline/tests.rs`) run every route of step 5's catalog fixture, `../control-plane/fixtures/catalog/identity-feed.json`, through match, admit, limits, labels and the subject fill.
+The config schema is compiled in from the repo's `schema/` (`build.rs`; the Docker build takes it as the `schema` named context). The pipeline tests (`src/pipeline/tests.rs`) run every route of the catalog fixture, `../control-plane/fixtures/catalog/identity-feed.json`, through match, admit, limits, labels and the subject fill.
 
 ## Environment Variables
 
@@ -81,7 +81,7 @@ Do not include `service_name` or `service_namespace` labels in Prometheus metric
 
 ## Control plane
 
-Kinds, routes and CORS origins come from the **control plane**. The gateway waits for the first snapshot at boot, then long-polls for changes and keeps the last snapshot while the control plane is down. Each snapshot is checked against `schema/v2/` and built whole; one that fails either is refused and the current one stays. CORS origins are not env: they're `cors` in `plat5.yml`. See [`docs/reference/gateway.md`](../../docs/reference/gateway.md#control-plane) and [`docs/reference/config/routes.md`](../../docs/reference/config/routes.md).
+Kinds, routes and CORS origins come from the **control plane**. The gateway waits for the first snapshot at boot, then long-polls for changes and keeps the last snapshot while the control plane is down. Each snapshot is checked against `schema/` and built whole; one that fails either is refused and the current one stays. CORS origins are not env: they're `cors` in `plat5.yml`. See [`docs/reference/gateway.md`](../../docs/reference/gateway.md#control-plane) and [`docs/reference/config/routes.md`](../../docs/reference/config/routes.md).
 
 ## Health
 

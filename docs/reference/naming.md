@@ -33,7 +33,7 @@ Plat5 owns the tree of nodes (kinds from config), the principals who can reach t
 | Non-human principal | **Service account** | Born at a node of an org's tree |
 | Credential | **API key** | A person's personal key, or a service account's key. No sessions |
 
-**Rejected service names:** `org-service`, `orgs`, `tenants`, `tenancy`, `memberships`, `rbac`, `authz`, `accounts`, `api-keys` (as a standalone platform service).
+**Rejected service names:** `org-service`, `orgs`, `tenants`, `tenancy`, `rbac`, `authz`, `accounts`, `api-keys` (as a standalone platform service).
 
 The identity service is **`identity`** (`service.name: identity`).
 

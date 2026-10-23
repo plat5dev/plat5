@@ -50,8 +50,8 @@ JWT: set `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_SUBJECT_CLAIM` (see compose defau
 ## Attach a service
 
 1. Implement against Plat5 contracts (reference apps: [`plat5dev/template-*`](https://github.com/orgs/plat5dev/repositories)).
-2. Set `url` in `routes.yml` to an address the **gateway** can reach.
-3. Add a routes file for it, list it in `plat5.yml`'s `services`, and apply (shows the plan first):
+2. Add a routes file for it (`routes/api.yml`), with `url` set to an address the **gateway** can reach.
+3. List it in `plat5.yml`'s `services`, and apply (shows the plan first):
 
 ```bash
 plat5 apply

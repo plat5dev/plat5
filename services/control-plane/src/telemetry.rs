@@ -36,7 +36,7 @@ impl Drop for TelemetryGuard {
     }
 }
 
-/// Init tracing + optional OTLP per plat5/docs/telemetry.md.
+/// Init tracing + optional OTLP per plat5/docs/reference/telemetry.md.
 ///
 /// Defaults when an OTLP destination is set:
 /// - traces → OTLP on (unless OTEL_TRACES_EXPORTER excludes otlp)

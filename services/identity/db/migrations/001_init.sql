@@ -1,5 +1,4 @@
--- v2 identity (docs/internals/identity-schema.md). A fresh schema: no v1 table
--- or data is read.
+-- Identity's schema (docs/internals/identity-schema.md).
 
 CREATE TABLE nodes (
     id          TEXT PRIMARY KEY,
@@ -51,12 +50,16 @@ CREATE TABLE idp_links (
 CREATE TABLE members (
     id            TEXT PRIMARY KEY,
     principal_id  TEXT REFERENCES principals (id) ON DELETE SET NULL,
+    -- The principal's kind outlives the principal: a removed service account
+    -- or a deleted account still reads as one.
+    principal     TEXT NOT NULL CHECK (principal IN ('person', 'service_account')),
     root_id       TEXT NOT NULL REFERENCES nodes (id),
     removed_at    TIMESTAMPTZ,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX members_active_uidx ON members (principal_id, root_id) WHERE removed_at IS NULL;
 CREATE INDEX members_root_idx ON members (root_id) WHERE removed_at IS NULL;
+CREATE INDEX members_principal_idx ON members (principal_id) WHERE removed_at IS NULL;
 
 CREATE TABLE bindings (
     id          TEXT PRIMARY KEY,
@@ -69,6 +72,8 @@ CREATE TABLE bindings (
 );
 CREATE UNIQUE INDEX bindings_uidx ON bindings (member_id, node_id);
 CREATE INDEX bindings_node_idx ON bindings (node_id);
+CREATE INDEX bindings_member_idx ON bindings (member_id);
+CREATE INDEX bindings_expiry_idx ON bindings (expires_at) WHERE expires_at IS NOT NULL;
 
 CREATE TABLE api_keys (
     id            TEXT PRIMARY KEY,
@@ -85,6 +90,7 @@ CREATE TABLE invites (
     id           TEXT PRIMARY KEY,
     node_id      TEXT NOT NULL REFERENCES nodes (id),
     role         TEXT NOT NULL,
+    role_duration TEXT,
     grants       JSONB NOT NULL DEFAULT '[]',
     token_hash   TEXT NOT NULL UNIQUE,
     token_prefix TEXT NOT NULL,
@@ -93,6 +99,8 @@ CREATE TABLE invites (
     expires_at   TIMESTAMPTZ NOT NULL,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX invites_node_idx ON invites (node_id);
+CREATE INDEX invites_expiry_idx ON invites (expires_at) WHERE status = 'active';
 
 CREATE TABLE lifecycle_events (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

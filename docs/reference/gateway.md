@@ -67,7 +67,7 @@ Counters live in **Valkey**; replicas share one budget. `VALKEY_URL` is required
 | Fallback | `RATE_LIMIT_REQUESTS` (default 60; `0` = unlimited), `RATE_LIMIT_WINDOW_SECONDS` (default 60), counted at the route's own node |
 | Exceed | **429** `RATE_LIMITED`, `details.retry_after_seconds`, `Retry-After` |
 | Admitted headers | On limited routes (2xx and 429): `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, for the tightest policy |
-| Failed-auth IP | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). Unadmitted 401s, step 2's 403s, and unmatched 404s. **429** sets `Retry-After`; no `X-RateLimit-*` |
+| Failed-auth IP | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). Unadmitted 401s, admit's 403s (node not found, or no member in the tree), and unmatched 404s. **429** sets `Retry-After`; no `X-RateLimit-*` |
 
 ## Audit
 

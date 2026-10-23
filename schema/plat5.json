@@ -1,13 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://plat5.com/schema/v2/plat5.json",
+  "$id": "https://plat5.com/schema/plat5.json",
   "title": "plat5.yml",
   "description": "The deployment's shape: settings, kinds, roles, defaults and CORS, and the list of routes files.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "kinds", "roles", "default_role", "creator_role"],
+  "required": ["kinds", "roles", "default_role", "creator_role"],
   "properties": {
-    "version": { "$ref": "config.json#/properties/version" },
     "deletion_grace": { "$ref": "kinds.json#/properties/deletion_grace" },
     "reserved_slugs": { "$ref": "kinds.json#/properties/reserved_slugs" },
     "kinds": { "$ref": "kinds.json#/properties/kinds" },

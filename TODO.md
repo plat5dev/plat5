@@ -1,3 +1,13 @@
+# To do
+
+## Next
+
+- **End-to-end suite for the local stack.** `plat5 init` and `plat5 start` bring up a stack with `organization` and `project` kinds; e2e tests cover the flows e10s needs: create an org and a project, add a service account at the project, call a route through the gateway as it, delete the project and restore it. `e2e/` already covers these flows against `compose/`.
+- **CI for the CLI.** Its schema-copy and init-files tests (`internal/schema`, `internal/cmd`) skip unless a `plat5` checkout sits next to the CLI, so CI must check one out there.
+- **Starter repos.** Each `template-*` API and console repo in plat5dev ships a `plat5.yml` and `routes/<service>.yml` built on the generated routes, and an app compose file to the contract in the CLI README; then `plat5 init` offers starters beside `--template none`.
+- **The operator plane.** Its gateway, console and route list follow the generated routes in its own repo; then `plat5 start` runs an operator module.
+- **A name in dev tokens.** Plat5 Auth's `POST /dev/token` takes a `name` and puts it in the token as the `name` claim, so `plat5 start`'s dev person gets a name. The CLI already sends it.
+
 # Deferred
 
 ## Policy hook below nodes (AuthZEN)

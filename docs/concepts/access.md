@@ -99,9 +99,9 @@ Every route, in order:
 6. **Fill and forward.** Substitute `{subject.<kind>_id}`, `{subject.member_id}` and `{path.*}` in `upstream` (a bad path param → **400**, a bad subject id → **500**), set the subject headers, forward. Slugs never reach a service.
 7. **Outcome**, in the background, then respond.
 
-Both **403**s have the same body, `details.required_labels` included, so neither says whether the node exists. A node you can't use and a node that doesn't exist answer the same, as Google Cloud's "Permission denied on resource (or it may not exist)". Step 2's **403** runs before the rate limit so a caller outside a tree can't spend that tree's budget; step 5's runs after, so a member probing labels is bounded by its own tree's limit.
+Both **403**s have the same body, `details.required_labels` included, so neither says whether the node exists. A node you can't use and a node that doesn't exist answer the same, as Google Cloud's "Permission denied on resource (or it may not exist)". The admit **403** runs before the rate limit so a caller outside a tree can't spend that tree's budget; the labels **403** runs after, so a member probing labels is bounded by its own tree's limit.
 
-On a `public` route, step 2 is skipped and there is no subject. On a sign-in route (`scope: directory`), the chain is empty and the subject is the person's directory member.
+On a `public` route, authenticate and admit is skipped and there is no subject. On a sign-in route (`scope: directory`), the chain is empty and the subject is the person's directory member.
 
 ## How fast changes reach the edge
 

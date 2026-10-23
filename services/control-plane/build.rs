@@ -1,4 +1,4 @@
-//! The config's JSON Schema lives once, at the repo's `schema/v2/`, and is
+//! The config's JSON Schema lives once, at the repo's `schema/`, and is
 //! compiled in. `PLAT5_SCHEMA_DIR` points elsewhere when the repo layout isn't
 //! there (the Docker build copies it in).
 
@@ -7,7 +7,7 @@ use std::path::PathBuf;
 fn main() {
     let dir = match std::env::var("PLAT5_SCHEMA_DIR") {
         Ok(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../schema/v2"),
+        _ => PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../schema"),
     };
     let dir = dir
         .canonicalize()

@@ -56,18 +56,6 @@ func TestParseControlPlaneURL(t *testing.T) {
 	}
 }
 
-func TestLoadIgnoresRolesEnabled(t *testing.T) {
-	t.Setenv("CONTROL_PLANE_URL", "http://control-plane:5003")
-	t.Setenv("ROLES_ENABLED", "false")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := reflect.TypeOf(cfg).FieldByName("RolesEnabled"); ok {
-		t.Fatal("roles are always on in v2")
-	}
-}
-
 func TestLoadIgnoresSMTP(t *testing.T) {
 	t.Setenv("CONTROL_PLANE_URL", "http://control-plane:5003")
 	t.Setenv("SMTP_HOST", "mail.example.com")

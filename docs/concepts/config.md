@@ -35,7 +35,6 @@ Two kinds of file, split by owner, kept in a repo:
 
 ```yaml
 # plat5.yml
-version: 2
 deletion_grace: 30d
 reserved_slugs: [new, settings, api, admin]
 kinds: { … }
@@ -62,7 +61,7 @@ The CLI reads `plat5.yml`, follows its `services` list, and sends one flat objec
 
 **The config is the whole desired state.** Each apply replaces everything: a service missing from `services` is removed, and the plan shows it. There is no per-document or per-service write.
 
-`version` is the config format, once, in `plat5.yml`. A future format is a migration the CLI and control plane run, not a hard cutover; a `version` the control plane doesn't know is **422**.
+The config has no format key: its absence means the first format. A second format adds a `version` key, with a migration the CLI and control plane run. Any key the schema doesn't know is **422**.
 
 The documents' fields: [kinds](../reference/config/kinds.md), [roles](../reference/config/roles.md), [routes](../reference/config/routes.md), [cors](../reference/config/cors.md). The admin API: [`reference/api/control-plane.md`](../reference/api/control-plane.md). The CLI: [`reference/cli.md`](../reference/cli.md).
 
@@ -82,7 +81,7 @@ Shape errors (a malformed duration, a reserved slug that isn't a slug, an unknow
 
 ## Schema
 
-One JSON Schema per document, and one for the whole config, in the repo at `schema/v2/` and served at `GET /schema`. It is the single definition of each document's shape:
+One JSON Schema per document, and one for the whole config, in the repo at `schema/` and served at `GET /schema`. It is the single definition of each document's shape:
 
 - The CLI validates locally with it (`plat5 validate`), so editors and CI catch shape errors without a deployment.
 - The control plane validates every apply with it before the cross-document rules.
@@ -96,11 +95,11 @@ Two calls on one endpoint. A dry run computes the plan and writes nothing; an ap
 
 ```
 POST /apply?dry_run=true
-{ "version": 2, "deletion_grace": "30d", "kinds": {…}, "roles": {…}, "default_role": "member", …, "services": {…} }
+{ "deletion_grace": "30d", "kinds": {…}, "roles": {…}, "default_role": "member", …, "services": {…} }
 → 200 the plan
 
 POST /apply
-{ "version": 2, "deletion_grace": "30d", "kinds": {…}, "roles": {…}, "default_role": "member", …, "services": {…},
+{ "deletion_grace": "30d", "kinds": {…}, "roles": {…}, "default_role": "member", …, "services": {…},
   "expect":  { "revision": 41 },
   "confirm": { "folder": { "nodes": 14 } } }
 → 200 { "revision": 42 }

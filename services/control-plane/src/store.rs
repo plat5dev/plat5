@@ -9,10 +9,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use tracing::info;
 
 const SCHEMA: &str = "control_plane";
-const MIGRATIONS: &[(&str, &str)] = &[(
-    "v2_001_config",
-    include_str!("../migrations/001_config.sql"),
-)];
+const MIGRATIONS: &[(&str, &str)] = &[("001_init", include_str!("../migrations/001_init.sql"))];
 
 #[derive(Clone)]
 pub struct Store {
