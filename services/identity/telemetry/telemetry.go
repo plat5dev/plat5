@@ -33,7 +33,7 @@ type Telemetry struct {
 	logger         zerolog.Logger
 }
 
-// Init configures OpenTelemetry per plat5/docs/telemetry.md.
+// Init configures OpenTelemetry per plat5/docs/reference/telemetry.md.
 //
 // Defaults when an OTLP destination is set:
 //   - traces → OTLP on (unless OTEL_TRACES_EXPORTER excludes otlp)

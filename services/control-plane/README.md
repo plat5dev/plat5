@@ -2,7 +2,7 @@
 
 The deployment's config: kinds, roles, routes and CORS origins, applied as one whole config. A dry run answers the plan; an apply recomputes it and writes one revision if its preconditions hold. Serves the current config to the gateway and identity over long-poll.
 
-Contract: [`../../docs/concepts/config.md`](../../docs/concepts/config.md), [`../../docs/reference/api/control-plane.md`](../../docs/reference/api/control-plane.md). The config's JSON Schema is [`../../schema/v2/`](../../schema/v2/), compiled in (`build.rs`).
+Contract: [`../../docs/concepts/config.md`](../../docs/concepts/config.md), [`../../docs/reference/api/control-plane.md`](../../docs/reference/api/control-plane.md). The config's JSON Schema is [`../../schema/`](../../schema/), compiled in (`build.rs`).
 
 ## Ports
 
@@ -18,7 +18,7 @@ Contract: [`../../docs/concepts/config.md`](../../docs/concepts/config.md), [`..
 | File | |
 |------|--|
 | `src/config.rs` | The config's types and the stored form the feeds serve |
-| `src/schema.rs` | `schema/v2/`, compiled in; errors as field paths |
+| `src/schema.rs` | `schema/`, compiled in; errors as field paths |
 | `src/rules.rs` | The seven cross-document rules, route shape, route ownership |
 | `src/plan.rs` | The plan, its classification, and the apply's preconditions |
 | `src/catalog.rs` | Identity's and audit's generated routes (`POST /catalog`) |
@@ -29,7 +29,7 @@ Contract: [`../../docs/concepts/config.md`](../../docs/concepts/config.md), [`..
 
 ## Telemetry
 
-Contract: [`../../docs/telemetry.md`](../../docs/telemetry.md).
+Contract: [`../../docs/reference/telemetry.md`](../../docs/reference/telemetry.md).
 
 | Signal | Path |
 |--------|------|

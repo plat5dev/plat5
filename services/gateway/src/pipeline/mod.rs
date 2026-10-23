@@ -180,7 +180,7 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         }
     }
 
-    /// Steps 2 and 3: authenticate and admit, then rate limit. `presented` is what
+    /// Authenticate and admit, then rate limit. `presented` is what
     /// [`crate::auth::Authenticator::present`] found. `cred` is filled as far as it gets.
     pub async fn admit_and_limit(
         &self,
@@ -354,7 +354,7 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         }
     }
 
-    /// Step 3: every policy on the route counts in its node's bucket, and every one
+    /// Rate limit: every policy on the route counts in its node's bucket, and every one
     /// must pass. Ok carries the tightest policy's numbers.
     async fn limit(
         &self,
@@ -440,7 +440,7 @@ fn buckets(
     }
 }
 
-/// Step 5: the caller's labels on the node against the route's.
+/// Labels: the caller's labels on the node against the route's.
 pub fn authorize(route: &Route, admitted: &Admitted) -> Result<(), Rejection> {
     match admitted {
         Admitted::Public => Ok(()),
@@ -451,7 +451,7 @@ pub fn authorize(route: &Route, admitted: &Admitted) -> Result<(), Rejection> {
     }
 }
 
-/// Step 6: the upstream path and the subject headers. Nothing on a public route.
+/// Fill: the upstream path and the subject headers. Nothing on a public route.
 pub fn forward(
     route: &Route,
     params: &HashMap<String, String>,

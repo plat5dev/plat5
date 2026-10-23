@@ -18,7 +18,7 @@ kinds:
     parent: organization
 ```
 
-<!-- generated from schema/v2: kinds.json#/$defs/kind_name kinds.json#/$defs/kind/properties kinds.json#/properties/reserved_slugs kinds.json#/properties/deletion_grace -->
+<!-- generated from schema: kinds.json#/$defs/kind_name kinds.json#/$defs/kind/properties kinds.json#/properties/reserved_slugs kinds.json#/properties/deletion_grace -->
 | Field | Rule |
 |-------|------|
 | kind name | Lowercase identifier, `[a-z][a-z0-9_]*`, max 32. Not `public` or `member`. Names the kind in route scopes, path params, subject fields (`{subject.project_id}`), headers (`X-Plat5-Project-Id`), events (`project.deleted`) and audit. Fixed once nodes exist: a rename reads as a remove plus an add |

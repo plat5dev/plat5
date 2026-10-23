@@ -81,7 +81,7 @@ jobs:
           context: ${{ matrix.context }}
           # The control plane and the gateway compile in the config schema; unused elsewhere.
           build-contexts: |
-            schema=schema/v2
+            schema=schema
           target: prod
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true

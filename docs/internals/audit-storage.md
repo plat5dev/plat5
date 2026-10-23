@@ -6,7 +6,7 @@ For implementers. The contract is [audit](../concepts/audit.md) and the [audit A
 
 `audit_events` in schema `audit` on the Plat5 Postgres. Partitioned by month on `occurred_at`. Unique on `request_id`; a GIN index on the node ids (`node_ids`, the chain beside `nodes`) for reads by node, and indexes on `named_root_id` and on the person's log (`actor_member_id` where `root_id` is null). Check constraints keep `root_id` the chain's head, a named root only on a sign-in event, and `key_prefix` set exactly for keys. Partitions are kept from last month to two months ahead, at boot and hourly.
 
-One fresh migration. Boot refuses a schema that records a migration this build doesn't know, such as a v1 audit schema: drop it or use a fresh database.
+One migration. Boot refuses a schema that records a migration this build doesn't know: drop it or use a fresh database.
 
 Append-only, except the one `pending` → final transition. A trigger enforces it. No API updates or deletes an event. Events are kept: there's no retention yet, and purging a node doesn't delete its events.
 

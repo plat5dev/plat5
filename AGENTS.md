@@ -17,10 +17,9 @@ A thin platform runtime for multi-tenant APIs: a gateway, identity (the tree of 
 | What Plat5 won't do (stop conditions) | [`docs/concepts/boundaries.md`](docs/concepts/boundaries.md#not-in-plat5) |
 | Shapes: config documents, APIs, headers, env | [`docs/reference/`](docs/reference/) |
 | How Plat5 stores things | [`docs/internals/`](docs/internals/) |
-| Why each decision was made | [`docs/decisions/`](docs/decisions/README.md) |
+| Why each decision was made, by topic | [`docs/decisions/`](docs/decisions/README.md) |
 | The map of all of it | [`docs/README.md`](docs/README.md) |
-| Deferred work and when it's ready | [`TODO.md`](TODO.md) |
-| v1 → v2 transition and build order | [`docs/v2-cutover.md`](docs/v2-cutover.md) (until v2 ships) |
+| What's next, and deferred work and when it's ready | [`TODO.md`](TODO.md) |
 
 ## Working here
 

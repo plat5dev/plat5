@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://plat5.com/schema/v2/roles.json",
+  "$id": "https://plat5.com/schema/roles.json",
   "title": "Roles",
   "description": "What each role grants and where it can be bound: the roles part of plat5.yml.",
   "type": "object",

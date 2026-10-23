@@ -77,7 +77,7 @@ mod tests {
             format!("Plat5-k-2-{s}"),
             format!("1plat5-k-2-{s}"),
             format!("{}-k-2-{s}", "a".repeat(MAX_BRAND_LEN + 1)),
-            // Sessions and version 1 keys are gone.
+            // Other formats: sessions, other versions, other key types.
             format!("plat5-s-2-{s}"),
             format!("plat5-sk-1-{s}"),
             format!("plat5-mk-1-{s}"),

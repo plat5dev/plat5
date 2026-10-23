@@ -14,15 +14,15 @@ import (
 	"github.com/plat5dev/plat5/audit/db"
 )
 
-// A v1 audit schema recorded 001_init and 002_personal_log. v2 is a hard
-// cutover: boot refuses it rather than reading v1 events.
-func TestMigrateRefusesAV1Schema(t *testing.T) {
+// A schema that records a migration this build doesn't know is refused, never
+// read: such a database is reset or moved by hand.
+func TestMigrateRefusesAnUnknownMigration(t *testing.T) {
 	url := os.Getenv("AUDIT_TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("AUDIT_TEST_DATABASE_URL is unset")
 	}
 	ctx := context.Background()
-	schema := fmt.Sprintf("audit_test_v1_%d", time.Now().UnixNano())
+	schema := fmt.Sprintf("audit_test_unknown_%d", time.Now().UnixNano())
 	pool, err := pgxpool.New(ctx, url)
 	if err != nil {
 		t.Fatal(err)
@@ -43,6 +43,6 @@ func TestMigrateRefusesAV1Schema(t *testing.T) {
 	}
 	err = db.MigrateSchema(ctx, pool, schema)
 	if err == nil || !strings.Contains(err.Error(), "002_personal_log") {
-		t.Fatalf("want refusal naming the v1 migration, got %v", err)
+		t.Fatalf("want refusal naming the unknown migration, got %v", err)
 	}
 }

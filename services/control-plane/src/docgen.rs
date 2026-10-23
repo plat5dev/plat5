@@ -1,8 +1,8 @@
-//! The config reference pages' field tables, generated from `schema/v2/` so they
+//! The config reference pages' field tables, generated from `schema/` so they
 //! can't drift from it. A table sits between
 //!
 //! ```text
-//! <!-- generated from schema/v2: kinds.json#/$defs/kind/properties … -->
+//! <!-- generated from schema: kinds.json#/$defs/kind/properties … -->
 //! <!-- end generated -->
 //! ```
 //!
@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use crate::schema;
 
-const OPEN: &str = "<!-- generated from schema/v2";
+const OPEN: &str = "<!-- generated from schema";
 const CLOSE: &str = "<!-- end generated -->";
 const PAGES: &[&str] = &["kinds.md", "roles.md", "routes.md", "cors.md"];
 
@@ -30,7 +30,7 @@ fn resolve(target: &str) -> (String, Value) {
     let doc = schema::file(file);
     let v = doc
         .pointer(pointer)
-        .unwrap_or_else(|| panic!("schema/v2/{target} doesn't exist"))
+        .unwrap_or_else(|| panic!("schema/{target} doesn't exist"))
         .clone();
     (file.to_string(), v)
 }
@@ -200,6 +200,6 @@ fn docs_reference_tables_match_the_schema() {
     }
     assert!(
         stale.is_empty(),
-        "docs/reference/config/{stale:?} don't match schema/v2; run UPDATE_DOCS=1 cargo test docs"
+        "docs/reference/config/{stale:?} don't match schema; run UPDATE_DOCS=1 cargo test docs"
     );
 }

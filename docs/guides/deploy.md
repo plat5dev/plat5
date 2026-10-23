@@ -194,7 +194,7 @@ The gateway starts serving once it has loaded routes from the control plane. Gat
 ## Footguns
 
 - Choose `AUTH_SUBJECT_CLAIM` before the first sign-in. Identity links each person by issuer and that claim's value, so changing the claim later signs everyone in as a new person. With Plat5 Auth use `properties.user_id` (the template default); use `sub` for generic OIDC IdPs.
-- `plat5.yml` / `plat5 start` do not operate this stack.
+- `plat5 start` and its `plat5.dev.yml` don't operate this stack. `plat5.yml` does, through `plat5 apply`.
 - `docker compose down -v` on this stack wipes identity (nodes, people, keys), audit, and the applied config. Plat5 Auth runs as its own stack; its users go only with its own volumes.
 - Wiping Postgres loses the applied config (kinds, roles, routes, CORS) along with identity and audit. Re-apply the config from your repo. A wiped deployment re-seeds from the seed folder first.
 - After first boot, editing the seed folder does nothing. Change your `plat5.yml` and `plat5 apply`.
@@ -203,3 +203,5 @@ The gateway starts serving once it has loaded routes from the control plane. Gat
 ## Pins
 
 Images: `ghcr.io/plat5dev/{gateway,identity,control-plane,audit}:$PLAT5_VERSION` and `ghcr.io/plat5dev/auth:$AUTH_VERSION`. Tags are independent. Use released `v*` tags, not `latest`.
+
+Upgrade the gateway with or before the control plane. The gateway [refuses a whole snapshot](../reference/gateway.md#control-plane) it can't build, so a control plane that writes something an older gateway doesn't know leaves that gateway on its last snapshot until it's upgraded.

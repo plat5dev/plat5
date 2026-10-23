@@ -77,7 +77,7 @@ func TestParseIntentRejects(t *testing.T) {
 		"node without an id":   {"r", `{"kind": "project", "id": "n_01J9ZX5A"}`, `{"kind": "project"}`, "nodes[1].id"},
 		"no member":            {"r", `"member_id": "m_01J9ZX5B8C1D4E7F0G3H6J9K2M", `, ``, "actor.member_id"},
 		"unknown principal":    {"r", `"service_account"`, `"robot"`, "actor.principal"},
-		"v1 auth type":         {"r", `"apikey"`, `"member_session"`, "actor.auth_type"},
+		"session auth type":         {"r", `"apikey"`, `"member_session"`, "actor.auth_type"},
 		"key without prefix":   {"r", `, "key_prefix": "plat5-k-2-x9Qa"`, ``, "actor.key_prefix"},
 		"service account jwt":  {"r", `"auth_type": "apikey", "key_prefix": "plat5-k-2-x9Qa"`, `"auth_type": "jwt"`, "actor.auth_type"},
 		"unaudited method":     {"r", `"PATCH"`, `"OPTIONS"`, "method"},

@@ -25,5 +25,3 @@ cd e2e && PLAT5_E2E=1 go test ./... -count=1 -v
 | `E2E_WAIT` | `10m` | How long to wait for the gateway to answer (the dev images build on first start) |
 
 Don't `up --wait`: the gateway isn't ready until it loads JWKS, which only the running tests serve.
-
-Step 9 of the v2 cutover grows this into the e2e for `plat5 init` and `plat5 start`.

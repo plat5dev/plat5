@@ -16,21 +16,19 @@ docker compose up --build
 | URL | Service |
 |-----|---------|
 | `http://localhost:5400` | Gateway |
-| `http://localhost:5402` | Control plane admin API (routes, roles, CORS origins) |
+| `http://localhost:5402` | Control plane admin API (the config: kinds, roles, routes, CORS origins) |
 
 Admin token default: `dev-admin-token` (`ADMIN_TOKEN`).
-Internal token default: `dev-internal-token` (`INTERNAL_AUTH_TOKEN`) — gateway → identity validate, audit, and the control plane; identity → the control plane.
+Internal token default: `dev-internal-token` (`INTERNAL_AUTH_TOKEN`) — gateway → identity admit, audit, and the control plane; identity → the control plane.
 
-## Apply routes
+## Change the config
+
+The control plane applies [`seed/`](seed/) on first boot (see Config below). After that, change it with the CLI, which shows the plan first:
 
 ```bash
-curl -sS -X POST http://localhost:5402/apply \
-  -H "Authorization: Bearer dev-admin-token" \
-  -H "Content-Type: application/yaml" \
-  --data-binary @../services/identity/routes.yml
+plat5 config pull my-config && cd my-config   # what's applied, as files
+plat5 apply                                    # plat5.yml and the routes files it lists
 ```
-
-Dev compose seeds identity and audit routes only when that service has no history yet (does not overwrite). Prod does not seed — apply `services/identity/routes.yml` (or a subset) and `services/audit/routes.yml` yourself.
 
 Audit: the gateway records audited requests on kind and sign-in routes through the `audit` service (`AUDIT_URL`). It is on by default. `AUDIT_ENABLED=false` turns it off for the deployment; then audit need not run. See [`../docs/concepts/audit.md`](../docs/concepts/audit.md).
 
@@ -57,7 +55,7 @@ See [`../docs/reference/idp.md`](../docs/reference/idp.md).
 
 ## Telemetry
 
-Optional `OTEL_EXPORTER_OTLP_ENDPOINT` (empty = no OTLP). When set, traces and metrics both default to OTLP; `/metrics` scrape stays on. CLI: `otel.endpoint` in `plat5.yml`. See [`../docs/telemetry.md`](../docs/telemetry.md).
+Optional `OTEL_EXPORTER_OTLP_ENDPOINT` (empty = no OTLP). When set, traces and metrics both default to OTLP; `/metrics` scrape stays on. CLI: `otel.endpoint` in `plat5.dev.yml`. See [`../docs/reference/telemetry.md`](../docs/reference/telemetry.md).
 
 ## Prod
 
@@ -78,4 +76,4 @@ Required: `POSTGRES_PASSWORD`, `ADMIN_TOKEN`, `INTERNAL_AUTH_TOKEN`, `AUTH_ISSUE
 
 `POSTGRES_PASSWORD` is interpolated into `DATABASE_URL` — use a URL-safe value (hex). The control plane's admin port is **not** published in prod by default.
 
-Operator walkthrough (Auth, TLS, attach your API): [`../docs/self-hosting.md`](../docs/self-hosting.md).
+Operator walkthrough (Auth, TLS, attach your API): [`../docs/guides/deploy.md`](../docs/guides/deploy.md).

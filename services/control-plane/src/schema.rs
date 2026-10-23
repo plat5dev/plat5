@@ -1,4 +1,4 @@
-//! The config's JSON Schema, from the repo's `schema/v2/`, compiled in. It is the
+//! The config's JSON Schema, from the repo's `schema/`, compiled in. It is the
 //! one definition of the config's shape (docs/concepts/config.md#schema): every
 //! apply is checked against it before the cross-document rules.
 
@@ -8,7 +8,7 @@ use jsonschema::{Registry, Validator};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 
-const BASE: &str = "https://plat5.com/schema/v2/";
+const BASE: &str = "https://plat5.com/schema/";
 
 /// Each schema file, by name, as served at `GET /schema`.
 pub const FILES: &[(&str, &str)] = &[
@@ -78,7 +78,7 @@ fn parsed(name: &str) -> Value {
         .iter()
         .find(|(n, _)| *n == name)
         .expect("schema file is embedded");
-    serde_json::from_str(text).unwrap_or_else(|e| panic!("schema/v2/{name}: {e}"))
+    serde_json::from_str(text).unwrap_or_else(|e| panic!("schema/{name}: {e}"))
 }
 
 fn validators() -> &'static Validators {
@@ -88,7 +88,7 @@ fn validators() -> &'static Validators {
         for (name, _) in FILES {
             registry = registry
                 .add(format!("{BASE}{name}"), parsed(name))
-                .unwrap_or_else(|e| panic!("schema/v2/{name}: {e}"));
+                .unwrap_or_else(|e| panic!("schema/{name}: {e}"));
         }
         let registry = registry.prepare().expect("schema registry");
         let build = |schema: &Value| {
@@ -98,13 +98,12 @@ fn validators() -> &'static Validators {
                 .build(schema)
                 .expect("schema compiles")
         };
-        // `POST /catalog` takes only the version and the kinds.
+        // `POST /catalog` takes only the kinds.
         let catalog = json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["version", "kinds"],
+            "required": ["kinds"],
             "properties": {
-                "version": { "$ref": format!("{BASE}config.json#/properties/version") },
                 "kinds": { "$ref": format!("{BASE}kinds.json#/properties/kinds") }
             }
         });
@@ -120,7 +119,7 @@ pub fn check_config(config: &Value) -> Result<(), Vec<FieldError>> {
     check(&validators().config, config)
 }
 
-/// Checks a `POST /catalog` body: `{ version, kinds }`.
+/// Checks a `POST /catalog` body: `{ kinds }`.
 pub fn check_catalog_request(body: &Value) -> Result<(), Vec<FieldError>> {
     check(&validators().catalog, body)
 }
@@ -188,7 +187,6 @@ mod tests {
 
     fn base() -> Value {
         json!({
-            "version": 2,
             "kinds": {
                 "directory": { "sign_in": "idp" },
                 "organization": { "label": "Organization", "segment": "orgs" }
@@ -227,7 +225,6 @@ mod tests {
     fn shape_errors() {
         type Mutate = Box<dyn Fn(&mut Value)>;
         let cases: Vec<(&str, Mutate)> = vec![
-            ("version", Box::new(|c| c["version"] = json!(3))),
             (
                 "deletion_grace",
                 Box::new(|c| c["deletion_grace"] = json!("30 days")),
@@ -350,8 +347,9 @@ mod tests {
 
     #[test]
     fn catalog_request() {
-        check_catalog_request(&json!({ "version": 2, "kinds": base()["kinds"] })).unwrap();
-        assert!(check_catalog_request(&json!({ "kinds": base()["kinds"] })).is_err());
+        check_catalog_request(&json!({ "kinds": base()["kinds"] })).unwrap();
+        assert!(check_catalog_request(&json!({ "kinds": base()["kinds"], "roles": {} })).is_err());
+        assert!(check_catalog_request(&json!({})).is_err());
     }
 
     #[test]

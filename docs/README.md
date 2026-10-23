@@ -36,7 +36,7 @@
 
 | Doc | |
 |-----|--|
-| [config/kinds](reference/config/kinds.md), [roles](reference/config/roles.md), [routes](reference/config/routes.md), [cors](reference/config/cors.md) | Config documents. Field tables generated from `schema/v2/` |
+| [config/kinds](reference/config/kinds.md), [roles](reference/config/roles.md), [routes](reference/config/routes.md), [cors](reference/config/cors.md) | Config documents. Field tables generated from `schema/` |
 | [api/edge-catalog](reference/api/edge-catalog.md) | Generated edge routes and their default labels |
 | [api/identity](reference/api/identity.md) | Identity's service API |
 | [api/control-plane](reference/api/control-plane.md) | The admin API |
@@ -55,7 +55,7 @@
 | [identity schema](internals/identity-schema.md) | Tables and invariants |
 | [audit storage](internals/audit-storage.md) | Partitions, roles, runtime |
 
-## Decisions and transition
+## Decisions
 
-- [Decision records](decisions/README.md): why, with references.
-- [v2 cutover](v2-cutover.md): transitional; deleted once v2 ships.
+- [Decisions](decisions/README.md): why, by topic, with references.
+- [`TODO.md`](../TODO.md): what's next, and deferred work.

@@ -28,7 +28,7 @@ Admin API routes require `Authorization: Bearer <ADMIN_TOKEN>`. Local default: `
 | `GET` | `/config` | The current config, as applied, and its `revision`. **404** before the first apply |
 | `GET` | `/revisions` | History, newest first: `revision`, `created_at`, `request_id`, and the plan's `summary` |
 | `GET` | `/revisions/{rev}` | The config at that revision |
-| `POST` | `/catalog` | `{ version, kinds }` → the generated identity and audit routes for those kinds, as `services`. Writes nothing |
+| `POST` | `/catalog` | `{ kinds }` → the generated identity and audit routes for those kinds, as `services`. Writes nothing |
 | `GET` | `/schema` | The JSON Schema for the config and each document |
 
 ## Responses
@@ -39,7 +39,7 @@ Validation, auth and empty-body failures use the Plat5 envelope ([`reference/err
 |------|--------|
 | Dry run | **200**, the plan |
 | Applied | **200** `{ "revision": 42, "summary": {…} }`. Readers see it on their next poll |
-| Schema or cross-document rule broken, unknown `version`, blocked change | **422** `VALIDATION_ERROR`, naming the file and field |
+| Schema or cross-document rule broken, unknown key, blocked change | **422** `VALIDATION_ERROR`, naming the file and field |
 | A method + path shape owned by two services | **409** `ROUTE_CONFLICT` ([`reference/config/routes.md`](../config/routes.md#route-ownership)) |
 | A precondition failed | **409** `PLAN_STALE` |
 | `expect` missing | **422** |

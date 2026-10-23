@@ -321,11 +321,7 @@ async fn plan_and_apply_against_postgres() {
 
     // The catalog for kinds not yet applied.
     let (status, catalog) = api
-        .admin(
-            "POST",
-            "/catalog",
-            Some(json!({ "version": 2, "kinds": first["kinds"] })),
-        )
+        .admin("POST", "/catalog", Some(json!({ "kinds": first["kinds"] })))
         .await;
     assert_eq!(status, StatusCode::OK);
     assert!(
@@ -336,11 +332,7 @@ async fn plan_and_apply_against_postgres() {
             > 20
     );
     let (status, _) = api
-        .admin(
-            "POST",
-            "/catalog",
-            Some(json!({ "version": 2, "kinds": { "org": {} } })),
-        )
+        .admin("POST", "/catalog", Some(json!({ "kinds": { "org": {} } })))
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 
@@ -348,6 +340,6 @@ async fn plan_and_apply_against_postgres() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         schema["config.json"]["$id"],
-        json!("https://plat5.com/schema/v2/config.json")
+        json!("https://plat5.com/schema/config.json")
     );
 }

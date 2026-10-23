@@ -4,7 +4,6 @@
 # Kinds and roles are yours: Plat5 names neither. The labels below are the
 # generated catalog's defaults (docs/reference/api/edge-catalog.md); add your own
 # services' labels to roles here.
-version: 2
 deletion_grace: 30d
 reserved_slugs: [new, settings, api, admin]
 kinds:

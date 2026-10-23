@@ -1,4 +1,4 @@
-//! The config's JSON Schema, from the repo's `schema/v2/`, compiled in
+//! The config's JSON Schema, from the repo's `schema/`, compiled in
 //! (docs/concepts/config.md#schema). Every gateway feed snapshot is checked
 //! against it before the gateway builds routes from it.
 
@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use jsonschema::{Registry, Validator};
 use serde_json::{json, Value};
 
-const BASE: &str = "https://plat5.com/schema/v2/";
+const BASE: &str = "https://plat5.com/schema/";
 
 const FILES: &[(&str, &str)] = &[
     (
@@ -45,10 +45,10 @@ fn validator() -> &'static Validator {
         let mut registry = Registry::new();
         for (name, text) in FILES {
             let schema: Value =
-                serde_json::from_str(text).unwrap_or_else(|e| panic!("schema/v2/{name}: {e}"));
+                serde_json::from_str(text).unwrap_or_else(|e| panic!("schema/{name}: {e}"));
             registry = registry
                 .add(format!("{BASE}{name}"), schema)
-                .unwrap_or_else(|e| panic!("schema/v2/{name}: {e}"));
+                .unwrap_or_else(|e| panic!("schema/{name}: {e}"));
         }
         let registry = registry.prepare().expect("schema registry");
         // `GET /internal/gateway`: the config's kinds, services and CORS, plus the revision.

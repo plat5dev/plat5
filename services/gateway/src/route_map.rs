@@ -693,7 +693,7 @@ mod tests {
             .contains("not in this route's chain"));
 
         let prefixed = build(json!({ "svc": {
-            "url": "http://svc:1", "route_prefix": "/v1",
+            "url": "http://svc:1", "route_prefix": "/api",
             "routes": [{ "path": "/x", "scope": "public", "methods": ["GET"] }]
         }}));
         assert!(prefixed.err().unwrap().contains("route_prefix"));

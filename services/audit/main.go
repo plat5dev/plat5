@@ -149,7 +149,7 @@ func newInternalApp(
 	})
 	app.Get("/metrics", adaptor.HTTPHandler(metrics.Handler()))
 
-	// Health and /metrics stay off traces and HTTP RED (docs/health-checks.md).
+	// Health and /metrics stay off traces and HTTP RED (docs/reference/health.md).
 	internalAPI := app.Group("/internal",
 		otel.Middleware(
 			otel.WithTracerProvider(telem.TracerProvider()),

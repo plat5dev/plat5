@@ -13,7 +13,6 @@ pub const PUBLIC_SCOPE: &str = "public";
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Config {
-    pub version: u32,
     #[serde(default = "default_deletion_grace")]
     pub deletion_grace: String,
     #[serde(default)]
@@ -336,7 +335,6 @@ impl Config {
     /// A config holding only kinds: what `POST /catalog` checks and generates from.
     pub fn from_kinds(kinds: BTreeMap<String, Kind>) -> Self {
         Self {
-            version: 2,
             deletion_grace: default_deletion_grace(),
             reserved_slugs: Vec::new(),
             kinds,

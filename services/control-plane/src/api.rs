@@ -393,7 +393,7 @@ async fn get_revision(
     }
 }
 
-/// `{ version, kinds }` → identity's and audit's generated routes. Writes nothing.
+/// `{ kinds }` → identity's and audit's generated routes. Writes nothing.
 async fn catalog(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,

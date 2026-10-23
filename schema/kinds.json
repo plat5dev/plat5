@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://plat5.com/schema/v2/kinds.json",
+  "$id": "https://plat5.com/schema/kinds.json",
   "title": "Kinds",
   "description": "The tree's levels, and the settings for every node: the kinds part of plat5.yml.",
   "type": "object",

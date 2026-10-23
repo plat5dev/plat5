@@ -8,7 +8,7 @@ cors:
   allowed_origins: ["https://app.example.com", "http://localhost:5173"]
 ```
 
-<!-- generated from schema/v2: cors.json#/properties/cors/properties -->
+<!-- generated from schema: cors.json#/properties/cors/properties -->
 | Field | Rule |
 |-------|------|
 | `allowed_origins` | Up to 100. Each is `https://host` or `http://host`, with an optional `:port`. Lowercase, no path, no trailing `/`, no wildcard, no repeats: the gateway compares it byte for byte with the browser's `Origin` |

@@ -1,6 +1,6 @@
 # Model
 
-> The concepts and principles everything else builds on. When another doc disagrees with this page, the other doc is wrong. Why each decision was made: [the decision records](../decisions/README.md).
+> The concepts and principles everything else builds on. When another doc disagrees with this page, the other doc is wrong. Why each decision was made: [decisions](../decisions/README.md), by topic.
 
 Plat5 is the front door for multi-tenant APIs. It owns a tree of nodes whose kinds the deployment declares, the principals who can reach each node, and the check at the gateway. Services own everything inside a node.
 

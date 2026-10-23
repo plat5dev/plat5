@@ -1,4 +1,4 @@
-//! The pipeline against step 5's catalog fixture
+//! The pipeline against the catalog fixture
 //! (services/control-plane/fixtures/catalog/identity-feed.json): every generated
 //! route, and every row of the admit table (docs/reference/gateway.md#admit).
 
@@ -155,7 +155,12 @@ impl Harness {
         presented: Result<Presented, AuthError>,
     ) -> (Result<Passed, Rejection>, RequestCredential) {
         let mut cred = RequestCredential::default();
-        let method = route.methods.iter().next().unwrap().clone();
+        // GET when the route has it, else the first in order: methods is a set.
+        let method = if route.methods.contains("GET") {
+            "GET".to_string()
+        } else {
+            route.methods.iter().min().unwrap().clone()
+        };
         let r = self
             .pipeline
             .admit_and_limit(route, params, &method, IP, presented, &mut cred)

@@ -19,8 +19,8 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestMigrateRefusesAV1Schema(t *testing.T) {
-	pool := testdb.Pool(t, "identity_test_db_v1")
+func TestMigrateRefusesAnUnknownMigration(t *testing.T) {
+	pool := testdb.Pool(t, "identity_test_db_unknown")
 	ctx := context.Background()
 	if _, err := pool.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ('005_lifecycle_created')`); err != nil {
 		t.Fatal(err)
@@ -30,8 +30,8 @@ func TestMigrateRefusesAV1Schema(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer admin.Close()
-	err = db.MigrateSchema(ctx, admin, "identity_test_db_v1")
+	err = db.MigrateSchema(ctx, admin, "identity_test_db_unknown")
 	if err == nil || !strings.Contains(err.Error(), "005_lifecycle_created") {
-		t.Fatalf("want refusal naming the v1 migration, got %v", err)
+		t.Fatalf("want refusal naming the unknown migration, got %v", err)
 	}
 }

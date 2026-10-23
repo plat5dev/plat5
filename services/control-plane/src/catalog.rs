@@ -392,7 +392,6 @@ mod tests {
     #[test]
     fn the_catalog_applies() {
         let config = json!({
-            "version": 2,
             "kinds": kinds(),
             "roles": { "admin": { "labels": ["*"], "bindable_at": ["organization", "folder", "project"] } },
             "default_role": "admin",

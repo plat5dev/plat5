@@ -5,7 +5,7 @@ services:
     build:
       context: ../services/control-plane
       additional_contexts:
-        schema: ../schema/v2
+        schema: ../schema
       target: prod
       args:
         VERSION: ${PLAT5_VERSION:?set PLAT5_VERSION}
@@ -14,7 +14,7 @@ services:
     build:
       context: ../services/gateway
       additional_contexts:
-        schema: ../schema/v2
+        schema: ../schema
       target: prod
       args:
         VERSION: ${PLAT5_VERSION:?set PLAT5_VERSION}

@@ -2,7 +2,6 @@
 # two parents, so every chain shape is in it. catalog.rs generates
 # identity-feed.json from this (UPDATE_FIXTURES=1 cargo test catalog), and
 # identity's tests walk every route in it (services/identity/members/catalog_test.go).
-version: 2
 kinds:
   directory:
     sign_in: idp
