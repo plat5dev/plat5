@@ -19,6 +19,7 @@ import (
 	apierrors "github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/lifecycle"
+	"github.com/plat5dev/plat5/identity/members"
 	"github.com/plat5dev/plat5/identity/metrics"
 	"github.com/plat5dev/plat5/identity/middleware"
 	"github.com/plat5dev/plat5/identity/nodes"
@@ -70,15 +71,18 @@ func main() {
 		log.Fatalf("failed to create the sign-in node: %v", err)
 	}
 
+	memberStore := members.NewStore(pool, nodeStore, signIn.ID, cfg.APIKeyBrand)
 	sweeper := nodes.NewSweeper(nodeStore, src, baseLogger)
+	sweeper.Also("expire bindings", memberStore.ExpireDue)
 	follower.OnChange = sweeper.Kick
 	go follower.Follow(runCtx)
 	go sweeper.Run(runCtx)
 
 	nodeHandler := nodes.NewHandler(nodeStore, src)
+	memberHandler := members.NewHandler(memberStore, src)
 	lifecycleHandler := lifecycle.NewHandler(lifecycle.NewStore(pool))
 
-	app := newPublicApp(telem, nodeHandler)
+	app := newPublicApp(telem, nodeHandler, memberHandler)
 	internalApp := newInternalApp(telem, pool, src, cfg.InternalAuthToken, lifecycleHandler)
 
 	baseLogger.Info().
@@ -123,7 +127,7 @@ func main() {
 	baseLogger.Info().Msg("shutdown complete")
 }
 
-func newPublicApp(telem *telemetry.Telemetry, nodeHandler *nodes.Handler) *fiber.App {
+func newPublicApp(telem *telemetry.Telemetry, nodeHandler *nodes.Handler, memberHandler *members.Handler) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName:      "identity",
 		ErrorHandler: apierrors.FiberErrorHandler,
@@ -138,6 +142,7 @@ func newPublicApp(telem *telemetry.Telemetry, nodeHandler *nodes.Handler) *fiber
 	app.Use(middleware.RequestLogger(telem))
 
 	nodeHandler.Mount(app)
+	memberHandler.Mount(app)
 	return app
 }
 

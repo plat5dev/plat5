@@ -172,7 +172,7 @@ func (e *env) principal(kind string, born, root *Node, nodes ...*Node) (principa
 	}
 	e.exec(`INSERT INTO principals (id, kind, born_node_id) VALUES ($1, $2, $3)`, principalID, kind, bornID)
 	memberID = id.New(id.Member)
-	e.exec(`INSERT INTO members (id, principal_id, root_id) VALUES ($1, $2, $3)`, memberID, principalID, root.ID)
+	e.exec(`INSERT INTO members (id, principal_id, principal, root_id) VALUES ($1, $2, $3, $4)`, memberID, principalID, kind, root.ID)
 	for _, n := range nodes {
 		e.exec(`INSERT INTO bindings (id, member_id, node_id, role) VALUES ($1, $2, $3, 'admin')`, id.New(id.Binding), memberID, n.ID)
 	}
@@ -618,7 +618,7 @@ func TestPurgingARootRemovesItsMembers(t *testing.T) {
 	project := e.create(org, "project", "Web")
 	person, member := e.principal("person", nil, org, org)
 	directoryMember := id.New(id.Member)
-	e.exec(`INSERT INTO members (id, principal_id, root_id) VALUES ($1, $2, $3)`, directoryMember, person, dir.ID)
+	e.exec(`INSERT INTO members (id, principal_id, principal, root_id) VALUES ($1, $2, 'person', $3)`, directoryMember, person, dir.ID)
 	_, saMember := e.principal("service_account", org, org, project)
 	e.delete(org)
 	e.clock.advance(31 * 24 * time.Hour)

@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	apierrors "github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/metrics"
 )
 
@@ -81,6 +82,21 @@ func (o *Op) Fail(err error) error {
 	o.span.SetStatus(codes.Error, err.Error())
 	o.span.RecordError(err)
 	return fmt.Errorf("%s: %w", o.name, err)
+}
+
+// Reject ends a refused operation: an API error or one of the sentinels is an
+// expected outcome, anything else a failure.
+func (o *Op) Reject(err error, sentinels ...error) error {
+	var apiErr *apierrors.ApiError
+	if errors.As(err, &apiErr) {
+		return o.Expected("refused", err)
+	}
+	for _, s := range sentinels {
+		if errors.Is(err, s) {
+			return o.Expected("refused", err)
+		}
+	}
+	return o.Fail(err)
 }
 
 // Attr sets extra span attributes mid-op.

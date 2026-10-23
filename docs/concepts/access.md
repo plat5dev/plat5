@@ -58,7 +58,7 @@ Admit also returns `good_until`, the earliest `expires_at` among the bindings th
 
 | Write | Role |
 |-------|------|
-| Create a node | The creator gets `creator_role` on it, unless an inherited binding already holds `creator_role`. A node created with no member behind the request gets no binding |
+| Create a node | The creator gets `creator_role` on it, unless an inherited binding with no `expires_at` already holds `creator_role`: an expiring one would take the new node with it. A node created with no member behind the request gets no binding |
 | Add a member to a root | `role` in the body, or `default_role` |
 | Redeem an invite at a root | The invite's `role` at the root, plus each of its `grants` |
 | Redeem an invite below a root | The invite's `role` at that node. For someone not in the tree, that makes them a guest |
@@ -113,9 +113,9 @@ What the TTL bounds: a removed binding, a role change, a deleted node, a suspend
 
 `/nodes/{node_id}/children/{kind}` and `/members/{member_id}/nodes` return only the nodes the caller could read, as Google Cloud's project search returns only projects the caller has `resourcemanager.projects.get` on.
 
-- **Which labels.** The labels of the kind's read route: the applied `GET` route to identity whose `upstream` is `/nodes/{subject.<kind>_id}`. Identity reads them from the services in its control-plane feed. With several such routes, any of their labels counts. With none applied, nothing is readable and the list is empty.
+- **Which labels.** The labels of the kind's read route: the applied `GET` route of the service named `identity` whose `upstream` is `/nodes/{subject.<kind>_id}`. Identity reads them from the services in its control-plane feed, so identity's routes file must define the service `identity`. With several such routes, any of their labels counts. With none applied, nothing is readable and the list is empty.
 - **Where.** At each listed node, from the union of the caller's bindings on it and its ancestors ([resolution](#resolution)).
-- **Deleted.** `?state=deleted` uses the kind's delete route (`DELETE` to `/nodes/{subject.<kind>_id}`) the same way, counting the deleted node's own bindings too: they're kept until purge, so whoever could delete a node can find and restore it. That includes a deleted org, which has nothing above it. `GET /me/nodes?kind=organization&state=deleted` is how a person finds one.
+- **Deleted.** `?state=deleted` uses the kind's delete route (`DELETE` to `/nodes/{subject.<kind>_id}`) the same way, counting the deleted node's own bindings too: they're kept until purge, so whoever could delete a node can find and restore it. That includes a deleted org, which has nothing above it. `GET /me/nodes?kind=organization&state=deleted` is how a person finds one. As at admit, only the deleted node's own bindings count beside live ones: a node whose ancestor is deleted too isn't listed, since it can't be restored before that ancestor.
 
 This is why the generated list routes are `[]`: anyone in the tree may ask, and the answer is what they can read. A project-only member gets their projects from `GET /orgs/{organization}/projects`, not a 403.
 
