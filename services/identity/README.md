@@ -25,6 +25,8 @@ TEST_DATABASE_URL=postgres://postgres:test@localhost:55999/postgres go test ./..
 
 Without `TEST_DATABASE_URL`, tests that need Postgres are skipped.
 
+`members/catalog_test.go` walks every route of the generated catalog the way the gateway sends it, from the control plane's `fixtures/catalog/identity-feed.json`. Regenerate that file there when the generator changes.
+
 ## Local
 
 ```bash
