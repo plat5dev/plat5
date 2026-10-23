@@ -13,13 +13,26 @@ import (
 const SweepInterval = time.Minute
 
 // Sweeper is the tree's background work: kind removals against the current
-// config, then the purge of nodes past purge_after. It runs on a timer, and
-// at once when kicked by a new config.
+// config, then the purge of nodes past purge_after, then any work added with
+// Also (binding expiry). It runs on a timer, and at once when kicked by a new
+// config.
 type Sweeper struct {
 	store *Store
 	src   *feed.Source
 	log   zerolog.Logger
 	kick  chan struct{}
+	also  []sweepTask
+}
+
+type sweepTask struct {
+	name string
+	run  func(context.Context) (int, error)
+}
+
+// Also adds work to each sweep, after the purge. run returns how many things
+// it changed, for the log.
+func (w *Sweeper) Also(name string, run func(context.Context) (int, error)) {
+	w.also = append(w.also, sweepTask{name: name, run: run})
 }
 
 func NewSweeper(store *Store, src *feed.Source, log zerolog.Logger) *Sweeper {
@@ -64,5 +77,14 @@ func (w *Sweeper) Sweep(ctx context.Context) {
 	}
 	if n > 0 {
 		w.log.Info().Int("nodes", n).Msg("purged nodes")
+	}
+	for _, t := range w.also {
+		n, err := t.run(ctx)
+		if err != nil && ctx.Err() == nil {
+			w.log.Error().Err(err).Str("task", t.name).Msg("sweep failed")
+		}
+		if n > 0 {
+			w.log.Info().Int("count", n).Str("task", t.name).Msg("swept")
+		}
 	}
 }

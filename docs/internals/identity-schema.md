@@ -50,6 +50,7 @@ CREATE TABLE idp_links (
 CREATE TABLE members (                                -- one per principal per tree: the id services see
     id            TEXT PRIMARY KEY,
     principal_id  TEXT REFERENCES principals (id) ON DELETE SET NULL,
+    principal     TEXT NOT NULL CHECK (principal IN ('person', 'service_account')),  -- outlives the principal
     root_id       TEXT NOT NULL REFERENCES nodes (id),
     removed_at    TIMESTAMPTZ,                         -- set once; never cleared
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -80,9 +81,10 @@ CREATE TABLE api_keys (
 CREATE TABLE invites (
     id           TEXT PRIMARY KEY,
     node_id      TEXT NOT NULL REFERENCES nodes (id),  -- below a root: can admit a guest
-    role         TEXT NOT NULL,
-    grants       JSONB NOT NULL DEFAULT '[]',         -- [{node_id, role}] under the same root
-    token_hash   TEXT NOT NULL UNIQUE,
+    role         TEXT NOT NULL,                        -- default_role when made, if none was given
+    role_duration TEXT,                                -- a config duration, counted from redeem
+    grants       JSONB NOT NULL DEFAULT '[]',         -- [{node_id, role, duration}] under the same root
+    token_hash   TEXT NOT NULL UNIQUE,                 -- the token is shown once, at create
     token_prefix TEXT NOT NULL,
     status       TEXT NOT NULL CHECK (status IN ('active', 'redeemed', 'revoked', 'expired')),
     max_uses     INT, use_count INT NOT NULL DEFAULT 0,
@@ -113,12 +115,13 @@ Ids are ULIDs with a type prefix: `n_` nodes, `m_` members, `b_` bindings, `k_` 
 
 ### Invariants the code enforces
 
-- **Members.** One active member per principal per tree. In an org's tree it's created with its first binding; in the directory, at first sign-in. Removal sets `removed_at`, deletes its bindings and emits `member.removed`; it's never undone, and re-adding makes a new member. A person's member outside the directory left with no bindings, by delete or expiry, is removed. A service account's member is removed only with the service account (deleted directly, or with its born node); with no bindings its keys still authenticate and are refused everywhere, so a team can re-bind it.
+- **Members.** One active member per principal per tree. In an org's tree it's created with its first binding; in the directory, with the person. Removal sets `removed_at`, deletes its bindings and emits `member.removed`; it's never undone, and re-adding makes a new member. A person's member outside the directory left with no bindings, by delete or expiry, is removed. A service account's member is removed only with the service account (deleted directly, or with its born node: either way its principal and keys are deleted); with no bindings its keys still authenticate and are refused everywhere, so a team can re-bind it.
 - **Guests.** A member with no binding at the root. Not stored; read from the bindings.
 - **Closed world.** A binding's node is under its member's root. A service account's member is in the tree of its `born_node_id`.
-- **Directory.** One sign-in node, created at boot. Every person has one member there and no bindings; that member's id is their user id.
+- **Directory.** One sign-in node, created at boot. Every person has one member there and no bindings, created with the person; that member's id is their user id.
 - **Roles.** A binding's `role` names a role in the roles document. A role that's missing, or not bindable at the binding's kind, grants nothing.
-- **Expiry.** A binding past `expires_at` grants nothing; a sweeper deletes it.
+- **Expiry.** A binding past `expires_at` grants nothing; a sweeper deletes it, and marks invites past their `expires_at` `expired`.
+- **Invites.** A node's delete revokes the active invites on it and below; restore leaves them revoked.
 - **Suspension.** A suspended principal's credentials are all invalid. There's no per-member suspension: remove the member instead.
 - **Deletions.** Each delete, and each kind removal, stamps one `deletion_id` on every node it soft-deletes. A restore, or a kind applied again, restores exactly the nodes with that id. A node already deleted keeps its own id.
 - **Kind removals.** Every config identity reads is checked against the nodes. Live nodes of a kind it lacks are soft-deleted with their descendants under one `deletion_id`, recorded in `kind_removals` in the same transaction. A kind in the config with a row restores the nodes with that id still before `purge_after` (not those under a parent deleted since) and drops the row. The sweeper drops a row once none of its nodes is left unpurged.

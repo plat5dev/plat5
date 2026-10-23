@@ -14,16 +14,13 @@ pub const IDENTITY_URL: &str = "http://identity:3000";
 pub const AUDIT_URL: &str = "http://audit:3002";
 
 /// One route: path, scope, upstream, and each method with its labels. Methods
-/// that share labels are written as a list, unless one is audited apart.
+/// that share labels are written as a list.
 struct Gen {
     path: String,
     scope: String,
     upstream: String,
     methods: Vec<(&'static str, Option<Vec<String>>)>,
     resolve_deleted: bool,
-    /// The read audited although reads aren't by default: one that returns
-    /// live tokens.
-    audited: Option<&'static str>,
 }
 
 impl Gen {
@@ -33,7 +30,7 @@ impl Gen {
         route.insert("scope".into(), json!(self.scope));
         route.insert("upstream".into(), json!(self.upstream));
         let first = &self.methods[0].1;
-        if self.audited.is_none() && self.methods.iter().all(|(_, l)| l == first) {
+        if self.methods.iter().all(|(_, l)| l == first) {
             let verbs: Vec<&str> = self.methods.iter().map(|(m, _)| *m).collect();
             route.insert("methods".into(), json!(verbs));
             if let Some(labels) = first {
@@ -45,9 +42,6 @@ impl Gen {
                 let mut cfg = Map::new();
                 if let Some(l) = labels {
                     cfg.insert("required_labels".into(), json!(l));
-                }
-                if self.audited == Some(*verb) {
-                    cfg.insert("audit".into(), json!(true));
                 }
                 map.insert(
                     verb.to_string(),
@@ -91,7 +85,6 @@ pub fn generate(kinds: &BTreeMap<String, Kind>) -> Value {
         upstream: upstream.into(),
         methods: methods.iter().map(|m| (*m, None)).collect(),
         resolve_deleted: false,
-        audited: None,
     };
     identity.push(me(
         "/me",
@@ -160,7 +153,6 @@ fn node_routes(
         upstream,
         methods,
         resolve_deleted: false,
-        audited: None,
     };
 
     // Creating, and listing under the parent.
@@ -268,14 +260,12 @@ fn node_routes(
     } else {
         format!("{root}:guests:write")
     };
-    let mut list = route(
+    identity.push(route(
         format!("{node}/invites"),
         kind,
         format!("{id}/invites"),
         vec![("GET", labels(&[&invites])), ("POST", labels(&[&invites]))],
-    );
-    list.audited = Some("GET");
-    identity.push(list);
+    ));
     identity.push(route(
         format!("{node}/invites/{{invite_id}}"),
         kind,
@@ -400,8 +390,8 @@ mod tests {
                 &s,
                 "identity",
                 "/orgs/{organization}/projects/{project}/invites"
-            )["methods"]["GET"],
-            json!({ "required_labels": ["organization:guests:write"], "audit": true })
+            )["required_labels"],
+            json!(["organization:guests:write"])
         );
         assert_eq!(
             route(&s, "identity", "/orgs/{organization}/me")["upstream"],
@@ -419,13 +409,10 @@ mod tests {
             route(&s, "audit", "/me/audit-events")["scope"],
             json!("directory")
         );
-        // Invite lists return live tokens: audited.
+        // Invite tokens are shown once, so listing invites is a plain read.
         assert_eq!(
             route(&s, "identity", "/orgs/{organization}/invites")["methods"],
-            json!({
-                "GET": { "required_labels": ["organization:bindings:write"], "audit": true },
-                "POST": { "required_labels": ["organization:bindings:write"] }
-            })
+            json!(["GET", "POST"])
         );
         // A derived segment has the slug shape.
         let kinds: BTreeMap<String, Kind> = serde_json::from_value(json!({

@@ -14,7 +14,7 @@ On every request the gateway answers three questions: who is calling (the creden
 | **Node** | One instance of a kind: `id`, `kind`, `parent`, `root`, `slug`, `label`, `status`. Nothing else. Everything else about a node is service data keyed by its id |
 | **Root** | A node with no parent. Each root and the nodes under it are one **tree**: the isolation boundary. Organizations are roots |
 | **Sign-in node** | The one root of the kind marked `sign_in` (the directory). Every person has a member there. It has no slug and no bindings |
-| **Principal** | A person (born at first sign-in) or a service account (born at a node of an org's tree). Its id never leaves Plat5 |
+| **Principal** | A person (born at first sign-in, or when an admin adds them) or a service account (born at a node of an org's tree). Its id never leaves Plat5 |
 | **Member** | A principal's presence in one tree: one per principal per tree, kept after removal. The id services see as the caller (`X-Plat5-Member-Id`). In the directory it's the person's user id |
 | **Binding** | A role for a member on one node of the member's tree, optionally expiring. A member can have many |
 | **Guest** | A member with no binding on its tree's root, only on nodes below it. Created by redeeming an invite below the root. Derived, not stored |

@@ -72,12 +72,8 @@ identity:
     - path: /orgs/{organization}/invites
       scope: organization
       upstream: /nodes/{subject.organization_id}/invites
-      methods:
-        GET:
-          required_labels: ['organization:bindings:write']
-          audit: true
-        POST:
-          required_labels: ['organization:bindings:write']
+      methods: [GET, POST]
+      required_labels: ['organization:bindings:write']
     - path: /orgs/{organization}/invites/{invite_id}
       scope: organization
       upstream: /nodes/{subject.organization_id}/invites/{path.invite_id}
@@ -182,12 +178,8 @@ identity:
     - path: /orgs/{organization}/projects/{project}/invites
       scope: project
       upstream: /nodes/{subject.project_id}/invites
-      methods:
-        GET:
-          required_labels: ['organization:guests:write']
-          audit: true
-        POST:
-          required_labels: ['organization:guests:write']
+      methods: [GET, POST]
+      required_labels: ['organization:guests:write']
     - path: /orgs/{organization}/projects/{project}/invites/{invite_id}
       scope: project
       upstream: /nodes/{subject.project_id}/invites/{path.invite_id}

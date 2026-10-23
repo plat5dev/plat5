@@ -1,0 +1,415 @@
+package members
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/plat5dev/plat5/identity/errors"
+	"github.com/plat5dev/plat5/identity/feed"
+	"github.com/plat5dev/plat5/identity/internal/apikey"
+	"github.com/plat5dev/plat5/identity/internal/dbx"
+	"github.com/plat5dev/plat5/identity/internal/id"
+	"github.com/plat5dev/plat5/identity/nodes"
+)
+
+const (
+	InviteActive   = "active"
+	InviteRedeemed = "redeemed"
+	InviteRevoked  = "revoked"
+	InviteExpired  = "expired"
+
+	tokenPrefix      = "inv_"
+	minInviteExpiry  = 60 * time.Second
+	maxInviteExpiry  = 30 * 24 * time.Hour
+	tokenRandomBytes = 32
+)
+
+// Grant is a binding below the root an invite to the root makes on redeem.
+type Grant struct {
+	NodeID   string  `json:"node_id"`
+	Role     string  `json:"role"`
+	Duration *string `json:"duration"`
+}
+
+// Invite is a join token for a node. Below a root it can admit a guest.
+type Invite struct {
+	ID           string
+	NodeID       string
+	Role         string
+	RoleDuration *string
+	Grants       []Grant
+	MaxUses      *int
+	UseCount     int
+	Status       string
+	ExpiresAt    time.Time
+	TokenPrefix  string
+	CreatedAt    time.Time
+	// Token is set once, on create.
+	Token string
+}
+
+const inviteColumns = `id, node_id, role, role_duration, grants, max_uses, use_count, status, expires_at, token_prefix, created_at`
+
+// scanInvite reads an invite, with an active one past its expiry read as
+// expired: the sweeper writes that later.
+func (s *Store) scanInvite(row dbx.Scannable) (*Invite, error) {
+	var inv Invite
+	var grants []byte
+	if err := row.Scan(&inv.ID, &inv.NodeID, &inv.Role, &inv.RoleDuration, &grants, &inv.MaxUses, &inv.UseCount,
+		&inv.Status, &inv.ExpiresAt, &inv.TokenPrefix, &inv.CreatedAt); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(grants, &inv.Grants); err != nil {
+		return nil, err
+	}
+	if inv.Grants == nil {
+		inv.Grants = []Grant{}
+	}
+	if inv.Status == InviteActive && !inv.ExpiresAt.After(s.now()) {
+		inv.Status = InviteExpired
+	}
+	return &inv, nil
+}
+
+// InviteInput is POST /nodes/{node_id}/invites.
+type InviteInput struct {
+	Role         *string
+	RoleDuration *string
+	Grants       []GrantInput
+	MaxUses      *int // nil: unlimited
+	ExpiresAt    *time.Time
+}
+
+// GrantInput is one of an invite's grants as sent: { node, role, duration? }.
+type GrantInput struct {
+	Node     string  `json:"node"`
+	Role     string  `json:"role"`
+	Duration *string `json:"duration"`
+}
+
+// CreateInvite makes an invite at nodeID. The token is in the result once.
+func (s *Store) CreateInvite(ctx context.Context, snap *feed.Snapshot, nodeID string, in InviteInput) (*Invite, error) {
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_invite", dbx.DefaultTimeout)
+	defer cancel()
+	defer op.End()
+
+	now := s.now()
+	if in.ExpiresAt == nil || in.ExpiresAt.Before(now.Add(minInviteExpiry)) || in.ExpiresAt.After(now.Add(maxInviteExpiry)) {
+		return nil, op.Expected("invalid", errors.FieldError("expires_at", "Expiry must be between 60 seconds and 30 days."))
+	}
+	if in.MaxUses != nil && *in.MaxUses < 1 {
+		return nil, op.Expected("invalid", errors.FieldError("max_uses", "Max uses must be at least 1."))
+	}
+
+	w, err := s.begin(ctx)
+	if err != nil {
+		return nil, op.Fail(err)
+	}
+	defer w.rollback(ctx)
+	n, err := s.nodes.LockedNode(ctx, w.tx, nodeID)
+	if err != nil {
+		return nil, op.Reject(err, nodes.ErrNotFound)
+	}
+	if n.ID == s.signInID {
+		return nil, op.Expected("sign-in", errors.FieldError("node_id", errors.FallbackValidation))
+	}
+	isRoot := n.ParentID == nil
+	var role string
+	switch {
+	case in.Role != nil:
+		role = *in.Role
+	case isRoot:
+		role = snap.DefaultRole
+	}
+	if role == "" {
+		return nil, op.Expected("invalid", errors.FieldError("role", "Choose a role."))
+	}
+	roleDuration, err := parseDuration(in.RoleDuration, "role_duration")
+	if err != nil {
+		return nil, op.Expected("invalid", err)
+	}
+	if err := checkDuration(snap, role, n.Kind, roleDuration, "role_duration"); err != nil {
+		return nil, op.Expected("invalid", err)
+	}
+	grants, err := s.checkGrants(ctx, w, snap, n, in.Grants)
+	if err != nil {
+		return nil, op.Reject(err)
+	}
+	grantsJSON, err := json.Marshal(grants)
+	if err != nil {
+		return nil, op.Fail(err)
+	}
+
+	token, err := newToken()
+	if err != nil {
+		return nil, op.Fail(err)
+	}
+	inv, err := s.scanInvite(w.tx.QueryRow(ctx, `
+		INSERT INTO invites (id, node_id, role, role_duration, grants, token_hash, token_prefix, status, max_uses, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, $10)
+		RETURNING `+inviteColumns,
+		id.New(id.Invite), n.ID, role, in.RoleDuration, grantsJSON, apikey.Hash(token),
+		apikey.DisplayPrefix(token, tokenPrefix), in.MaxUses, in.ExpiresAt.UTC(), now.UTC()))
+	if err != nil {
+		return nil, op.Fail(err)
+	}
+	if err := w.commit(ctx); err != nil {
+		return nil, op.Fail(err)
+	}
+	inv.Token = token
+	op.OK("created")
+	return inv, nil
+}
+
+func newToken() (string, error) {
+	buf := make([]byte, tokenRandomBytes)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return tokenPrefix + base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+// parseDuration reads an optional duration in the config's form.
+func parseDuration(v *string, field string) (*time.Duration, error) {
+	if v == nil {
+		return nil, nil
+	}
+	if *v == "" {
+		return nil, errors.FieldError(field, errors.FallbackValidation)
+	}
+	d, err := feed.ParseDuration(*v)
+	if err != nil {
+		return nil, errors.FieldError(field, errors.FallbackValidation)
+	}
+	return &d, nil
+}
+
+// checkGrants checks an invite's grants: only on a root, each on a distinct
+// live node below it, with a role bindable there and a duration that meets
+// its max_duration.
+func (s *Store) checkGrants(ctx context.Context, w *write, snap *feed.Snapshot, n *nodes.Node, in []GrantInput) ([]Grant, error) {
+	out := []Grant{}
+	if len(in) == 0 {
+		return out, nil
+	}
+	if n.ParentID != nil {
+		var rootKind string
+		if err := w.tx.QueryRow(ctx, `SELECT kind FROM nodes WHERE id = $1`, n.RootID).Scan(&rootKind); err != nil {
+			return nil, err
+		}
+		return nil, errors.FieldError("grants", fmt.Sprintf("Only an invite to the %s can grant more.", nodes.KindWord(snap, rootKind)))
+	}
+	seen := map[string]bool{}
+	for i, g := range in {
+		field := fmt.Sprintf("grants[%d]", i)
+		var kind string
+		err := w.tx.QueryRow(ctx, `
+			SELECT kind FROM nodes WHERE id = $1 AND root_id = $2 AND id <> $2 AND status = 'active'
+		`, g.Node, n.ID).Scan(&kind)
+		if dbx.IsNoRows(err) || seen[g.Node] {
+			return nil, errors.FieldError(field+".node", errors.FallbackValidation)
+		}
+		if err != nil {
+			return nil, err
+		}
+		seen[g.Node] = true
+		d, err := parseDuration(g.Duration, field+".duration")
+		if err != nil {
+			return nil, err
+		}
+		if err := checkDuration(snap, g.Role, kind, d, field+".duration"); err != nil {
+			return nil, err
+		}
+		out = append(out, Grant{NodeID: g.Node, Role: g.Role, Duration: g.Duration})
+	}
+	return out, nil
+}
+
+// ListInvites is the invites at a node, id ascending. No tokens.
+func (s *Store) ListInvites(ctx context.Context, nodeID string, limit int, startingAfter string) ([]*Invite, bool, error) {
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_invites", dbx.DefaultTimeout)
+	defer cancel()
+	defer op.End()
+	if _, err := s.nodes.Get(ctx, nodeID); err != nil {
+		return nil, false, op.Reject(err, nodes.ErrNotFound)
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+inviteColumns+` FROM invites WHERE node_id = $1 AND id > $2 ORDER BY id LIMIT $3
+	`, nodeID, startingAfter, limit+1)
+	if err != nil {
+		return nil, false, op.Fail(err)
+	}
+	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (*Invite, error) { return s.scanInvite(r) })
+	if err != nil {
+		return nil, false, op.Fail(err)
+	}
+	out, hasMore := page(out, limit)
+	op.OK("ok")
+	return out, hasMore, nil
+}
+
+// RevokeInvite revokes an active invite. Any other is left as it is: changed
+// is false.
+func (s *Store) RevokeInvite(ctx context.Context, nodeID, inviteID string) (bool, error) {
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "revoke_invite", dbx.DefaultTimeout)
+	defer cancel()
+	defer op.End()
+	if !id.Valid(id.Invite, inviteID) {
+		return false, op.Expected("not found", ErrNotFound)
+	}
+	var exists, changed bool
+	err := s.pool.QueryRow(ctx, `
+		WITH target AS (SELECT id FROM invites WHERE id = $1 AND node_id = $2),
+		     revoked AS (
+		         UPDATE invites SET status = 'revoked'
+		         WHERE id IN (SELECT id FROM target) AND status = 'active' AND expires_at > $3
+		         RETURNING id)
+		SELECT EXISTS (SELECT 1 FROM target), EXISTS (SELECT 1 FROM revoked)
+	`, inviteID, nodeID, s.now().UTC()).Scan(&exists, &changed)
+	if err != nil {
+		return false, op.Fail(err)
+	}
+	if !exists {
+		return false, op.Expected("not found", ErrNotFound)
+	}
+	op.OK("ok")
+	return changed, nil
+}
+
+// Redeemed is what a redeem did: the member in the invite's tree, and the
+// node it was for. Binding is nil when nothing changed.
+type Redeemed struct {
+	MemberID      string
+	RootID        string
+	NodeID        string
+	MemberCreated bool
+	Binding       *Binding
+}
+
+// Redeem uses an invite for a person, by their directory member. At a root it
+// makes a member with the invite's role plus each grant on a node still live;
+// below a root it binds the role there, making a guest of someone not in the
+// tree. Someone already bound on the invite's node uses it and changes nothing.
+func (s *Store) Redeem(ctx context.Context, memberID, token string) (*Redeemed, error) {
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "redeem_invite", dbx.DefaultTimeout)
+	defer cancel()
+	defer op.End()
+
+	principalID, err := s.personPrincipal(ctx, s.pool, memberID)
+	if err != nil {
+		return nil, op.Reject(err, ErrNotFound)
+	}
+	hash := apikey.Hash(token)
+	var nodeID string
+	err = s.pool.QueryRow(ctx, `SELECT node_id FROM invites WHERE token_hash = $1`, hash).Scan(&nodeID)
+	if dbx.IsNoRows(err) {
+		return nil, op.Expected("unknown token", errors.NotFoundError("invite", nil))
+	}
+	if err != nil {
+		return nil, op.Fail(err)
+	}
+
+	w, err := s.begin(ctx)
+	if err != nil {
+		return nil, op.Fail(err)
+	}
+	defer w.rollback(ctx)
+	n, err := s.nodes.LockedNode(ctx, w.tx, nodeID)
+	if err != nil {
+		return nil, op.Fail(err)
+	}
+	inv, err := s.scanInvite(w.tx.QueryRow(ctx, `SELECT `+inviteColumns+` FROM invites WHERE token_hash = $1 FOR UPDATE`, hash))
+	if err != nil {
+		return nil, op.Fail(err)
+	}
+	if inv.Status != InviteActive {
+		return nil, op.Expected("unusable", inviteUnusable(inv.Status))
+	}
+
+	out := &Redeemed{RootID: n.RootID, NodeID: n.ID}
+	if out.MemberID, err = activeMemberID(ctx, w.tx, principalID, n.RootID); err != nil {
+		return nil, op.Fail(err)
+	}
+	if out.MemberID == "" {
+		if out.MemberID, err = s.insertMember(ctx, w, principalID, PrincipalPerson, n.RootID); err != nil {
+			return nil, op.Fail(err)
+		}
+		out.MemberCreated = true
+	}
+	var held bool
+	if err := w.tx.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM bindings WHERE member_id = $1 AND node_id = $2)
+	`, out.MemberID, n.ID).Scan(&held); err != nil {
+		return nil, op.Fail(err)
+	}
+	if !held {
+		if out.Binding, err = s.insertBinding(ctx, w, out.MemberID, n.ID, inv.Role, s.until(inv.RoleDuration)); err != nil {
+			return nil, op.Fail(err)
+		}
+		if err := s.applyGrants(ctx, w, out.MemberID, inv.Grants); err != nil {
+			return nil, op.Fail(err)
+		}
+	}
+	if _, err := w.tx.Exec(ctx, `
+		UPDATE invites SET use_count = use_count + 1,
+		       status = CASE WHEN max_uses IS NOT NULL AND use_count + 1 >= max_uses THEN 'redeemed' ELSE status END
+		WHERE id = $1
+	`, inv.ID); err != nil {
+		return nil, op.Fail(err)
+	}
+	if err := w.commit(ctx); err != nil {
+		return nil, op.Fail(err)
+	}
+	op.OK("redeemed")
+	return out, nil
+}
+
+// applyGrants binds each grant on a node still live where the member has no
+// binding yet. Roles were checked when the invite was made; one removed since
+// binds and grants nothing, like any binding whose role is gone.
+func (s *Store) applyGrants(ctx context.Context, w *write, memberID string, grants []Grant) error {
+	for _, g := range grants {
+		var live, held bool
+		if err := w.tx.QueryRow(ctx, `
+			SELECT EXISTS (SELECT 1 FROM nodes WHERE id = $1 AND status = 'active'),
+			       EXISTS (SELECT 1 FROM bindings WHERE member_id = $2 AND node_id = $1)
+		`, g.NodeID, memberID).Scan(&live, &held); err != nil {
+			return err
+		}
+		if !live || held {
+			continue
+		}
+		if _, err := s.insertBinding(ctx, w, memberID, g.NodeID, g.Role, s.until(g.Duration)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// until is now plus a stored duration, or nil for none.
+func (s *Store) until(d *string) *time.Time {
+	if d == nil {
+		return nil
+	}
+	dur, err := feed.ParseDuration(*d)
+	if err != nil {
+		return nil
+	}
+	t := s.now().UTC().Add(dur)
+	return &t
+}
+
+func inviteUnusable(status string) error {
+	msg := map[string]string{
+		InviteRedeemed: "This invite has already been used.",
+		InviteRevoked:  "This invite is no longer valid.",
+		InviteExpired:  "This invite has expired.",
+	}[status]
+	return errors.ConflictError(msg, "status", status)
+}

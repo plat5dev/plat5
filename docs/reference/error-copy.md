@@ -70,6 +70,7 @@ Clients show `error.message`. `details.fields` is for multi-field 422s; `message
 | Already a member | This person is already a member. |
 | Direct binding for someone not in the tree | Add this person to the {root kind} first, or invite them. |
 | Already bound on this node | This member already has a role here. |
+| Remove a service account's member | Delete the service account to remove it. |
 
 ### Roles
 
@@ -97,6 +98,7 @@ All are **422** `VALIDATION_ERROR` with `path` `role` or `expires_at`.
 | `expires_at` not between 60 seconds and 30 days away | Expiry must be between 60 seconds and 30 days. |
 | `max_uses` 0 or negative | Max uses must be at least 1. |
 | `grants` on an invite below a root | Only an invite to the {root kind} can grant more. |
+| No `role` on an invite below a root | Choose a role. |
 | Redeem of a redeemed invite | This invite has already been used. |
 | Redeem of a revoked invite | This invite is no longer valid. |
 | Redeem of an expired invite | This invite has expired. |

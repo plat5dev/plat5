@@ -28,7 +28,7 @@ Always **`id` ascending**. Ids are ULIDs (time-sortable) behind a type prefix.
 
 | Field | |
 |-------|--|
-| named collection | Plural resource key: `nodes`, `members`, `bindings`, `access`, `service_accounts`, `keys`, `invites` |
+| named collection | Plural resource key: `nodes`, `members`, `bindings`, `access`, `service_accounts`, `keys`, `invites`. `access` entries are keyed by binding id; `service_accounts` by member id |
 | `has_more` | `true` if another page exists. Always present |
 
 When `has_more` is `true`, pass the last item's `id` as `starting_after`.

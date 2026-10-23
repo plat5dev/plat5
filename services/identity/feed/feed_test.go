@@ -43,6 +43,56 @@ func TestParse(t *testing.T) {
 	}
 }
 
+func TestParseRolesAndNodeRoutes(t *testing.T) {
+	s, err := Parse([]byte(`{
+		"kinds": { "directory": { "sign_in": "idp" }, "organization": {}, "project": { "parent": "organization" } },
+		"roles": {
+			"admin": { "labels": ["*"], "bindable_at": ["organization", "project"] },
+			"support": { "labels": ["project:read"], "bindable_at": ["organization"], "max_duration": "7d" }
+		},
+		"default_role": "admin", "creator_role": "admin",
+		"services": {
+			"identity": { "routes": [
+				{ "methods": ["GET"], "upstream": "/nodes/{subject.project_id}", "required_labels": ["project:read"] },
+				{ "methods": ["GET"], "upstream": "/nodes/{subject.project_id}", "required_labels": ["project:view"] },
+				{ "methods": ["DELETE"], "upstream": "/nodes/{subject.project_id}", "required_labels": ["project:delete"] },
+				{ "methods": ["GET"], "upstream": "/nodes/{subject.organization_id}", "required_labels": [] },
+				{ "methods": ["GET"], "upstream": "/nodes/{subject.project_id}/bindings", "required_labels": ["x"] }
+			] },
+			"other": { "routes": [
+				{ "methods": ["DELETE"], "upstream": "/nodes/{subject.organization_id}", "required_labels": [] }
+			] }
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	support, _ := s.Role("support")
+	if support.MaxDuration != 7*24*time.Hour || support.MaxDurationText != "7d" || !support.BindableAtKind("organization") || support.BindableAtKind("project") {
+		t.Fatalf("support: %+v", support)
+	}
+	if s.DefaultRole != "admin" || s.CreatorRole != "admin" {
+		t.Fatalf("defaults: %q %q", s.DefaultRole, s.CreatorRole)
+	}
+	// Several read routes add up; only exact /nodes/{subject.<kind>_id} counts.
+	if r, ok := s.ReadLabels("project"); !ok || r.Open || len(r.Labels) != 2 {
+		t.Fatalf("project read: %+v %v", r, ok)
+	}
+	if r, ok := s.DeleteLabels("project"); !ok || r.Labels[0] != "project:delete" {
+		t.Fatalf("project delete: %+v %v", r, ok)
+	}
+	if r, ok := s.ReadLabels("organization"); !ok || !r.Open {
+		t.Fatalf("organization read: %+v %v", r, ok)
+	}
+	// Only the service named identity: another service's route doesn't count.
+	if _, ok := s.DeleteLabels("organization"); ok {
+		t.Fatal("organization delete comes from another service")
+	}
+	if _, err := Parse([]byte(`{"kinds": {"d": {"sign_in": "idp"}}, "roles": {"r": {"labels": [], "bindable_at": [], "max_duration": "soon"}}}`)); err == nil {
+		t.Fatal("a bad max_duration should be refused")
+	}
+}
+
 func TestParseRefuses(t *testing.T) {
 	for name, body := range map[string]string{
 		"no sign-in":      `{"kinds": {"organization": {}}}`,

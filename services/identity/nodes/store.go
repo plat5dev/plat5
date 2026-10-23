@@ -80,6 +80,26 @@ func (s *Store) WithClock(now func() time.Time) *Store {
 
 const nodeColumns = `id, kind, parent_id, root_id, slug, label, status, deleted_at, purge_after, deletion_id, created_at, updated_at`
 
+// Columns is the node columns qualified by alias, in ScanNode's order.
+func Columns(alias string) string {
+	cols := strings.Split(nodeColumns, ", ")
+	for i, c := range cols {
+		cols[i] = alias + "." + c
+	}
+	return strings.Join(cols, ", ")
+}
+
+// ScanNode reads a node selected with Columns, followed by extra columns.
+func ScanNode(row dbx.Scannable, extra ...any) (*Node, error) {
+	var n Node
+	dest := append([]any{&n.ID, &n.Kind, &n.ParentID, &n.RootID, &n.Slug, &n.Label, &n.Status,
+		&n.DeletedAt, &n.PurgeAfter, &n.DeletionID, &n.CreatedAt, &n.UpdatedAt}, extra...)
+	if err := row.Scan(dest...); err != nil {
+		return nil, err
+	}
+	return &n, nil
+}
+
 func scanNode(row dbx.Scannable) (*Node, error) {
 	var n Node
 	err := row.Scan(&n.ID, &n.Kind, &n.ParentID, &n.RootID, &n.Slug, &n.Label, &n.Status,
@@ -105,60 +125,16 @@ func (s *Store) Create(ctx context.Context, snap *feed.Snapshot, in CreateInput)
 	defer cancel()
 	defer op.End()
 
-	label, err := NormalizeLabel(in.Label)
-	if err != nil {
-		return nil, op.Expected("invalid", err)
-	}
-	kind, ok := snap.Kind(in.Kind)
-	if !ok || kind.SignIn {
-		return nil, op.Expected("kind", kindNotHere(snap, in.Kind))
-	}
-	if in.Slug != nil {
-		if err := checkSlug(snap, *in.Slug); err != nil {
-			return nil, op.Expected("invalid", err)
-		}
-	}
-
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
 	defer tx.Rollback(ctx)
-
-	now := s.now().UTC()
-	n := &Node{ID: id.New(id.Node), Kind: kind.Name, Label: label, Status: StatusActive, CreatedAt: now, UpdatedAt: now}
-	if in.ParentID == "" {
-		if !kind.IsRoot() {
-			return nil, op.Expected("kind", kindNotHere(snap, kind.Name))
-		}
-		n.RootID = n.ID
-	} else {
-		parent, err := s.lockedNode(ctx, tx, in.ParentID)
-		if err != nil {
-			return nil, op.Expected("parent", err)
-		}
-		if !kind.AllowsParent(parent.Kind) {
-			return nil, op.Expected("kind", kindNotHere(snap, kind.Name))
-		}
-		if parent.Status != StatusActive {
-			return nil, op.Expected("parent", parentNotLive(snap, parent))
-		}
-		n.ParentID = &parent.ID
-		n.RootID = parent.RootID
+	n, err := s.CreateTx(ctx, tx, snap, in)
+	if err != nil {
+		return nil, op.Reject(err, ErrNotFound)
 	}
-
-	if err := s.insertWithSlug(ctx, tx, snap, n, in.Slug); err != nil {
-		return nil, op.Expected("slug", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO node_ancestors (node_id, ancestor_id, depth)
-		SELECT $1, $1, 0
-		UNION ALL
-		SELECT $1, ancestor_id, depth + 1 FROM node_ancestors WHERE node_id = $2
-	`, n.ID, n.ParentID); err != nil {
-		return nil, op.Fail(err)
-	}
-	if err := lifecycle.Record(ctx, tx, lifecycle.NodeEvent(lifecycle.TypeNodeCreated, n.Kind, n.ID, n.RootID)); err != nil {
+	if err := recordCreated(ctx, tx, n); err != nil {
 		return nil, op.Fail(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -167,6 +143,68 @@ func (s *Store) Create(ctx context.Context, snap *feed.Snapshot, in CreateInput)
 	metrics.RecordNodeOps("created", 1)
 	op.OK("created")
 	return n, nil
+}
+
+// CreateTx is Create inside tx, holding the new node's tree lock, for a caller
+// that writes more in the same transaction (the creator's binding). It doesn't
+// write <kind>.created: the caller does, after its own writes.
+func (s *Store) CreateTx(ctx context.Context, tx pgx.Tx, snap *feed.Snapshot, in CreateInput) (*Node, error) {
+	label, err := NormalizeLabel(in.Label)
+	if err != nil {
+		return nil, err
+	}
+	kind, ok := snap.Kind(in.Kind)
+	if !ok || kind.SignIn {
+		return nil, kindNotHere(snap, in.Kind)
+	}
+	if in.Slug != nil {
+		if err := checkSlug(snap, *in.Slug); err != nil {
+			return nil, err
+		}
+	}
+
+	now := s.now().UTC()
+	n := &Node{ID: id.New(id.Node), Kind: kind.Name, Label: label, Status: StatusActive, CreatedAt: now, UpdatedAt: now}
+	if in.ParentID == "" {
+		if !kind.IsRoot() {
+			return nil, kindNotHere(snap, kind.Name)
+		}
+		n.RootID = n.ID
+		if err := LockTrees(ctx, tx, []string{n.ID}); err != nil {
+			return nil, err
+		}
+	} else {
+		parent, err := s.LockedNode(ctx, tx, in.ParentID)
+		if err != nil {
+			return nil, err
+		}
+		if !kind.AllowsParent(parent.Kind) {
+			return nil, kindNotHere(snap, kind.Name)
+		}
+		if parent.Status != StatusActive {
+			return nil, parentNotLive(snap, parent)
+		}
+		n.ParentID = &parent.ID
+		n.RootID = parent.RootID
+	}
+
+	if err := s.insertWithSlug(ctx, tx, snap, n, in.Slug); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO node_ancestors (node_id, ancestor_id, depth)
+		SELECT $1, $1, 0
+		UNION ALL
+		SELECT $1, ancestor_id, depth + 1 FROM node_ancestors WHERE node_id = $2
+	`, n.ID, n.ParentID); err != nil {
+		return nil, err
+	}
+	return n, nil
+}
+
+// recordCreated writes n's <kind>.created.
+func recordCreated(ctx context.Context, tx pgx.Tx, n *Node) error {
+	return lifecycle.Record(ctx, tx, lifecycle.NodeEvent(lifecycle.TypeNodeCreated, n.Kind, n.ID, n.RootID))
 }
 
 // insertWithSlug inserts n with the slug asked for, or the first free one
@@ -396,7 +434,7 @@ func (s *Store) Delete(ctx context.Context, snap *feed.Snapshot, nodeID string) 
 		return false, op.Fail(err)
 	}
 	defer tx.Rollback(ctx)
-	n, err := s.lockedNode(ctx, tx, nodeID)
+	n, err := s.LockedNode(ctx, tx, nodeID)
 	if err != nil {
 		return false, op.Expected("not found", err)
 	}
@@ -430,7 +468,8 @@ type changedNode struct {
 	depth            int
 }
 
-// softDelete marks the live nodes at and under tops deleted. A node already
+// softDelete marks the live nodes at and under tops deleted, and revokes the
+// keys of service accounts born there and the invites on them. A node already
 // deleted keeps its own deletion_id and purge_after.
 func (s *Store) softDelete(ctx context.Context, tx pgx.Tx, tops []string, deletionID string, grace time.Duration) ([]changedNode, error) {
 	now := s.now().UTC()
@@ -461,6 +500,12 @@ func (s *Store) softDelete(ctx context.Context, tx pgx.Tx, tops []string, deleti
 	`, tops, now); err != nil {
 		return nil, err
 	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE invites SET status = 'revoked'
+		WHERE status = 'active' AND node_id IN (SELECT node_id FROM node_ancestors WHERE ancestor_id = ANY($1))
+	`, tops); err != nil {
+		return nil, err
+	}
 	return changed, nil
 }
 
@@ -477,7 +522,7 @@ func (s *Store) Restore(ctx context.Context, snap *feed.Snapshot, nodeID string)
 		return nil, false, op.Fail(err)
 	}
 	defer tx.Rollback(ctx)
-	n, err := s.lockedNode(ctx, tx, nodeID)
+	n, err := s.LockedNode(ctx, tx, nodeID)
 	if err != nil {
 		return nil, false, op.Expected("not found", err)
 	}
@@ -500,7 +545,7 @@ func (s *Store) Restore(ctx context.Context, snap *feed.Snapshot, nodeID string)
 		}
 		if parentStatus != StatusActive {
 			return nil, false, op.Expected("parent deleted", errors.ConflictError(
-				fmt.Sprintf("Restore the %s first.", kindWord(snap, parentKind)), "parent_id", *n.ParentID))
+				fmt.Sprintf("Restore the %s first.", KindWord(snap, parentKind)), "parent_id", *n.ParentID))
 		}
 	}
 
@@ -607,7 +652,7 @@ func (s *Store) ReleaseSlug(ctx context.Context, nodeID string) (*string, *Node,
 		return nil, nil, op.Fail(err)
 	}
 	defer tx.Rollback(ctx)
-	n, err := s.lockedNode(ctx, tx, nodeID)
+	n, err := s.LockedNode(ctx, tx, nodeID)
 	if err != nil {
 		return nil, nil, op.Expected("not found", err)
 	}
@@ -690,7 +735,7 @@ func (s *Store) purgeTree(ctx context.Context, rootID string, now time.Time) (in
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	if err := lockTrees(ctx, tx, []string{rootID}); err != nil {
+	if err := LockTrees(ctx, tx, []string{rootID}); err != nil {
 		return 0, err
 	}
 
@@ -869,7 +914,7 @@ func (s *Store) removeKind(ctx context.Context, snap *feed.Snapshot, kind string
 	if err != nil {
 		return err
 	}
-	if err := lockTrees(ctx, tx, roots); err != nil {
+	if err := LockTrees(ctx, tx, roots); err != nil {
 		return err
 	}
 	rows, err = tx.Query(ctx, `SELECT id FROM nodes WHERE kind = $1 AND status = 'active'`, kind)
@@ -920,7 +965,7 @@ func (s *Store) reapplyKind(ctx context.Context, snap *feed.Snapshot, kind strin
 	if err != nil {
 		return err
 	}
-	if err := lockTrees(ctx, tx, roots); err != nil {
+	if err := LockTrees(ctx, tx, roots); err != nil {
 		return err
 	}
 	rows, err = tx.Query(ctx, `
@@ -946,8 +991,9 @@ func (s *Store) reapplyKind(ctx context.Context, snap *feed.Snapshot, kind strin
 	return nil
 }
 
-// lockedNode takes the lock on the node's tree, then reads the node.
-func (s *Store) lockedNode(ctx context.Context, tx pgx.Tx, nodeID string) (*Node, error) {
+// LockedNode takes the lock on the node's tree, and on alsoLock's trees in
+// the same order, then reads the node.
+func (s *Store) LockedNode(ctx context.Context, tx pgx.Tx, nodeID string, alsoLock ...string) (*Node, error) {
 	if !id.Valid(id.Node, nodeID) {
 		return nil, ErrNotFound
 	}
@@ -959,18 +1005,21 @@ func (s *Store) lockedNode(ctx context.Context, tx pgx.Tx, nodeID string) (*Node
 	if err != nil {
 		return nil, err
 	}
-	if err := lockTrees(ctx, tx, []string{rootID}); err != nil {
+	if err := LockTrees(ctx, tx, append([]string{rootID}, alsoLock...)); err != nil {
 		return nil, err
 	}
 	return scanNode(tx.QueryRow(ctx, `SELECT `+nodeColumns+` FROM nodes WHERE id = $1`, nodeID))
 }
 
-// lockTrees takes the per-tree locks in a fixed order, so two writers never
+// LockTrees takes the per-tree locks in a fixed order, so two writers never
 // wait on each other in a cycle. Lifecycle events take their own lock last.
-func lockTrees(ctx context.Context, tx pgx.Tx, rootIDs []string) error {
+func LockTrees(ctx context.Context, tx pgx.Tx, rootIDs []string) error {
 	sorted := append([]string(nil), rootIDs...)
 	sort.Strings(sorted)
-	for _, r := range sorted {
+	for i, r := range sorted {
+		if i > 0 && r == sorted[i-1] {
+			continue
+		}
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`, treeLockSpace, r); err != nil {
 			return err
 		}
@@ -1034,15 +1083,15 @@ func slugTaken(slug string) error {
 }
 
 func kindNotHere(snap *feed.Snapshot, kind string) error {
-	return errors.FieldError("kind", fmt.Sprintf("A %s can't go here.", kindWord(snap, kind)))
+	return errors.FieldError("kind", fmt.Sprintf("A %s can't go here.", KindWord(snap, kind)))
 }
 
 func parentNotLive(snap *feed.Snapshot, parent *Node) error {
-	return errors.ConflictError(fmt.Sprintf("Restore the %s first.", kindWord(snap, parent.Kind)), "parent_id", parent.ID)
+	return errors.ConflictError(fmt.Sprintf("Restore the %s first.", KindWord(snap, parent.Kind)), "parent_id", parent.ID)
 }
 
-// kindWord is how a sentence names a kind: its label, lowercased, or its name.
-func kindWord(snap *feed.Snapshot, kind string) string {
+// KindWord is how a sentence names a kind: its label, lowercased, or its name.
+func KindWord(snap *feed.Snapshot, kind string) string {
 	if k, ok := snap.Kind(kind); ok {
 		return strings.ToLower(k.DisplayLabel())
 	}

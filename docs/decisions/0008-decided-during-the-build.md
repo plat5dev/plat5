@@ -30,7 +30,7 @@ Each build session turns up questions the contracts don't answer. Every answer g
 | The four config reference pages' field tables are generated from `schema/v2/` between markers. A test fails when they're stale; `UPDATE_DOCS=1` rewrites them. Prose stays hand-written | Kubernetes' API reference works this way; generating whole pages would push prose into the schema |
 | The CLI embeds a copy of `schema/v2/` for offline `validate` | Editors and CI catch shape errors without a deployment |
 | The generated catalog's URLs are `http://identity:3000` and `http://audit:3002` | The compose defaults; the files are edited anyway |
-| The generated invite list routes have `audit: true` | They return live tokens: a read worth recording |
+| ~~The generated invite list routes have `audit: true`~~ **Superseded in step 3** by invite tokens shown once, on create: lists carry `token_prefix`, so listing is a plain read | They returned live tokens: a read worth recording |
 | The CLI finds the control plane through its existing flags and env vars, defaulting to the local stack | Nothing new to learn |
 | `plat5 start` and `init` stay on v1 until steps 8 and 9. The v1 project file and the v2 config are both named `plat5.yml`; step 8 settles that | They still work against the pinned v1 images |
 
@@ -51,3 +51,28 @@ Each build session turns up questions the contracts don't answer. Every answer g
 | Purge takes the deleted nodes below it, even if their own `purge_after` is later | A child under a purged parent can never be restored, so keeping it loses nothing but storage |
 | Delete answers **204**, restore **200** with the node, and releasing the slug of a node that isn't purged is **409** | Plain, and consistent with the rest of the API |
 | A `deletion_id` is a bare ULID. The purge sweeper runs every minute and whenever a new config arrives, with no setting | Internal; no setting until someone needs one |
+
+## Step 3: identity principals, members and bindings
+
+| Decision | Why |
+|----------|-----|
+| Step 3 serves identity's service API for everything it builds; step 5 checks that every generated upstream is served and its labels work | Step 2 served the node routes it built. The catalog itself was generated in step 1 |
+| Invite tokens are hashed at rest and shown once, on create, like keys. Lists show `token_prefix`; the generated invite lists aren't audited | A token that can be read back is a stored secret. Stripe and GitHub show secrets once |
+| Response shapes for bindings, access entries, members, service accounts, keys and invites are in the identity API; `/members/{id}/nodes` items add `root_slug` and `root_label` | A console showing "Gruow / gatheroom" needs the org's name without a second call |
+| The access list has one entry per binding that counts at the node, keyed by binding id, with where it sits. On a root it includes guests' bindings below, marked `guest: true` | A member can hold several bindings that count, each with its own role and expiry. GitHub lists outside collaborators on the org |
+| Filtered lists read the labels of routes in the service named `identity`; identity's routes file must define that service | Identity must know which routes are its own; the generated catalog already names it `identity` |
+| A deleted node is listed under `?state=deleted` only when every node above it is live | Admit counts a deleted node's own bindings only as the last of a live chain; such a node can't be restored before its ancestor anyway |
+| The creator gets `creator_role` unless an inherited binding with no `expires_at` already holds it | An expiring inherited grant would take the creator's access to their new node with it |
+| `X-Plat5-Member-Id` naming no active member of the node's tree is **400**; on `POST /roots/{kind}` the header is optional and, when sent, must be an active directory member | The service refuses a malformed request. A front door may create a root with no member behind it, as it may any node |
+| Adding someone who has never signed in creates the person and their directory member together | Every person has one directory member; there's no state without one |
+| Deleting a service account deletes its principal and keys and removes its member, as at purge. Removing its member through the members route is **422** | One way for a service account to end. Its member is removed only with it |
+| Service account create takes `expires_at`, required when the role has a `max_duration` | Otherwise a role with `max_duration` could never be given to a new service account; member add has the same field |
+| Invites store `role_duration`, and each grant its `duration`, in the config's duration form. The role is fixed at create, `default_role` then if omitted. Below a root, `role` is required | One duration form across Plat5. `default_role` is null below a root |
+| A node's delete revokes the invites on it and below; restore leaves them revoked. At redeem, grants on nodes no longer live are skipped | As with keys, a token that leaked near a deletion stays dead |
+| Redeem by someone already bound on the invite's node is a use and changes nothing, grants included. Redeem answers `{ member_id, root_id, node_id }` | "No change" means none. The console needs the member and where to go next |
+| The binding sweeper runs with the purge sweeper, every minute, and also marks invites past `expires_at` `expired` | One background loop; no setting until someone needs one |
+| Bindings, service accounts and invites on a deleted node have no rule in the service API | Same as `PATCH` in step 2: the gateway already refuses deleted nodes, and other front doors are trusted |
+| `PATCH` of a binding with `expires_at: null` clears it; the result must still meet the role's `max_duration`. Key lists include revoked keys. `/members/{id}/nodes` without `?kind` returns every kind. Member routes on a node that isn't a root, or on the sign-in node, are **404**; `/members/{id}` routes on a member that isn't a directory member are **404** | Plain defaults, consistent with the rest of the API |
+| Removing a member already removed is **204** and changes nothing. Binding lists leave out bindings past `expires_at`; the access list also leaves out bindings whose role grants nothing where they sit. Grants name live nodes below the root, each once | Repeat deletes succeed elsewhere in the API. A list shows what's in force, not what the sweeper hasn't reached yet |
+| A member stores its principal kind (`members.principal`) | The member shape names `person` or `service_account`, and a removed service account or deleted account has no principal row left |
+| Writes that touch members take the tree lock, like structural writes | One active member per principal per tree, and "removed when left with no bindings", can't race |

@@ -2,7 +2,7 @@
 
 The routes identity and audit expose at the gateway, generated per kind. Concept: [access](../../concepts/access.md).
 
-Identity's edge routes, and the audit service's read routes, are generated from `kinds` ([generated routes](#generated-routes)). `POST /catalog` takes the kinds in the body, so the catalog for a new kind can be generated before that kind is applied, and both go in one apply. `plat5 routes generate` writes it to `routes/identity.yml` and `routes/audit.yml`. The team edits them like any routes file (renames labels, drops routes) and keeps them in `plat5.yml`'s `services`. Omitting a route hides it from the gateway; the identity process still serves that path on the network.
+Identity's edge routes, and the audit service's read routes, are generated from `kinds` ([generated routes](#generated-routes)) as the services `identity` and `audit`. Keep the name `identity`: identity finds the labels for its [filtered lists](../../concepts/access.md#lists) in that service's routes. `POST /catalog` takes the kinds in the body, so the catalog for a new kind can be generated before that kind is applied, and both go in one apply. `plat5 routes generate` writes it to `routes/identity.yml` and `routes/audit.yml`. The team edits them like any routes file (renames labels, drops routes) and keeps them in `plat5.yml`'s `services`. Omitting a route hides it from the gateway; the identity process still serves that path on the network.
 
 ## Generated routes
 
@@ -31,16 +31,16 @@ Identity's edge routes are generated from the kinds (`plat5 routes generate`, or
 | `POST /orgs/{organization}/projects` | `project:create` | `POST /nodes/{subject.organization_id}/children/project` | Body `{ label, slug? }`. The caller gets `creator_role`, unless an inherited binding already holds it |
 | `GET /orgs/{organization}/projects/{project}` | `project:read` | `GET /nodes/{subject.project_id}` | |
 | `PATCH …/{project}` | `project:write` | `PATCH /nodes/{subject.project_id}` | `{ label }`. The slug never changes |
-| `DELETE …/{project}` | `project:delete` | `DELETE /nodes/{subject.project_id}` | Soft; cascades; revokes keys of service accounts born here and below |
+| `DELETE …/{project}` | `project:delete` | `DELETE /nodes/{subject.project_id}` | Soft; cascades; revokes keys of service accounts born here and below, and invites here and below |
 | `POST …/{project}/restore` | `project:delete` | `POST /nodes/{subject.project_id}/restore` | `resolve_deleted: true` ([`reference/config/routes.md`](../config/routes.md#route-fields)). **409** if the parent is deleted |
 | `GET, POST …/{project}/bindings` | `project:bindings:read`, `:write` | `/nodes/{subject.project_id}/bindings` | Body `{ member, role, expires_at? }`; `member` is a member id in the org |
 | `PATCH, DELETE …/{project}/bindings/{binding_id}` | `project:bindings:write` | `/nodes/{subject.project_id}/bindings/{path.binding_id}` | Change role or expiry; remove |
 | `GET …/{project}/access` | `project:bindings:read` | `GET /nodes/{subject.project_id}/access` | Direct and inherited bindings, each with the node it comes from |
-| `GET, POST …/{project}/service-accounts` | `project:bindings:read`, `project:service-accounts:write` | `/nodes/{subject.project_id}/service-accounts` | `{ name, role }`: born here, bound here |
-| `GET, PATCH, DELETE …/service-accounts/{service_account}` | `project:bindings:read`, `project:service-accounts:write` | `/nodes/{subject.project_id}/service-accounts/{path.service_account}` | `{ name }`. Delete removes its member and revokes its keys |
+| `GET, POST …/{project}/service-accounts` | `project:bindings:read`, `project:service-accounts:write` | `/nodes/{subject.project_id}/service-accounts` | `{ name, role, expires_at? }`: born here, bound here |
+| `GET, PATCH, DELETE …/service-accounts/{service_account}` | `project:bindings:read`, `project:service-accounts:write` | `/nodes/{subject.project_id}/service-accounts/{path.service_account}` | `{ name }`. Delete removes its member and deletes it with its keys |
 | `GET, POST …/service-accounts/{service_account}/keys` | `project:service-accounts:write` | `…/service-accounts/{path.service_account}/keys` | Plaintext once |
 | `DELETE …/keys/{key_id}` | `project:service-accounts:write` | `…/keys/{path.key_id}` | Revoke |
-| `GET, POST …/{project}/invites` | `organization:guests:write` | `/nodes/{subject.project_id}/invites` | `{ role, role_duration?, max_uses?, expires_at }`. Can admit a guest. To give someone already in the org a project role, bind them directly. `GET` has `audit: true`: it returns live tokens |
+| `GET, POST …/{project}/invites` | `organization:guests:write` | `/nodes/{subject.project_id}/invites` | `{ role, role_duration?, max_uses?, expires_at }`. Can admit a guest. To give someone already in the org a project role, bind them directly. The token is in the `POST` response only |
 | `DELETE …/invites/{invite_id}` | `organization:guests:write` | `/nodes/{subject.project_id}/invites/{path.invite_id}` | Revoke |
 | `GET …/{project}/roles` | `[]` | `GET /nodes/{subject.project_id}/roles` | Roles bindable here |
 
@@ -53,7 +53,7 @@ Roots get the same at `/orgs/{organization}`, with `organization:*` labels, exce
 | `GET /orgs/{organization}/members/{member}` | `[]` | `GET /nodes/{subject.organization_id}/members/{path.member}` | Name and status, a removed member too. So services and consoles can show "Dana (former member)" |
 | `DELETE /orgs/{organization}/members/{member}` | `organization:bindings:write` | `DELETE /nodes/{subject.organization_id}/members/{path.member}` | Remove |
 | `DELETE /orgs/{organization}/me` | `[]` | `DELETE /nodes/{subject.organization_id}/members/{subject.member_id}` | Leave the org |
-| `GET, POST /orgs/{organization}/invites` | `organization:bindings:write` | `/nodes/{subject.organization_id}/invites` | `{ role?, role_duration?, grants?, max_uses?, expires_at }`. `grants` are bindings below the root made on redeem. `GET` has `audit: true`: it returns live tokens |
+| `GET, POST /orgs/{organization}/invites` | `organization:bindings:write` | `/nodes/{subject.organization_id}/invites` | `{ role?, role_duration?, grants?, max_uses?, expires_at }`. `grants` are bindings below the root made on redeem. The token is in the `POST` response only |
 | `DELETE /orgs/{organization}/invites/{invite_id}` | `organization:bindings:write` | `/nodes/{subject.organization_id}/invites/{path.invite_id}` | Revoke |
 
 The caller's own routes, all `scope: directory` with `[]`:

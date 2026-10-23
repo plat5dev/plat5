@@ -12,7 +12,7 @@ import (
 
 // Handler serves the node routes that need no member
 // (docs/reference/api/identity.md#nodes). Creating nodes and the filtered
-// children list come with members.
+// children list are in package members.
 type Handler struct {
 	store *Store
 	src   *feed.Source
