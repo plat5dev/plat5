@@ -130,27 +130,6 @@ func ConflictError(message, field string, value interface{}) *ApiError {
 	}
 }
 
-// OrgRef names an org in error details.
-type OrgRef struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
-// HandoffRequiredError is 409: an account the last member, or last
-// creator_role holder, of these orgs cannot be deleted yet.
-func HandoffRequiredError(orgs []OrgRef) *ApiError {
-	return &ApiError{
-		Type:    "invalid_request_error",
-		Code:    "ORGANIZATION_HANDOFF_REQUIRED",
-		Message: "Hand off or delete your organizations first.",
-		Details: map[string]interface{}{
-			"organizations": orgs,
-		},
-		Status: fiber.StatusConflict,
-		Kind:   KindValidation,
-	}
-}
-
 func PayloadTooLargeError(maxSizeBytes int64) *ApiError {
 	return &ApiError{
 		Type:    "invalid_request_error",

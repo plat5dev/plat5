@@ -57,6 +57,10 @@ Clients show `error.message`. `details.fields` is for multi-field 422s; `message
 | Child kind not allowed here | A {kind} can't go here. |
 | Restore with a deleted parent | Restore the {parent kind} first. |
 | Restore past the grace period | This can no longer be restored. |
+| Restore while its kind is removed | A {kind} can't be restored while its kind is removed. |
+| Create under a deleted node | Restore the {parent kind} first. |
+| Delete the sign-in node | The {kind} can't be deleted. |
+| Release the slug of a node that isn't purged | Only a purged node's slug can be released. |
 
 ### Members and bindings
 

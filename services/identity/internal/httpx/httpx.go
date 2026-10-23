@@ -28,13 +28,15 @@ func PathParam(c fiber.Ctx, name string) string {
 	return strings.Clone(c.Params(name))
 }
 
-func ParseListParams(c fiber.Ctx) (limit int, startingAfter string, err error) {
+// ParseListParams reads limit and starting_after, which must be an id with the
+// collection's prefix (docs/reference/lists.md).
+func ParseListParams(c fiber.Ctx, prefix string) (limit int, startingAfter string, err error) {
 	limit, err = ParseLimit(c)
 	if err != nil {
 		return 0, "", err
 	}
 	startingAfter = strings.TrimSpace(c.Query("starting_after"))
-	if startingAfter != "" && !id.Valid(startingAfter) {
+	if startingAfter != "" && !id.Valid(prefix, startingAfter) {
 		return 0, "", errors.FieldError("starting_after", errors.FallbackValidation)
 	}
 	return limit, startingAfter, nil
@@ -91,7 +93,7 @@ func LogError(ctx context.Context, msg string, err error, kind errors.ErrorKind)
 }
 
 // DBErr maps store sentinel errors to API errors.
-// NotFound/Conflict are the package sentinels to match (e.g. orgs.ErrNotFound).
+// NotFound/Conflict are the package sentinels to match (e.g. nodes.ErrNotFound).
 // When a sentinel matches, Resource/ResourceID or Field/FieldValue fill the API details.
 type DBErr struct {
 	NotFound   error

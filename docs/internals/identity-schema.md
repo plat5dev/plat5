@@ -101,6 +101,12 @@ CREATE TABLE lifecycle_events (                       -- append-only; outlives w
     principal   TEXT CHECK (principal IN ('person', 'service_account')),
     occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE kind_removals (                          -- a kind removed from the config, until it's back or purged
+    kind        TEXT PRIMARY KEY,
+    deletion_id TEXT NOT NULL,                         -- stamped on every node the removal soft-deleted
+    removed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 ```
 
 Ids are ULIDs with a type prefix: `n_` nodes, `m_` members, `b_` bindings, `k_` keys, `i_` invites. Principal ids never leave identity.
@@ -115,4 +121,5 @@ Ids are ULIDs with a type prefix: `n_` nodes, `m_` members, `b_` bindings, `k_` 
 - **Expiry.** A binding past `expires_at` grants nothing; a sweeper deletes it.
 - **Suspension.** A suspended principal's credentials are all invalid. There's no per-member suspension: remove the member instead.
 - **Deletions.** Each delete, and each kind removal, stamps one `deletion_id` on every node it soft-deletes. A restore, or a kind applied again, restores exactly the nodes with that id. A node already deleted keeps its own id.
+- **Kind removals.** Every config identity reads is checked against the nodes. Live nodes of a kind it lacks are soft-deleted with their descendants under one `deletion_id`, recorded in `kind_removals` in the same transaction. A kind in the config with a row restores the nodes with that id still before `purge_after` (not those under a parent deleted since) and drops the row. The sweeper drops a row once none of its nodes is left unpurged.
 - **Deletion.** A node with `status = 'deleted'` grants nothing on it or below, except on a `resolve_deleted` route (restore, listing deleted). Each deleted node stores `purge_after`, set from `deletion_grace` when it's deleted, so changing `deletion_grace` applies to new deletes only. Once `purge_after` has passed, the purge sweeper sets `status = 'purged'`, deletes bindings on it and below, removes members of a purged root, and keeps the row.

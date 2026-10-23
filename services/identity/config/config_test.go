@@ -46,20 +46,25 @@ func TestParseAPIKeyBrand(t *testing.T) {
 	}
 }
 
-func TestParseRoles(t *testing.T) {
-	on, u, err := parseRoles("", "http://control-plane:5003/")
-	if err != nil || !on || u != "http://control-plane:5003" {
-		t.Fatalf("default on: %v %q %v", on, u, err)
+func TestParseControlPlaneURL(t *testing.T) {
+	u, err := parseControlPlaneURL(" http://control-plane:5003/ ")
+	if err != nil || u != "http://control-plane:5003" {
+		t.Fatalf("%q %v", u, err)
 	}
-	if _, _, err := parseRoles("true", " "); err == nil {
-		t.Fatal("roles on without CONTROL_PLANE_URL must fail boot")
+	if _, err := parseControlPlaneURL(" "); err == nil {
+		t.Fatal("a missing CONTROL_PLANE_URL must fail boot")
 	}
-	on, u, err = parseRoles("false", "")
-	if err != nil || on || u != "" {
-		t.Fatalf("off: %v %q %v", on, u, err)
+}
+
+func TestLoadIgnoresRolesEnabled(t *testing.T) {
+	t.Setenv("CONTROL_PLANE_URL", "http://control-plane:5003")
+	t.Setenv("ROLES_ENABLED", "false")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, _, err := parseRoles("no", "http://control-plane:5003"); err == nil {
-		t.Fatal("ROLES_ENABLED is true or false")
+	if _, ok := reflect.TypeOf(cfg).FieldByName("RolesEnabled"); ok {
+		t.Fatal("roles are always on in v2")
 	}
 }
 
