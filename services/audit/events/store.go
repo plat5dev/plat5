@@ -35,8 +35,9 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	}
 }
 
-const eventColumns = `id, occurred_at, request_id, organization_id, user_id, actor_member_id, actor_auth_type,
-	actor_key_prefix, service, method, route, params, ip, user_agent, outcome, status, details, created_id`
+const eventColumns = `id, occurred_at, request_id, root_id, nodes, named_root_id, named_member_id,
+	actor_member_id, actor_principal, actor_auth_type, actor_key_prefix, service, method, route, params, ip,
+	user_agent, outcome, status, details, created_id`
 
 // CreateIntent writes a pending event unless one exists for the request id.
 // created is false for a retry. The intent the caller holds is not updated.
@@ -51,19 +52,28 @@ func (s *Store) CreateIntent(ctx context.Context, in *Intent) (created bool, err
 	if err != nil {
 		return false, op.Fail(err)
 	}
+	nodes, err := json.Marshal(in.Nodes)
+	if err != nil {
+		return false, op.Fail(err)
+	}
+	nodeIDs := make([]string, len(in.Nodes))
+	for i, n := range in.Nodes {
+		nodeIDs[i] = n.ID
+	}
 	insert := func() (pgconn.CommandTag, error) {
 		// request_id alone is the dedupe. The unique index has occurred_at
 		// too (the partition key), so check request_id here and let the
 		// index catch two identical intents racing.
 		return s.pool.Exec(ctx, `
-			INSERT INTO audit_events (id, occurred_at, request_id, organization_id, user_id, actor_member_id,
-				actor_auth_type, actor_key_prefix, service, method, route, params, ip, user_agent)
-			SELECT $1::text, $2::timestamptz, $3::text, $4::text, $5::text, $6::text, $7::text, $8::text,
-				$9::text, $10::text, $11::text, $12::jsonb, $13::text, $14::text
+			INSERT INTO audit_events (id, occurred_at, request_id, root_id, nodes, node_ids, actor_member_id,
+				actor_principal, actor_auth_type, actor_key_prefix, service, method, route, params, ip, user_agent)
+			SELECT $1::text, $2::timestamptz, $3::text, $4::text, $5::jsonb, $6::text[], $7::text, $8::text,
+				$9::text, $10::text, $11::text, $12::text, $13::text, $14::jsonb, $15::text, $16::text
 			WHERE NOT EXISTS (SELECT 1 FROM audit_events WHERE request_id = $3::text)
 			ON CONFLICT DO NOTHING
-		`, id.NewAt(in.OccurredAt), in.OccurredAt, in.RequestID, in.OrganizationID, in.UserID, in.Actor.MemberID,
-			in.Actor.AuthType, in.Actor.KeyPrefix, in.Service, in.Method, in.Route, string(params), in.IP, in.UserAgent)
+		`, id.NewAt(in.OccurredAt), in.OccurredAt, in.RequestID, in.RootID, string(nodes), nodeIDs,
+			in.Actor.MemberID, in.Actor.Principal, in.Actor.AuthType, in.Actor.KeyPrefix,
+			in.Service, in.Method, in.Route, string(params), in.IP, in.UserAgent)
 	}
 
 	tag, err := insert()
@@ -95,21 +105,19 @@ func (s *Store) ApplyOutcome(ctx context.Context, requestID string, out *Outcome
 	if out.Details != nil {
 		details = string(out.Details)
 	}
-	var namedOrg, namedMember any
+	var namedRoot, namedMember any
 	if out.Named != nil {
-		namedOrg, namedMember = out.Named.OrganizationID, out.Named.MemberID
+		namedRoot, namedMember = out.Named.RootID, out.Named.MemberID
 	}
-	// The named org and member only add to a person's event. An org's event
-	// keeps the org and member its credential had.
+	// Only a sign-in route's event names a tree. A kind route's event is in
+	// its chain's root's log, and a pair sent for it is ignored.
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE audit_events
 		SET outcome = $2, status = $3, details = $4::jsonb, created_id = $5,
-			organization_id = CASE WHEN user_id IS NOT NULL AND organization_id IS NULL
-				THEN $6::text ELSE organization_id END,
-			actor_member_id = CASE WHEN user_id IS NOT NULL AND organization_id IS NULL
-				THEN $7::text ELSE actor_member_id END
+			named_root_id = CASE WHEN root_id IS NULL THEN $6::text END,
+			named_member_id = CASE WHEN root_id IS NULL THEN $7::text END
 		WHERE request_id = $1 AND outcome = 'pending'
-	`, requestID, out.Outcome, out.Status, details, out.CreatedID, namedOrg, namedMember)
+	`, requestID, out.Outcome, out.Status, details, out.CreatedID, namedRoot, namedMember)
 	if err != nil {
 		return "", op.Fail(err)
 	}
@@ -131,22 +139,30 @@ func (s *Store) ApplyOutcome(ctx context.Context, requestID string, out *Outcome
 	return metrics.OutcomeFinal, nil
 }
 
-// List returns one page of a log, newest first: the org's when
-// f.OrganizationID is set, else the person's.
+// List returns one page of a log, newest first. With f.NodeID: the events on
+// the node and below, and those a sign-in route named it the root of, with the
+// named member as their actor. Otherwise the person's own log: the sign-in
+// route events f.MemberID acted in.
 func (s *Store) List(ctx context.Context, f Filter) ([]*Event, bool, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_events", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
-	where := []string{"organization_id = $1"}
-	args := []any{f.OrganizationID}
-	if f.OrganizationID == "" {
-		where = []string{"user_id = $1"}
-		args = []any{f.UserID}
-	}
+	var where []string
+	var args []any
 	add := func(cond string, v any) {
 		args = append(args, v)
 		where = append(where, strings.ReplaceAll(cond, "?", "$"+strconv.Itoa(len(args))))
+	}
+	// Who acted, as this log shows it. In a root's log a named event's actor
+	// is the member the service named: the directory member never leaves the
+	// person's own log.
+	actor := "actor_member_id"
+	if f.NodeID != "" {
+		add("(node_ids @> ARRAY[?::text] OR named_root_id = ?)", f.NodeID)
+		actor = "CASE WHEN root_id IS NULL THEN named_member_id ELSE actor_member_id END"
+	} else {
+		add("root_id IS NULL AND actor_member_id = ?", f.MemberID)
 	}
 	if f.StartingAfter != "" {
 		add("id < ?", f.StartingAfter)
@@ -155,7 +171,7 @@ func (s *Store) List(ctx context.Context, f Filter) ([]*Event, bool, error) {
 		add("occurred_at < ?", id.Time(f.StartingAfter).Add(time.Millisecond))
 	}
 	if f.ActorMemberID != "" {
-		add("actor_member_id = ?", f.ActorMemberID)
+		add(actor+" = ?", f.ActorMemberID)
 	}
 	if f.Service != "" {
 		add("service = ?", f.Service)
@@ -205,6 +221,9 @@ func (s *Store) List(ctx context.Context, f Filter) ([]*Event, bool, error) {
 		if err != nil {
 			return nil, false, op.Fail(err)
 		}
+		if f.NodeID != "" && e.Named != nil && e.RootID == nil {
+			e.Actor.MemberID = e.Named.MemberID
+		}
 		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {
@@ -220,19 +239,25 @@ func (s *Store) List(ctx context.Context, f Filter) ([]*Event, bool, error) {
 
 func scanEvent(row dbx.Scannable) (*Event, error) {
 	var e Event
-	var params []byte
-	var details []byte
-	if err := row.Scan(&e.ID, &e.OccurredAt, &e.RequestID, &e.OrganizationID, &e.UserID, &e.Actor.MemberID,
-		&e.Actor.AuthType, &e.Actor.KeyPrefix, &e.Service, &e.Method, &e.Route, &params, &e.IP,
-		&e.UserAgent, &e.Outcome.Outcome, &e.Status, &details, &e.CreatedID); err != nil {
+	var nodes, params, details []byte
+	var namedRoot, namedMember *string
+	if err := row.Scan(&e.ID, &e.OccurredAt, &e.RequestID, &e.RootID, &nodes, &namedRoot, &namedMember,
+		&e.Actor.MemberID, &e.Actor.Principal, &e.Actor.AuthType, &e.Actor.KeyPrefix, &e.Service, &e.Method,
+		&e.Route, &params, &e.IP, &e.UserAgent, &e.Outcome.Outcome, &e.Status, &details, &e.CreatedID); err != nil {
 		return nil, err
 	}
 	e.OccurredAt = e.OccurredAt.UTC()
+	if err := json.Unmarshal(nodes, &e.Nodes); err != nil {
+		return nil, fmt.Errorf("nodes: %w", err)
+	}
 	if err := json.Unmarshal(params, &e.Params); err != nil {
 		return nil, fmt.Errorf("params: %w", err)
 	}
 	if details != nil {
 		e.Details = json.RawMessage(details)
+	}
+	if namedRoot != nil && namedMember != nil {
+		e.Named = &Named{RootID: *namedRoot, MemberID: *namedMember}
 	}
 	return &e, nil
 }

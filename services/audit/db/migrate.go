@@ -28,12 +28,10 @@ func MigrateSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error
 	if _, err := pool.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+quoted); err != nil {
 		return fmt.Errorf("create schema %s: %w", schema, err)
 	}
-	if _, err := pool.Exec(ctx, "SET search_path TO "+quoted); err != nil {
-		return fmt.Errorf("set search_path: %w", err)
-	}
-
+	// Qualified: a pool's statements can each run on a different connection.
+	migrations := quoted + ".schema_migrations"
 	if _, err := pool.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS schema_migrations (
+		CREATE TABLE IF NOT EXISTS `+migrations+` (
 			version TEXT PRIMARY KEY,
 			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)
@@ -54,12 +52,15 @@ func MigrateSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error
 		versions = append(versions, e.Name())
 	}
 	sort.Strings(versions)
+	if err := refuseUnknown(ctx, pool, migrations, versions); err != nil {
+		return err
+	}
 
 	for _, name := range versions {
 		version := strings.TrimSuffix(name, ".sql")
 		var exists bool
 		if err := pool.QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)`, version,
+			`SELECT EXISTS(SELECT 1 FROM `+migrations+` WHERE version = $1)`, version,
 		).Scan(&exists); err != nil {
 			return fmt.Errorf("check migration %s: %w", version, err)
 		}
@@ -87,7 +88,7 @@ func MigrateSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error
 			return fmt.Errorf("apply migration %s: %w", version, err)
 		}
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO schema_migrations (version) VALUES ($1)`, version,
+			`INSERT INTO `+migrations+` (version) VALUES ($1)`, version,
 		); err != nil {
 			_ = tx.Rollback(ctx)
 			return fmt.Errorf("record migration %s: %w", version, err)
@@ -97,5 +98,30 @@ func MigrateSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error
 		}
 	}
 
+	return nil
+}
+
+// refuseUnknown stops boot on a database that recorded migrations this build
+// doesn't have: a v1 audit schema, or one from a newer build. v2 is a hard
+// cutover, so a v1 database is reset or moved by hand, never migrated
+// (docs/v2-cutover.md).
+func refuseUnknown(ctx context.Context, pool *pgxpool.Pool, migrations string, files []string) error {
+	known := make(map[string]bool, len(files))
+	for _, name := range files {
+		known[strings.TrimSuffix(name, ".sql")] = true
+	}
+	rows, err := pool.Query(ctx, `SELECT version FROM `+migrations+` ORDER BY version`)
+	if err != nil {
+		return fmt.Errorf("read schema_migrations: %w", err)
+	}
+	applied, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return fmt.Errorf("read schema_migrations: %w", err)
+	}
+	for _, v := range applied {
+		if !known[v] {
+			return fmt.Errorf("schema has migration %q that this build doesn't know (a v1 audit schema?); drop the schema or use a fresh database", v)
+		}
+	}
 	return nil
 }

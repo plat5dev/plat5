@@ -32,7 +32,7 @@ curl -sS -X POST http://localhost:5402/apply \
 
 Dev compose seeds identity and audit routes only when that service has no history yet (does not overwrite). Prod does not seed — apply `services/identity/routes.yml` (or a subset) and `services/audit/routes.yml` yourself.
 
-Audit: the gateway records audited requests on kind and sign-in routes through the `audit` service (`AUDIT_URL`). It is on by default. `AUDIT_ENABLED=false` turns it off for the deployment; then audit need not run. Until v2 step 7 the audit service still takes v1 events, so run the v2 stack with `AUDIT_ENABLED=false`. See [`../docs/concepts/audit.md`](../docs/concepts/audit.md).
+Audit: the gateway records audited requests on kind and sign-in routes through the `audit` service (`AUDIT_URL`). It is on by default. `AUDIT_ENABLED=false` turns it off for the deployment; then audit need not run. See [`../docs/concepts/audit.md`](../docs/concepts/audit.md).
 
 ## JWT / IdP
 

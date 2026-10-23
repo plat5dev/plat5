@@ -37,11 +37,12 @@ func (h *Handler) MountInternal(router fiber.Router) {
 	router.Patch("/events/:request_id", h.PatchOutcome)
 }
 
-// MountPublic registers the reads. The catalog publishes them as
-// /org/audit-events and /user/audit-events.
+// MountPublic registers the reads. The generated catalog publishes them per
+// kind as …/audit-events, and as /me/audit-events on the sign-in kind
+// (docs/reference/api/audit.md#reading).
 func (h *Handler) MountPublic(router fiber.Router) {
-	router.Get("/organizations/:organization_id/audit-events", h.List)
-	router.Get("/users/:user_id/audit-events", h.ListUser)
+	router.Get("/nodes/:node_id/audit-events", h.ListNode)
+	router.Get("/members/:member_id/audit-events", h.ListMember)
 }
 
 // PutIntent creates the pending event, or leaves an existing one alone.
@@ -88,28 +89,32 @@ type listResponse struct {
 	HasMore     bool            `json:"has_more"`
 }
 
-// eventResponse is one event. UserID is only in a person's own read: an
-// org's read never carries it.
 type eventResponse struct {
-	ID             string            `json:"id"`
-	OccurredAt     string            `json:"occurred_at"`
-	RequestID      string            `json:"request_id"`
-	OrganizationID *string           `json:"organization_id"`
-	UserID         *string           `json:"user_id,omitempty"`
-	Actor          Actor             `json:"actor"`
-	Service        string            `json:"service"`
-	Method         string            `json:"method"`
-	Route          string            `json:"route"`
-	Params         map[string]string `json:"params"`
-	IP             string            `json:"ip"`
-	UserAgent      *string           `json:"user_agent"`
-	Outcome        string            `json:"outcome"`
-	Status         *int              `json:"status"`
-	Details        json.RawMessage   `json:"details"`
-	CreatedID      *string           `json:"created_id"`
+	ID            string            `json:"id"`
+	OccurredAt    string            `json:"occurred_at"`
+	RequestID     string            `json:"request_id"`
+	RootID        *string           `json:"root_id"`
+	Nodes         []Node            `json:"nodes"`
+	NamedRootID   *string           `json:"named_root_id"`
+	NamedMemberID *string           `json:"named_member_id"`
+	Actor         Actor             `json:"actor"`
+	Service       string            `json:"service"`
+	Method        string            `json:"method"`
+	Route         string            `json:"route"`
+	Params        map[string]string `json:"params"`
+	IP            string            `json:"ip"`
+	UserAgent     *string           `json:"user_agent"`
+	Outcome       string            `json:"outcome"`
+	Status        *int              `json:"status"`
+	Details       json.RawMessage   `json:"details"`
+	CreatedID     *string           `json:"created_id"`
 }
 
-func toResponse(e *Event, withUser bool) eventResponse {
+func toResponse(e *Event) eventResponse {
+	nodes := e.Nodes
+	if nodes == nil {
+		nodes = []Node{}
+	}
 	params := e.Params
 	if params == nil {
 		params = map[string]string{}
@@ -119,49 +124,52 @@ func toResponse(e *Event, withUser bool) eventResponse {
 		details = json.RawMessage("null")
 	}
 	resp := eventResponse{
-		ID:             e.ID,
-		OccurredAt:     e.OccurredAt.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
-		RequestID:      e.RequestID,
-		OrganizationID: e.OrganizationID,
-		Actor:          e.Actor,
-		Service:        e.Service,
-		Method:         e.Method,
-		Route:          e.Route,
-		Params:         params,
-		IP:             e.IP,
-		UserAgent:      e.UserAgent,
-		Outcome:        e.Outcome.Outcome,
-		Status:         e.Status,
-		Details:        details,
-		CreatedID:      e.CreatedID,
+		ID:         e.ID,
+		OccurredAt: e.OccurredAt.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
+		RequestID:  e.RequestID,
+		RootID:     e.RootID,
+		Nodes:      nodes,
+		Actor:      e.Actor,
+		Service:    e.Service,
+		Method:     e.Method,
+		Route:      e.Route,
+		Params:     params,
+		IP:         e.IP,
+		UserAgent:  e.UserAgent,
+		Outcome:    e.Outcome.Outcome,
+		Status:     e.Status,
+		Details:    details,
+		CreatedID:  e.CreatedID,
 	}
-	if withUser {
-		resp.UserID = e.UserID
+	if e.Named != nil {
+		resp.NamedRootID, resp.NamedMemberID = &e.Named.RootID, &e.Named.MemberID
 	}
 	return resp
 }
 
-// List is one page of the org's log, newest first. No user_id.
-func (h *Handler) List(c fiber.Ctx) error {
+// ListNode is one page of the events on a node and below it, newest first.
+// Audit doesn't know which nodes exist: one with no events is an empty list.
+func (h *Handler) ListNode(c fiber.Ctx) error {
 	f, err := parseFilter(c)
 	if err != nil {
 		return err
 	}
-	f.OrganizationID = httpx.PathParam(c, "organization_id")
-	return h.list(c, f, false)
+	f.NodeID = httpx.PathParam(c, "node_id")
+	return h.list(c, f)
 }
 
-// ListUser is one page of the person's own log, newest first.
-func (h *Handler) ListUser(c fiber.Ctx) error {
+// ListMember is one page of a person's own log, keyed by their directory
+// member, newest first.
+func (h *Handler) ListMember(c fiber.Ctx) error {
 	f, err := parseFilter(c)
 	if err != nil {
 		return err
 	}
-	f.UserID = httpx.PathParam(c, "user_id")
-	return h.list(c, f, true)
+	f.MemberID = httpx.PathParam(c, "member_id")
+	return h.list(c, f)
 }
 
-func (h *Handler) list(c fiber.Ctx, f Filter, withUser bool) error {
+func (h *Handler) list(c fiber.Ctx, f Filter) error {
 	list, hasMore, err := h.store.List(c.Context(), f)
 	if err != nil {
 		httpx.LogError(c.Context(), "list audit events", err, errors.KindDB)
@@ -169,7 +177,7 @@ func (h *Handler) list(c fiber.Ctx, f Filter, withUser bool) error {
 	}
 	resp := listResponse{AuditEvents: make([]eventResponse, 0, len(list)), HasMore: hasMore}
 	for _, e := range list {
-		resp.AuditEvents = append(resp.AuditEvents, toResponse(e, withUser))
+		resp.AuditEvents = append(resp.AuditEvents, toResponse(e))
 	}
 	return c.JSON(resp)
 }
@@ -179,7 +187,7 @@ var listOutcomes = map[string]bool{
 }
 
 // parseFilter reads the list query. Unknown, repeated, or malformed params are
-// 422 (docs/audit.md#reading).
+// 422 (docs/reference/api/audit.md#reading).
 func parseFilter(c fiber.Ctx) (Filter, error) {
 	f := Filter{Limit: httpx.DefaultListLimit}
 	var bad fieldErrs

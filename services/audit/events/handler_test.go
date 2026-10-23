@@ -105,20 +105,21 @@ func TestListShape(t *testing.T) {
 	s := &fakeStore{list: []*Event{{
 		ID: "01JA2Z6Q3Y8D5V2K9N4R7T1W0X",
 		Intent: Intent{
-			RequestID:      "req-1",
-			OccurredAt:     time.Date(2026, 10, 8, 18, 30, 0, 120_000_000, time.UTC),
-			OrganizationID: strPtr("org-1"),
-			Actor:          Actor{MemberID: strPtr("m-1"), AuthType: AuthMemberAPIKey, KeyPrefix: strPtr("plat5-k-2-AbC9")},
-			Service:        "identity",
-			Method:         "DELETE",
-			Route:          "/org",
-			IP:             "203.0.113.7",
+			RequestID:  "req-1",
+			OccurredAt: time.Date(2026, 10, 8, 18, 30, 0, 120_000_000, time.UTC),
+			RootID:     strPtr("n_org"),
+			Nodes:      []Node{{Kind: "organization", ID: "n_org"}},
+			Actor:      Actor{MemberID: "m_1", Principal: PrincipalServiceAccount, AuthType: AuthAPIKey, KeyPrefix: strPtr("plat5-k-2-AbC9")},
+			Service:    "identity",
+			Method:     "DELETE",
+			Route:      "/orgs/{organization}",
+			IP:         "203.0.113.7",
 		},
 		Outcome: Outcome{Outcome: OutcomeRejected, Status: &status},
 	}}}
 	app := newTestApp(s)
 
-	code, body := do(t, app, http.MethodGet, "/organizations/org-1/audit-events", "")
+	code, body := do(t, app, http.MethodGet, "/nodes/n_org/audit-events", "")
 	if code != http.StatusOK {
 		t.Fatalf("list: %d %s", code, body)
 	}
@@ -133,7 +134,7 @@ func TestListShape(t *testing.T) {
 	if e["occurred_at"] != "2026-10-08T18:30:00.120Z" {
 		t.Fatalf("occurred_at is UTC with milliseconds: %v", e["occurred_at"])
 	}
-	for _, k := range []string{"details", "user_agent"} {
+	for _, k := range []string{"details", "user_agent", "created_id", "named_root_id", "named_member_id"} {
 		if v, ok := e[k]; !ok || v != nil {
 			t.Fatalf("%s is present and null: %s", k, body)
 		}
@@ -141,7 +142,35 @@ func TestListShape(t *testing.T) {
 	if p, ok := e["params"].(map[string]any); !ok || len(p) != 0 {
 		t.Fatalf("params is {} when the route has none: %s", body)
 	}
-	if s.lastList.OrganizationID != "org-1" || s.lastList.Limit != 50 {
+	if e["root_id"] != "n_org" || len(e["nodes"].([]any)) != 1 {
+		t.Fatalf("root and chain: %s", body)
+	}
+	actor := e["actor"].(map[string]any)
+	if actor["member_id"] != "m_1" || actor["principal"] != "service_account" || actor["auth_type"] != "apikey" || actor["key_prefix"] != "plat5-k-2-AbC9" {
+		t.Fatalf("actor: %s", body)
+	}
+	if s.lastList.NodeID != "n_org" || s.lastList.MemberID != "" || s.lastList.Limit != 50 {
+		t.Fatalf("filter: %+v", s.lastList)
+	}
+
+	// A person's own log: a sign-in route's event has no root and empty nodes.
+	s.list = []*Event{{ID: "01JA2Z6Q3Y8D5V2K9N4R7T1W0X", Intent: Intent{
+		RequestID: "req-2", OccurredAt: testNow, Actor: Actor{MemberID: "m_dir", Principal: PrincipalPerson, AuthType: AuthJWT},
+		Service: "identity", Method: "POST", Route: "/orgs", IP: "203.0.113.7",
+	}, Outcome: Outcome{Outcome: OutcomeResponded, Status: intPtr(201), Named: &Named{RootID: "n_org", MemberID: "m_org"}}}}
+	code, body = do(t, app, http.MethodGet, "/members/m_dir/audit-events", "")
+	if code != http.StatusOK {
+		t.Fatalf("person's list: %d %s", code, body)
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatal(err)
+	}
+	e = resp["audit_events"].([]any)[0].(map[string]any)
+	if e["root_id"] != nil || len(e["nodes"].([]any)) != 0 || e["named_root_id"] != "n_org" || e["named_member_id"] != "m_org" ||
+		e["actor"].(map[string]any)["key_prefix"] != nil {
+		t.Fatalf("sign-in event: %s", body)
+	}
+	if s.lastList.MemberID != "m_dir" || s.lastList.NodeID != "" {
 		t.Fatalf("filter: %+v", s.lastList)
 	}
 }
@@ -151,16 +180,16 @@ func TestListFilters(t *testing.T) {
 	app := newTestApp(s)
 
 	q := "?limit=500&starting_after=01JA2Z6Q3Y8D5V2K9N4R7T1W0X&actor_member_id=m-1&service=identity&method=PATCH" +
-		"&route=%2Forg%2Fmembers%2F%7Bmember_id%7D&outcome=pending&request_id=req-1" +
-		"&params%5Bmember_id%5D=m-2&occurred_after=2026-10-01T00:00:00Z&occurred_before=2026-10-09T00:00:00Z"
-	if code, body := do(t, app, http.MethodGet, "/organizations/org-1/audit-events"+q, ""); code != http.StatusOK {
+		"&route=%2Forgs%2F%7Borganization%7D%2Fmembers%2F%7Bmember%7D&outcome=pending&request_id=req-1" +
+		"&params%5Bmember%5D=m-2&occurred_after=2026-10-01T00:00:00Z&occurred_before=2026-10-09T00:00:00Z"
+	if code, body := do(t, app, http.MethodGet, "/nodes/n_org/audit-events"+q, ""); code != http.StatusOK {
 		t.Fatalf("list: %d %s", code, body)
 	}
 	f := s.lastList
 	if f.Limit != 100 {
 		t.Fatalf("limit is clamped to 100: %d", f.Limit)
 	}
-	if f.Route != "/org/members/{member_id}" || f.Params["member_id"] != "m-2" || f.ActorMemberID != "m-1" ||
+	if f.Route != "/orgs/{organization}/members/{member}" || f.Params["member"] != "m-2" || f.ActorMemberID != "m-1" ||
 		f.Method != "PATCH" || f.Outcome != OutcomePending || f.OccurredAfter == nil || f.OccurredBefore == nil {
 		t.Fatalf("filter: %+v", f)
 	}
@@ -181,7 +210,7 @@ func TestListFilters(t *testing.T) {
 		"bracketless key": "?params=m",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if code, body := do(t, app, http.MethodGet, "/organizations/org-1/audit-events"+q, ""); code != http.StatusUnprocessableEntity {
+			if code, body := do(t, app, http.MethodGet, "/nodes/n_org/audit-events"+q, ""); code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 422, got %d %s", code, body)
 			}
 		})
