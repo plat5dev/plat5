@@ -76,3 +76,14 @@ Each build session turns up questions the contracts don't answer. Every answer g
 | Removing a member already removed is **204** and changes nothing. Binding lists leave out bindings past `expires_at`; the access list also leaves out bindings whose role grants nothing where they sit. Grants name live nodes below the root, each once | Repeat deletes succeed elsewhere in the API. A list shows what's in force, not what the sweeper hasn't reached yet |
 | A member stores its principal kind (`members.principal`) | The member shape names `person` or `service_account`, and a removed service account or deleted account has no principal row left |
 | Writes that touch members take the tree lock, like structural writes | One active member per principal per tree, and "removed when left with no bindings", can't race |
+
+## Step 4: identity admit
+
+| Decision | Why |
+|----------|-----|
+| Every admit answer has every field. With `valid: false` they're empty or null; with `found: false`, `nodes` is empty too. On a sign-in route `nodes` is empty | The gateway reads a missing field as identity failing (**503**). A partial chain tells the gateway nothing it acts on |
+| Admit resolves `chain` by kind name and never checks it against identity's kinds. Only a body it can't read is **422**: neither or both credentials, an `idp` missing `issuer` or `subject`, `scope` empty or `public`, a chain on a sign-in route, or a chain that doesn't end at `scope` | The gateway and identity read the config on their own schedules. A request during that second must fail like any missing node (`found: false`, **403**), not as an outage |
+| `labels` is sorted, with `*` as the role wrote it | One request gives one answer, which keeps tests and logs stable. The gateway matches `*` itself |
+| An empty name claim is treated as missing: the name stays | An IdP that sends `""` hasn't told us a name. Blanking someone's name on every request would be worse |
+| Plan counts are what would be lost: deleted nodes count, expired bindings and revoked keys don't, purged nodes never do. `sample` is up to five ids in id order. Every requested kind has an entry. The counts come from one read-only, repeatable-read snapshot | A deleted node can still be restored, so removing its kind loses it. An expired binding or a revoked key never works again. The control plane refuses an answer missing a requested kind. One snapshot keeps the numbers consistent with each other |
+| Admit lives in `members/` and plan counts in `nodes/`, each with a `MountInternal` beside lifecycle's | Admit reads people, keys, members and bindings; the counts are about kind removal. Same pattern as the lifecycle feed |

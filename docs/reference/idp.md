@@ -32,7 +32,7 @@ A person is linked to their IdP subjects, and services hold member ids, never su
 
 ## Name claim
 
-The claim named by `name_claim` sets the person's name, shown by member lookups and `/me`. It's read on each admit that reaches identity, so a name change at the IdP shows up within the gateway's cache TTL. A missing claim leaves the name as it was. Plat5 has no other way to set a person's name.
+The claim named by `name_claim` sets the person's name, shown by member lookups and `/me`. It's read on each admit that reaches identity, so a name change at the IdP shows up within the gateway's cache TTL. A missing or empty claim leaves the name as it was. Plat5 has no other way to set a person's name.
 
 ## Bring your own IdP
 
