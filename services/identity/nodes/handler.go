@@ -182,7 +182,7 @@ func (h *Handler) Delete(c fiber.Ctx) error {
 func (h *Handler) Restore(c fiber.Ctx) error {
 	ctx := c.Context()
 	nodeID := httpx.PathParam(c, "node_id")
-	n, changed, err := h.store.Restore(ctx, h.src.Current(), nodeID)
+	n, changed, err := h.store.Restore(ctx, nodeID)
 	if err != nil {
 		return httpx.MapDB(ctx, err, "failed to restore node", notFound(nodeID))
 	}

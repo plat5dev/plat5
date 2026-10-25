@@ -16,7 +16,7 @@ Every delete is soft for `deletion_grace`, 30 days by default, restorable, then 
 | A deleted node's grace is fixed when it's deleted (`purge_after`), so changing `deletion_grace` applies to new deletes only. The node carries `purge_after` | Shortening it must not purge what people were promised could be restored, and a console can show "restorable until" |
 | Each delete has a `deletion_id`; restore undoes only that id's nodes. It's a bare ULID | A node deleted separately earlier must stay deleted |
 | Deleting an already deleted or purged node succeeds and changes nothing; it keeps its `deletion_id` and `purge_after` | Kubernetes accepts a delete of something already being deleted. A second delete mustn't extend the grace |
-| Restoring a live node succeeds and changes nothing. Restoring under a deleted parent is **409**; parents are never restored for it. Restoring a node whose kind isn't in the config, or whose parent's kind isn't its kind's parent, is **409** | Google Cloud makes you undelete the parent first. A restore must never put a node where its kind can't be |
+| Restoring a live node succeeds and changes nothing. Restoring under a deleted parent is **409**; parents are never restored for it | Google Cloud makes you undelete the parent first |
 | Nothing is created under a deleted or purged parent (**409**). `PATCH`, bindings, service accounts and invites on a deleted node have no rule in the service API | The gateway already refuses deleted nodes; other front doors are trusted |
 | Purge takes the deleted nodes below it, even if their own `purge_after` is later | A child under a purged parent can never be restored, so keeping it loses nothing but storage |
 | A service account born at a purged node goes with it: principal and keys deleted, member removed with `member.removed` | Google Cloud deletes a project's service accounts with the project |
@@ -27,7 +27,8 @@ Every delete is soft for `deletion_grace`, 30 days by default, restorable, then 
 
 | Decision | Why |
 |----------|-----|
-| Only an empty kind can be removed, and a kind's parent changes only while it has no nodes, so identity never deletes or moves nodes because of a config | A config change that soft-deletes data needs a confirmation flow, a record of what each removal deleted, and a rule for restoring it when the kind returns, possibly under other parents. Google Cloud deletes only an empty folder |
+| A kind is removed, or changes parent, only while it has no nodes that aren't purged, deleted ones included, so identity never deletes or moves nodes because of a config | A config change that soft-deletes data needs a confirmation flow, a record of what each removal deleted, and a rule for restoring it when the kind returns, possibly under other parents. Google Cloud deletes only an empty folder |
+| A deleted node blocks its kind's removal until it's purged | Every deleted node stays restorable for its whole grace, and a restore always puts it where its kind can be, so restore needs no rule for a kind that's gone or moved |
 
 ## Moving nodes
 

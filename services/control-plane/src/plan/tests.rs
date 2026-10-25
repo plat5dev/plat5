@@ -173,8 +173,7 @@ async fn a_node_made_since_the_dry_run_blocks_the_apply() {
         kinds: [(
             "folder".to_string(),
             KindCounts {
-                live: 1,
-                nodes: 3,
+                nodes: 1,
                 sample: vec!["01jb8z3m5q0000000000000009".into()],
             },
         )]

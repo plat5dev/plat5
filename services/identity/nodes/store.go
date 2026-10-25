@@ -416,7 +416,7 @@ type changedNode struct {
 // Restore brings back a deleted node and the descendants its delete cascaded
 // to, within the grace: everything that hung off them works again. A live
 // node is left as it is: changed is false.
-func (s *Store) Restore(ctx context.Context, snap *feed.Snapshot, nodeID string) (*Node, bool, error) {
+func (s *Store) Restore(ctx context.Context, nodeID string) (*Node, bool, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "restore_node", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
@@ -444,18 +444,15 @@ func (s *Store) Restore(ctx context.Context, snap *feed.Snapshot, nodeID string)
 			return nil, false, op.Fail(err)
 		}
 	}
-	if !fits(snap, n.Kind, parentKind) {
-		return nil, false, op.Expected("kind", errors.ConflictError(fmt.Sprintf("A %s can't be restored here.", n.Kind), "kind", n.Kind))
-	}
 	if n.ParentID != nil && parentStatus != StatusActive {
 		return nil, false, op.Expected("parent deleted", errors.ConflictError(
 			fmt.Sprintf("Restore the %s first.", parentKind), "parent_id", *n.ParentID))
 	}
 
 	rows, err := tx.Query(ctx, `
-		SELECT n.id, n.kind, n.root_id, n.parent_id, COALESCE(p.kind, ''),
+		SELECT n.id, n.kind, n.root_id, n.parent_id,
 		       (SELECT count(*) - 1 FROM node_ancestors WHERE node_id = n.id) AS depth
-		FROM nodes n LEFT JOIN nodes p ON p.id = n.parent_id
+		FROM nodes n
 		WHERE n.status = 'deleted' AND n.deletion_id = $2
 		  AND n.id IN (SELECT node_id FROM node_ancestors WHERE ancestor_id = $1)
 		ORDER BY depth, n.id
@@ -463,7 +460,7 @@ func (s *Store) Restore(ctx context.Context, snap *feed.Snapshot, nodeID string)
 	if err != nil {
 		return nil, false, op.Fail(err)
 	}
-	restored, err := s.restoreTopDown(ctx, tx, snap, rows, n.ParentID)
+	restored, err := s.restoreTopDown(ctx, tx, rows, n.ParentID)
 	if err != nil {
 		return nil, false, op.Fail(err)
 	}
@@ -482,27 +479,18 @@ func (s *Store) Restore(ctx context.Context, snap *feed.Snapshot, nodeID string)
 	return out, true, nil
 }
 
-// fits is whether a node of kind can sit under a parent of parentKind ("" for
-// none) in this config.
-func fits(snap *feed.Snapshot, kind, parentKind string) bool {
-	k, ok := snap.Kind(kind)
-	return ok && k.Parent == parentKind
-}
-
 // restoreTopDown restores candidates (rows of id, kind, root_id, parent_id,
-// parent kind, depth, shallowest first). A node comes back only if it fits
-// the config under its parent and that parent is live or coming back with it,
-// so nothing live ever sits under a deleted node. topParent is the restored
-// node's parent, live, or nil for a root.
-func (s *Store) restoreTopDown(ctx context.Context, tx pgx.Tx, snap *feed.Snapshot, rows pgx.Rows, topParent *string) ([]changedNode, error) {
+// depth, shallowest first). A node comes back only if its parent is live or
+// coming back with it, so nothing live ever sits under a deleted node.
+// topParent is the restored node's parent, live, or nil for a root.
+func (s *Store) restoreTopDown(ctx context.Context, tx pgx.Tx, rows pgx.Rows, topParent *string) ([]changedNode, error) {
 	type cand struct {
 		changedNode
-		parentID   *string
-		parentKind string
+		parentID *string
 	}
 	cands, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (cand, error) {
 		var c cand
-		err := r.Scan(&c.id, &c.kind, &c.rootID, &c.parentID, &c.parentKind, &c.depth)
+		err := r.Scan(&c.id, &c.kind, &c.rootID, &c.parentID, &c.depth)
 		return c, err
 	})
 	if err != nil {
@@ -515,7 +503,7 @@ func (s *Store) restoreTopDown(ctx context.Context, tx pgx.Tx, snap *feed.Snapsh
 	var restored []changedNode
 	var ids []string
 	for _, c := range cands {
-		if !fits(snap, c.kind, c.parentKind) || (c.parentID != nil && !live[*c.parentID]) {
+		if c.parentID != nil && !live[*c.parentID] {
 			continue
 		}
 		live[c.id] = true

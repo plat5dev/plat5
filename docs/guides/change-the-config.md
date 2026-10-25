@@ -8,11 +8,11 @@ Add it to `kinds` in `plat5.yml` with its `parent`, `path` and `list_permission`
 
 ## Remove a kind
 
-Delete its nodes first, through the node routes: the plan is blocked while the kind has live nodes, and lists some of them. Then remove it from `kinds`, with every route scoped to it and every role permission only its routes required, in one apply ([blocked changes](../concepts/config.md#blocked-changes)).
+Delete its nodes first, through the node routes: the plan is blocked while the kind has nodes, deleted ones included, and lists some of them. Then remove it from `kinds`, with every route scoped to it and every role permission only its routes required, in one apply ([blocked changes](../concepts/config.md#blocked-changes)).
 
 ## Change a kind's parent
 
-Only while the kind has no nodes. Moving nodes between parents is deferred ([`TODO.md`](../../TODO.md)).
+Only while the kind has no nodes, deleted ones included. Moving nodes between parents is deferred ([`TODO.md`](../../TODO.md)).
 
 ## Change roles
 

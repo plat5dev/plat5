@@ -230,7 +230,7 @@ func TestInviteEndings(t *testing.T) {
 	if r := e.redeem(frank, folderToken); r.message() != "This invite's folder was deleted." {
 		t.Fatalf("message %q", r.message())
 	}
-	if _, _, err := e.nodes.Restore(e.ctx, e.snap(), org.ID); err != nil {
+	if _, _, err := e.nodes.Restore(e.ctx, org.ID); err != nil {
 		t.Fatal(err)
 	}
 	for _, tok := range []string{rootToken, folderToken} {

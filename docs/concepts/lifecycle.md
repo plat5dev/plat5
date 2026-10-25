@@ -20,7 +20,7 @@ A service never creates a node in its own tables first: it creates it through th
 
 - **What a deleted node grants.** Nothing on it or below, except on an `allow_deleted` route (restore). Listing deleted nodes counts its own bindings ([lists](access.md#lists)).
 
-- **Restore.** Before `purge_after`, by anyone who could delete the node: a full undo. The node and the descendants its delete cascaded to come back, with their bindings, service accounts, keys and unexpired invites. A node whose parent is deleted can't be restored until the parent is (**409**); parents are never restored for it. Restoring a live node succeeds and changes nothing. A node whose kind isn't in the config, or whose parent's kind isn't its kind's parent any more, can't be restored (**409**).
+- **Restore.** Before `purge_after`, by anyone who could delete the node: a full undo. The node and the descendants its delete cascaded to come back, with their bindings, service accounts, keys and unexpired invites. A node whose parent is deleted can't be restored until the parent is (**409**); parents are never restored for it. Restoring a live node succeeds and changes nothing.
 
 - **Purge.** Once `purge_after` has passed, the purge sweeper sets `status = 'purged'` on the node and the deleted nodes below it, even those whose own `purge_after` is later, and deletes everything that hung off them: bindings, invites, and service accounts born there (principal and keys; the member removed with `member.removed`). A person's member it leaves with no bindings, a guest included, is removed with `member.removed`, and a purged root removes all its members. The node rows are kept. A purged node below a root frees its slug; a purged root keeps its slug as a tombstone ([ids and slugs](model.md#ids-and-slugs)).
 
@@ -28,7 +28,7 @@ A service never creates a node in its own tables first: it creates it through th
 
 ## Kinds
 
-Only an empty kind can be removed, and a kind's parent changes only while it has no nodes ([config](config.md#blocked-changes)), so a config change never deletes or moves a node. Identity follows a new kind at once: its nodes can be created as soon as the config reaches identity.
+A kind is removed, or changes parent, only while it has no nodes, deleted ones included ([config](config.md#blocked-changes)), so a config change never deletes or moves a node, and every deleted node can be restored where it was. Identity follows a new kind at once: its nodes can be created as soon as the config reaches identity.
 
 ## Members
 

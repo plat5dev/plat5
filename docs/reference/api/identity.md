@@ -21,7 +21,7 @@ Each is optional: without it, nobody is bound and the list is the full list. Whe
 | `GET` | `/nodes/{node_id}` | [Node](#node) |
 | `PATCH` | `/nodes/{node_id}` | `{ display_name }` |
 | `DELETE` | `/nodes/{node_id}` | Soft delete. Cascades to descendants, parents before children. Revokes nothing. **204**. Already deleted or purged: **204**, no change |
-| `POST` | `/nodes/{node_id}/restore` | Within `deletion_grace`. Restores the node and the descendants its delete cascaded to (same `deletion_id`). Returns the node. A live node: **200**, no change. **409** if the parent is deleted, the grace has passed, the kind isn't in the config, or the parent's kind isn't the kind's parent |
+| `POST` | `/nodes/{node_id}/restore` | Within `deletion_grace`. Restores the node and the descendants its delete cascaded to (same `deletion_id`). Returns the node. A live node: **200**, no change. **409** if the parent is deleted or the grace has passed |
 | `GET` | `/nodes/{node_id}/children/{kind}` | Nodes. [Filtered](../../concepts/access.md#lists) when `X-Plat5-Member-Id` is sent. `?status=deleted` for deleted ones |
 | `POST` | `/nodes/{node_id}/children/{kind}` | `{ display_name, slug? }`. **422** if `{kind}`'s parent isn't this node's kind. **409** if this node is deleted or purged. Returns the node, **201** |
 | `POST` | `/roots/{kind}` | `{ display_name, slug? }`. A root kind. Returns the node, **201** |

@@ -80,7 +80,7 @@ The control plane is the one validator: it checks the schema, then these rules, 
 6. Every `rate_limit` names a policy in `rate_limits`, and a policy's `count_at` is the route's kind or an ancestor.
 7. `identity` and `audit` name only their own resources and verbs, and kinds that exist ([resources](../reference/config/resources.md)).
 
-A kind with live nodes can't be removed, and a kind with nodes can't change parent: those are [blocked](#blocked-changes) at plan time. Shape errors (a malformed duration, a reserved slug that isn't a slug, an unknown key) are reported by the [schema](#schema) before these run.
+A kind with nodes can't be removed or change parent: those are [blocked](#blocked-changes) at plan time. Shape errors (a malformed duration, a reserved slug that isn't a slug, an unknown key) are reported by the [schema](#schema) before these run.
 
 ## Schema
 
@@ -149,12 +149,14 @@ Changes are ordered kinds, settings, roles, rate limits, CORS, services, then by
 
 | Change | Blocked while |
 |--------|---------------|
-| A kind removed | It has live nodes. The line lists how many and up to five of their ids. Delete them first through the node routes, each restorable on its own, as Google Cloud deletes only an empty folder |
-| A kind's parent changed | It has nodes, live or deleted |
+| A kind removed | It has nodes |
+| A kind's parent changed | It has nodes |
+
+A kind's nodes are every node of it that isn't purged, deleted ones included, so a deleted node stays restorable for its whole grace and its kind waits for the purge. The line lists how many and up to five of their ids. Delete them first through the node routes, each restorable on its own, as Google Cloud deletes only an empty folder.
 
 The counts come from identity ([`reference/api/internal.md`](../reference/api/internal.md#plan-counts)), asked only when the plan removes a kind or changes a parent. A plan that does neither needs no identity, so a fresh stack's first apply works before identity is up.
 
-A removed kind's deleted nodes stay deleted and are purged on schedule; they can't be restored while the kind isn't in the config. Adding a kind in the middle of a populated tree needs a move API, which is deferred ([`TODO.md`](../../TODO.md)).
+Adding a kind in the middle of a populated tree needs a move API, which is deferred ([`TODO.md`](../../TODO.md)).
 
 Everything else is safe:
 

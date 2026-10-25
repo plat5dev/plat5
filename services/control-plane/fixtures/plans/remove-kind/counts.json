@@ -1,12 +1,8 @@
 {
   "kinds": {
     "folder": {
-      "live": 0,
-      "nodes": 2,
-      "sample": [
-        "01jb8z3m5q0000000000000001",
-        "01jb8z3m5q0000000000000002"
-      ]
+      "nodes": 0,
+      "sample": []
     }
   }
 }

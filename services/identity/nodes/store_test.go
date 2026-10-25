@@ -456,7 +456,7 @@ func TestDeleteRevokesNothing(t *testing.T) {
 		}
 	}
 	kept()
-	if _, _, err := e.store.Restore(e.ctx, e.snap, folder.ID); err != nil {
+	if _, _, err := e.store.Restore(e.ctx, folder.ID); err != nil {
 		t.Fatal(err)
 	}
 	kept()
@@ -472,7 +472,7 @@ func TestRestoreUndoesExactlyItsDelete(t *testing.T) {
 	e.delete(org)
 
 	mark := e.lastEventID()
-	n, changed, err := e.store.Restore(e.ctx, e.snap, org.ID)
+	n, changed, err := e.store.Restore(e.ctx, org.ID)
 	if err != nil || !changed || n.Status != StatusActive || n.DeletedAt != nil || n.PurgeAfter != nil {
 		t.Fatalf("restore: %+v %v %v", n, changed, err)
 	}
@@ -496,7 +496,7 @@ func TestRestoreConflicts(t *testing.T) {
 
 	// Live: succeeds, changes nothing.
 	mark := e.lastEventID()
-	n, changed, err := e.store.Restore(e.ctx, e.snap, folder.ID)
+	n, changed, err := e.store.Restore(e.ctx, folder.ID)
 	if err != nil || changed || n.Status != StatusActive {
 		t.Fatalf("live: %v %v", changed, err)
 	}
@@ -504,54 +504,23 @@ func TestRestoreConflicts(t *testing.T) {
 
 	// Parent deleted: 409, and the parent isn't restored for it.
 	e.delete(org)
-	_, _, err = e.store.Restore(e.ctx, e.snap, folder.ID)
+	_, _, err = e.store.Restore(e.ctx, folder.ID)
 	if apiErr := wantAPIError(t, err, 409, "CONFLICT"); apiErr.Message != "Restore the organization first." {
 		t.Fatalf("message %q", apiErr.Message)
 	}
 	if e.get(org).Status != StatusDeleted {
 		t.Fatal("parent restored")
 	}
-	if _, _, err := e.store.Restore(e.ctx, e.snap, org.ID); err != nil {
+	if _, _, err := e.store.Restore(e.ctx, org.ID); err != nil {
 		t.Fatal(err)
 	}
-
-	// Kind not in the config: 409.
-	e.delete(folder)
-	noFolders := snapshot(t, "30d", `"organization": { "list_permission": "organization:read" }`)
-	_, _, err = e.store.Restore(e.ctx, noFolders, folder.ID)
-	if apiErr := wantAPIError(t, err, 409, "CONFLICT"); apiErr.Message != "A folder can't be restored here." {
-		t.Fatalf("message %q", apiErr.Message)
-	}
-
-	// The kind's parent is another kind now: 409.
-	team := snapshot(t, "30d", `"organization": { "list_permission": "organization:read" },
-		"team": { "parent": "organization", "list_permission": "team:read" },
-		"folder": { "parent": "team", "list_permission": "folder:read" }`)
-	_, _, err = e.store.Restore(e.ctx, team, folder.ID)
-	wantAPIError(t, err, 409, "CONFLICT")
 
 	// Past the grace, even before the sweeper ran: 409.
 	e.delete(org)
 	e.clock.advance(30 * 24 * time.Hour)
-	_, _, err = e.store.Restore(e.ctx, e.snap, org.ID)
+	_, _, err = e.store.Restore(e.ctx, org.ID)
 	if apiErr := wantAPIError(t, err, 409, "CONFLICT"); apiErr.Message != "This can no longer be restored." {
 		t.Fatalf("message %q", apiErr.Message)
-	}
-}
-
-func TestRestoreLeavesBehindWhatNoLongerFits(t *testing.T) {
-	e := setup(t)
-	org := e.create(nil, "organization", "Gruow")
-	folder := e.create(org, "folder", "Web")
-	project := e.create(folder, "project", "Api")
-	e.delete(org)
-	noProjects := snapshot(t, "30d", `"organization": { "list_permission": "organization:read" },
-		"folder": { "parent": "organization", "list_permission": "folder:read" }`)
-	if _, _, err := e.store.Restore(e.ctx, noProjects, org.ID); err != nil {
-		t.Fatal(err)
-	}
-	if e.get(folder).Status != StatusActive || e.get(project).Status != StatusDeleted {
-		t.Fatalf("folder %s, project %s", e.get(folder).Status, e.get(project).Status)
 	}
 }
 
@@ -738,10 +707,10 @@ func TestPlanCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f := got.Kinds["folder"]; f.Live != 2 || f.Nodes != 3 || fmt.Sprint(f.Sample) != fmt.Sprint([]string{f2.ID, f3.ID, f1.ID}) {
+	if f := got.Kinds["folder"]; f.Nodes != 3 || fmt.Sprint(f.Sample) != fmt.Sprint([]string{f2.ID, f3.ID, f1.ID}) {
 		t.Fatalf("folder: %+v", f)
 	}
-	if p, ok := got.Kinds["project"]; !ok || p.Live != 0 || p.Nodes != 0 || p.Sample == nil || len(p.Sample) != 0 {
+	if p, ok := got.Kinds["project"]; !ok || p.Nodes != 0 || p.Sample == nil || len(p.Sample) != 0 {
 		t.Fatalf("project: %+v %v", p, ok)
 	}
 	_, err = e.store.PlanCounts(e.ctx, PlanRequest{Kinds: []string{""}})

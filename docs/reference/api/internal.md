@@ -53,10 +53,10 @@ Identity resolves `chain` by kind name only and doesn't check it against its kin
 ```
 POST /internal/plan
 { "kinds": ["folder"] }
-→ { "kinds": { "folder": { "live": 3, "nodes": 5, "sample": ["01jbx…"] } } }
+→ { "kinds": { "folder": { "nodes": 5, "sample": ["01jbx…"] } } }
 ```
 
-The control plane calls it on a dry run and again on the apply, only when the plan removes a kind or changes a kind's parent ([`concepts/config.md`](../../concepts/config.md#blocked-changes)). A plan that does neither never calls identity. `live` counts the kind's live nodes; `nodes` counts its live and deleted ones, purged never. `sample` is up to five of the counted nodes' ids, live ones first, in id order. Every kind in the request has an entry, zeros included. All counts come from one snapshot. A body identity can't read (a kind name empty) is **422**.
+The control plane calls it on a dry run and again on the apply, only when the plan removes a kind or changes a kind's parent ([`concepts/config.md`](../../concepts/config.md#blocked-changes)). A plan that does neither never calls identity. `nodes` counts the kind's live and deleted nodes, purged never. `sample` is up to five of the counted nodes' ids, live ones first, in id order. Every kind in the request has an entry, zeros included. All counts come from one snapshot. A body identity can't read (a kind name empty) is **422**.
 
 ### Lifecycle events
 

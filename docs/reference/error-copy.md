@@ -57,7 +57,6 @@ Clients show `error.message`. `details.fields` is for multi-field 422s; `message
 | Child kind whose parent is another kind | A {kind} can't go here. |
 | Restore with a deleted parent | Restore the {parent kind} first. |
 | Restore past the grace period | This can no longer be restored. |
-| Restore of a kind not in the config, or under a parent of another kind | A {kind} can't be restored here. |
 | Create under a deleted node | Restore the {parent kind} first. |
 | Release the slug of a node that isn't a purged root | Only a purged root's slug can be released. |
 

@@ -19,11 +19,10 @@ pub struct CountsResponse {
     pub kinds: BTreeMap<String, KindCounts>,
 }
 
-/// One kind's nodes: `live` ones, all `nodes` (live and deleted), and up to five
-/// of their ids, live ones first.
+/// One kind's `nodes`, live and deleted, and up to five of their ids, live ones
+/// first.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 pub struct KindCounts {
-    pub live: u64,
     pub nodes: u64,
     pub sample: Vec<String>,
 }

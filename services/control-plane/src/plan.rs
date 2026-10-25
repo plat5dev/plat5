@@ -157,7 +157,10 @@ pub async fn apply(
         .filter_map(|c| {
             let b = c.blocked.as_ref()?;
             let (path, what) = match c.op {
-                Op::Remove => (format!("kinds.{}", c.name), "live nodes; delete them first"),
+                Op::Remove => (
+                    format!("kinds.{}", c.name),
+                    "nodes, live or deleted; delete them first and wait for the purge",
+                ),
                 _ => (
                     format!("kinds.{}.parent", c.name),
                     "nodes, live or deleted; a kind changes parent only while it has none",
@@ -226,26 +229,18 @@ async fn make_plan(
         .map(|(k, v)| (k.clone(), json!(v)))
         .collect();
     for mut c in diff_map(What::Kind, &old, &new) {
-        let blocked = match c.op {
-            Op::Remove => {
-                let n = count(&c.name);
-                (n.live > 0).then(|| InTheWay {
-                    nodes: n.live,
-                    sample: n.sample.into_iter().take(n.live as usize).collect(),
-                })
-            }
-            Op::Change if moved.contains(&c.name) => {
-                let n = count(&c.name);
-                (n.nodes > 0).then_some(InTheWay {
-                    nodes: n.nodes,
-                    sample: n.sample,
-                })
-            }
-            _ => None,
+        let needs_empty = match c.op {
+            Op::Remove => true,
+            Op::Change => moved.contains(&c.name),
+            Op::Add => false,
         };
-        c.blocked = blocked.map(|in_the_way| Blocked {
+        let n = count(&c.name);
+        c.blocked = (needs_empty && n.nodes > 0).then(|| Blocked {
             reason: KIND_NOT_EMPTY.into(),
-            in_the_way,
+            in_the_way: InTheWay {
+                nodes: n.nodes,
+                sample: n.sample,
+            },
         });
         changes.push(c);
     }

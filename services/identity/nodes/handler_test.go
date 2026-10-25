@@ -171,7 +171,7 @@ func TestPlanCountsRoute(t *testing.T) {
 	org := e.create(nil, "organization", "Gruow")
 	f := e.create(org, "folder", "Apps")
 	status, body, _ := call(t, app, "POST", "/plan", `{"kinds": ["folder"]}`)
-	want := fmt.Sprint(map[string]any{"kinds": map[string]any{"folder": map[string]any{"live": 1.0, "nodes": 1.0, "sample": []any{f.ID}}}})
+	want := fmt.Sprint(map[string]any{"kinds": map[string]any{"folder": map[string]any{"nodes": 1.0, "sample": []any{f.ID}}}})
 	if status != 200 || fmt.Sprint(body) != want {
 		t.Fatalf("plan: %d %v", status, body)
 	}

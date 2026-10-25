@@ -81,14 +81,13 @@ fn with(mut config: Value, extra: Value) -> Value {
     config
 }
 
-fn folder_counts(live: u64) -> CountsResponse {
+fn folder_counts(nodes: u64) -> CountsResponse {
     CountsResponse {
         kinds: [(
             "folder".to_string(),
             KindCounts {
-                live,
-                nodes: live + 1,
-                sample: (0..=live)
+                nodes,
+                sample: (0..nodes)
                     .map(|i| format!("01jb8z3m5q000000000000000{i}"))
                     .collect(),
             },
@@ -225,7 +224,7 @@ async fn plan_and_apply_against_postgres() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(again["revision"], json!(1));
 
-    // Removing folder while it has live nodes is blocked.
+    // Removing folder while it has nodes is blocked.
     let next = fixture("remove-kind", "after.yml");
     let (_, plan) = api
         .admin("POST", "/apply?dry_run=true", Some(next.clone()))
@@ -272,7 +271,25 @@ async fn plan_and_apply_against_postgres() {
         json!({ "precondition": "revision", "expected": 0, "actual": 1 })
     );
 
-    // Once its nodes are deleted, folder goes.
+    // Its nodes deleted but not purged still block it.
+    counts.set(folder_counts(1));
+    let (status, err) = api
+        .admin(
+            "POST",
+            "/apply",
+            Some(with(next.clone(), json!({ "expect": { "revision": 1 } }))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        err["error"]["details"]["fields"][0],
+        json!({
+            "path": "kinds.folder",
+            "message": "blocked (kind_not_empty): folder has 1 nodes, live or deleted; delete them first and wait for the purge, such as 01jb8z3m5q0000000000000000"
+        })
+    );
+
+    // Once its nodes are purged, folder goes.
     counts.set(folder_counts(0));
     let (status, applied) = api
         .admin(

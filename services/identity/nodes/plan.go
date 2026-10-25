@@ -21,11 +21,9 @@ type PlanRequest struct {
 	Kinds []string `json:"kinds"`
 }
 
-// KindCount is what's in the way of changing a kind: its live nodes, its live
-// and deleted ones, and a few of their ids, live ones first. Purged nodes
-// never count.
+// KindCount is what's in the way of changing a kind: its live and deleted
+// nodes, and a few of their ids, live ones first. Purged nodes never count.
 type KindCount struct {
-	Live   int64    `json:"live"`
 	Nodes  int64    `json:"nodes"`
 	Sample []string `json:"sample"`
 }
@@ -54,10 +52,9 @@ func (s *Store) PlanCounts(ctx context.Context, req PlanRequest) (*PlanCounts, e
 		c := KindCount{Sample: []string{}}
 		var sample []string
 		if err := tx.QueryRow(ctx, `
-			SELECT count(*) FILTER (WHERE status = 'active'), count(*),
-			       COALESCE((array_agg(id ORDER BY status <> 'active', id))[1:$2], '{}')
+			SELECT count(*), COALESCE((array_agg(id ORDER BY status <> 'active', id))[1:$2], '{}')
 			FROM nodes WHERE kind = $1 AND status <> 'purged'
-		`, kind, planSample).Scan(&c.Live, &c.Nodes, &sample); err != nil {
+		`, kind, planSample).Scan(&c.Nodes, &sample); err != nil {
 			return nil, op.Fail(err)
 		}
 		if sample != nil {
