@@ -14,7 +14,6 @@ import (
 
 // CreateChild creates a node under parentID. The caller's member, if any,
 // must be active in the parent's tree; it gets creator_role on the new node
-// unless an inherited binding with no expiry already holds it
 // (docs/concepts/access.md#assigning).
 func (s *Store) CreateChild(ctx context.Context, snap *feed.Snapshot, parentID string, in nodes.CreateInput, callerID string) (*nodes.Node, *Binding, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_child_node", dbx.DefaultTimeout)
@@ -35,18 +34,15 @@ func (s *Store) CreateChild(ctx context.Context, snap *feed.Snapshot, parentID s
 
 	var b *Binding
 	if callerID != "" {
-		m, err := s.callerIn(ctx, w, callerID, n.RootID)
-		if err != nil {
-			return nil, nil, op.Reject(err, ErrNotMember)
+		m, err := s.lockedMember(ctx, w, callerID)
+		if err == ErrNotFound || (err == nil && (m.removed || m.rootID != n.RootID)) {
+			return nil, nil, op.Expected("bad caller", ErrBadCaller)
 		}
-		held, err := s.holdsInherited(ctx, w, snap, m.id, n.ID, snap.CreatorRole)
 		if err != nil {
 			return nil, nil, op.Fail(err)
 		}
-		if !held {
-			if b, err = s.insertBinding(ctx, w, m.id, n.ID, snap.CreatorRole, nil); err != nil {
-				return nil, nil, op.Fail(err)
-			}
+		if b, err = s.insertBinding(ctx, w, m.id, n.ID, snap.CreatorRole); err != nil {
+			return nil, nil, op.Fail(err)
 		}
 	}
 	if err := w.commit(ctx); err != nil {
@@ -56,97 +52,66 @@ func (s *Store) CreateChild(ctx context.Context, snap *feed.Snapshot, parentID s
 	return n, b, nil
 }
 
-// callerIn is the caller's member, which must be active in rootID's tree.
-func (s *Store) callerIn(ctx context.Context, w *write, callerID, rootID string) (*memberRow, error) {
-	if !id.Valid(id.Member, callerID) {
-		return nil, ErrNotMember
-	}
-	m, err := s.lockedMember(ctx, w, callerID)
-	if err == ErrNotFound || (err == nil && (m.removed || m.rootID != rootID)) {
-		return nil, ErrNotMember
-	}
-	return m, err
-}
-
-// holdsInherited is whether the member holds role, never expiring and
-// counting, on a strict ancestor of nodeID.
-func (s *Store) holdsInherited(ctx context.Context, w *write, snap *feed.Snapshot, memberID, nodeID, role string) (bool, error) {
-	kinds, roles := bindablePairs(snap)
-	var held bool
-	err := w.tx.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM bindings b JOIN nodes bn ON bn.id = b.node_id
-			WHERE b.member_id = $1 AND b.role = $3 AND b.expires_at IS NULL
-			  AND b.node_id IN (SELECT ancestor_id FROM node_ancestors WHERE node_id = $2 AND depth > 0)
-			  AND `+counts("$4", "$5", "$6")+`)
-	`, memberID, nodeID, role, s.now().UTC(), kinds, roles).Scan(&held)
-	return held, err
-}
-
-// CreateRoot creates a root. The caller, if any, is an active directory
-// member; they get a member in the new tree with creator_role at its root.
-func (s *Store) CreateRoot(ctx context.Context, snap *feed.Snapshot, in nodes.CreateInput, callerID string) (*nodes.Node, *Member, error) {
+// CreateRoot creates a root. The user, if any, must be an active person; they
+// get a member in the new tree with creator_role at its root. It returns that
+// member's id, or "".
+func (s *Store) CreateRoot(ctx context.Context, snap *feed.Snapshot, in nodes.CreateInput, userID string) (*nodes.Node, string, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_root_node", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
 	w, err := s.begin(ctx)
 	if err != nil {
-		return nil, nil, op.Fail(err)
+		return nil, "", op.Fail(err)
 	}
 	defer w.rollback(ctx)
-	var principalID string
-	if callerID != "" {
-		if err := nodes.LockTrees(ctx, w.tx, []string{s.signInID}); err != nil {
-			return nil, nil, op.Fail(err)
+	var u *User
+	if userID != "" {
+		u, err = s.user(ctx, w.tx, userID)
+		if err == ErrNotFound || (err == nil && u.Status != StatusActive) {
+			return nil, "", op.Expected("bad caller", ErrBadCaller)
 		}
-		m, err := s.callerIn(ctx, w, callerID, s.signInID)
 		if err != nil {
-			return nil, nil, op.Reject(err, ErrNotMember)
+			return nil, "", op.Fail(err)
 		}
-		principalID = *m.principalID
 	}
 	in.ParentID = ""
 	n, err := s.nodes.CreateTx(ctx, w.tx, snap, in)
 	if err != nil {
-		return nil, nil, op.Reject(err, nodes.ErrNotFound)
+		return nil, "", op.Reject(err, nodes.ErrNotFound)
 	}
 	w.event(lifecycle.NodeEvent(lifecycle.TypeNodeCreated, n.Kind, n.ID, n.RootID))
 
-	var m *Member
-	if principalID != "" {
-		memberID, err := s.insertMember(ctx, w, principalID, PrincipalPerson, n.ID)
-		if err != nil {
-			return nil, nil, op.Fail(err)
+	var memberID string
+	if u != nil {
+		if memberID, err = s.insertMember(ctx, w, u.principalID, PrincipalPerson, n.ID); err != nil {
+			return nil, "", op.Fail(err)
 		}
-		if _, err := s.insertBinding(ctx, w, memberID, n.ID, snap.CreatorRole, nil); err != nil {
-			return nil, nil, op.Fail(err)
-		}
-		if m, err = s.getMember(ctx, w.tx, memberID); err != nil {
-			return nil, nil, op.Fail(err)
+		if _, err := s.insertBinding(ctx, w, memberID, n.ID, snap.CreatorRole); err != nil {
+			return nil, "", op.Fail(err)
 		}
 	}
 	if err := w.commit(ctx); err != nil {
-		return nil, nil, op.Fail(err)
+		return nil, "", op.Fail(err)
 	}
 	op.OK("created")
-	return n, m, nil
+	return n, memberID, nil
 }
 
-// --- filtered lists (docs/concepts/access.md#lists) ---
+// --- lists (docs/concepts/access.md#lists) ---
 
-// ListedNode is a node in a filtered list, with its root for /members/{id}/nodes.
-type ListedNode struct {
+// listed is a candidate for a filtered list, with the member whose bindings
+// decide it.
+type listed struct {
 	*nodes.Node
-	RootSlug  *string
-	RootLabel string
-	memberID  string // the member whose bindings decide
+	memberID string
 }
 
-// ListChildren is the children of kind under parentID that the caller's
-// member can read, or, with deleted, the deleted ones it could delete. The
-// caller must be an active member of the parent's tree.
-func (s *Store) ListChildren(ctx context.Context, snap *feed.Snapshot, parentID, kind, callerID string, deleted bool, limit int, startingAfter string) ([]*ListedNode, bool, error) {
+// ListChildren is the children of kind under parentID, live or, with
+// deleted, deleted ones. With a caller, only those the caller's member can
+// see; the caller must be an active member of the parent's tree. Without one,
+// the full list.
+func (s *Store) ListChildren(ctx context.Context, snap *feed.Snapshot, parentID, kind, callerID string, deleted bool, limit int, startingAfter string) ([]*nodes.Node, bool, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_children", 4*dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
@@ -155,34 +120,35 @@ func (s *Store) ListChildren(ctx context.Context, snap *feed.Snapshot, parentID,
 	if err != nil {
 		return nil, false, op.Reject(err, nodes.ErrNotFound)
 	}
-	if !id.Valid(id.Member, callerID) {
-		return nil, false, op.Expected("not a member", ErrNotMember)
+	if callerID != "" {
+		var active bool
+		if id.Valid(callerID) {
+			if err := s.pool.QueryRow(ctx, `
+				SELECT EXISTS (SELECT 1 FROM members WHERE id = $1 AND root_id = $2 AND removed_at IS NULL)
+			`, callerID, parent.RootID).Scan(&active); err != nil {
+				return nil, false, op.Fail(err)
+			}
+		}
+		if !active {
+			return nil, false, op.Expected("bad caller", ErrBadCaller)
+		}
 	}
-	var active bool
-	if err := s.pool.QueryRow(ctx, `
-		SELECT EXISTS (SELECT 1 FROM members WHERE id = $1 AND root_id = $2 AND removed_at IS NULL)
-	`, callerID, parent.RootID).Scan(&active); err != nil {
-		return nil, false, op.Fail(err)
-	}
-	if !active {
-		return nil, false, op.Expected("not a member", ErrNotMember)
-	}
-	fetch := func(after string, n int) ([]*ListedNode, error) {
+	fetch := func(after string, n int) ([]*listed, error) {
 		rows, err := s.pool.Query(ctx, `
-			SELECT `+nodes.Columns("n")+`, NULL::text, ''
+			SELECT `+nodes.Columns("n")+`, $6::text
 			FROM nodes n
 			WHERE n.parent_id = $1 AND n.kind = $2 AND n.status = $3 AND n.id > $4
 			  AND NOT EXISTS (
 			      SELECT 1 FROM node_ancestors a JOIN nodes an ON an.id = a.ancestor_id
 			      WHERE a.node_id = n.id AND a.depth > 0 AND an.status <> 'active')
 			ORDER BY n.id LIMIT $5
-		`, parent.ID, kind, statusOf(deleted), after, n)
+		`, parent.ID, kind, statusOf(deleted), after, n, callerID)
 		if err != nil {
 			return nil, err
 		}
-		return collectListed(rows, callerID)
+		return collectListed(rows)
 	}
-	out, hasMore, err := s.filterPage(ctx, snap, deleted, limit, startingAfter, fetch)
+	out, hasMore, err := s.filterPage(ctx, snap, callerID != "", limit, startingAfter, fetch)
 	if err != nil {
 		return nil, false, op.Fail(err)
 	}
@@ -190,35 +156,34 @@ func (s *Store) ListChildren(ctx context.Context, snap *feed.Snapshot, parentID,
 	return out, hasMore, nil
 }
 
-// ListPersonNodes is /members/{member_id}/nodes: nodes of kind (every kind
-// when empty) across every tree the person is in, filtered the same way.
-func (s *Store) ListPersonNodes(ctx context.Context, snap *feed.Snapshot, memberID, kind string, deleted bool, limit int, startingAfter string) ([]*ListedNode, bool, error) {
-	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_person_nodes", 4*dbx.DefaultTimeout)
+// ListUserNodes is /users/{user_id}/nodes: nodes of kind (every kind when
+// empty) across every tree the person is in, filtered to what they can see.
+func (s *Store) ListUserNodes(ctx context.Context, snap *feed.Snapshot, userID, kind string, deleted bool, limit int, startingAfter string) ([]*nodes.Node, bool, error) {
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_user_nodes", 4*dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
-	principalID, err := s.personPrincipal(ctx, s.pool, memberID)
+	u, err := s.user(ctx, s.pool, userID)
 	if err != nil {
 		return nil, false, op.Reject(err, ErrNotFound)
 	}
-	fetch := func(after string, n int) ([]*ListedNode, error) {
+	fetch := func(after string, n int) ([]*listed, error) {
 		rows, err := s.pool.Query(ctx, `
-			SELECT `+nodes.Columns("n")+`, r.slug, r.label, m.id
+			SELECT `+nodes.Columns("n")+`, m.id
 			FROM nodes n
 			JOIN members m ON m.root_id = n.root_id AND m.principal_id = $1 AND m.removed_at IS NULL
-			JOIN nodes r ON r.id = n.root_id
-			WHERE n.root_id <> $2 AND ($3 = '' OR n.kind = $3) AND n.status = $4 AND n.id > $5
+			WHERE ($2 = '' OR n.kind = $2) AND n.status = $3 AND n.id > $4
 			  AND NOT EXISTS (
 			      SELECT 1 FROM node_ancestors a JOIN nodes an ON an.id = a.ancestor_id
 			      WHERE a.node_id = n.id AND a.depth > 0 AND an.status <> 'active')
-			ORDER BY n.id LIMIT $6
-		`, principalID, s.signInID, kind, statusOf(deleted), after, n)
+			ORDER BY n.id LIMIT $5
+		`, u.principalID, kind, statusOf(deleted), after, n)
 		if err != nil {
 			return nil, err
 		}
-		return collectListed(rows, "")
+		return collectListed(rows)
 	}
-	out, hasMore, err := s.filterPage(ctx, snap, deleted, limit, startingAfter, fetch)
+	out, hasMore, err := s.filterPage(ctx, snap, true, limit, startingAfter, fetch)
 	if err != nil {
 		return nil, false, op.Fail(err)
 	}
@@ -233,41 +198,39 @@ func statusOf(deleted bool) string {
 	return nodes.StatusActive
 }
 
-// collectListed scans node rows followed by root slug, root label and,
-// unless memberID is given for all, the member whose bindings decide.
-func collectListed(rows pgx.Rows, memberID string) ([]*ListedNode, error) {
-	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (*ListedNode, error) {
-		l := &ListedNode{memberID: memberID}
-		extra := []any{&l.RootSlug, &l.RootLabel}
-		if memberID == "" {
-			extra = append(extra, &l.memberID)
-		}
-		n, err := nodes.ScanNode(r, extra...)
+// collectListed scans node rows followed by the member whose bindings decide.
+func collectListed(rows pgx.Rows) ([]*listed, error) {
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (*listed, error) {
+		l := &listed{}
+		n, err := nodes.ScanNode(r, &l.memberID)
 		l.Node = n
 		return l, err
 	})
 }
 
-// filterPage walks candidates in id order until it has a page of readable
-// ones. A page can't stop short with nothing in it, or the caller would have
-// no cursor, so it reads on until limit+1 are found or none are left.
-func (s *Store) filterPage(ctx context.Context, snap *feed.Snapshot, deleted bool, limit int, after string, fetch func(after string, n int) ([]*ListedNode, error)) ([]*ListedNode, bool, error) {
+// filterPage walks candidates in id order until it has a page, of visible
+// ones when filter is set. A page can't stop short with nothing in it, or the
+// caller would have no cursor, so it reads on until limit+1 are found or none
+// are left.
+func (s *Store) filterPage(ctx context.Context, snap *feed.Snapshot, filter bool, limit int, after string, fetch func(after string, n int) ([]*listed, error)) ([]*nodes.Node, bool, error) {
 	batch := max(limit+1, 100)
-	var out []*ListedNode
+	var out []*nodes.Node
 	for {
 		cands, err := fetch(after, batch)
 		if err != nil {
 			return nil, false, err
 		}
-		ok, err := s.readable(ctx, snap, cands, deleted)
-		if err != nil {
-			return nil, false, err
+		ok := map[string]bool{}
+		if filter {
+			if ok, err = s.visible(ctx, snap, cands); err != nil {
+				return nil, false, err
+			}
 		}
 		for _, c := range cands {
-			if !ok[c.ID] {
+			if filter && !ok[c.ID] {
 				continue
 			}
-			out = append(out, c)
+			out = append(out, c.Node)
 			if len(out) > limit {
 				return out[:limit], true, nil
 			}
@@ -279,11 +242,10 @@ func (s *Store) filterPage(ctx context.Context, snap *feed.Snapshot, deleted boo
 	}
 }
 
-// readable decides each candidate from its member's bindings on it and its
-// ancestors, against the kind's read route (or delete route, for deleted
-// ones). A deleted node grants nothing except on itself in a deleted list;
-// candidates come with live ancestors only.
-func (s *Store) readable(ctx context.Context, snap *feed.Snapshot, cands []*ListedNode, deleted bool) (map[string]bool, error) {
+// visible decides each candidate from its member's bindings on it and its
+// ancestors, against its kind's list_permission. A deleted node grants
+// nothing except on itself; candidates come with live ancestors only.
+func (s *Store) visible(ctx context.Context, snap *feed.Snapshot, cands []*listed) (map[string]bool, error) {
 	out := make(map[string]bool, len(cands))
 	if len(cands) == 0 {
 		return out, nil
@@ -300,8 +262,8 @@ func (s *Store) readable(ctx context.Context, snap *feed.Snapshot, cands []*List
 		JOIN node_ancestors a ON a.node_id = c.node_id
 		JOIN bindings b ON b.node_id = a.ancestor_id AND b.member_id = c.member_id
 		JOIN nodes bn ON bn.id = b.node_id
-		WHERE (bn.status = 'active' OR bn.id = c.node_id) AND `+counts("$3", "$4", "$5"),
-		nodeIDs, memberIDs, s.now().UTC(), kinds, roles)
+		WHERE (bn.status = 'active' OR bn.id = c.node_id) AND `+counts("$3", "$4"),
+		nodeIDs, memberIDs, kinds, roles)
 	if err != nil {
 		return nil, err
 	}
@@ -314,42 +276,26 @@ func (s *Store) readable(ctx context.Context, snap *feed.Snapshot, cands []*List
 		return nil, err
 	}
 	for _, c := range cands {
-		need, ok := snap.ReadLabels(c.Kind)
-		if deleted {
-			need, ok = snap.DeleteLabels(c.Kind)
-		}
-		out[c.ID] = ok && Resolve(snap, held[c.ID]).Allows(need)
+		k, ok := snap.Kind(c.Kind)
+		out[c.ID] = ok && Resolve(snap, held[c.ID]).Has(k.ListPermission)
 	}
 	return out, nil
 }
 
 // --- roles ---
 
-// RolesAt is GET /nodes/{node_id}/roles: the roles bindable at the node's
-// kind, by slug, with default_role on a root that can be joined and
-// creator_role where it's bindable.
-type RolesAt struct {
-	Roles       []feed.Role
-	DefaultRole *string
-	CreatorRole *string
-}
-
-func (s *Store) Roles(ctx context.Context, snap *feed.Snapshot, nodeID string) (*RolesAt, error) {
+// Roles is GET /nodes/{node_id}/roles: the roles bindable at the node's kind,
+// by slug.
+func (s *Store) Roles(ctx context.Context, snap *feed.Snapshot, nodeID string) ([]feed.Role, error) {
 	n, err := s.nodes.Get(ctx, nodeID)
 	if err != nil {
 		return nil, err
 	}
-	out := &RolesAt{Roles: []feed.Role{}}
+	out := []feed.Role{}
 	for _, slug := range snap.RoleSlugs() {
 		if r := snap.Roles[slug]; r.BindableAtKind(n.Kind) {
-			out.Roles = append(out.Roles, r)
+			out = append(out, r)
 		}
-	}
-	if n.ParentID == nil && n.ID != s.signInID && snap.DefaultRole != "" {
-		out.DefaultRole = &snap.DefaultRole
-	}
-	if r, ok := snap.Role(snap.CreatorRole); ok && r.BindableAtKind(n.Kind) {
-		out.CreatorRole = &snap.CreatorRole
 	}
 	return out, nil
 }

@@ -18,16 +18,16 @@ var slugRe = regexp.MustCompile(`^[a-z][a-z0-9-]{1,61}[a-z0-9]$`)
 
 // ValidSlug is the slug shape: lowercase letters, digits and hyphens, starting
 // with a letter, not ending with a hyphen, 3 to 63 characters. Never an id,
-// since ids contain _.
+// since ids start with a digit.
 func ValidSlug(s string) bool {
 	return slugRe.MatchString(s)
 }
 
-// baseSlug is the slug generated from a label: lowercased, each run of other
-// characters as -, trimmed. Prefixed with the kind name when it would start
-// with a digit or be too short, and filled to the minimum length.
-func baseSlug(label, kind string) string {
-	s := slugify(label)
+// baseSlug is the slug generated from a display name: lowercased, each run of
+// other characters as -, trimmed. Prefixed with the kind name when it would
+// start with a digit or be too short, and filled to the minimum length.
+func baseSlug(name, kind string) string {
+	s := slugify(name)
 	if s == "" || s[0] < 'a' || s[0] > 'z' || len(s) < minSlugLen {
 		s = strings.Trim(slugify(kind)+"-"+s, "-")
 	}

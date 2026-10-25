@@ -63,8 +63,8 @@ func strp(s string) *string { return &s }
 func TestListShapesEvents(t *testing.T) {
 	at := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
 	store := &fakeStore{events: []*Event{
-		{ID: 1, Type: TypeNodeDeleted, Kind: strp("project"), NodeID: strp("n_1"), RootID: "n_0", OccurredAt: at},
-		{ID: 2, Type: TypeMemberRemoved, RootID: "n_2", MemberID: strp("m_1"), Principal: strp("service_account"), OccurredAt: at},
+		{ID: 1, Type: TypeNodeDeleted, Kind: strp("project"), NodeID: strp("01jbx0000000000000000000n1"), RootID: "01jbx0000000000000000000n0", OccurredAt: at},
+		{ID: 2, Type: TypeMemberRemoved, RootID: "01jbx0000000000000000000n2", MemberID: strp("01jbx0000000000000000000m1"), Principal: strp("service_account"), OccurredAt: at},
 	}}
 	status, body := get(t, testApp(store), "/lifecycle-events")
 	if status != 200 {
@@ -78,20 +78,22 @@ func TestListShapesEvents(t *testing.T) {
 		t.Fatalf("events: %v", events)
 	}
 	node := events[0].(map[string]any)
-	if node["id"] != "1" || node["type"] != "project.deleted" || node["node_id"] != "n_1" || node["root_id"] != "n_0" || node["occurred_at"] != "2026-10-13T12:00:00Z" {
+	if node["id"] != "1" || node["type"] != "node.deleted" || node["kind"] != "project" || node["node_id"] != "01jbx0000000000000000000n1" || node["root_id"] != "01jbx0000000000000000000n0" || node["occurred_at"] != "2026-10-13T12:00:00Z" {
 		t.Fatalf("node event: %v", node)
 	}
-	for _, field := range []string{"member_id", "principal", "kind"} {
+	for _, field := range []string{"member_id", "principal"} {
 		if _, ok := node[field]; ok {
 			t.Fatalf("node event must not carry %s: %v", field, node)
 		}
 	}
 	mem := events[1].(map[string]any)
-	if mem["id"] != "2" || mem["type"] != "member.removed" || mem["member_id"] != "m_1" || mem["root_id"] != "n_2" || mem["principal"] != "service_account" {
+	if mem["id"] != "2" || mem["type"] != "member.removed" || mem["member_id"] != "01jbx0000000000000000000m1" || mem["root_id"] != "01jbx0000000000000000000n2" || mem["principal"] != "service_account" {
 		t.Fatalf("member event: %v", mem)
 	}
-	if _, ok := mem["node_id"]; ok {
-		t.Fatalf("member event must not carry node_id: %v", mem)
+	for _, field := range []string{"node_id", "kind"} {
+		if _, ok := mem[field]; ok {
+			t.Fatalf("member event must not carry %s: %v", field, mem)
+		}
 	}
 	if store.lastAfter != 0 || store.lastLimit != 50 {
 		t.Fatalf("defaults: after %d limit %d", store.lastAfter, store.lastLimit)

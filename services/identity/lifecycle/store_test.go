@@ -15,9 +15,9 @@ func TestRecordAndList(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range []Event{
-		NodeEvent(TypeNodeCreated, "organization", "n_1", "n_1"),
-		NodeEvent(TypeNodePurged, "project", "n_2", "n_1"),
-		MemberEvent(TypeMemberRemoved, "m_1", "n_1", "person"),
+		NodeEvent(TypeNodeCreated, "organization", "01jbx0000000000000000000n1", "01jbx0000000000000000000n1"),
+		NodeEvent(TypeNodePurged, "project", "01jbx0000000000000000000n2", "01jbx0000000000000000000n1"),
+		MemberEvent(TypeMemberRemoved, "01jbx0000000000000000000m1", "01jbx0000000000000000000n1", "person"),
 	} {
 		if err := Record(ctx, tx, e); err != nil {
 			t.Fatal(err)
@@ -32,14 +32,14 @@ func TestRecordAndList(t *testing.T) {
 	if err != nil || len(page) != 2 || !more {
 		t.Fatalf("page 1: %v %v %v", page, more, err)
 	}
-	if page[0].WireType() != "organization.created" || page[1].WireType() != "project.purged" || *page[1].NodeID != "n_2" {
-		t.Fatalf("node events: %s %s", page[0].WireType(), page[1].WireType())
+	if page[0].Type != TypeNodeCreated || *page[0].Kind != "organization" || page[1].Type != TypeNodePurged || *page[1].Kind != "project" || *page[1].NodeID != "01jbx0000000000000000000n2" {
+		t.Fatalf("node events: %+v %+v", page[0], page[1])
 	}
 	rest, more, err := store.List(ctx, 2, page[1].ID)
 	if err != nil || len(rest) != 1 || more {
 		t.Fatalf("page 2: %v %v %v", rest, more, err)
 	}
-	if m := rest[0]; m.WireType() != "member.removed" || *m.MemberID != "m_1" || *m.Principal != "person" || m.NodeID != nil || m.RootID != "n_1" {
+	if m := rest[0]; m.Type != TypeMemberRemoved || m.Kind != nil || *m.MemberID != "01jbx0000000000000000000m1" || *m.Principal != "person" || m.NodeID != nil || m.RootID != "01jbx0000000000000000000n1" {
 		t.Fatalf("member event: %+v", m)
 	}
 }

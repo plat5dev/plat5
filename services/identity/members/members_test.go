@@ -5,9 +5,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/plat5dev/plat5/identity/internal/auditx"
+	"github.com/plat5dev/plat5/identity/internal/id"
 )
 
 func TestAddMember(t *testing.T) {
@@ -15,39 +15,29 @@ func TestAddMember(t *testing.T) {
 	org, _ := e.org(e.person("dana"), "Gruow")
 	before := e.lastEvent()
 
-	// A new IdP subject: the person and their directory member are made too.
-	r := e.call("POST", "/nodes/"+org.ID+"/members", "", `{"idp": {"issuer": "https://idp.test", "subject": "new"}}`)
+	// A new IdP subject: the person is made too, with a user id and no other member.
+	r := e.call("POST", "/nodes/"+org.ID+"/members", "", `{"idp": {"issuer": "https://idp.test", "subject": "new"}, "role": "member"}`)
 	e.expect(r, 201, "add")
 	memberID := r.str("id")
-	if r.str("principal") != "person" || r.str("status") != "active" || r.body["guest"] != false || r.body["name"] != nil {
+	if r.str("principal") != "person" || r.str("status") != "active" || r.body["guest"] != false || r.body["name"] != nil || !id.Valid(memberID) {
 		t.Fatalf("member %v", r.body)
 	}
-	var dirMember string
-	if err := e.pool.QueryRow(e.ctx, `
-		SELECT d.id FROM members d JOIN members m ON m.principal_id = d.principal_id
-		WHERE m.id = $1 AND d.root_id = $2`, memberID, e.signIn.ID).Scan(&dirMember); err != nil {
-		t.Fatalf("directory member: %v", err)
+	if got := e.eventsAfter(before); !slices.Equal(got, []string{"member.created " + memberID + " " + org.ID + " person"}) {
+		t.Fatalf("events %v", got)
 	}
-	got := e.eventsAfter(before)
-	want := []string{
-		"member.created " + dirMember + " " + e.signIn.ID + " person",
-		"member.created " + memberID + " " + org.ID + " person",
-	}
-	if !slices.Equal(got, want) {
-		t.Fatalf("events %v, want %v", got, want)
-	}
-	// role omitted: default_role at the root.
 	if n := e.count(`SELECT count(*) FROM bindings WHERE member_id = $1 AND node_id = $2 AND role = 'member'`, memberID, org.ID); n != 1 {
-		t.Fatal("default_role not bound")
+		t.Fatal("role not bound at the root")
 	}
 	if r.headers[auditx.CreatedHeader] != memberID {
 		t.Fatalf("created %q", r.headers[auditx.CreatedHeader])
 	}
+	if e.userOf("new") == memberID {
+		t.Fatal("a user id is not a member id")
+	}
 
-	r = e.call("POST", "/nodes/"+org.ID+"/members", "", `{"idp": {"issuer": "https://idp.test", "subject": "new"}}`)
-	e.expect(r, 409, "already a member")
-	if r.message() != "This person is already a member." {
-		t.Fatal(r.message())
+	r = e.call("POST", "/nodes/"+org.ID+"/members", "", `{"idp": {"issuer": "https://idp.test", "subject": "new"}, "role": "member"}`)
+	if r.status != 409 || r.message() != "This person is already a member." {
+		t.Fatalf("already a member: %d %v", r.status, r.body)
 	}
 
 	// A known subject reuses the person.
@@ -58,42 +48,38 @@ func TestAddMember(t *testing.T) {
 		t.Fatalf("principals %d, want %d", n, people+1)
 	}
 
-	until := rfc(e.clock.t.Add(3 * 24 * time.Hour))
-	for _, c := range []struct{ body, field, msg string }{
-		{`{"idp": {"issuer": "", "subject": ""}}`, "idp", "Choose someone to add."},
-		{`{}`, "idp", "Choose someone to add."},
-		{`{"idp": {"issuer": "i", "subject": "a"}, "role": "nope"}`, "role", "That role doesn't exist."},
-		{`{"idp": {"issuer": "i", "subject": "a"}, "role": "viewer"}`, "role", "That role can't be given on a organization."},
-		{`{"idp": {"issuer": "i", "subject": "a"}, "role": "support"}`, "expires_at", "This role can be given for at most 7d."},
-		{`{"idp": {"issuer": "i", "subject": "a"}, "role": "support", "expires_at": "` + rfc(e.clock.t.Add(8*24*time.Hour)) + `"}`, "expires_at", "This role can be given for at most 7d."},
-		{`{"idp": {"issuer": "i", "subject": "a"}, "expires_at": "` + rfc(e.clock.t.Add(-time.Hour)) + `"}`, "expires_at", "That doesn't look right."},
+	for _, c := range []struct{ body, msg string }{
+		{`{"idp": {"issuer": "", "subject": ""}, "role": "member"}`, "Choose someone to add."},
+		{`{"role": "member"}`, "Choose someone to add."},
+		{`{"idp": {"issuer": "i", "subject": "a"}}`, "Choose a role."},
+		{`{"idp": {"issuer": "i", "subject": "a"}, "role": "nope"}`, "That role doesn't exist."},
+		{`{"idp": {"issuer": "i", "subject": "a"}, "role": "viewer"}`, "That role can't be given on a organization."},
 	} {
 		r := e.call("POST", "/nodes/"+org.ID+"/members", "", c.body)
 		if r.status != 422 || r.message() != c.msg {
 			t.Fatalf("%s: %d %q", c.body, r.status, r.message())
 		}
 	}
-	r = e.call("POST", "/nodes/"+org.ID+"/members", "", `{"idp": {"issuer": "i", "subject": "a"}, "role": "support", "expires_at": "`+until+`"}`)
-	e.expect(r, 201, "support within max_duration")
 
-	// Only roots other than the sign-in node have members.
-	p := e.child(org, "project", "One")
-	e.expect(e.call("POST", "/nodes/"+p.ID+"/members", "", `{"idp": {"issuer": "i", "subject": "b"}}`), 404, "members below a root")
-	e.expect(e.call("GET", "/nodes/"+p.ID+"/members", "", ""), 404, "list below a root")
-	e.expect(e.call("GET", "/nodes/"+e.signIn.ID+"/members", "", ""), 404, "the directory")
+	// Only roots have members.
+	f := e.child(org, "folder", "One")
+	e.expect(e.call("POST", "/nodes/"+f.ID+"/members", "", `{"idp": {"issuer": "i", "subject": "b"}, "role": "member"}`), 404, "members below a root")
+	e.expect(e.call("GET", "/nodes/"+f.ID+"/members", "", ""), 404, "list below a root")
 }
 
 func TestMembersAndGuests(t *testing.T) {
 	e := setup(t)
-	org, owner := e.org(e.person("dana"), "Gruow")
-	p := e.child(org, "project", "One")
+	org, admin := e.org(e.person("dana"), "Gruow")
+	f := e.child(org, "folder", "One")
+	p := e.child(f, "project", "One")
 	plain := e.join(org, "plain", "member")
 
-	// A guest: a member whose only binding is below the root.
+	// A guest: a person whose only binding is below the root.
 	guest := e.join(org, "guest", "member")
-	e.bind(p, guest, "viewer", nil)
-	b := e.bindingOf(guest, org.ID)
-	e.expect(e.call("DELETE", "/nodes/"+org.ID+"/bindings/"+b, "", ""), 204, "drop root binding")
+	e.bind(p, guest, "viewer")
+	e.expect(e.call("DELETE", "/nodes/"+org.ID+"/bindings/"+e.bindingOf(guest, org.ID), "", ""), 204, "drop root binding")
+	// A service account born below the root is never a guest.
+	sa, _ := e.serviceAccount(p, "viewer")
 
 	r := e.call("GET", "/nodes/"+org.ID+"/members", "", "")
 	e.expect(r, 200, "list")
@@ -101,14 +87,13 @@ func TestMembersAndGuests(t *testing.T) {
 	for _, m := range r.list("members") {
 		guests[m["id"].(string)] = m["guest"].(bool)
 	}
-	if len(guests) != 3 || guests[owner] || guests[plain] || !guests[guest] {
+	if len(guests) != 4 || guests[admin] || guests[plain] || !guests[guest] || guests[sa] {
 		t.Fatalf("members %v", guests)
 	}
 
 	// Removing is final: bindings go, member.removed, a lookup says removed.
 	before := e.lastEvent()
-	r = e.call("DELETE", "/nodes/"+org.ID+"/members/"+plain, "", "")
-	e.expect(r, 204, "remove")
+	e.expect(e.call("DELETE", "/nodes/"+org.ID+"/members/"+plain, "", ""), 204, "remove")
 	if !e.removed(plain) || e.count(`SELECT count(*) FROM bindings WHERE member_id = $1`, plain) != 0 {
 		t.Fatal("removed member keeps bindings")
 	}
@@ -121,170 +106,157 @@ func TestMembersAndGuests(t *testing.T) {
 	}
 	r = e.call("GET", "/nodes/"+org.ID+"/members/"+plain, "", "")
 	e.expect(r, 200, "lookup removed")
-	if r.str("status") != "removed" {
-		t.Fatalf("status %v", r.body)
+	if r.str("status") != "removed" || r.body["guest"] != false {
+		t.Fatalf("removed member %v", r.body)
 	}
 	// Re-adding makes a new member id.
-	again := e.join(org, "plain", "member")
-	if again == plain {
+	if again := e.join(org, "plain", "member"); again == plain {
 		t.Fatal("re-adding reused a member id")
 	}
 
-	e.expect(e.call("GET", "/nodes/"+org.ID+"/members/m_01JAAAAAAAAAAAAAAAAAAAAAAA", "", ""), 404, "missing member")
-	other, otherOwner := e.org(e.person("erin"), "Acme")
-	_ = other
-	e.expect(e.call("GET", "/nodes/"+org.ID+"/members/"+otherOwner, "", ""), 404, "member of another tree")
+	e.expect(e.call("GET", "/nodes/"+org.ID+"/members/"+id.New(), "", ""), 404, "missing member")
+	_, otherAdmin := e.org(e.person("erin"), "Acme")
+	e.expect(e.call("GET", "/nodes/"+org.ID+"/members/"+otherAdmin, "", ""), 404, "member of another tree")
 
 	// A service account's member goes only with the service account.
-	sa := e.call("POST", "/nodes/"+p.ID+"/service-accounts", "", `{"name": "ci", "role": "viewer"}`).str("id")
 	r = e.call("DELETE", "/nodes/"+org.ID+"/members/"+sa, "", "")
 	if r.status != 422 || r.message() != "Delete the service account to remove it." {
 		t.Fatalf("remove service account member: %d %s", r.status, r.message())
 	}
 }
 
-func (e *env) bindingOf(memberID, nodeID string) string {
-	e.t.Helper()
-	var id string
-	if err := e.pool.QueryRow(e.ctx, `SELECT id FROM bindings WHERE member_id = $1 AND node_id = $2`, memberID, nodeID).Scan(&id); err != nil {
-		e.t.Fatal(err)
-	}
-	return id
-}
-
 func TestBindings(t *testing.T) {
 	e := setup(t)
-	org, _ := e.org(e.person("dana"), "Gruow")
-	p := e.child(org, "project", "One")
+	org, admin := e.org(e.person("dana"), "Gruow")
+	f := e.child(org, "folder", "One")
+	p := e.child(f, "project", "One")
 	m := e.join(org, "dev", "member")
 	_, outsider := e.org(e.person("erin"), "Acme")
 
 	// Direct bindings are for members of the tree only: guests come through invites.
-	for _, who := range []string{outsider, "m_01JAAAAAAAAAAAAAAAAAAAAAAA", "nope"} {
-		r := e.call("POST", "/nodes/"+p.ID+"/bindings", "", `{"member": "`+who+`", "role": "viewer"}`)
+	for _, who := range []string{outsider, id.New(), "nope"} {
+		r := e.call("POST", "/nodes/"+p.ID+"/bindings", "", `{"member_id": "`+who+`", "role": "viewer"}`)
 		if r.status != 422 || r.message() != "Add this person to the organization first, or invite them." {
 			t.Fatalf("bind %s: %d %s", who, r.status, r.message())
 		}
 	}
-	r := e.call("POST", "/nodes/"+p.ID+"/bindings", "", `{"member": "`+m+`", "role": "viewer"}`)
+	r := e.call("POST", "/nodes/"+p.ID+"/bindings", "", `{"member_id": "`+m+`", "role": "viewer"}`)
 	e.expect(r, 201, "bind")
 	bindingID := r.str("id")
-	if r.str("member") != m || r.str("node_id") != p.ID || r.body["expires_at"] != nil {
+	if r.str("member_id") != m || r.str("node_id") != p.ID || r.body["inherited"] != false || r.body["guest"] != false ||
+		r.str("principal") != "person" || r.str("role") != "viewer" {
 		t.Fatalf("binding %v", r.body)
 	}
-	r = e.call("POST", "/nodes/"+p.ID+"/bindings", "", `{"member": "`+m+`", "role": "developer"}`)
+	if _, ok := r.body["expires_at"]; ok {
+		t.Fatal("bindings don't expire")
+	}
+	r = e.call("POST", "/nodes/"+p.ID+"/bindings", "", `{"member_id": "`+m+`", "role": "developer"}`)
 	if r.status != 409 || r.message() != "This member already has a role here." {
 		t.Fatalf("second binding: %d %s", r.status, r.message())
 	}
-	e.expect(e.call("POST", "/nodes/"+p.ID+"/bindings", "", `{"member": "`+m+`", "role": "member"}`), 422, "role not bindable at project")
+	e.expect(e.call("POST", "/nodes/"+p.ID+"/bindings", "", `{"member_id": "`+m+`", "role": "member"}`), 422, "role not bindable at project")
+	e.expect(e.call("POST", "/nodes/"+p.ID+"/bindings", "", `{"member_id": "`+m+`"}`), 422, "role required")
 
-	// PATCH changes role or expiry; the result must meet the role's rules.
-	until := e.clock.t.Add(time.Hour)
-	r = e.call("PATCH", "/nodes/"+p.ID+"/bindings/"+bindingID, "", `{"role": "developer", "expires_at": "`+rfc(until)+`"}`)
+	// PATCH changes the role.
+	r = e.call("PATCH", "/nodes/"+p.ID+"/bindings/"+bindingID, "", `{"role": "developer"}`)
 	e.expect(r, 200, "patch")
-	if r.str("role") != "developer" || r.str("expires_at") != rfc(until) {
-		t.Fatalf("patched %v", r.body)
+	if r.str("role") != "developer" || !strings.Contains(r.headers[auditx.Header], `"role":{"from":"viewer","to":"developer"}`) {
+		t.Fatalf("patched %v %s", r.body, r.headers[auditx.Header])
 	}
-	if !strings.Contains(r.headers[auditx.Header], `"role":{"from":"viewer","to":"developer"}`) {
-		t.Fatalf("details %s", r.headers[auditx.Header])
+	e.expect(e.call("PATCH", "/nodes/"+p.ID+"/bindings/"+bindingID, "", `{}`), 422, "patch without a role")
+	e.expect(e.call("PATCH", "/nodes/"+org.ID+"/bindings/"+bindingID, "", `{"role": "admin"}`), 404, "binding on another node")
+
+	// The access list: every binding that counts here, own and inherited.
+	r = e.call("GET", "/nodes/"+p.ID+"/bindings", "", "")
+	e.expect(r, 200, "access list")
+	type entry struct {
+		member, node string
+		inherited    bool
 	}
-	r = e.call("PATCH", "/nodes/"+p.ID+"/bindings/"+bindingID, "", `{"expires_at": null}`)
-	e.expect(r, 200, "clear expiry")
-	if r.body["expires_at"] != nil {
-		t.Fatal("expires_at: null should clear it")
+	var got []entry
+	for _, b := range r.list("bindings") {
+		got = append(got, entry{b["member_id"].(string), b["node_id"].(string), b["inherited"].(bool)})
 	}
-	orgBinding := e.bindingOf(m, org.ID)
-	r = e.call("PATCH", "/nodes/"+org.ID+"/bindings/"+orgBinding, "", `{"role": "support"}`)
-	if r.status != 422 || r.message() != "This role can be given for at most 7d." {
-		t.Fatalf("support without expiry: %d %s", r.status, r.message())
+	want := []entry{{admin, org.ID, true}, {m, org.ID, true}, {m, p.ID, false}}
+	slices.SortFunc(got, func(a, b entry) int { return strings.Compare(a.member+a.node, b.member+b.node) })
+	slices.SortFunc(want, func(a, b entry) int { return strings.Compare(a.member+a.node, b.member+b.node) })
+	if !slices.Equal(got, want) {
+		t.Fatalf("access list %v, want %v", got, want)
 	}
-	e.expect(e.call("PATCH", "/nodes/"+org.ID+"/bindings/"+bindingID, "", `{"role": "viewer"}`), 404, "binding on another node")
+	r = e.call("GET", "/nodes/"+p.ID+"/bindings?inherited=false", "", "")
+	if got := ids(r.list("bindings")); !slices.Equal(got, []string{bindingID}) {
+		t.Fatalf("own bindings %v", got)
+	}
+	e.expect(e.call("GET", "/nodes/"+p.ID+"/bindings?inherited=maybe", "", ""), 422, "bad inherited")
 
 	// A person's member left with no bindings is removed.
+	orgBinding := e.bindingOf(m, org.ID)
 	before := e.lastEvent()
 	e.expect(e.call("DELETE", "/nodes/"+p.ID+"/bindings/"+bindingID, "", ""), 204, "delete project binding")
 	if e.removed(m) {
 		t.Fatal("still bound at the org")
 	}
-	e.expect(e.call("DELETE", "/nodes/"+org.ID+"/bindings/"+orgBinding, "", ""), 204, "delete last binding")
-	if !e.removed(m) {
-		t.Fatal("a person left with no bindings should be removed")
+	r = e.call("DELETE", "/nodes/"+org.ID+"/bindings/"+orgBinding, "", "")
+	e.expect(r, 204, "delete last binding")
+	if !e.removed(m) || !strings.Contains(r.headers[auditx.Header], `"role":{"from":"member","to":null}`) {
+		t.Fatalf("a person left with no bindings should be removed; details %s", r.headers[auditx.Header])
 	}
 	if got := e.eventsAfter(before); !slices.Equal(got, []string{"member.removed " + m + " " + org.ID + " person"}) {
 		t.Fatalf("events %v", got)
 	}
-	e.expect(e.call("DELETE", "/nodes/"+org.ID+"/bindings/"+orgBinding, "", ""), 404, "deleted binding")
+	r = e.call("DELETE", "/nodes/"+org.ID+"/bindings/"+orgBinding, "", "")
+	if r.status != 204 || r.headers[auditx.Header] != "" {
+		t.Fatalf("delete again: %d %s", r.status, r.headers[auditx.Header])
+	}
+	e.expect(e.call("DELETE", "/nodes/"+id.New()+"/bindings/"+orgBinding, "", ""), 404, "binding on a missing node")
 
 	// A service account's member stays with no bindings, so a team can re-bind it.
-	sa := e.call("POST", "/nodes/"+p.ID+"/service-accounts", "", `{"name": "ci", "role": "viewer"}`).str("id")
+	sa, _ := e.serviceAccount(p, "viewer")
 	e.expect(e.call("DELETE", "/nodes/"+p.ID+"/bindings/"+e.bindingOf(sa, p.ID), "", ""), 204, "unbind service account")
 	if e.removed(sa) {
 		t.Fatal("a service account's member goes only with it")
 	}
-	e.expect(e.call("POST", "/nodes/"+org.ID+"/bindings", "", `{"member": "`+sa+`", "role": "developer"}`), 201, "rebind it anywhere in its tree")
-
-	r = e.call("GET", "/nodes/"+org.ID+"/bindings", "", "")
-	e.expect(r, 200, "list")
-	if len(r.list("bindings")) != 2 { // the owner, the service account
-		t.Fatalf("bindings %v", r.list("bindings"))
-	}
+	e.expect(e.call("POST", "/nodes/"+org.ID+"/bindings", "", `{"member_id": "`+sa+`", "role": "developer"}`), 201, "rebind it anywhere in its tree")
 }
 
-func TestAccess(t *testing.T) {
+func TestMembership(t *testing.T) {
 	e := setup(t)
-	org, owner := e.org(e.person("dana"), "Gruow")
-	p := e.child(org, "project", "One")
-	q := e.child(org, "project", "Two")
-	viewer := e.join(org, "viewer", "member")
-	e.bind(p, viewer, "viewer", nil)
-	guest := e.join(org, "guest", "member")
-	e.bind(q, guest, "viewer", nil)
-	e.call("DELETE", "/nodes/"+org.ID+"/bindings/"+e.bindingOf(guest, org.ID), "", "")
-	short := e.join(org, "short", "member")
-	e.bind(p, short, "viewer", ptr(e.clock.t.Add(time.Minute)))
-	e.clock.advance(time.Hour) // expired, not yet swept
+	org, _ := e.org(e.person("dana"), "Gruow")
+	f := e.child(org, "folder", "One")
+	p := e.child(f, "project", "One")
+	q := e.child(f, "project", "Two")
+	dev := e.join(org, "dev", "developer")
+	e.bind(f, dev, "browser")
+	e.bind(q, dev, "viewer")
+	stale := e.join(org, "stale", "member")
+	e.exec(`INSERT INTO bindings (id, member_id, node_id, role) VALUES ($1, $2, $3, 'gone_here')`, id.New(), stale, p.ID)
 
-	type entry struct {
-		member, node string
-		inherited    bool
-		guest        bool
+	r := e.call("GET", "/nodes/"+p.ID+"/memberships/"+dev, "", "")
+	e.expect(r, 200, "membership")
+	if r.str("member_id") != dev {
+		t.Fatalf("membership %v", r.body)
 	}
-	read := func(n string) []entry {
-		t.Helper()
-		r := e.call("GET", "/nodes/"+n+"/access", "", "")
-		e.expect(r, 200, "access")
-		var out []entry
-		for _, a := range r.list("access") {
-			out = append(out, entry{a["member"].(string), a["node_id"].(string), a["inherited"].(bool), a["guest"].(bool)})
-		}
-		return out
-	}
-	got := read(p.ID)
-	want := map[entry]bool{
-		{owner, org.ID, true, false}:  true,
-		{viewer, org.ID, true, false}: true,
-		{short, org.ID, true, false}:  true,
-		{viewer, p.ID, false, false}:  true,
-	}
-	if len(got) != len(want) {
-		t.Fatalf("project access %v", got)
-	}
-	for _, g := range got {
-		if !want[g] {
-			t.Fatalf("unexpected %v in %v", g, got)
+	var nodes []string
+	for _, b := range r.list("bindings") {
+		nodes = append(nodes, b["node_id"].(string))
+		if b["inherited"] != true {
+			t.Fatalf("both sit above the project: %v", b)
 		}
 	}
-	// On the root, guests' bindings below it are listed, marked.
-	got = read(org.ID)
-	found := false
-	for _, g := range got {
-		if g.member == guest {
-			found = g.node == q.ID && g.guest && !g.inherited
-		}
+	if !slices.Equal(sorted(nodes...), sorted(org.ID, f.ID)) {
+		t.Fatalf("bindings on %v", nodes)
 	}
-	if !found {
-		t.Fatalf("guest not on the root's access list: %v", got)
+	if got := permissionsOf(r); !slices.Equal(got, []string{"folder:read", "organization:read", "project:read", "project:write"}) {
+		t.Fatalf("permissions %v", got)
 	}
+	// A binding whose role doesn't count is listed and grants nothing.
+	r = e.call("GET", "/nodes/"+p.ID+"/memberships/"+stale, "", "")
+	if len(r.list("bindings")) != 2 || !slices.Equal(permissionsOf(r), []string{"organization:read"}) {
+		t.Fatalf("stale membership %v", r.body)
+	}
+	_, otherAdmin := e.org(e.person("erin"), "Acme")
+	e.expect(e.call("GET", "/nodes/"+p.ID+"/memberships/"+otherAdmin, "", ""), 404, "a member of another tree")
+	e.expect(e.call("GET", "/nodes/"+p.ID+"/memberships/nope", "", ""), 404, "malformed member")
 }
 
 var keyRe = regexp.MustCompile(`^plat5-k-2-[A-Za-z0-9_-]{43}$`)
@@ -292,7 +264,8 @@ var keyRe = regexp.MustCompile(`^plat5-k-2-[A-Za-z0-9_-]{43}$`)
 func TestServiceAccountsAndKeys(t *testing.T) {
 	e := setup(t)
 	org, _ := e.org(e.person("dana"), "Gruow")
-	p := e.child(org, "project", "One")
+	f := e.child(org, "folder", "One")
+	p := e.child(f, "project", "One")
 	before := e.lastEvent()
 
 	r := e.call("POST", "/nodes/"+p.ID+"/service-accounts", "", `{"name": " CI ", "role": "developer"}`)
@@ -318,9 +291,6 @@ func TestServiceAccountsAndKeys(t *testing.T) {
 			t.Fatalf("%s: %d %s", c.body, r.status, r.message())
 		}
 	}
-	e.expect(e.call("POST", "/nodes/"+e.signIn.ID+"/service-accounts", "", `{"name": "x", "role": "owner"}`), 422, "at the sign-in node")
-	e.expect(e.call("POST", "/nodes/"+org.ID+"/service-accounts", "", `{"name": "x", "role": "support"}`), 422, "support needs expires_at")
-	e.expect(e.call("POST", "/nodes/"+org.ID+"/service-accounts", "", `{"name": "x", "role": "support", "expires_at": "`+rfc(e.clock.t.Add(time.Hour))+`"}`), 201, "support with expires_at")
 
 	r = e.call("GET", "/nodes/"+p.ID+"/service-accounts", "", "")
 	if got := ids(r.list("service_accounts")); !slices.Equal(got, []string{sa}) {
@@ -339,7 +309,7 @@ func TestServiceAccountsAndKeys(t *testing.T) {
 	r = e.call("POST", "/nodes/"+p.ID+"/service-accounts/"+sa+"/keys", "", ``)
 	e.expect(r, 201, "key")
 	secret, keyID := r.str("key"), r.str("id")
-	if !keyRe.MatchString(secret) || r.str("name") != "Unnamed key" || r.str("key_prefix") != secret[:len("plat5-k-2-")+4] {
+	if !keyRe.MatchString(secret) || r.str("name") != "Unnamed key" || r.str("key_prefix") != secret[:len("plat5-k-2-")+4] || !id.Valid(keyID) {
 		t.Fatalf("key %v", r.body)
 	}
 	if !strings.Contains(r.headers[auditx.Header], keyID) || strings.Contains(r.headers[auditx.Header], secret) {
@@ -380,48 +350,73 @@ func TestServiceAccountsAndKeys(t *testing.T) {
 		t.Fatalf("lookup %v", r.body)
 	}
 	e.expect(e.call("GET", "/nodes/"+p.ID+"/service-accounts/"+sa, "", ""), 404, "deleted")
-	e.expect(e.call("DELETE", "/nodes/"+p.ID+"/service-accounts/"+sa, "", ""), 404, "delete again")
+	r = e.call("DELETE", "/nodes/"+p.ID+"/service-accounts/"+sa, "", "")
+	if r.status != 204 || r.headers[auditx.Header] != "" || len(e.eventsAfter(before)) != 1 {
+		t.Fatalf("delete again: %d %s", r.status, r.headers[auditx.Header])
+	}
+	e.expect(e.call("DELETE", "/nodes/"+p.ID+"/service-accounts/"+id.New(), "", ""), 404, "never a service account here")
 }
 
-func TestPeople(t *testing.T) {
+func TestUsers(t *testing.T) {
 	e := setup(t)
 	dana := e.person("dana")
-	gruow, _ := e.org(dana, "Gruow")
+	gruow, danaGruow := e.org(dana, "Gruow")
 	acme, _ := e.org(e.person("erin"), "Acme")
 	danaAcme := e.join(acme, "dana", "developer")
+	sa, _ := e.serviceAccount(acme, "developer")
 
-	r := e.call("GET", "/members/"+dana, "", "")
-	if r.status != 200 || r.str("status") != "active" {
-		t.Fatalf("person %v", r.body)
+	r := e.call("GET", "/users/"+dana, "", "")
+	if r.status != 200 || r.str("status") != "active" || r.str("id") != dana {
+		t.Fatalf("user %v", r.body)
 	}
-	e.expect(e.call("GET", "/members/"+danaAcme, "", ""), 404, "not a directory member")
+	e.expect(e.call("GET", "/users/"+danaAcme, "", ""), 404, "a member id isn't a user")
+
+	// The user behind a member.
+	for _, m := range []string{danaGruow, danaAcme} {
+		if r := e.call("GET", "/members/"+m+"/user", "", ""); r.status != 200 || r.str("id") != dana {
+			t.Fatalf("user of %s: %d %v", m, r.status, r.body)
+		}
+	}
+	e.expect(e.call("GET", "/members/"+sa+"/user", "", ""), 404, "a service account's member")
+
+	// Exact lookup by IdP link.
+	r = e.call("GET", "/users?issuer=https://idp.test&subject=dana", "", "")
+	if got := ids(r.list("users")); r.status != 200 || !slices.Equal(got, []string{dana}) || r.body["has_more"] != false {
+		t.Fatalf("lookup %d %v", r.status, r.body)
+	}
+	r = e.call("GET", "/users?issuer=https://idp.test&subject=nobody", "", "")
+	if r.status != 200 || len(r.list("users")) != 0 {
+		t.Fatalf("lookup of no one %v", r.body)
+	}
+	e.expect(e.call("GET", "/users?subject=dana", "", ""), 422, "issuer required")
+	e.expect(e.call("GET", "/users?issuer=https://idp.test", "", ""), 422, "subject required")
 
 	// Suspension is on the person.
-	r = e.call("PATCH", "/members/"+dana+"/status", "", `{"status": "suspended"}`)
-	if r.status != 200 || r.str("status") != "suspended" {
-		t.Fatalf("suspend %d %v", r.status, r.body)
+	r = e.call("PATCH", "/users/"+dana+"/status", "", `{"status": "suspended"}`)
+	if r.status != 200 || r.str("status") != "suspended" || r.headers[auditx.Header] != `{"status":{"from":"active","to":"suspended"}}` {
+		t.Fatalf("suspend %d %v %s", r.status, r.body, r.headers[auditx.Header])
 	}
-	e.expect(e.call("PATCH", "/members/"+dana+"/status", "", `{"status": "gone"}`), 422, "bad status")
-	e.call("PATCH", "/members/"+dana+"/status", "", `{"status": "active"}`)
+	e.expect(e.call("PATCH", "/users/"+dana+"/status", "", `{"status": "gone"}`), 422, "bad status")
+	e.expect(e.call("PATCH", "/users/"+id.New()+"/status", "", `{"status": "active"}`), 404, "no such user")
+	e.call("PATCH", "/users/"+dana+"/status", "", `{"status": "active"}`)
 
 	// Personal keys.
-	r = e.call("POST", "/members/"+dana+"/keys", "", `{"name": "laptop"}`)
+	r = e.call("POST", "/users/"+dana+"/keys", "", `{"name": "laptop"}`)
 	e.expect(r, 201, "personal key")
 	if !keyRe.MatchString(r.str("key")) {
 		t.Fatal(r.str("key"))
 	}
-	e.expect(e.call("POST", "/members/"+danaAcme+"/keys", "", `{}`), 404, "keys on an org member")
+	k := r.str("id")
+	e.expect(e.call("GET", "/users/"+dana+"/keys", "", ""), 200, "list keys")
+	e.expect(e.call("DELETE", "/users/"+dana+"/keys/"+k, "", ""), 204, "revoke")
+	e.expect(e.call("DELETE", "/users/"+dana+"/keys/"+k, "", ""), 204, "revoke again")
+	e.expect(e.call("POST", "/users/"+danaAcme+"/keys", "", `{}`), 404, "keys on a member id")
 
 	// Deleting the account removes every member, deletes keys and links, keeps the rows.
-	var danaGruow string
-	if err := e.pool.QueryRow(e.ctx, `SELECT id FROM members WHERE root_id = $1`, gruow.ID).Scan(&danaGruow); err != nil {
-		t.Fatal(err)
-	}
 	before := e.lastEvent()
-	e.expect(e.call("DELETE", "/members/"+dana, "", ""), 204, "delete account")
+	e.expect(e.call("DELETE", "/users/"+dana, "", ""), 204, "delete account")
 	got := e.eventsAfter(before)
 	want := sorted(
-		"member.removed "+dana+" "+e.signIn.ID+" person",
 		"member.removed "+danaGruow+" "+gruow.ID+" person",
 		"member.removed "+danaAcme+" "+acme.ID+" person",
 	)
@@ -429,16 +424,18 @@ func TestPeople(t *testing.T) {
 		t.Fatalf("events %v, want %v", got, want)
 	}
 	if e.count(`SELECT count(*) FROM idp_links WHERE subject = 'dana'`) != 0 ||
-		e.count(`SELECT count(*) FROM members WHERE id = ANY($1) AND removed_at IS NOT NULL AND principal_id IS NULL`, []string{dana, danaGruow, danaAcme}) != 3 {
+		e.count(`SELECT count(*) FROM members WHERE id = ANY($1) AND removed_at IS NOT NULL AND principal_id IS NULL`, []string{danaGruow, danaAcme}) != 2 {
 		t.Fatal("account not deleted cleanly")
 	}
-	r = e.call("GET", "/members/"+dana, "", "")
+	r = e.call("GET", "/nodes/"+gruow.ID+"/members/"+danaGruow, "", "")
 	if r.status != 200 || r.str("status") != "removed" || r.body["name"] != nil {
-		t.Fatalf("deleted person %v", r.body)
+		t.Fatalf("a deleted account's member %v", r.body)
 	}
-	e.expect(e.call("DELETE", "/members/"+dana, "", ""), 204, "delete again")
-	if len(e.eventsAfter(before)) != 3 {
+	e.expect(e.call("GET", "/users/"+dana, "", ""), 404, "deleted account")
+	e.expect(e.call("GET", "/members/"+danaGruow+"/user", "", ""), 404, "user of a deleted account")
+	e.expect(e.call("DELETE", "/users/"+dana, "", ""), 204, "delete again")
+	if len(e.eventsAfter(before)) != 2 {
 		t.Fatal("a second delete changed something")
 	}
-	e.expect(e.call("GET", "/members/"+dana+"/keys", "", ""), 404, "keys of a deleted account")
+	e.expect(e.call("GET", "/users/"+dana+"/keys", "", ""), 404, "keys of a deleted account")
 }

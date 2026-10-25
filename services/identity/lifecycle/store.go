@@ -5,7 +5,6 @@ package lifecycle
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -17,8 +16,8 @@ import (
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 )
 
-// Stored types. A node event is stored as node.<op> with its kind, and goes on
-// the wire as <kind>.<op> (project.deleted).
+// The event types: a fixed set, whatever kinds the deployment declares. Node
+// events carry the node's kind.
 const (
 	TypeNodeCreated   = "node.created"
 	TypeNodeDeleted   = "node.deleted"
@@ -54,14 +53,6 @@ func NodeEvent(typ, kind, nodeID, rootID string) Event {
 // MemberEvent is a member.<op> event. principal is person or service_account.
 func MemberEvent(typ, memberID, rootID, principal string) Event {
 	return Event{Type: typ, MemberID: &memberID, RootID: rootID, Principal: &principal}
-}
-
-// WireType is the type services read: the node's kind in place of "node".
-func (e *Event) WireType() string {
-	if op, ok := strings.CutPrefix(e.Type, "node."); ok && e.Kind != nil {
-		return *e.Kind + "." + op
-	}
-	return e.Type
 }
 
 // Record writes e in tx. Call it after every other write of the change: the

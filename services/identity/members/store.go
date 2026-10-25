@@ -1,7 +1,7 @@
-// Package members is who can reach the tree: people and their IdP links, the
-// directory member, members of each tree, bindings with expiry, service
-// accounts, API keys and invites (docs/concepts/access.md,
-// docs/concepts/lifecycle.md#members, docs/internals/identity-schema.md).
+// Package members is who can reach the tree: people and their IdP links,
+// members of each tree, bindings, service accounts, API keys and invites
+// (docs/concepts/access.md, docs/concepts/lifecycle.md#members,
+// docs/internals/identity-schema.md).
 package members
 
 import (
@@ -33,13 +33,17 @@ const (
 	StatusRemoved   = "removed"
 
 	storeTracerName = "identity.members.store"
+	// personLockSpace keys the lock on one IdP subject while its person is
+	// created. Taken after any tree lock.
+	personLockSpace int32 = 0x706c6170 // "plap"
 )
 
 var (
 	ErrNotFound = stderrors.New("not found")
-	// ErrNotMember is a caller (X-Plat5-Member-Id) that isn't an active member
-	// of the addressed tree: a malformed request.
-	ErrNotMember = stderrors.New("caller is not a member of this tree")
+	// ErrBadCaller is a caller header (X-Plat5-Member-Id or X-Plat5-User-Id)
+	// naming no active member of the tree, or no active user: a malformed
+	// request.
+	ErrBadCaller = stderrors.New("the caller header names no active member or user")
 )
 
 // Store writes everything about who can reach a node. Writes that touch a
@@ -47,23 +51,21 @@ var (
 // active member per principal per tree" and "removed when left with no
 // bindings" can't race.
 type Store struct {
-	pool     *pgxpool.Pool
-	nodes    *nodes.Store
-	signInID string
-	brand    string
-	tracer   trace.Tracer
-	now      func() time.Time
+	pool   *pgxpool.Pool
+	nodes  *nodes.Store
+	brand  string
+	tracer trace.Tracer
+	now    func() time.Time
 }
 
-// NewStore needs the sign-in node's id (made at boot) and APIKEY_BRAND.
-func NewStore(pool *pgxpool.Pool, nodeStore *nodes.Store, signInID, brand string) *Store {
+// NewStore needs APIKEY_BRAND for the keys it mints and reads.
+func NewStore(pool *pgxpool.Pool, nodeStore *nodes.Store, brand string) *Store {
 	return &Store{
-		pool:     pool,
-		nodes:    nodeStore,
-		signInID: signInID,
-		brand:    brand,
-		tracer:   otel.Tracer(storeTracerName),
-		now:      time.Now,
+		pool:   pool,
+		nodes:  nodeStore,
+		brand:  brand,
+		tracer: otel.Tracer(storeTracerName),
+		now:    time.Now,
 	}
 }
 
@@ -120,6 +122,9 @@ type memberRow struct {
 }
 
 func (s *Store) lockedMember(ctx context.Context, w *write, memberID string) (*memberRow, error) {
+	if !id.Valid(memberID) {
+		return nil, ErrNotFound
+	}
 	var m memberRow
 	var removedAt *time.Time
 	err := w.tx.QueryRow(ctx, `
@@ -148,7 +153,7 @@ func activeMemberID(ctx context.Context, q dbx.Querier, principalID, rootID stri
 }
 
 func (s *Store) insertMember(ctx context.Context, w *write, principalID, principal, rootID string) (string, error) {
-	memberID := id.New(id.Member)
+	memberID := id.New()
 	if _, err := w.tx.Exec(ctx, `
 		INSERT INTO members (id, principal_id, principal, root_id, created_at) VALUES ($1, $2, $3, $4, $5)
 	`, memberID, principalID, principal, rootID, s.now().UTC()); err != nil {
@@ -171,18 +176,18 @@ func (s *Store) removeMember(ctx context.Context, w *write, m *memberRow) error 
 	return nil
 }
 
-// removeEmptyPeople removes each of memberIDs that is a person's active member
-// outside the directory with no bindings left.
+// removeEmptyPeople removes each of memberIDs that is a person's active
+// member with no bindings left.
 func (s *Store) removeEmptyPeople(ctx context.Context, w *write, memberIDs []string) error {
 	if len(memberIDs) == 0 {
 		return nil
 	}
 	rows, err := w.tx.Query(ctx, `
-		UPDATE members m SET removed_at = $3
-		WHERE m.id = ANY($1) AND m.principal = 'person' AND m.removed_at IS NULL AND m.root_id <> $2
+		UPDATE members m SET removed_at = $2
+		WHERE m.id = ANY($1) AND m.principal = 'person' AND m.removed_at IS NULL
 		  AND NOT EXISTS (SELECT 1 FROM bindings b WHERE b.member_id = m.id)
 		RETURNING m.id, m.root_id
-	`, memberIDs, s.signInID, s.now().UTC())
+	`, memberIDs, s.now().UTC())
 	if err != nil {
 		return err
 	}
@@ -203,53 +208,21 @@ func (s *Store) removeEmptyPeople(ctx context.Context, w *write, memberIDs []str
 
 // --- roles ---
 
-// checkRole is the rule for any binding a write makes: the role exists, is
-// bindable at the node's kind, and the expiry meets its max_duration
-// (docs/concepts/access.md#assigning). field names the expiry in errors.
-func (s *Store) checkRole(snap *feed.Snapshot, roleSlug, kind string, expiresAt *time.Time, field string) error {
-	role, err := roleAt(snap, roleSlug, kind)
-	if err != nil {
-		return err
-	}
-	now := s.now()
-	if expiresAt != nil && !expiresAt.After(now) {
-		return errors.FieldError(field, errors.FallbackValidation)
-	}
-	if role.MaxDuration > 0 && (expiresAt == nil || expiresAt.After(now.Add(role.MaxDuration))) {
-		return maxDurationError(role, field)
-	}
-	return nil
-}
-
-// checkDuration is checkRole for an invite's role_duration or a grant's
-// duration: how long the binding lasts from redeem.
-func checkDuration(snap *feed.Snapshot, roleSlug, kind string, d *time.Duration, field string) error {
-	role, err := roleAt(snap, roleSlug, kind)
-	if err != nil {
-		return err
-	}
-	if role.MaxDuration > 0 && (d == nil || *d > role.MaxDuration) {
-		return maxDurationError(role, field)
-	}
-	return nil
-}
-
-func roleAt(snap *feed.Snapshot, roleSlug, kind string) (feed.Role, error) {
+// checkRole is the rule for any binding a write makes: a role is given, is in
+// the document, and is bindable at the node's kind
+// (docs/concepts/access.md#assigning). field names the role in errors.
+func checkRole(snap *feed.Snapshot, roleSlug, kind, field string) error {
 	if roleSlug == "" {
-		return feed.Role{}, errors.FieldError("role", "Choose a role.")
+		return errors.FieldError(field, "Choose a role.")
 	}
 	role, ok := snap.Role(roleSlug)
 	if !ok {
-		return feed.Role{}, errors.FieldError("role", "That role doesn't exist.")
+		return errors.FieldError(field, "That role doesn't exist.")
 	}
 	if !role.BindableAtKind(kind) {
-		return feed.Role{}, errors.FieldError("role", fmt.Sprintf("That role can't be given on a %s.", nodes.KindWord(snap, kind)))
+		return errors.FieldError(field, fmt.Sprintf("That role can't be given on a %s.", kind))
 	}
-	return role, nil
-}
-
-func maxDurationError(role feed.Role, field string) error {
-	return errors.FieldError(field, fmt.Sprintf("This role can be given for at most %s.", role.MaxDurationText))
+	return nil
 }
 
 // bindablePairs is every (kind, role) where the role can be bound, as two
@@ -265,52 +238,60 @@ func bindablePairs(snap *feed.Snapshot) (kinds, roles []string) {
 	return kinds, roles
 }
 
-// counts is the SQL condition for a binding b on node bn that counts at now
-// ($n): unexpired, its role in the document and bindable at bn's kind. kinds
-// and roles are the arrays from bindablePairs.
-func counts(now, kinds, roles string) string {
-	return `(b.expires_at IS NULL OR b.expires_at > ` + now + `)
-		AND (bn.kind, b.role) IN (SELECT * FROM unnest(` + kinds + `::text[], ` + roles + `::text[]))`
+// counts is the SQL condition for a binding b on node bn that counts: its
+// role in the document and bindable at bn's kind. kinds and roles are the
+// arrays from bindablePairs.
+func counts(kinds, roles string) string {
+	return `(bn.kind, b.role) IN (SELECT * FROM unnest(` + kinds + `::text[], ` + roles + `::text[]))`
 }
 
 // --- resolution ---
 
-// Labels is the union of roles' labels a member holds at a node
-// (docs/concepts/access.md#resolution). All is "*".
-type Labels struct {
+// Permissions is the union of the permissions of roles a member holds at a
+// node (docs/concepts/access.md#resolution). All is "*".
+type Permissions struct {
 	All bool
 	Set map[string]bool
 }
 
-// Resolve unions the labels of roles, which must already count (unexpired,
-// bindable where they sit). A role gone from the document grants nothing.
-func Resolve(snap *feed.Snapshot, roles []string) Labels {
-	out := Labels{Set: map[string]bool{}}
+// Resolve unions the permissions of roles, which must already count
+// (bindable where they sit). A role gone from the document grants nothing.
+func Resolve(snap *feed.Snapshot, roles []string) Permissions {
+	out := Permissions{Set: map[string]bool{}}
 	for _, slug := range roles {
 		role, ok := snap.Role(slug)
 		if !ok {
 			continue
 		}
-		for _, l := range role.Labels {
-			if l == "*" {
+		for _, p := range role.Permissions {
+			if p == "*" {
 				out.All = true
 			}
-			out.Set[l] = true
+			out.Set[p] = true
 		}
 	}
 	return out
 }
 
-// Allows is whether l meets a route's labels: open to any member, "*", or
-// any one label in common.
-func (l Labels) Allows(need feed.RouteLabels) bool {
-	if need.Open || l.All {
-		return true
+// Has is whether p grants permission: "*", or permission itself.
+func (p Permissions) Has(permission string) bool {
+	return p.All || p.Set[permission]
+}
+
+// List is the permissions, sorted, with * as written.
+func (p Permissions) List() []string {
+	out := make([]string, 0, len(p.Set))
+	for perm := range p.Set {
+		out = append(out, perm)
 	}
-	for _, label := range need.Labels {
-		if l.Set[label] {
-			return true
-		}
+	sort.Strings(out)
+	return out
+}
+
+// page trims a limit+1 read to limit and says whether there was more.
+func page[T any](items []T, limit int) ([]T, bool) {
+	if len(items) > limit {
+		return items[:limit], true
 	}
-	return false
+	return items, false
 }

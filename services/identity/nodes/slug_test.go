@@ -11,7 +11,7 @@ func TestValidSlug(t *testing.T) {
 			t.Fatalf("%q should be valid", ok)
 		}
 	}
-	for _, bad := range []string{"", "ab", "1abc", "-abc", "abc-", "Abc", "a_b", "n_01J0000000000000000000000", "a" + strings.Repeat("b", 63), "ab c", "café"} {
+	for _, bad := range []string{"", "ab", "1abc", "-abc", "abc-", "Abc", "a_b", "n_01J0000000000000000000000", "01jbx9q3t5vk8m2n4p6r7s8t9w", "a" + strings.Repeat("b", 63), "ab c", "café"} {
 		if ValidSlug(bad) {
 			t.Fatalf("%q should be invalid", bad)
 		}
@@ -19,7 +19,7 @@ func TestValidSlug(t *testing.T) {
 }
 
 func TestBaseSlug(t *testing.T) {
-	for _, tc := range []struct{ label, kind, want string }{
+	for _, tc := range []struct{ name, kind, want string }{
 		{"Gruow", "organization", "gruow"},
 		{"  Acme, Inc.  ", "organization", "acme-inc"},
 		{"Gather Room!!", "project", "gather-room"},
@@ -32,12 +32,12 @@ func TestBaseSlug(t *testing.T) {
 		{"", "x", "x00"},
 		{strings.Repeat("abc ", 30), "project", strings.TrimRight(strings.Repeat("abc-", 15), "-")},
 	} {
-		got := baseSlug(tc.label, tc.kind)
+		got := baseSlug(tc.name, tc.kind)
 		if got != tc.want {
-			t.Fatalf("baseSlug(%q, %q) = %q, want %q", tc.label, tc.kind, got, tc.want)
+			t.Fatalf("baseSlug(%q, %q) = %q, want %q", tc.name, tc.kind, got, tc.want)
 		}
 		if !ValidSlug(got) {
-			t.Fatalf("baseSlug(%q, %q) = %q is not a valid slug", tc.label, tc.kind, got)
+			t.Fatalf("baseSlug(%q, %q) = %q is not a valid slug", tc.name, tc.kind, got)
 		}
 	}
 }

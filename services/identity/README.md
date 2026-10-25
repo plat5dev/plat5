@@ -1,31 +1,31 @@
 # identity
 
-Plat5 **identity**: the tree of nodes, and the principals, members, bindings, keys and invites in it.
+Plat5 **identity**: the tree of nodes, and the principals, users, members, bindings, keys and invites in it.
 
-Contracts: [identity API](../../docs/reference/api/identity.md), [lifecycle](../../docs/concepts/lifecycle.md), [schema](../../docs/internals/identity-schema.md). Its gateway routes are generated per kind into the deployment's `routes/identity.yml` (`plat5 routes generate`).
+Contracts: [identity API](../../docs/reference/api/identity.md), [internal APIs](../../docs/reference/api/internal.md), [lifecycle](../../docs/concepts/lifecycle.md), [schema](../../docs/internals/identity-schema.md). Its gateway routes are its [resources](../../docs/reference/config/resources.md), expanded by the control plane: nothing is generated.
 
 ## Layout
 
 | Package | Role |
 |---------|------|
-| `feed/` | The config from the control plane's `GET /internal/identity`: kinds, roles, `deletion_grace`, `reserved_slugs`, and the labels of the `identity` service's node routes, which filter node lists. Identity doesn't listen until it has one, and long-polls for changes |
-| `nodes/` | Nodes, the closure table, slugs and tombstones, soft delete, restore, purge, kind removal, and the sweeper that runs reconcile and purge. `POST /internal/plan` on the internal port: the control plane's counts for a plan that removes a kind or narrows a parent |
-| `members/` | People and IdP links, directory members, members of each tree, bindings with expiry, the access list, service accounts, API keys, invites and redeem; creating nodes with the creator's binding, and filtered node lists. Its sweep deletes expired bindings. `POST /internal/admit` on the internal port: the member and labels for a credential on a node chain |
+| `feed/` | The config from the control plane's `GET /internal/identity`: kinds with their `list_permission`, roles with their includes resolved, `creator_role`, `deletion_grace`, `reserved_slugs`. Identity doesn't listen until it has one, and long-polls for changes |
+| `nodes/` | Nodes, the closure table, ancestors on the node shape, slugs and root tombstones, soft delete, restore, purge, and the sweeper that runs purge. `POST /internal/plan` on the internal port: the control plane's counts for a plan that removes a kind or changes its parent |
+| `members/` | People and their user ids and IdP links, members of each tree, bindings and the access list, memberships, service accounts, API keys, invites and redeem; creating nodes with the creator's binding, and filtered node lists. `POST /internal/admit` on the internal port: the member and permissions for a credential on a node chain |
 | `lifecycle/` | The lifecycle-events feed on the internal port. Written in the change's transaction |
 | `db/` | The schema, one migration. Boot refuses a database that records migrations this build doesn't know |
 
-Boot: wait for the first config, create the sign-in node if there is none, then listen. Each new config kicks the sweeper, which also runs every minute: nodes of a kind the config dropped are soft-deleted, a kind applied again gets its nodes back, nodes past `purge_after` are purged, and expired bindings are deleted.
+Boot: wait for the first config, then listen. The sweeper runs every minute: nodes past `purge_after` are purged, and invites past their expiry are marked expired.
 
 ## Tests
 
 ```bash
 docker run -d --rm --name identity-pg -e POSTGRES_PASSWORD=test -p 55999:5432 postgres:17
-TEST_DATABASE_URL=postgres://postgres:test@localhost:55999/postgres go test ./...
+TEST_DATABASE_URL='postgres://postgres:test@localhost:55999/postgres?sslmode=disable' go test ./...
 ```
 
 Without `TEST_DATABASE_URL`, tests that need Postgres are skipped.
 
-`members/catalog_test.go` walks every route of the generated catalog the way the gateway sends it, from the control plane's `fixtures/catalog/identity-feed.json`. Regenerate that file there when the generator changes.
+`members/catalog_test.go` walks every identity route the gateway serves the way the gateway sends it: the routes from the control plane's `fixtures/catalog/gateway-feed.json`, the config from `fixtures/catalog/identity-feed.json`. Regenerate those there when the resources change.
 
 ## Local
 

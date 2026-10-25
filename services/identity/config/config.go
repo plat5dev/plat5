@@ -18,10 +18,9 @@ const (
 // OTEL_* stays in the telemetry package (standard env contract).
 // There is no SMTP configuration: identity does not send invite (or any) email.
 type Config struct {
-	Port              string
-	InternalPort      string
-	DatabaseURL       string
-	InternalAuthToken string
+	Port         string
+	InternalPort string
+	DatabaseURL  string
 	// APIKeyBrand starts every key identity mints (docs/reference/api/identity.md#credentials).
 	APIKeyBrand string
 	// ControlPlaneURL is CONTROL_PLANE_URL: the control plane's internal base
@@ -39,12 +38,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	return Config{
-		Port:              envOr("PORT", defaultPort),
-		InternalPort:      envOr("INTERNAL_PORT", defaultInternalPort),
-		DatabaseURL:       envOr("DATABASE_URL", defaultDatabaseURL),
-		InternalAuthToken: strings.TrimSpace(os.Getenv("INTERNAL_AUTH_TOKEN")),
-		APIKeyBrand:       brand,
-		ControlPlaneURL:   controlPlane,
+		Port:            envOr("PORT", defaultPort),
+		InternalPort:    envOr("INTERNAL_PORT", defaultInternalPort),
+		DatabaseURL:     envOr("DATABASE_URL", defaultDatabaseURL),
+		APIKeyBrand:     brand,
+		ControlPlaneURL: controlPlane,
 	}, nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,14 +13,12 @@ import (
 )
 
 const good = `{
-	"revision": 3, "deletion_grace": "12h", "reserved_slugs": ["new"],
+	"revision": 3, "deletion_grace": "12h", "reserved_slugs": ["new"], "users": { "name_claim": "name" },
 	"kinds": {
-		"directory": { "sign_in": "idp", "name_claim": "name" },
-		"organization": { "label": "Organization", "segment": "orgs" },
-		"folder": { "parent": "organization" },
-		"project": { "label": "Project", "parent": ["organization", "folder"] }
+		"organization": { "path": "/orgs/{organization}", "list_permission": "organization:read" },
+		"project": { "parent": "organization", "path": "/projects/{project}", "list_permission": "project:read" }
 	},
-	"roles": {}, "default_role": null, "creator_role": "admin", "services": {}
+	"roles": {}, "creator_role": "admin"
 }`
 
 func TestParse(t *testing.T) {
@@ -27,83 +26,61 @@ func TestParse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Revision != 3 || s.DeletionGrace != 12*time.Hour || !s.ReservedSlugs["new"] {
+	if s.Revision != 3 || s.DeletionGrace != 12*time.Hour || !s.ReservedSlugs["new"] || s.CreatorRole != "admin" {
 		t.Fatalf("settings: %+v", s)
 	}
-	if k := s.SignInKind(); k.Name != "directory" || !k.IsRoot() || k.DisplayLabel() != "directory" {
-		t.Fatalf("sign-in: %+v", k)
+	o, _ := s.Kind("organization")
+	if !o.IsRoot() || o.ListPermission != "organization:read" {
+		t.Fatalf("organization: %+v", o)
 	}
 	p, _ := s.Kind("project")
-	if !p.AllowsParent("folder") || !p.AllowsParent("organization") || p.AllowsParent("project") || p.IsRoot() {
+	if p.Parent != "organization" || p.IsRoot() || p.ListPermission != "project:read" {
 		t.Fatalf("project: %+v", p)
-	}
-	f, _ := s.Kind("folder")
-	if !f.AllowsParent("organization") {
-		t.Fatalf("folder: %+v", f)
 	}
 }
 
-func TestParseRolesAndNodeRoutes(t *testing.T) {
+func TestParseResolvesIncludes(t *testing.T) {
 	s, err := Parse([]byte(`{
-		"kinds": { "directory": { "sign_in": "idp" }, "organization": {}, "project": { "parent": "organization" } },
+		"kinds": { "organization": { "list_permission": "organization:read" }, "project": { "parent": "organization", "list_permission": "project:read" } },
 		"roles": {
-			"admin": { "labels": ["*"], "bindable_at": ["organization", "project"] },
-			"support": { "labels": ["project:read"], "bindable_at": ["organization"], "max_duration": "7d" }
+			"admin": { "permissions": ["*"], "bindable_at": ["organization", "project"] },
+			"member": { "permissions": ["organization:read"], "bindable_at": ["organization"] },
+			"developer": { "includes": ["member"], "permissions": ["project:write", "project:read"], "bindable_at": ["organization", "project"] },
+			"lead": { "includes": ["developer", "admin"], "permissions": [], "bindable_at": ["project"] },
+			"loop": { "includes": ["loop"], "permissions": ["a:b"], "bindable_at": [] }
 		},
-		"default_role": "admin", "creator_role": "admin",
-		"services": {
-			"identity": { "routes": [
-				{ "methods": ["GET"], "upstream": "/nodes/{subject.project_id}", "required_labels": ["project:read"] },
-				{ "methods": ["GET"], "upstream": "/nodes/{subject.project_id}", "required_labels": ["project:view"] },
-				{ "methods": ["DELETE"], "upstream": "/nodes/{subject.project_id}", "required_labels": ["project:delete"] },
-				{ "methods": ["GET"], "upstream": "/nodes/{subject.organization_id}", "required_labels": [] },
-				{ "methods": ["GET"], "upstream": "/nodes/{subject.project_id}/bindings", "required_labels": ["x"] }
-			] },
-			"other": { "routes": [
-				{ "methods": ["DELETE"], "upstream": "/nodes/{subject.organization_id}", "required_labels": [] }
-			] }
-		}
+		"creator_role": "admin"
 	}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	support, _ := s.Role("support")
-	if support.MaxDuration != 7*24*time.Hour || support.MaxDurationText != "7d" || !support.BindableAtKind("organization") || support.BindableAtKind("project") {
-		t.Fatalf("support: %+v", support)
+	for slug, want := range map[string]string{
+		"admin":     "*",
+		"developer": "organization:read project:read project:write",
+		"lead":      "* organization:read project:read project:write",
+		"loop":      "a:b",
+	} {
+		r, _ := s.Role(slug)
+		if got := strings.Join(r.Permissions, " "); got != want {
+			t.Fatalf("%s: %q, want %q", slug, got, want)
+		}
 	}
-	if s.DefaultRole != "admin" || s.CreatorRole != "admin" {
-		t.Fatalf("defaults: %q %q", s.DefaultRole, s.CreatorRole)
-	}
-	// Several read routes add up; only exact /nodes/{subject.<kind>_id} counts.
-	if r, ok := s.ReadLabels("project"); !ok || r.Open || len(r.Labels) != 2 {
-		t.Fatalf("project read: %+v %v", r, ok)
-	}
-	if r, ok := s.DeleteLabels("project"); !ok || r.Labels[0] != "project:delete" {
-		t.Fatalf("project delete: %+v %v", r, ok)
-	}
-	if r, ok := s.ReadLabels("organization"); !ok || !r.Open {
-		t.Fatalf("organization read: %+v %v", r, ok)
-	}
-	// Only the service named identity: another service's route doesn't count.
-	if _, ok := s.DeleteLabels("organization"); ok {
-		t.Fatal("organization delete comes from another service")
-	}
-	if _, err := Parse([]byte(`{"kinds": {"d": {"sign_in": "idp"}}, "roles": {"r": {"labels": [], "bindable_at": [], "max_duration": "soon"}}}`)); err == nil {
-		t.Fatal("a bad max_duration should be refused")
+	// bindable_at stays the role's own.
+	if lead, _ := s.Role("lead"); lead.BindableAtKind("organization") || !lead.BindableAtKind("project") {
+		t.Fatalf("lead: %+v", lead)
 	}
 }
 
 func TestParseRefuses(t *testing.T) {
 	for name, body := range map[string]string{
-		"no sign-in":      `{"kinds": {"organization": {}}}`,
-		"two sign-in":     `{"kinds": {"a": {"sign_in": "idp"}, "b": {"sign_in": "idp"}}}`,
-		"sign-in parent":  `{"kinds": {"o": {}, "d": {"sign_in": "idp", "parent": "o"}}}`,
-		"unknown parent":  `{"kinds": {"d": {"sign_in": "idp"}, "p": {"parent": "nope"}}}`,
-		"bad kind name":   `{"kinds": {"d": {"sign_in": "idp"}, "Org": {}}}`,
-		"bad grace":       `{"deletion_grace": "30 days", "kinds": {"d": {"sign_in": "idp"}}}`,
-		"no kinds":        `{"kinds": {}}`,
-		"not json":        `{`,
-		"bad parent type": `{"kinds": {"d": {"sign_in": "idp"}, "p": {"parent": 3}}}`,
+		"no list permission": `{"kinds": {"organization": {}}}`,
+		"unknown parent":     `{"kinds": {"p": {"parent": "nope", "list_permission": "p:read"}}}`,
+		"bad kind name":      `{"kinds": {"Org": {"list_permission": "o:read"}}}`,
+		"bad grace":          `{"deletion_grace": "30 days", "kinds": {"o": {"list_permission": "o:read"}}}`,
+		"no kinds":           `{"kinds": {}}`,
+		"not json":           `{`,
+		"parent list":        `{"kinds": {"o": {"list_permission": "o:read"}, "p": {"parent": ["o"], "list_permission": "p:read"}}}`,
+		"unknown include":    `{"kinds": {"o": {"list_permission": "o:read"}}, "roles": {"r": {"includes": ["gone"], "permissions": [], "bindable_at": []}}}`,
 	} {
 		if _, err := Parse([]byte(body)); err == nil {
 			t.Fatalf("%s: should be refused", name)
@@ -127,7 +104,7 @@ func TestParseDuration(t *testing.T) {
 func TestFollowerLoadsAndFollows(t *testing.T) {
 	var polls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/internal/identity" || r.Header.Get("X-Plat5-Internal-Token") != "tok" {
+		if r.URL.Path != "/internal/identity" {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
@@ -142,7 +119,7 @@ func TestFollowerLoadsAndFollows(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusNoContent)
 		case "4":
-			_, _ = w.Write([]byte(`{"revision": 5, "kinds": {"people": {"sign_in": "idp"}}}`))
+			_, _ = w.Write([]byte(`{"revision": 5, "kinds": {"team": {"list_permission": "team:read"}}}`))
 		default:
 			time.Sleep(20 * time.Millisecond)
 			w.WriteHeader(http.StatusNoContent)
@@ -151,7 +128,7 @@ func TestFollowerLoadsAndFollows(t *testing.T) {
 	defer srv.Close()
 
 	src := &Source{}
-	f := NewFollower(srv.URL+"/", "tok", src, zerolog.Nop())
+	f := NewFollower(srv.URL+"/", src, zerolog.Nop())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := f.Load(ctx); err != nil {
@@ -160,16 +137,15 @@ func TestFollowerLoadsAndFollows(t *testing.T) {
 	if src.Current().Revision != 3 {
 		t.Fatalf("loaded %d", src.Current().Revision)
 	}
-	changed := make(chan struct{}, 4)
-	f.OnChange = func() { changed <- struct{}{} }
 	go f.Follow(ctx)
-	select {
-	case <-changed:
-	case <-ctx.Done():
-		t.Fatal("no change seen")
+	for src.Current().Revision != 5 {
+		if ctx.Err() != nil {
+			t.Fatal("no change seen")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if got := src.Current(); got.Revision != 5 || got.SignInKind().Name != "people" {
-		t.Fatalf("followed to %+v", got)
+	if _, ok := src.Current().Kind("team"); !ok {
+		t.Fatalf("followed to %+v", src.Current())
 	}
 }
 
@@ -189,7 +165,7 @@ func TestLoadWaitsForAConfig(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := NewFollower(srv.URL, "", src, zerolog.Nop()).Load(ctx); err != nil {
+	if err := NewFollower(srv.URL, src, zerolog.Nop()).Load(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if !src.Loaded() || calls.Load() != 2 {

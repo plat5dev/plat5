@@ -2,6 +2,7 @@ package nodes
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"strings"
@@ -56,37 +57,42 @@ func errorCode(body map[string]any) string {
 func TestRoutes(t *testing.T) {
 	e := setup(t)
 	app := e.app()
-	dir, err := e.store.EnsureSignIn(e.ctx, e.snap)
-	if err != nil {
-		t.Fatal(err)
-	}
 	org := e.create(nil, "organization", "Gruow")
-	project := e.create(org, "project", "Web")
+	folder := e.create(org, "folder", "Apps")
+	project := e.create(folder, "project", "Web")
 
 	status, body, _ := call(t, app, "GET", "/nodes/"+project.ID, "")
-	if status != 200 || body["slug"] != "web" || body["parent_id"] != org.ID || body["root_id"] != org.ID || body["deleted_at"] != nil || body["status"] != "active" {
+	if status != 200 || body["slug"] != "web" || body["parent_id"] != folder.ID || body["root_id"] != org.ID || body["deleted_at"] != nil ||
+		body["purge_after"] != nil || body["status"] != "active" || body["display_name"] != "Web" {
 		t.Fatalf("get: %d %v", status, body)
 	}
 	if _, ok := body["deletion_id"]; ok {
 		t.Fatal("deletion_id is internal")
 	}
-	for _, missing := range []string{id.New(id.Node), "gruow", id.New(id.Member)} {
+	ancestors, _ := json.Marshal(body["ancestors"])
+	want := `[{"display_name":"Gruow","id":"` + org.ID + `","kind":"organization","slug":"gruow"},{"display_name":"Apps","id":"` + folder.ID + `","kind":"folder","slug":"apps"}]`
+	if string(ancestors) != want {
+		t.Fatalf("ancestors: %s", ancestors)
+	}
+	if _, body, _ := call(t, app, "GET", "/nodes/"+org.ID, ""); fmt.Sprint(body["ancestors"]) != "[]" {
+		t.Fatalf("a root's ancestors: %v", body["ancestors"])
+	}
+	for _, missing := range []string{id.New(), "gruow", strings.ToUpper(org.ID)} {
 		if status, body, _ := call(t, app, "GET", "/nodes/"+missing, ""); status != 404 || errorCode(body) != "NOT_FOUND" {
 			t.Fatalf("get %s: %d %v", missing, status, body)
 		}
 	}
 
-	status, body, details := call(t, app, "PATCH", "/nodes/"+project.ID, `{"label":"Website"}`)
-	if status != 200 || body["label"] != "Website" || details != `{"label":{"from":"Web","to":"Website"}}` {
+	status, body, details := call(t, app, "PATCH", "/nodes/"+project.ID, `{"display_name":"Website"}`)
+	if status != 200 || body["display_name"] != "Website" || details != `{"display_name":{"from":"Web","to":"Website"}}` {
 		t.Fatalf("patch: %d %v %s", status, body, details)
 	}
-	if status, body, _ := call(t, app, "PATCH", "/nodes/"+project.ID, `{"label":""}`); status != 422 || errorCode(body) != "VALIDATION_ERROR" {
-		t.Fatalf("patch empty: %d %v", status, body)
+	for _, bad := range []string{`{"display_name":""}`, `{}`} {
+		if status, body, _ := call(t, app, "PATCH", "/nodes/"+project.ID, bad); status != 422 || errorCode(body) != "VALIDATION_ERROR" {
+			t.Fatalf("patch %s: %d %v", bad, status, body)
+		}
 	}
 
-	if status, body, _ := call(t, app, "DELETE", "/nodes/"+dir.ID, ""); status != 422 {
-		t.Fatalf("delete sign-in: %d %v", status, body)
-	}
 	status, _, details = call(t, app, "DELETE", "/nodes/"+org.ID, "")
 	if status != 204 || details != `{"status":{"from":"active","to":"deleted"}}` {
 		t.Fatalf("delete: %d %s", status, details)
@@ -98,7 +104,7 @@ func TestRoutes(t *testing.T) {
 		t.Fatalf("restore under deleted parent: %d %v", status, body)
 	}
 	status, body, _ = call(t, app, "GET", "/nodes/"+org.ID, "")
-	if status != 200 || body["status"] != "deleted" || body["deleted_at"] == nil {
+	if status != 200 || body["status"] != "deleted" || body["deleted_at"] == nil || body["purge_after"] == nil {
 		t.Fatalf("get deleted: %d %v", status, body)
 	}
 	status, body, _ = call(t, app, "POST", "/nodes/"+org.ID+"/restore", "")
@@ -116,7 +122,10 @@ func TestRoutes(t *testing.T) {
 	if status != 200 || body["has_more"] != false || len(body["nodes"].([]any)) != 1 {
 		t.Fatalf("list: %d %v", status, body)
 	}
-	for _, bad := range []string{"?status=gone", "?starting_after=" + id.New(id.Member), "?limit=0"} {
+	if n := body["nodes"].([]any)[0].(map[string]any); len(n["ancestors"].([]any)) != 2 {
+		t.Fatalf("listed nodes carry ancestors: %v", n)
+	}
+	for _, bad := range []string{"?status=gone", "?starting_after=m_" + id.New(), "?limit=0"} {
 		if status, _, _ := call(t, app, "GET", "/nodes"+bad, ""); status != 422 {
 			t.Fatalf("list %s: %d", bad, status)
 		}
@@ -135,7 +144,7 @@ func TestCreatesRacingADelete(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = e.store.Create(e.ctx, e.snap, CreateInput{ParentID: folder.ID, Kind: "project", Label: "P"})
+			_, _ = e.store.Create(e.ctx, e.snap, CreateInput{ParentID: folder.ID, Kind: "project", DisplayName: "P"})
 		}()
 	}
 	wg.Add(1)
@@ -152,5 +161,21 @@ func TestCreatesRacingADelete(t *testing.T) {
 	}
 	if n := e.count(`SELECT count(DISTINCT slug) FROM nodes WHERE parent_id = $1`, folder.ID); n != e.count(`SELECT count(*) FROM nodes WHERE parent_id = $1`, folder.ID) {
 		t.Fatal("generated slugs collided")
+	}
+}
+
+func TestPlanCountsRoute(t *testing.T) {
+	e := setup(t)
+	app := fiber.New(fiber.Config{ErrorHandler: apierrors.FiberErrorHandler})
+	NewHandler(e.store, feed.Static(e.snap)).MountInternal(app)
+	org := e.create(nil, "organization", "Gruow")
+	f := e.create(org, "folder", "Apps")
+	status, body, _ := call(t, app, "POST", "/plan", `{"kinds": ["folder"]}`)
+	want := fmt.Sprint(map[string]any{"kinds": map[string]any{"folder": map[string]any{"live": 1.0, "nodes": 1.0, "sample": []any{f.ID}}}})
+	if status != 200 || fmt.Sprint(body) != want {
+		t.Fatalf("plan: %d %v", status, body)
+	}
+	if status, _, _ := call(t, app, "POST", "/plan", `{"kinds": [""]}`); status != 422 {
+		t.Fatalf("empty kind: %d", status)
 	}
 }

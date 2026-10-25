@@ -2,9 +2,7 @@ package members
 
 import (
 	"context"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -18,12 +16,12 @@ import (
 
 // AdmitInput is POST /internal/admit (docs/reference/api/internal.md#admit):
 // a credential, or the IdP's issuer and subject, and the route's node chain.
+// An empty chain is a user route.
 type AdmitInput struct {
-	Credential     *string
-	IdP            *IdPClaims
-	Scope          string
-	Chain          []ChainRef
-	ResolveDeleted bool
+	Credential   *string
+	IdP          *IdPClaims
+	Chain        []ChainRef
+	AllowDeleted bool
 }
 
 // IdPClaims is what the gateway read from a verified JWT.
@@ -32,7 +30,8 @@ type IdPClaims struct {
 	Name            *string
 }
 
-// ChainRef is one chain param from the path: a slug, or an id when it holds _.
+// ChainRef is one chain param from the path: an id when it starts with a
+// digit, else a slug.
 type ChainRef struct {
 	Kind, Ref string
 }
@@ -42,80 +41,74 @@ type ChainNode struct {
 	Kind, ID string
 }
 
-// Admitted is admit's answer. MemberID empty means no member in the tree.
+// Admitted is admit's answer. Empty strings are nulls on the wire.
 type Admitted struct {
-	Valid     bool
-	Found     bool
-	Principal string
-	Nodes     []ChainNode
-	MemberID  string
-	Labels    []string
-	GoodUntil *time.Time
+	Valid       bool
+	Principal   string
+	KeyID       string
+	Nodes       []ChainNode
+	MemberID    string
+	UserID      string
+	Permissions []string
 }
-
-var invalid = &Admitted{}
 
 // admitPrincipal is the principal behind a credential.
 type admitPrincipal struct {
-	id, kind string
+	id, kind, userID, keyID string
 }
 
-// Admit turns a credential and a node chain into the member and labels for
-// one request, in the five steps of the contract. It writes only for a new
-// IdP subject (the person and their directory member) or a changed name.
+// Admit turns a credential and a node chain into the member and permissions
+// for one request, in the steps of the contract. It writes only for a new IdP
+// subject (the person) or a changed name.
 func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (*Admitted, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "admit", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
-	signIn := in.Scope == snap.SignInKind().Name
-	if err := checkAdmit(in, signIn); err != nil {
+	if err := checkAdmit(in); err != nil {
 		return nil, op.Expected("invalid", err)
 	}
+	userRoute := len(in.Chain) == 0
 
 	// 1. Principal.
 	p, err := s.admitPrincipal(ctx, in)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
-	if p == nil || (signIn && p.kind == PrincipalServiceAccount) {
+	if p == nil || (userRoute && p.kind == PrincipalServiceAccount) {
 		op.OK("invalid")
-		return invalid, nil
+		return &Admitted{}, nil
 	}
-	out := &Admitted{Valid: true, Found: true, Principal: p.kind}
-
-	if signIn {
-		memberID, err := activeMemberID(ctx, s.pool, p.id, s.signInID)
-		if err != nil {
-			return nil, op.Fail(err)
-		}
-		out.MemberID = memberID
+	out := &Admitted{Valid: true, Principal: p.kind, KeyID: p.keyID}
+	if userRoute {
+		out.UserID = p.userID
 		op.OK("admitted")
 		return out, nil
 	}
 
 	// 2. Nodes.
-	out.Nodes, err = s.resolveChain(ctx, in.Chain, in.ResolveDeleted)
+	chain, err := s.resolveChain(ctx, in.Chain, in.AllowDeleted)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
-	if out.Nodes == nil {
+	if chain == nil {
 		op.OK("not found")
-		return &Admitted{Valid: true, Principal: p.kind}, nil
-	}
-
-	// 3. Member.
-	out.MemberID, err = activeMemberID(ctx, s.pool, p.id, out.Nodes[0].ID)
-	if err != nil {
-		return nil, op.Fail(err)
-	}
-	if out.MemberID == "" {
-		op.OK("no member")
 		return out, nil
 	}
 
-	// 4 and 5. Labels and good until.
-	if err := s.chainLabels(ctx, snap, out); err != nil {
+	// 3. Member.
+	memberID, err := activeMemberID(ctx, s.pool, p.id, chain[0].ID)
+	if err != nil {
+		return nil, op.Fail(err)
+	}
+	if memberID == "" {
+		op.OK("no member")
+		return out, nil
+	}
+	out.Nodes, out.MemberID = chain, memberID
+
+	// 4. Permissions.
+	if out.Permissions, err = s.chainPermissions(ctx, snap, out); err != nil {
 		return nil, op.Fail(err)
 	}
 	op.OK("admitted")
@@ -124,37 +117,21 @@ func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (
 
 // checkAdmit refuses a body identity can't read (422). The chain's kinds are
 // matched by name only, never against the config: a gateway on another
-// revision gets found: false, not an error.
-func checkAdmit(in AdmitInput, signIn bool) error {
+// revision gets member_id null, not an error.
+func checkAdmit(in AdmitInput) error {
 	if (in.Credential == nil) == (in.IdP == nil) {
 		return errors.FieldError("credential", "Send a credential or idp.")
 	}
 	if in.IdP != nil && (strings.TrimSpace(in.IdP.Issuer) == "" || strings.TrimSpace(in.IdP.Subject) == "") {
 		return errors.FieldError("idp", errors.FallbackValidation)
 	}
-	if in.Scope == "" || in.Scope == "public" {
-		return errors.FieldError("scope", errors.FallbackValidation)
-	}
-	if signIn {
-		if len(in.Chain) > 0 {
-			return errors.FieldError("chain", "A sign-in route has no chain.")
-		}
-		return nil
-	}
-	if len(in.Chain) == 0 || in.Chain[len(in.Chain)-1].Kind != in.Scope {
-		return errors.FieldError("chain", "The chain ends at the route's scope.")
-	}
-	for _, c := range in.Chain {
-		if c.Kind == "" {
-			return errors.FieldError("chain", errors.FallbackValidation)
-		}
-	}
 	return nil
 }
 
 // admitPrincipal finds the principal, or nil when the credential is invalid:
-// an unknown or revoked key, a suspended principal, or a service account
-// whose born node is deleted. A new IdP subject becomes a person.
+// a key identity can't read, an unknown or revoked key, a suspended person,
+// or a service account whose born node is deleted. A new IdP subject becomes
+// a person.
 func (s *Store) admitPrincipal(ctx context.Context, in AdmitInput) (*admitPrincipal, error) {
 	if in.Credential != nil {
 		return s.keyPrincipalFor(ctx, *in.Credential)
@@ -167,16 +144,17 @@ func (s *Store) keyPrincipalFor(ctx context.Context, key string) (*admitPrincipa
 		return nil, nil
 	}
 	var p admitPrincipal
+	var userID *string
 	var status string
 	var revoked bool
 	var bornStatus *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT p.id, p.kind, p.status, k.revoked_at IS NOT NULL, bn.status
+		SELECT p.id, p.kind, p.user_id, k.id, p.status, k.revoked_at IS NOT NULL, bn.status
 		FROM api_keys k
 		JOIN principals p ON p.id = k.principal_id
 		LEFT JOIN nodes bn ON bn.id = p.born_node_id
 		WHERE k.key_hash = $1
-	`, apikey.Hash(key)).Scan(&p.id, &p.kind, &status, &revoked, &bornStatus)
+	`, apikey.Hash(key)).Scan(&p.id, &p.kind, &userID, &p.keyID, &status, &revoked, &bornStatus)
 	if dbx.IsNoRows(err) {
 		return nil, nil
 	}
@@ -185,6 +163,9 @@ func (s *Store) keyPrincipalFor(ctx context.Context, key string) (*admitPrincipa
 	}
 	if revoked || status != StatusActive || (bornStatus != nil && *bornStatus != nodes.StatusActive) {
 		return nil, nil
+	}
+	if userID != nil {
+		p.userID = *userID
 	}
 	return &p, nil
 }
@@ -195,14 +176,14 @@ func (s *Store) idpPrincipal(ctx context.Context, c IdPClaims) (*admitPrincipal,
 	if c.Name != nil {
 		name = strings.TrimSpace(*c.Name)
 	}
-	var principalID, status string
+	var principalID, userID, status string
 	err := s.pool.QueryRow(ctx, `
-		SELECT p.id, p.status FROM idp_links l JOIN principals p ON p.id = l.principal_id
+		SELECT p.id, p.user_id, p.status FROM idp_links l JOIN principals p ON p.id = l.principal_id
 		WHERE l.issuer = $1 AND l.subject = $2
-	`, issuer, subject).Scan(&principalID, &status)
+	`, issuer, subject).Scan(&principalID, &userID, &status)
 	switch {
 	case dbx.IsNoRows(err):
-		if principalID, status, err = s.firstSignIn(ctx, issuer, subject, name); err != nil {
+		if principalID, userID, status, err = s.firstSignIn(ctx, issuer, subject, name); err != nil {
 			return nil, err
 		}
 	case err != nil:
@@ -218,46 +199,42 @@ func (s *Store) idpPrincipal(ctx context.Context, c IdPClaims) (*admitPrincipal,
 	if status != StatusActive {
 		return nil, nil
 	}
-	return &admitPrincipal{id: principalID, kind: PrincipalPerson}, nil
+	return &admitPrincipal{id: principalID, kind: PrincipalPerson, userID: userID}, nil
 }
 
-// firstSignIn creates the person behind a new IdP subject, with their
-// directory member, under the sign-in tree's lock. A concurrent admit for the
-// same subject finds the link once it has the lock. It returns the
-// principal and its status.
-func (s *Store) firstSignIn(ctx context.Context, issuer, subject, name string) (string, string, error) {
+// firstSignIn creates the person behind a new IdP subject. A concurrent
+// admit for the same subject finds the link once it has the subject's lock.
+// It returns the principal, its user id and its status.
+func (s *Store) firstSignIn(ctx context.Context, issuer, subject, name string) (string, string, string, error) {
 	w, err := s.begin(ctx)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	defer w.rollback(ctx)
-	if err := nodes.LockTrees(ctx, w.tx, []string{s.signInID}); err != nil {
-		return "", "", err
-	}
 	principalID, err := s.ensurePerson(ctx, w, issuer, subject)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	var status string
+	var userID, status string
 	if err := w.tx.QueryRow(ctx, `
-		UPDATE principals SET name = COALESCE(NULLIF($2, ''), name) WHERE id = $1 RETURNING status
-	`, principalID, name).Scan(&status); err != nil {
-		return "", "", err
+		UPDATE principals SET name = COALESCE(NULLIF($2, ''), name) WHERE id = $1 RETURNING user_id, status
+	`, principalID, name).Scan(&userID, &status); err != nil {
+		return "", "", "", err
 	}
-	return principalID, status, w.commit(ctx)
+	return principalID, userID, status, w.commit(ctx)
 }
 
 // resolveChain resolves each ref under the previous node, by kind; the first
 // is a root. Nil when a node is missing, purged, or deleted, except a deleted
-// last node with resolveDeleted.
-func (s *Store) resolveChain(ctx context.Context, chain []ChainRef, resolveDeleted bool) ([]ChainNode, error) {
+// last node with allowDeleted.
+func (s *Store) resolveChain(ctx context.Context, chain []ChainRef, allowDeleted bool) ([]ChainNode, error) {
 	out := make([]ChainNode, 0, len(chain))
 	parent := ""
 	for i, c := range chain {
 		var nodeID, status string
 		var err error
-		if strings.Contains(c.Ref, "_") {
-			if !id.Valid(id.Node, c.Ref) {
+		if id.IsID(c.Ref) {
+			if !id.Valid(c.Ref) {
 				return nil, nil
 			}
 			err = s.pool.QueryRow(ctx, `
@@ -275,7 +252,7 @@ func (s *Store) resolveChain(ctx context.Context, chain []ChainRef, resolveDelet
 			return nil, err
 		}
 		last := i == len(chain)-1
-		if status != nodes.StatusActive && !(last && resolveDeleted && status == nodes.StatusDeleted) {
+		if status != nodes.StatusActive && !(last && allowDeleted && status == nodes.StatusDeleted) {
 			return nil, nil
 		}
 		out = append(out, ChainNode{Kind: c.Kind, ID: nodeID})
@@ -284,47 +261,26 @@ func (s *Store) resolveChain(ctx context.Context, chain []ChainRef, resolveDelet
 	return out, nil
 }
 
-// chainLabels sets the union of the roles of the member's bindings that count
-// on the chain's nodes (docs/concepts/access.md#resolution), and the earliest
-// expiry among them. The chain is live but for a resolve_deleted last node,
-// whose own bindings count.
-func (s *Store) chainLabels(ctx context.Context, snap *feed.Snapshot, out *Admitted) error {
+// chainPermissions is the union of the roles of the member's bindings that
+// count on the chain's nodes (docs/concepts/access.md#resolution). The chain
+// is live but for an allow_deleted last node, whose own bindings count.
+func (s *Store) chainPermissions(ctx context.Context, snap *feed.Snapshot, out *Admitted) ([]string, error) {
 	nodeIDs := make([]string, len(out.Nodes))
 	for i, n := range out.Nodes {
 		nodeIDs[i] = n.ID
 	}
 	kinds, roles := bindablePairs(snap)
 	rows, err := s.pool.Query(ctx, `
-		SELECT b.role, b.expires_at
+		SELECT b.role
 		FROM bindings b JOIN nodes bn ON bn.id = b.node_id
-		WHERE b.member_id = $1 AND b.node_id = ANY($2) AND `+counts("$3", "$4", "$5"),
-		out.MemberID, nodeIDs, s.now().UTC(), kinds, roles)
+		WHERE b.member_id = $1 AND b.node_id = ANY($2) AND `+counts("$3", "$4"),
+		out.MemberID, nodeIDs, kinds, roles)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	var held []string
-	var role string
-	var expiresAt *time.Time
-	if _, err := pgx.ForEachRow(rows, []any{&role, &expiresAt}, func() error {
-		held = append(held, role)
-		if expiresAt != nil && (out.GoodUntil == nil || expiresAt.Before(*out.GoodUntil)) {
-			t := *expiresAt
-			out.GoodUntil = &t
-		}
-		return nil
-	}); err != nil {
-		return err
+	held, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, err
 	}
-	out.Labels = Resolve(snap, held).List()
-	return nil
-}
-
-// List is the labels, sorted, with * as written.
-func (l Labels) List() []string {
-	out := make([]string, 0, len(l.Set))
-	for label := range l.Set {
-		out = append(out, label)
-	}
-	sort.Strings(out)
-	return out
+	return Resolve(snap, held).List(), nil
 }

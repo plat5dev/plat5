@@ -19,9 +19,10 @@ const (
 	Header = "X-Plat5-Audit-Details"
 	// CreatedHeader is the id a create produced.
 	CreatedHeader = "X-Plat5-Audit-Created"
-	// RootHeader and MemberHeader name the tree a sign-in route changed, and
-	// the member in it. The event goes in that tree's log too.
-	RootHeader   = "X-Plat5-Audit-Root"
+	// NodesHeader and MemberHeader name the chain a user route changed, root
+	// first, and the person's member in that tree. The event goes in those
+	// nodes' logs too.
+	NodesHeader  = "X-Plat5-Audit-Nodes"
 	MemberHeader = "X-Plat5-Audit-Member"
 	// MaxBytes is the gateway's cap. Over it, the gateway drops the details.
 	MaxBytes = 4096
@@ -69,10 +70,11 @@ func SetCreated(c fiber.Ctx, id string) {
 	c.Set(CreatedHeader, id)
 }
 
-// SetRoot names the tree a sign-in route changed, and the member in it. Only
-// for sign-in routes: elsewhere the route's nodes already name the tree.
-func SetRoot(c fiber.Ctx, rootID, memberID string) {
-	c.Set(RootHeader, rootID)
+// SetNamed names the chain a user route changed, root first, and the member
+// in that tree. Only for user routes: elsewhere the route's nodes already
+// name the tree.
+func SetNamed(c fiber.Ctx, nodeIDs []string, memberID string) {
+	c.Set(NodesHeader, strings.Join(nodeIDs, ","))
 	c.Set(MemberHeader, memberID)
 }
 

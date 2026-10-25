@@ -30,38 +30,39 @@ const (
 	tokenRandomBytes = 32
 )
 
+// DefaultInviteExpiry is how long a token works when expires_in is omitted.
+const DefaultInviteExpiry = 7 * 24 * time.Hour
+
 // Grant is a binding below the root an invite to the root makes on redeem.
 type Grant struct {
-	NodeID   string  `json:"node_id"`
-	Role     string  `json:"role"`
-	Duration *string `json:"duration"`
+	NodeID string `json:"node_id"`
+	Role   string `json:"role"`
 }
 
 // Invite is a join token for a node. Below a root it can admit a guest.
 type Invite struct {
-	ID           string
-	NodeID       string
-	Role         string
-	RoleDuration *string
-	Grants       []Grant
-	MaxUses      *int
-	UseCount     int
-	Status       string
-	ExpiresAt    time.Time
-	TokenPrefix  string
-	CreatedAt    time.Time
+	ID          string
+	NodeID      string
+	Role        string
+	Grants      []Grant
+	MaxUses     *int // nil: unlimited
+	UseCount    int
+	Status      string
+	ExpiresAt   time.Time
+	TokenPrefix string
+	CreatedAt   time.Time
 	// Token is set once, on create.
 	Token string
 }
 
-const inviteColumns = `id, node_id, role, role_duration, grants, max_uses, use_count, status, expires_at, token_prefix, created_at`
+const inviteColumns = `id, node_id, role, grants, max_uses, use_count, status, expires_at, token_prefix, created_at`
 
 // scanInvite reads an invite, with an active one past its expiry read as
 // expired: the sweeper writes that later.
 func (s *Store) scanInvite(row dbx.Scannable) (*Invite, error) {
 	var inv Invite
 	var grants []byte
-	if err := row.Scan(&inv.ID, &inv.NodeID, &inv.Role, &inv.RoleDuration, &grants, &inv.MaxUses, &inv.UseCount,
+	if err := row.Scan(&inv.ID, &inv.NodeID, &inv.Role, &grants, &inv.MaxUses, &inv.UseCount,
 		&inv.Status, &inv.ExpiresAt, &inv.TokenPrefix, &inv.CreatedAt); err != nil {
 		return nil, err
 	}
@@ -77,20 +78,12 @@ func (s *Store) scanInvite(row dbx.Scannable) (*Invite, error) {
 	return &inv, nil
 }
 
-// InviteInput is POST /nodes/{node_id}/invites.
+// InviteInput is POST /nodes/{node_id}/invites, read.
 type InviteInput struct {
-	Role         *string
-	RoleDuration *string
-	Grants       []GrantInput
-	MaxUses      *int // nil: unlimited
-	ExpiresAt    *time.Time
-}
-
-// GrantInput is one of an invite's grants as sent: { node, role, duration? }.
-type GrantInput struct {
-	Node     string  `json:"node"`
-	Role     string  `json:"role"`
-	Duration *string `json:"duration"`
+	Role      string
+	Grants    []Grant
+	MaxUses   *int // nil: unlimited
+	ExpiresIn time.Duration
 }
 
 // CreateInvite makes an invite at nodeID. The token is in the result once.
@@ -99,12 +92,11 @@ func (s *Store) CreateInvite(ctx context.Context, snap *feed.Snapshot, nodeID st
 	defer cancel()
 	defer op.End()
 
-	now := s.now()
-	if in.ExpiresAt == nil || in.ExpiresAt.Before(now.Add(minInviteExpiry)) || in.ExpiresAt.After(now.Add(maxInviteExpiry)) {
-		return nil, op.Expected("invalid", errors.FieldError("expires_at", "Expiry must be between 60 seconds and 30 days."))
+	if in.ExpiresIn < minInviteExpiry || in.ExpiresIn > maxInviteExpiry {
+		return nil, op.Expected("invalid", ExpiresInError())
 	}
 	if in.MaxUses != nil && *in.MaxUses < 1 {
-		return nil, op.Expected("invalid", errors.FieldError("max_uses", "Max uses must be at least 1."))
+		return nil, op.Expected("invalid", MaxUsesError())
 	}
 
 	w, err := s.begin(ctx)
@@ -116,25 +108,7 @@ func (s *Store) CreateInvite(ctx context.Context, snap *feed.Snapshot, nodeID st
 	if err != nil {
 		return nil, op.Reject(err, nodes.ErrNotFound)
 	}
-	if n.ID == s.signInID {
-		return nil, op.Expected("sign-in", errors.FieldError("node_id", errors.FallbackValidation))
-	}
-	isRoot := n.ParentID == nil
-	var role string
-	switch {
-	case in.Role != nil:
-		role = *in.Role
-	case isRoot:
-		role = snap.DefaultRole
-	}
-	if role == "" {
-		return nil, op.Expected("invalid", errors.FieldError("role", "Choose a role."))
-	}
-	roleDuration, err := parseDuration(in.RoleDuration, "role_duration")
-	if err != nil {
-		return nil, op.Expected("invalid", err)
-	}
-	if err := checkDuration(snap, role, n.Kind, roleDuration, "role_duration"); err != nil {
+	if err := checkRole(snap, in.Role, n.Kind, "role"); err != nil {
 		return nil, op.Expected("invalid", err)
 	}
 	grants, err := s.checkGrants(ctx, w, snap, n, in.Grants)
@@ -150,12 +124,13 @@ func (s *Store) CreateInvite(ctx context.Context, snap *feed.Snapshot, nodeID st
 	if err != nil {
 		return nil, op.Fail(err)
 	}
+	now := s.now().UTC()
 	inv, err := s.scanInvite(w.tx.QueryRow(ctx, `
-		INSERT INTO invites (id, node_id, role, role_duration, grants, token_hash, token_prefix, status, max_uses, expires_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, $10)
+		INSERT INTO invites (id, node_id, role, grants, token_hash, token_prefix, status, max_uses, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9)
 		RETURNING `+inviteColumns,
-		id.New(id.Invite), n.ID, role, in.RoleDuration, grantsJSON, apikey.Hash(token),
-		apikey.DisplayPrefix(token, tokenPrefix), in.MaxUses, in.ExpiresAt.UTC(), now.UTC()))
+		id.New(), n.ID, in.Role, grantsJSON, apikey.Hash(token),
+		apikey.DisplayPrefix(token, tokenPrefix), in.MaxUses, now.Add(in.ExpiresIn), now))
 	if err != nil {
 		return nil, op.Fail(err)
 	}
@@ -167,6 +142,17 @@ func (s *Store) CreateInvite(ctx context.Context, snap *feed.Snapshot, nodeID st
 	return inv, nil
 }
 
+// ExpiresInError is the 422 for an expires_in out of range or unreadable.
+func ExpiresInError() error {
+	return errors.FieldError("expires_in", "Expiry must be between 60 seconds and 30 days.")
+}
+
+// MaxUsesError is the 422 for a max_uses that's neither a positive number nor
+// unlimited.
+func MaxUsesError() error {
+	return errors.FieldError("max_uses", "Max uses must be at least 1, or unlimited.")
+}
+
 func newToken() (string, error) {
 	buf := make([]byte, tokenRandomBytes)
 	if _, err := rand.Read(buf); err != nil {
@@ -175,25 +161,9 @@ func newToken() (string, error) {
 	return tokenPrefix + base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-// parseDuration reads an optional duration in the config's form.
-func parseDuration(v *string, field string) (*time.Duration, error) {
-	if v == nil {
-		return nil, nil
-	}
-	if *v == "" {
-		return nil, errors.FieldError(field, errors.FallbackValidation)
-	}
-	d, err := feed.ParseDuration(*v)
-	if err != nil {
-		return nil, errors.FieldError(field, errors.FallbackValidation)
-	}
-	return &d, nil
-}
-
 // checkGrants checks an invite's grants: only on a root, each on a distinct
-// live node below it, with a role bindable there and a duration that meets
-// its max_duration.
-func (s *Store) checkGrants(ctx context.Context, w *write, snap *feed.Snapshot, n *nodes.Node, in []GrantInput) ([]Grant, error) {
+// live node below it, with a role bindable there.
+func (s *Store) checkGrants(ctx context.Context, w *write, snap *feed.Snapshot, n *nodes.Node, in []Grant) ([]Grant, error) {
 	out := []Grant{}
 	if len(in) == 0 {
 		return out, nil
@@ -203,30 +173,30 @@ func (s *Store) checkGrants(ctx context.Context, w *write, snap *feed.Snapshot, 
 		if err := w.tx.QueryRow(ctx, `SELECT kind FROM nodes WHERE id = $1`, n.RootID).Scan(&rootKind); err != nil {
 			return nil, err
 		}
-		return nil, errors.FieldError("grants", fmt.Sprintf("Only an invite to the %s can grant more.", nodes.KindWord(snap, rootKind)))
+		return nil, errors.FieldError("grants", fmt.Sprintf("Only an invite to the %s can grant more.", rootKind))
 	}
 	seen := map[string]bool{}
 	for i, g := range in {
 		field := fmt.Sprintf("grants[%d]", i)
+		badNode := errors.FieldError(field+".node_id", errors.FallbackValidation)
+		if !id.Valid(g.NodeID) || seen[g.NodeID] {
+			return nil, badNode
+		}
 		var kind string
 		err := w.tx.QueryRow(ctx, `
 			SELECT kind FROM nodes WHERE id = $1 AND root_id = $2 AND id <> $2 AND status = 'active'
-		`, g.Node, n.ID).Scan(&kind)
-		if dbx.IsNoRows(err) || seen[g.Node] {
-			return nil, errors.FieldError(field+".node", errors.FallbackValidation)
+		`, g.NodeID, n.ID).Scan(&kind)
+		if dbx.IsNoRows(err) {
+			return nil, badNode
 		}
 		if err != nil {
 			return nil, err
 		}
-		seen[g.Node] = true
-		d, err := parseDuration(g.Duration, field+".duration")
-		if err != nil {
+		seen[g.NodeID] = true
+		if err := checkRole(snap, g.Role, kind, field+".role"); err != nil {
 			return nil, err
 		}
-		if err := checkDuration(snap, g.Role, kind, d, field+".duration"); err != nil {
-			return nil, err
-		}
-		out = append(out, Grant{NodeID: g.Node, Role: g.Role, Duration: g.Duration})
+		out = append(out, Grant{NodeID: g.NodeID, Role: g.Role})
 	}
 	return out, nil
 }
@@ -260,7 +230,7 @@ func (s *Store) RevokeInvite(ctx context.Context, nodeID, inviteID string) (bool
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "revoke_invite", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
-	if !id.Valid(id.Invite, inviteID) {
+	if !id.Valid(inviteID) {
 		return false, op.Expected("not found", ErrNotFound)
 	}
 	var exists, changed bool
@@ -282,26 +252,39 @@ func (s *Store) RevokeInvite(ctx context.Context, nodeID, inviteID string) (bool
 	return changed, nil
 }
 
+// ExpireInvites marks active invites past their expiry expired. Reads already
+// show them so; this writes it down. It returns how many it marked.
+func (s *Store) ExpireInvites(ctx context.Context) (int, error) {
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "expire_invites", dbx.DefaultTimeout)
+	defer cancel()
+	defer op.End()
+	tag, err := s.pool.Exec(ctx, `UPDATE invites SET status = 'expired' WHERE status = 'active' AND expires_at <= $1`, s.now().UTC())
+	if err != nil {
+		return 0, op.Fail(err)
+	}
+	op.OK("ok")
+	return int(tag.RowsAffected()), nil
+}
+
 // Redeemed is what a redeem did: the member in the invite's tree, and the
 // node it was for. Binding is nil when nothing changed.
 type Redeemed struct {
 	MemberID      string
-	RootID        string
-	NodeID        string
+	Node          *nodes.Node
 	MemberCreated bool
 	Binding       *Binding
 }
 
-// Redeem uses an invite for a person, by their directory member. At a root it
-// makes a member with the invite's role plus each grant on a node still live;
-// below a root it binds the role there, making a guest of someone not in the
-// tree. Someone already bound on the invite's node uses it and changes nothing.
-func (s *Store) Redeem(ctx context.Context, memberID, token string) (*Redeemed, error) {
+// Redeem uses an invite for a person, by user id. At a root it makes a member
+// with the invite's role plus each grant on a node still live; below a root
+// it binds the role there, making a guest of someone not in the tree. Someone
+// already bound on the invite's node changes nothing, and that isn't a use.
+func (s *Store) Redeem(ctx context.Context, userID, token string) (*Redeemed, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "redeem_invite", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
-	principalID, err := s.personPrincipal(ctx, s.pool, memberID)
+	u, err := s.user(ctx, s.pool, userID)
 	if err != nil {
 		return nil, op.Reject(err, ErrNotFound)
 	}
@@ -325,19 +308,25 @@ func (s *Store) Redeem(ctx context.Context, memberID, token string) (*Redeemed, 
 		return nil, op.Fail(err)
 	}
 	inv, err := s.scanInvite(w.tx.QueryRow(ctx, `SELECT `+inviteColumns+` FROM invites WHERE token_hash = $1 FOR UPDATE`, hash))
+	if dbx.IsNoRows(err) {
+		return nil, op.Expected("unknown token", errors.NotFoundError("invite", nil)) // purged meanwhile
+	}
 	if err != nil {
 		return nil, op.Fail(err)
 	}
 	if inv.Status != InviteActive {
 		return nil, op.Expected("unusable", inviteUnusable(inv.Status))
 	}
+	if n.Status != nodes.StatusActive {
+		return nil, op.Expected("node deleted", errors.ConflictError(fmt.Sprintf("This invite's %s was deleted.", n.Kind), "node", nodes.StatusDeleted))
+	}
 
-	out := &Redeemed{RootID: n.RootID, NodeID: n.ID}
-	if out.MemberID, err = activeMemberID(ctx, w.tx, principalID, n.RootID); err != nil {
+	out := &Redeemed{Node: n}
+	if out.MemberID, err = activeMemberID(ctx, w.tx, u.principalID, n.RootID); err != nil {
 		return nil, op.Fail(err)
 	}
 	if out.MemberID == "" {
-		if out.MemberID, err = s.insertMember(ctx, w, principalID, PrincipalPerson, n.RootID); err != nil {
+		if out.MemberID, err = s.insertMember(ctx, w, u.principalID, PrincipalPerson, n.RootID); err != nil {
 			return nil, op.Fail(err)
 		}
 		out.MemberCreated = true
@@ -348,13 +337,18 @@ func (s *Store) Redeem(ctx context.Context, memberID, token string) (*Redeemed, 
 	`, out.MemberID, n.ID).Scan(&held); err != nil {
 		return nil, op.Fail(err)
 	}
-	if !held {
-		if out.Binding, err = s.insertBinding(ctx, w, out.MemberID, n.ID, inv.Role, s.until(inv.RoleDuration)); err != nil {
+	if held {
+		if err := w.commit(ctx); err != nil {
 			return nil, op.Fail(err)
 		}
-		if err := s.applyGrants(ctx, w, out.MemberID, inv.Grants); err != nil {
-			return nil, op.Fail(err)
-		}
+		op.OK("unchanged")
+		return out, nil
+	}
+	if out.Binding, err = s.insertBinding(ctx, w, out.MemberID, n.ID, inv.Role); err != nil {
+		return nil, op.Fail(err)
+	}
+	if err := s.applyGrants(ctx, w, out.MemberID, inv.Grants); err != nil {
+		return nil, op.Fail(err)
 	}
 	if _, err := w.tx.Exec(ctx, `
 		UPDATE invites SET use_count = use_count + 1,
@@ -385,24 +379,11 @@ func (s *Store) applyGrants(ctx context.Context, w *write, memberID string, gran
 		if !live || held {
 			continue
 		}
-		if _, err := s.insertBinding(ctx, w, memberID, g.NodeID, g.Role, s.until(g.Duration)); err != nil {
+		if _, err := s.insertBinding(ctx, w, memberID, g.NodeID, g.Role); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-// until is now plus a stored duration, or nil for none.
-func (s *Store) until(d *string) *time.Time {
-	if d == nil {
-		return nil
-	}
-	dur, err := feed.ParseDuration(*d)
-	if err != nil {
-		return nil
-	}
-	t := s.now().UTC().Add(dur)
-	return &t
 }
 
 func inviteUnusable(status string) error {

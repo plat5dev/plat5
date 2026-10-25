@@ -22,10 +22,9 @@ import (
 const testSchema = "identity_test_nodes"
 
 const baseKinds = `
-	"directory": { "sign_in": "idp" },
-	"organization": { "label": "Organization" },
-	"folder": { "label": "Folder", "parent": "organization" },
-	"project": { "label": "Project", "parent": ["organization", "folder"] }`
+	"organization": { "path": "/orgs/{organization}", "list_permission": "organization:read" },
+	"folder": { "parent": "organization", "path": "/folders/{folder}", "list_permission": "folder:read" },
+	"project": { "parent": "folder", "path": "/projects/{project}", "list_permission": "project:read" }`
 
 func snapshot(t *testing.T, grace string, kinds string) *feed.Snapshot {
 	t.Helper()
@@ -66,15 +65,15 @@ func setup(t *testing.T) *env {
 	}
 }
 
-func (e *env) create(parent *Node, kind, label string) *Node {
+func (e *env) create(parent *Node, kind, name string) *Node {
 	e.t.Helper()
-	in := CreateInput{Kind: kind, Label: label}
+	in := CreateInput{Kind: kind, DisplayName: name}
 	if parent != nil {
 		in.ParentID = parent.ID
 	}
 	n, err := e.store.Create(e.ctx, e.snap, in)
 	if err != nil {
-		e.t.Fatalf("create %s %q: %v", kind, label, err)
+		e.t.Fatalf("create %s %q: %v", kind, name, err)
 	}
 	return n
 }
@@ -121,12 +120,11 @@ func (e *env) lastEventID() int64 {
 	return n
 }
 
-// events after mark, as "<wire type> <node or member id>".
+// events after mark, as "<type> [<kind>] <node or member id> [<principal>]".
 func (e *env) events(after int64) []string {
 	e.t.Helper()
 	rows, err := e.pool.Query(e.ctx, `
-		SELECT CASE WHEN type LIKE 'node.%' THEN kind || substr(type, 5) ELSE type END,
-		       COALESCE(node_id, member_id), COALESCE(principal, '')
+		SELECT type || COALESCE(' ' || kind, ''), COALESCE(node_id, member_id), COALESCE(principal, '')
 		FROM lifecycle_events WHERE id > $1 ORDER BY id`, after)
 	if err != nil {
 		e.t.Fatal(err)
@@ -165,23 +163,26 @@ func wantAPIError(t *testing.T, err error, status int, code string) *errors.ApiE
 // root's tree, bound at each of nodes. It returns the member id.
 func (e *env) principal(kind string, born, root *Node, nodes ...*Node) (principalID, memberID string) {
 	e.t.Helper()
-	principalID = "p_" + id.New("")
-	var bornID *string
+	principalID = id.New()
+	var bornID, userID *string
 	if born != nil {
 		bornID = &born.ID
+	} else {
+		u := id.New()
+		userID = &u
 	}
-	e.exec(`INSERT INTO principals (id, kind, born_node_id) VALUES ($1, $2, $3)`, principalID, kind, bornID)
-	memberID = id.New(id.Member)
+	e.exec(`INSERT INTO principals (id, kind, user_id, born_node_id) VALUES ($1, $2, $3, $4)`, principalID, kind, userID, bornID)
+	memberID = id.New()
 	e.exec(`INSERT INTO members (id, principal_id, principal, root_id) VALUES ($1, $2, $3, $4)`, memberID, principalID, kind, root.ID)
 	for _, n := range nodes {
-		e.exec(`INSERT INTO bindings (id, member_id, node_id, role) VALUES ($1, $2, $3, 'admin')`, id.New(id.Binding), memberID, n.ID)
+		e.exec(`INSERT INTO bindings (id, member_id, node_id, role) VALUES ($1, $2, $3, 'admin')`, id.New(), memberID, n.ID)
 	}
 	return principalID, memberID
 }
 
 func (e *env) key(principalID string) string {
 	e.t.Helper()
-	keyID := id.New(id.Key)
+	keyID := id.New()
 	e.exec(`INSERT INTO api_keys (id, principal_id, name, key_prefix, key_hash) VALUES ($1, $2, 'k', 'plat5-k-2-AAAA', $1)`, keyID, principalID)
 	return keyID
 }
@@ -196,7 +197,7 @@ func TestCreateWritesTheClosureTable(t *testing.T) {
 	if org.RootID != org.ID || org.ParentID != nil || folder.RootID != org.ID || project.RootID != org.ID {
 		t.Fatalf("roots: %+v %+v %+v", org, folder, project)
 	}
-	if *project.ParentID != folder.ID || *project.Slug != "gatheroom" || project.Status != StatusActive {
+	if *project.ParentID != folder.ID || *project.Slug != "gatheroom" || project.Status != StatusActive || !id.Valid(project.ID) {
 		t.Fatalf("project: %+v", project)
 	}
 	rows, err := e.pool.Query(e.ctx, `SELECT ancestor_id, depth FROM node_ancestors WHERE node_id = $1 ORDER BY depth`, project.ID)
@@ -214,36 +215,47 @@ func TestCreateWritesTheClosureTable(t *testing.T) {
 	}
 	equal(t, "ancestors", got, []string{project.ID + "@0", folder.ID + "@1", org.ID + "@2"})
 	equal(t, "events", e.events(mark), []string{
-		"organization.created " + org.ID, "folder.created " + folder.ID, "project.created " + project.ID,
+		"node.created organization " + org.ID, "node.created folder " + folder.ID, "node.created project " + project.ID,
 	})
+
+	ancestors, err := e.store.Ancestors(e.ctx, []string{project.ID, org.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := ancestors[project.ID]; len(a) != 2 || a[0].ID != org.ID || a[1].ID != folder.ID || *a[1].Slug != "apps" || a[1].DisplayName != "Apps" {
+		t.Fatalf("project's ancestors, root first: %+v", a)
+	}
+	if len(ancestors[org.ID]) != 0 {
+		t.Fatalf("a root has none: %+v", ancestors[org.ID])
+	}
 }
 
 func TestCreateKindRules(t *testing.T) {
 	e := setup(t)
 	org := e.create(nil, "organization", "Gruow")
-	project := e.create(org, "project", "Gatheroom")
+	folder := e.create(org, "folder", "Apps")
 
 	for _, tc := range []struct {
 		name string
 		in   CreateInput
 	}{
-		{"a non-root kind as a root", CreateInput{Kind: "project", Label: "P"}},
-		{"a root kind under a node", CreateInput{ParentID: org.ID, Kind: "organization", Label: "O"}},
-		{"a kind under a parent it doesn't allow", CreateInput{ParentID: project.ID, Kind: "folder", Label: "F"}},
-		{"the sign-in kind", CreateInput{Kind: "directory", Label: "D"}},
-		{"a kind not in the config", CreateInput{Kind: "team", Label: "T"}},
+		{"a non-root kind as a root", CreateInput{Kind: "project", DisplayName: "P"}},
+		{"a root kind under a node", CreateInput{ParentID: org.ID, Kind: "organization", DisplayName: "O"}},
+		{"a kind under another kind than its parent", CreateInput{ParentID: org.ID, Kind: "project", DisplayName: "P"}},
+		{"a kind under itself", CreateInput{ParentID: folder.ID, Kind: "folder", DisplayName: "F"}},
+		{"a kind not in the config", CreateInput{Kind: "team", DisplayName: "T"}},
 	} {
 		_, err := e.store.Create(e.ctx, e.snap, tc.in)
 		apiErr := wantAPIError(t, err, 422, "VALIDATION_ERROR")
-		if tc.name == "a kind under a parent it doesn't allow" && apiErr.Message != "A folder can't go here." {
+		if tc.name == "a kind under another kind than its parent" && apiErr.Message != "A project can't go here." {
 			t.Fatalf("%s: message %q", tc.name, apiErr.Message)
 		}
 	}
-	if _, err := e.store.Create(e.ctx, e.snap, CreateInput{ParentID: id.New(id.Node), Kind: "project", Label: "P"}); !stderrors.Is(err, ErrNotFound) {
+	if _, err := e.store.Create(e.ctx, e.snap, CreateInput{ParentID: id.New(), Kind: "folder", DisplayName: "F"}); !stderrors.Is(err, ErrNotFound) {
 		t.Fatalf("missing parent: %v", err)
 	}
-	for _, label := range []string{"", "   ", string(make([]rune, 129))} {
-		_, err := e.store.Create(e.ctx, e.snap, CreateInput{Kind: "organization", Label: label})
+	for _, name := range []string{"", "   ", string(make([]rune, 129))} {
+		_, err := e.store.Create(e.ctx, e.snap, CreateInput{Kind: "organization", DisplayName: name})
 		wantAPIError(t, err, 422, "VALIDATION_ERROR")
 	}
 }
@@ -252,7 +264,7 @@ func TestCreateUnderADeletedParentIsRefused(t *testing.T) {
 	e := setup(t)
 	org := e.create(nil, "organization", "Gruow")
 	e.delete(org)
-	_, err := e.store.Create(e.ctx, e.snap, CreateInput{ParentID: org.ID, Kind: "project", Label: "P"})
+	_, err := e.store.Create(e.ctx, e.snap, CreateInput{ParentID: org.ID, Kind: "folder", DisplayName: "F"})
 	apiErr := wantAPIError(t, err, 409, "CONFLICT")
 	if apiErr.Message != "Restore the organization first." {
 		t.Fatalf("message %q", apiErr.Message)
@@ -265,30 +277,27 @@ func TestSlugsAreUniquePerParentAndKind(t *testing.T) {
 	org := e.create(nil, "organization", "Gruow")
 	other := e.create(nil, "organization", "Kyvera")
 
-	in := CreateInput{ParentID: org.ID, Kind: "project", Label: "P", Slug: slug("web")}
+	in := CreateInput{ParentID: org.ID, Kind: "folder", DisplayName: "F", Slug: slug("web")}
 	if _, err := e.store.Create(e.ctx, e.snap, in); err != nil {
 		t.Fatal(err)
 	}
 	_, err := e.store.Create(e.ctx, e.snap, in)
 	wantAPIError(t, err, 409, "CONFLICT")
 
-	// Another parent, or another kind under the same parent, may use it.
-	if _, err := e.store.Create(e.ctx, e.snap, CreateInput{ParentID: other.ID, Kind: "project", Label: "P", Slug: slug("web")}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.store.Create(e.ctx, e.snap, CreateInput{ParentID: org.ID, Kind: "folder", Label: "F", Slug: slug("web")}); err != nil {
+	// Another parent may use it.
+	if _, err := e.store.Create(e.ctx, e.snap, CreateInput{ParentID: other.ID, Kind: "folder", DisplayName: "F", Slug: slug("web")}); err != nil {
 		t.Fatal(err)
 	}
 
 	// Roots share one namespace per kind: org slugs are deployment-wide.
-	_, err = e.store.Create(e.ctx, e.snap, CreateInput{Kind: "organization", Label: "Again", Slug: slug("gruow")})
+	_, err = e.store.Create(e.ctx, e.snap, CreateInput{Kind: "organization", DisplayName: "Again", Slug: slug("gruow")})
 	wantAPIError(t, err, 409, "CONFLICT")
 
-	for _, bad := range []string{"ab", "1abc", "has_underscore", "Upper", "trailing-"} {
-		_, err := e.store.Create(e.ctx, e.snap, CreateInput{ParentID: org.ID, Kind: "project", Label: "P", Slug: slug(bad)})
+	for _, bad := range []string{"ab", "1abc", "has_underscore", "Upper", "trailing-", "01jbx9q3t5vk8m2n4p6r7s8t9w"} {
+		_, err := e.store.Create(e.ctx, e.snap, CreateInput{ParentID: org.ID, Kind: "folder", DisplayName: "F", Slug: slug(bad)})
 		wantAPIError(t, err, 422, "VALIDATION_ERROR")
 	}
-	_, err = e.store.Create(e.ctx, e.snap, CreateInput{ParentID: org.ID, Kind: "project", Label: "P", Slug: slug("settings")})
+	_, err = e.store.Create(e.ctx, e.snap, CreateInput{ParentID: org.ID, Kind: "folder", DisplayName: "F", Slug: slug("settings")})
 	if apiErr := wantAPIError(t, err, 422, "VALIDATION_ERROR"); apiErr.Message != "That name is reserved." {
 		t.Fatalf("reserved: %q", apiErr.Message)
 	}
@@ -298,51 +307,74 @@ func TestGeneratedSlugs(t *testing.T) {
 	e := setup(t)
 	org := e.create(nil, "organization", "Gruow")
 	var got []string
-	for _, label := range []string{"Gather Room", "Gather Room", "gather room!", "42", "New", "New"} {
-		got = append(got, *e.create(org, "project", label).Slug)
+	for _, name := range []string{"Gather Room", "Gather Room", "gather room!", "42", "New", "New"} {
+		got = append(got, *e.create(org, "folder", name).Slug)
 	}
-	equal(t, "slugs", got, []string{"gather-room", "gather-room-2", "gather-room-3", "project-42", "new-2", "new-3"})
+	equal(t, "slugs", got, []string{"gather-room", "gather-room-2", "gather-room-3", "folder-42", "new-2", "new-3"})
 
 	if s := *e.create(nil, "organization", "Gruow").Slug; s != "gruow-2" {
 		t.Fatalf("second root: %q", s)
 	}
 }
 
-func TestPurgedSlugsStayTaken(t *testing.T) {
-	e := setup(t)
-	org := e.create(nil, "organization", "Gruow")
-	old := e.create(org, "project", "Web")
-	e.delete(old)
+func (e *env) purge(n *Node) {
+	e.t.Helper()
+	e.delete(n)
 	e.clock.advance(31 * 24 * time.Hour)
 	if _, err := e.store.PurgeDue(e.ctx); err != nil {
+		e.t.Fatal(err)
+	}
+	if e.get(n).Status != StatusPurged {
+		e.t.Fatal("not purged")
+	}
+}
+
+func TestPurgeFreesASlugBelowTheRoot(t *testing.T) {
+	e := setup(t)
+	org := e.create(nil, "organization", "Gruow")
+	old := e.create(org, "folder", "Web")
+	e.purge(old)
+	if e.get(old).Slug != nil {
+		t.Fatalf("a purged node below a root keeps its slug: %+v", e.get(old))
+	}
+	web := "web"
+	if _, err := e.store.Create(e.ctx, e.snap, CreateInput{ParentID: org.ID, Kind: "folder", DisplayName: "Web", Slug: &web}); err != nil {
 		t.Fatal(err)
 	}
-	if e.get(old).Status != StatusPurged {
-		t.Fatal("not purged")
-	}
-
-	web := "web"
-	_, err := e.store.Create(e.ctx, e.snap, CreateInput{ParentID: org.ID, Kind: "project", Label: "Web", Slug: &web})
+	// A purged node below a root has no slug to release.
+	_, _, err := e.store.ReleaseSlug(e.ctx, old.ID)
 	wantAPIError(t, err, 409, "CONFLICT")
-	if s := *e.create(org, "project", "Web").Slug; s != "web-2" {
+}
+
+func TestPurgedRootSlugsStayTaken(t *testing.T) {
+	e := setup(t)
+	old := e.create(nil, "organization", "Gruow")
+	e.purge(old)
+
+	gruow := "gruow"
+	_, err := e.store.Create(e.ctx, e.snap, CreateInput{Kind: "organization", DisplayName: "Gruow", Slug: &gruow})
+	wantAPIError(t, err, 409, "CONFLICT")
+	if s := *e.create(nil, "organization", "Gruow").Slug; s != "gruow-2" {
 		t.Fatalf("generated past a tombstone: %q", s)
 	}
 
-	// Released by hand, the slug is free again.
+	// Released by an operator, the slug is free again.
 	freed, n, err := e.store.ReleaseSlug(e.ctx, old.ID)
-	if err != nil || *freed != "web" || n.Slug != nil {
+	if err != nil || *freed != "gruow" || n.Slug != nil {
 		t.Fatalf("release: %v %v %+v", freed, err, n)
 	}
-	if _, err := e.store.Create(e.ctx, e.snap, CreateInput{ParentID: org.ID, Kind: "project", Label: "Web", Slug: &web}); err != nil {
+	if _, err := e.store.Create(e.ctx, e.snap, CreateInput{Kind: "organization", DisplayName: "Gruow", Slug: &gruow}); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestReleaseSlugOnlyOnAPurgedNode(t *testing.T) {
+func TestReleaseSlugOnlyOnAPurgedRoot(t *testing.T) {
 	e := setup(t)
 	org := e.create(nil, "organization", "Gruow")
 	_, _, err := e.store.ReleaseSlug(e.ctx, org.ID)
-	wantAPIError(t, err, 409, "CONFLICT")
+	if apiErr := wantAPIError(t, err, 409, "CONFLICT"); apiErr.Message != "Only a purged root's slug can be released." {
+		t.Fatalf("message %q", apiErr.Message)
+	}
 	e.delete(org)
 	_, _, err = e.store.ReleaseSlug(e.ctx, org.ID)
 	wantAPIError(t, err, 409, "CONFLICT")
@@ -353,7 +385,7 @@ func TestDeleteCascadesUnderOneDeletionID(t *testing.T) {
 	org := e.create(nil, "organization", "Gruow")
 	folder := e.create(org, "folder", "Apps")
 	p1 := e.create(folder, "project", "One")
-	p2 := e.create(org, "project", "Two")
+	p2 := e.create(folder, "project", "Two")
 	e.delete(p2)
 	earlier := e.get(p2)
 
@@ -375,7 +407,7 @@ func TestDeleteCascadesUnderOneDeletionID(t *testing.T) {
 		t.Fatalf("p2 changed: %+v", b)
 	}
 	equal(t, "events", e.events(mark), []string{
-		"organization.deleted " + org.ID, "folder.deleted " + folder.ID, "project.deleted " + p1.ID,
+		"node.deleted organization " + org.ID, "node.deleted folder " + folder.ID, "node.deleted project " + p1.ID,
 	})
 }
 
@@ -398,68 +430,36 @@ func TestDeletingAgainChangesNothing(t *testing.T) {
 	equal(t, "events", e.events(mark), nil)
 }
 
-func TestTheSignInNodeCantBeDeleted(t *testing.T) {
-	e := setup(t)
-	dir, err := e.store.EnsureSignIn(e.ctx, e.snap)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = e.store.Delete(e.ctx, e.snap, dir.ID)
-	if apiErr := wantAPIError(t, err, 422, "VALIDATION_ERROR"); apiErr.Message != "The directory can't be deleted." {
-		t.Fatalf("message %q", apiErr.Message)
-	}
-}
-
-func TestEnsureSignInMakesOneNode(t *testing.T) {
-	e := setup(t)
-	mark := e.lastEventID()
-	first, err := e.store.EnsureSignIn(e.ctx, e.snap)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := e.store.EnsureSignIn(e.ctx, e.snap)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.ID != second.ID || first.Slug != nil || first.ParentID != nil || first.RootID != first.ID || first.Label != "directory" {
-		t.Fatalf("sign-in node: %+v %+v", first, second)
-	}
-	equal(t, "events", e.events(mark), []string{"directory.created " + first.ID})
-
-	// A label on the kind is the node's label.
-	e2 := setup(t)
-	e2.snap = snapshot(t, "30d", `"people": { "sign_in": "idp", "label": "People" }, "organization": {}`)
-	n, err := e2.store.EnsureSignIn(e2.ctx, e2.snap)
-	if err != nil || n.Label != "People" || n.Kind != "people" {
-		t.Fatalf("labelled: %+v %v", n, err)
-	}
-}
-
-func TestDeleteRevokesKeysAndRestoreKeepsThemRevoked(t *testing.T) {
+func TestDeleteRevokesNothing(t *testing.T) {
 	e := setup(t)
 	org := e.create(nil, "organization", "Gruow")
-	project := e.create(org, "project", "Web")
-	sa, _ := e.principal("service_account", project, org, project)
+	folder := e.create(org, "folder", "Web")
+	sa, _ := e.principal("service_account", folder, org, folder)
 	saKey := e.key(sa)
-	person, _ := e.principal("person", nil, org, project)
+	person, _ := e.principal("person", nil, org, folder)
 	personKey := e.key(person)
+	inviteID := id.New()
+	e.exec(`INSERT INTO invites (id, node_id, role, token_hash, token_prefix, status, max_uses, expires_at)
+		VALUES ($1, $2, 'admin', $1, 'inv_AAAA', 'active', 1, $3)`, inviteID, folder.ID, e.clock.t.Add(24*time.Hour))
 
-	e.delete(project)
-	revoked := func(keyID string) bool {
-		return e.count(`SELECT count(*) FROM api_keys WHERE id = $1 AND revoked_at IS NOT NULL`, keyID) == 1
+	e.delete(folder)
+	kept := func() {
+		t.Helper()
+		if e.count(`SELECT count(*) FROM api_keys WHERE id = ANY($1) AND revoked_at IS NULL`, []string{saKey, personKey}) != 2 {
+			t.Fatal("a key was revoked")
+		}
+		if e.count(`SELECT count(*) FROM invites WHERE id = $1 AND status = 'active'`, inviteID) != 1 {
+			t.Fatal("the invite was revoked")
+		}
+		if e.count(`SELECT count(*) FROM bindings WHERE node_id = $1`, folder.ID) != 2 {
+			t.Fatal("bindings must survive delete and restore")
+		}
 	}
-	if !revoked(saKey) || revoked(personKey) {
-		t.Fatalf("after delete: sa %v person %v", revoked(saKey), revoked(personKey))
-	}
-	if _, _, err := e.store.Restore(e.ctx, e.snap, project.ID); err != nil {
+	kept()
+	if _, _, err := e.store.Restore(e.ctx, e.snap, folder.ID); err != nil {
 		t.Fatal(err)
 	}
-	if !revoked(saKey) {
-		t.Fatal("restore brought a key back")
-	}
-	if e.count(`SELECT count(*) FROM bindings WHERE node_id = $1`, project.ID) != 2 {
-		t.Fatal("bindings must survive delete and restore")
-	}
+	kept()
 }
 
 func TestRestoreUndoesExactlyItsDelete(t *testing.T) {
@@ -473,30 +473,30 @@ func TestRestoreUndoesExactlyItsDelete(t *testing.T) {
 
 	mark := e.lastEventID()
 	n, changed, err := e.store.Restore(e.ctx, e.snap, org.ID)
-	if err != nil || !changed || n.Status != StatusActive || n.DeletedAt != nil {
+	if err != nil || !changed || n.Status != StatusActive || n.DeletedAt != nil || n.PurgeAfter != nil {
 		t.Fatalf("restore: %+v %v %v", n, changed, err)
 	}
 	for _, n := range []*Node{e.get(org), e.get(folder), e.get(kept)} {
 		if n.Status != StatusActive || n.DeletionID != nil || n.PurgeAfter != nil {
-			t.Fatalf("%s %s not restored: %+v", n.Kind, n.Label, n)
+			t.Fatalf("%s %s not restored: %+v", n.Kind, n.DisplayName, n)
 		}
 	}
 	if e.get(gone).Status != StatusDeleted {
 		t.Fatal("a node deleted separately came back")
 	}
 	equal(t, "events", e.events(mark), []string{
-		"organization.restored " + org.ID, "folder.restored " + folder.ID, "project.restored " + kept.ID,
+		"node.restored organization " + org.ID, "node.restored folder " + folder.ID, "node.restored project " + kept.ID,
 	})
 }
 
 func TestRestoreConflicts(t *testing.T) {
 	e := setup(t)
 	org := e.create(nil, "organization", "Gruow")
-	project := e.create(org, "project", "Web")
+	folder := e.create(org, "folder", "Web")
 
 	// Live: succeeds, changes nothing.
 	mark := e.lastEventID()
-	n, changed, err := e.store.Restore(e.ctx, e.snap, project.ID)
+	n, changed, err := e.store.Restore(e.ctx, e.snap, folder.ID)
 	if err != nil || changed || n.Status != StatusActive {
 		t.Fatalf("live: %v %v", changed, err)
 	}
@@ -504,21 +504,30 @@ func TestRestoreConflicts(t *testing.T) {
 
 	// Parent deleted: 409, and the parent isn't restored for it.
 	e.delete(org)
-	_, _, err = e.store.Restore(e.ctx, e.snap, project.ID)
+	_, _, err = e.store.Restore(e.ctx, e.snap, folder.ID)
 	if apiErr := wantAPIError(t, err, 409, "CONFLICT"); apiErr.Message != "Restore the organization first." {
 		t.Fatalf("message %q", apiErr.Message)
 	}
 	if e.get(org).Status != StatusDeleted {
 		t.Fatal("parent restored")
 	}
-
-	// Kind not in the config: 409.
-	noProjects := snapshot(t, "30d", `"directory": { "sign_in": "idp" }, "organization": {}, "folder": { "parent": "organization" }`)
 	if _, _, err := e.store.Restore(e.ctx, e.snap, org.ID); err != nil {
 		t.Fatal(err)
 	}
-	e.delete(project)
-	_, _, err = e.store.Restore(e.ctx, noProjects, project.ID)
+
+	// Kind not in the config: 409.
+	e.delete(folder)
+	noFolders := snapshot(t, "30d", `"organization": { "list_permission": "organization:read" }`)
+	_, _, err = e.store.Restore(e.ctx, noFolders, folder.ID)
+	if apiErr := wantAPIError(t, err, 409, "CONFLICT"); apiErr.Message != "A folder can't be restored here." {
+		t.Fatalf("message %q", apiErr.Message)
+	}
+
+	// The kind's parent is another kind now: 409.
+	team := snapshot(t, "30d", `"organization": { "list_permission": "organization:read" },
+		"team": { "parent": "organization", "list_permission": "team:read" },
+		"folder": { "parent": "team", "list_permission": "folder:read" }`)
+	_, _, err = e.store.Restore(e.ctx, team, folder.ID)
 	wantAPIError(t, err, 409, "CONFLICT")
 
 	// Past the grace, even before the sweeper ran: 409.
@@ -530,11 +539,27 @@ func TestRestoreConflicts(t *testing.T) {
 	}
 }
 
+func TestRestoreLeavesBehindWhatNoLongerFits(t *testing.T) {
+	e := setup(t)
+	org := e.create(nil, "organization", "Gruow")
+	folder := e.create(org, "folder", "Web")
+	project := e.create(folder, "project", "Api")
+	e.delete(org)
+	noProjects := snapshot(t, "30d", `"organization": { "list_permission": "organization:read" },
+		"folder": { "parent": "organization", "list_permission": "folder:read" }`)
+	if _, _, err := e.store.Restore(e.ctx, noProjects, org.ID); err != nil {
+		t.Fatal(err)
+	}
+	if e.get(folder).Status != StatusActive || e.get(project).Status != StatusDeleted {
+		t.Fatalf("folder %s, project %s", e.get(folder).Status, e.get(project).Status)
+	}
+}
+
 func TestGraceIsFixedAtDelete(t *testing.T) {
 	e := setup(t)
 	org := e.create(nil, "organization", "Gruow")
-	a := e.create(org, "project", "A")
-	b := e.create(org, "project", "B")
+	a := e.create(org, "folder", "A")
+	b := e.create(org, "folder", "B")
 	e.delete(a)
 	e.snap = snapshot(t, "1d", baseKinds)
 	e.delete(b)
@@ -557,13 +582,15 @@ func TestGraceIsFixedAtDelete(t *testing.T) {
 func TestPurgeAfterTheGrace(t *testing.T) {
 	e := setup(t)
 	org := e.create(nil, "organization", "Gruow")
-	project := e.create(org, "project", "Web")
-	other := e.create(org, "project", "Other")
-	_, onlyHere := e.principal("person", nil, org, project)
-	_, alsoOrg := e.principal("person", nil, org, project, org)
-	sa, saMember := e.principal("service_account", project, org, project, other)
+	folder := e.create(org, "folder", "Web")
+	other := e.create(org, "folder", "Other")
+	_, onlyHere := e.principal("person", nil, org, folder)
+	_, alsoOrg := e.principal("person", nil, org, folder, org)
+	sa, saMember := e.principal("service_account", folder, org, folder, other)
 	e.key(sa)
-	e.delete(project)
+	e.exec(`INSERT INTO invites (id, node_id, role, token_hash, token_prefix, status, max_uses, expires_at)
+		VALUES ($1, $2, 'admin', $1, 'inv_AAAA', 'active', 1, $3)`, id.New(), folder.ID, e.clock.t.Add(24*time.Hour))
+	e.delete(folder)
 
 	// Not yet: the grace hasn't passed.
 	e.clock.advance(30*24*time.Hour - time.Second)
@@ -576,11 +603,14 @@ func TestPurgeAfterTheGrace(t *testing.T) {
 	if n, err := e.store.PurgeDue(e.ctx); err != nil || n != 1 {
 		t.Fatalf("purge: %d %v", n, err)
 	}
-	if p := e.get(project); p.Status != StatusPurged || *p.Slug != "web" {
-		t.Fatalf("tombstone: %+v", p)
+	if p := e.get(folder); p.Status != StatusPurged || p.Slug != nil {
+		t.Fatalf("purged: %+v", p)
 	}
-	if e.count(`SELECT count(*) FROM bindings WHERE node_id = $1`, project.ID) != 0 {
+	if e.count(`SELECT count(*) FROM bindings WHERE node_id = $1`, folder.ID) != 0 {
 		t.Fatal("bindings on the purged node remain")
+	}
+	if e.count(`SELECT count(*) FROM invites WHERE node_id = $1`, folder.ID) != 0 {
+		t.Fatal("invites on the purged node remain")
 	}
 	if e.count(`SELECT count(*) FROM principals WHERE id = $1`, sa) != 0 || e.count(`SELECT count(*) FROM api_keys WHERE principal_id = $1`, sa) != 0 {
 		t.Fatal("the service account born there remains")
@@ -594,11 +624,11 @@ func TestPurgeAfterTheGrace(t *testing.T) {
 	if !removed(onlyHere) || removed(alsoOrg) || !removed(saMember) {
 		t.Fatalf("removed: onlyHere %v alsoOrg %v sa %v", removed(onlyHere), removed(alsoOrg), removed(saMember))
 	}
-	equal(t, "events", e.events(mark), []string{
-		"project.purged " + project.ID,
-		"member.removed " + saMember + " service_account",
-		"member.removed " + onlyHere + " person",
-	})
+	want := []string{"member.removed " + saMember + " service_account", "member.removed " + onlyHere + " person"}
+	if onlyHere < saMember {
+		want[0], want[1] = want[1], want[0]
+	}
+	equal(t, "events", e.events(mark), append([]string{"node.purged folder " + folder.ID}, want...))
 
 	// Purged is final: nothing more on the next sweep.
 	mark = e.lastEventID()
@@ -610,16 +640,13 @@ func TestPurgeAfterTheGrace(t *testing.T) {
 
 func TestPurgingARootRemovesItsMembers(t *testing.T) {
 	e := setup(t)
-	dir, err := e.store.EnsureSignIn(e.ctx, e.snap)
-	if err != nil {
-		t.Fatal(err)
-	}
 	org := e.create(nil, "organization", "Gruow")
-	project := e.create(org, "project", "Web")
+	folder := e.create(org, "folder", "Web")
+	other := e.create(nil, "organization", "Other")
 	person, member := e.principal("person", nil, org, org)
-	directoryMember := id.New(id.Member)
-	e.exec(`INSERT INTO members (id, principal_id, principal, root_id) VALUES ($1, $2, 'person', $3)`, directoryMember, person, dir.ID)
-	_, saMember := e.principal("service_account", org, org, project)
+	elsewhere := id.New()
+	e.exec(`INSERT INTO members (id, principal_id, principal, root_id) VALUES ($1, $2, 'person', $3)`, elsewhere, person, other.ID)
+	_, saMember := e.principal("service_account", org, org, folder)
 	e.delete(org)
 	e.clock.advance(31 * 24 * time.Hour)
 
@@ -630,22 +657,27 @@ func TestPurgingARootRemovesItsMembers(t *testing.T) {
 	if e.count(`SELECT count(*) FROM members WHERE root_id = $1 AND removed_at IS NULL`, org.ID) != 0 {
 		t.Fatal("members of the purged root remain")
 	}
-	if e.count(`SELECT count(*) FROM members WHERE id = $1 AND removed_at IS NULL`, directoryMember) != 1 {
-		t.Fatal("the person's directory member was removed")
+	if e.count(`SELECT count(*) FROM members WHERE id = $1 AND removed_at IS NULL`, elsewhere) != 1 {
+		t.Fatal("the person's member in another tree was removed")
 	}
-	equal(t, "events", e.events(mark), []string{
-		"organization.purged " + org.ID,
-		"project.purged " + project.ID,
-		"member.removed " + saMember + " service_account",
-		"member.removed " + member + " person",
-	})
+	if *e.get(org).Slug != "gruow" {
+		t.Fatal("a purged root keeps its slug")
+	}
+	removedEvents := []string{"member.removed " + saMember + " service_account", "member.removed " + member + " person"}
+	if member < saMember {
+		removedEvents[0], removedEvents[1] = removedEvents[1], removedEvents[0]
+	}
+	equal(t, "events", e.events(mark), append([]string{
+		"node.purged organization " + org.ID,
+		"node.purged folder " + folder.ID,
+	}, removedEvents...))
 }
 
 func TestPurgeTakesTheDeletedNodesBelow(t *testing.T) {
 	e := setup(t)
 	org := e.create(nil, "organization", "Gruow")
-	project := e.create(org, "project", "Web")
-	e.delete(project) // 30d grace
+	folder := e.create(org, "folder", "Web")
+	e.delete(folder) // 30d grace
 	e.snap = snapshot(t, "1d", baseKinds)
 	e.delete(org) // 1d grace, so the org is due first
 	e.clock.advance(2 * 24 * time.Hour)
@@ -653,117 +685,20 @@ func TestPurgeTakesTheDeletedNodesBelow(t *testing.T) {
 	if n, err := e.store.PurgeDue(e.ctx); err != nil || n != 2 {
 		t.Fatalf("purge: %d %v", n, err)
 	}
-	if e.get(project).Status != StatusPurged {
+	if e.get(folder).Status != StatusPurged {
 		t.Fatal("a deleted node under a purged one was left restorable")
 	}
 }
 
-func TestKindRemovalAndReapply(t *testing.T) {
-	e := setup(t)
-	org := e.create(nil, "organization", "Gruow")
-	f1 := e.create(org, "folder", "Apps")
-	underF1 := e.create(f1, "project", "In a folder")
-	f2 := e.create(org, "folder", "Old")
-	direct := e.create(org, "project", "Direct")
-	e.delete(f2)
-	before := e.get(f2)
-
-	noFolders := snapshot(t, "30d", `
-		"directory": { "sign_in": "idp" },
-		"organization": { "label": "Organization" },
-		"project": { "label": "Project", "parent": "organization" }`)
-	mark := e.lastEventID()
-	if err := e.store.ReconcileKinds(e.ctx, noFolders); err != nil {
-		t.Fatal(err)
-	}
-	var removal string
-	if err := e.pool.QueryRow(e.ctx, `SELECT deletion_id FROM kind_removals WHERE kind = 'folder'`).Scan(&removal); err != nil {
-		t.Fatalf("removal not recorded: %v", err)
-	}
-	for _, n := range []*Node{e.get(f1), e.get(underF1)} {
-		if n.Status != StatusDeleted || *n.DeletionID != removal {
-			t.Fatalf("%s: %+v", n.Label, n)
-		}
-	}
-	if b := e.get(f2); *b.DeletionID != *before.DeletionID {
-		t.Fatal("a folder deleted before the removal took its id")
-	}
-	if e.get(direct).Status != StatusActive {
-		t.Fatal("a project outside any folder was deleted")
-	}
-	equal(t, "removal events", e.events(mark), []string{"folder.deleted " + f1.ID, "project.deleted " + underF1.ID})
-
-	// Every config is checked; nothing more happens on the same one.
-	mark = e.lastEventID()
-	if err := e.store.ReconcileKinds(e.ctx, noFolders); err != nil {
-		t.Fatal(err)
-	}
-	equal(t, "repeat", e.events(mark), nil)
-
-	// Applied again: the removal's nodes come back, not the earlier delete.
-	if err := e.store.ReconcileKinds(e.ctx, e.snap); err != nil {
-		t.Fatal(err)
-	}
-	if e.get(f1).Status != StatusActive || e.get(underF1).Status != StatusActive || e.get(f2).Status != StatusDeleted {
-		t.Fatalf("reapply: f1 %s underF1 %s f2 %s", e.get(f1).Status, e.get(underF1).Status, e.get(f2).Status)
-	}
-	if e.count(`SELECT count(*) FROM kind_removals`) != 0 {
-		t.Fatal("the removal wasn't forgotten")
-	}
-	equal(t, "reapply events", e.events(mark), []string{"folder.restored " + f1.ID, "project.restored " + underF1.ID})
-}
-
-func TestKindReapplySkipsNodesUnderAParentDeletedSince(t *testing.T) {
-	e := setup(t)
-	org := e.create(nil, "organization", "Gruow")
-	folder := e.create(org, "folder", "Apps")
-	noFolders := snapshot(t, "30d", `"directory": { "sign_in": "idp" }, "organization": {}, "project": { "parent": "organization" }`)
-	if err := e.store.ReconcileKinds(e.ctx, noFolders); err != nil {
-		t.Fatal(err)
-	}
-	e.delete(org)
-	if err := e.store.ReconcileKinds(e.ctx, e.snap); err != nil {
-		t.Fatal(err)
-	}
-	if e.get(folder).Status != StatusDeleted {
-		t.Fatal("a folder came back under a deleted org")
-	}
-}
-
-func TestKindRemovalIsForgottenOncePurged(t *testing.T) {
-	e := setup(t)
-	org := e.create(nil, "organization", "Gruow")
-	folder := e.create(org, "folder", "Apps")
-	noFolders := snapshot(t, "30d", `"directory": { "sign_in": "idp" }, "organization": {}, "project": { "parent": "organization" }`)
-	if err := e.store.ReconcileKinds(e.ctx, noFolders); err != nil {
-		t.Fatal(err)
-	}
-	e.clock.advance(31 * 24 * time.Hour)
-	if _, err := e.store.PurgeDue(e.ctx); err != nil {
-		t.Fatal(err)
-	}
-	if e.count(`SELECT count(*) FROM kind_removals`) != 0 {
-		t.Fatal("the removal outlived its nodes")
-	}
-	mark := e.lastEventID()
-	if err := e.store.ReconcileKinds(e.ctx, e.snap); err != nil {
-		t.Fatal(err)
-	}
-	equal(t, "reapply after purge", e.events(mark), nil)
-	if e.get(folder).Status != StatusPurged {
-		t.Fatal("purged folder changed")
-	}
-}
-
-func TestUpdateLabel(t *testing.T) {
+func TestUpdateDisplayName(t *testing.T) {
 	e := setup(t)
 	org := e.create(nil, "organization", "Gruow")
 	e.clock.advance(time.Minute)
-	before, n, err := e.store.UpdateLabel(e.ctx, org.ID, "  Gruow Inc  ")
-	if err != nil || before != "Gruow" || n.Label != "Gruow Inc" || *n.Slug != "gruow" || !n.UpdatedAt.Equal(e.clock.t) {
+	before, n, err := e.store.UpdateDisplayName(e.ctx, org.ID, "  Gruow Inc  ")
+	if err != nil || before != "Gruow" || n.DisplayName != "Gruow Inc" || *n.Slug != "gruow" || !n.UpdatedAt.Equal(e.clock.t) {
 		t.Fatalf("update: %q %+v %v", before, n, err)
 	}
-	if _, _, err := e.store.UpdateLabel(e.ctx, id.New(id.Node), "X"); !stderrors.Is(err, ErrNotFound) {
+	if _, _, err := e.store.UpdateDisplayName(e.ctx, id.New(), "X"); !stderrors.Is(err, ErrNotFound) {
 		t.Fatalf("missing: %v", err)
 	}
 }
@@ -771,8 +706,8 @@ func TestUpdateLabel(t *testing.T) {
 func TestList(t *testing.T) {
 	e := setup(t)
 	org := e.create(nil, "organization", "Gruow")
-	a := e.create(org, "project", "A")
-	b := e.create(org, "project", "B")
+	a := e.create(org, "folder", "A")
+	b := e.create(org, "folder", "B")
 	e.delete(b)
 
 	all, more, err := e.store.List(e.ctx, ListFilter{ParentID: org.ID}, 1, "")
@@ -783,8 +718,32 @@ func TestList(t *testing.T) {
 	if err != nil || len(rest) != 1 || more || rest[0].ID != b.ID {
 		t.Fatalf("page 2: %v %v %v", rest, more, err)
 	}
-	deleted, _, err := e.store.List(e.ctx, ListFilter{Kind: "project", Status: StatusDeleted}, 50, "")
+	deleted, _, err := e.store.List(e.ctx, ListFilter{Kind: "folder", Status: StatusDeleted}, 50, "")
 	if err != nil || len(deleted) != 1 || deleted[0].ID != b.ID {
 		t.Fatalf("deleted: %v %v", deleted, err)
 	}
+}
+
+func TestPlanCounts(t *testing.T) {
+	e := setup(t)
+	org := e.create(nil, "organization", "Gruow")
+	f1 := e.create(org, "folder", "A")
+	f2 := e.create(org, "folder", "B")
+	f3 := e.create(org, "folder", "C")
+	gone := e.create(org, "folder", "D")
+	e.purge(gone)
+	e.delete(f1)
+
+	got, err := e.store.PlanCounts(e.ctx, PlanRequest{Kinds: []string{"folder", "project"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := got.Kinds["folder"]; f.Live != 2 || f.Nodes != 3 || fmt.Sprint(f.Sample) != fmt.Sprint([]string{f2.ID, f3.ID, f1.ID}) {
+		t.Fatalf("folder: %+v", f)
+	}
+	if p, ok := got.Kinds["project"]; !ok || p.Live != 0 || p.Nodes != 0 || p.Sample == nil || len(p.Sample) != 0 {
+		t.Fatalf("project: %+v %v", p, ok)
+	}
+	_, err = e.store.PlanCounts(e.ctx, PlanRequest{Kinds: []string{""}})
+	wantAPIError(t, err, 422, "VALIDATION_ERROR")
 }

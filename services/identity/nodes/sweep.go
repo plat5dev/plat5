@@ -5,22 +5,16 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-
-	"github.com/plat5dev/plat5/identity/feed"
 )
 
-// SweepInterval is how often the sweeper runs when nothing kicks it.
+// SweepInterval is how often the sweeper runs.
 const SweepInterval = time.Minute
 
-// Sweeper is the tree's background work: kind removals against the current
-// config, then the purge of nodes past purge_after, then any work added with
-// Also (binding expiry). It runs on a timer, and at once when kicked by a new
-// config.
+// Sweeper is the tree's background work: the purge of nodes past
+// purge_after, then any work added with Also (invite expiry).
 type Sweeper struct {
 	store *Store
-	src   *feed.Source
 	log   zerolog.Logger
-	kick  chan struct{}
 	also  []sweepTask
 }
 
@@ -35,16 +29,8 @@ func (w *Sweeper) Also(name string, run func(context.Context) (int, error)) {
 	w.also = append(w.also, sweepTask{name: name, run: run})
 }
 
-func NewSweeper(store *Store, src *feed.Source, log zerolog.Logger) *Sweeper {
-	return &Sweeper{store: store, src: src, log: log, kick: make(chan struct{}, 1)}
-}
-
-// Kick asks for a sweep now. It never blocks.
-func (w *Sweeper) Kick() {
-	select {
-	case w.kick <- struct{}{}:
-	default:
-	}
+func NewSweeper(store *Store, log zerolog.Logger) *Sweeper {
+	return &Sweeper{store: store, log: log}
 }
 
 // Run sweeps until ctx ends, starting with one sweep at once.
@@ -57,20 +43,12 @@ func (w *Sweeper) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-		case <-w.kick:
 		}
 	}
 }
 
 // Sweep runs once. A failure is logged and retried on the next run.
 func (w *Sweeper) Sweep(ctx context.Context) {
-	snap := w.src.Current()
-	if snap == nil {
-		return
-	}
-	if err := w.store.ReconcileKinds(ctx, snap); err != nil && ctx.Err() == nil {
-		w.log.Error().Err(err).Int64("revision", snap.Revision).Msg("kind reconcile failed")
-	}
 	n, err := w.store.PurgeDue(ctx)
 	if err != nil && ctx.Err() == nil {
 		w.log.Error().Err(err).Msg("purge sweep failed")

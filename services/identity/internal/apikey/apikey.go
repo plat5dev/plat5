@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"strings"
 )
 
 const (
@@ -30,10 +29,6 @@ func Hash(key string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func LooksLike(key, prefix string) bool {
-	return strings.HasPrefix(key, prefix)
-}
-
 // DisplayPrefix is the wire prefix plus a short secret preview for UI.
 func DisplayPrefix(key, prefix string) string {
 	n := len(prefix) + PrefixDisplayLen
@@ -41,16 +36,4 @@ func DisplayPrefix(key, prefix string) string {
 		return key
 	}
 	return key[:n]
-}
-
-// NormalizeName trims name, applies default, and enforces max length.
-func NormalizeName(raw string) (string, error) {
-	name := strings.TrimSpace(raw)
-	if name == "" {
-		name = DefaultName
-	}
-	if len(name) > MaxNameLen {
-		return "", fmt.Errorf("name too long")
-	}
-	return name, nil
 }

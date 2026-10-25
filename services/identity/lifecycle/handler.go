@@ -26,6 +26,7 @@ func NewHandler(store *Store) *Handler {
 type EventResponse struct {
 	ID         string  `json:"id"`
 	Type       string  `json:"type"`
+	Kind       *string `json:"kind,omitempty"`
 	NodeID     *string `json:"node_id,omitempty"`
 	MemberID   *string `json:"member_id,omitempty"`
 	RootID     string  `json:"root_id"`
@@ -64,7 +65,8 @@ func (h *Handler) List(c fiber.Ctx) error {
 	for _, e := range events {
 		out.LifecycleEvents = append(out.LifecycleEvents, EventResponse{
 			ID:         strconv.FormatInt(e.ID, 10),
-			Type:       e.WireType(),
+			Type:       e.Type,
+			Kind:       e.Kind,
 			NodeID:     e.NodeID,
 			MemberID:   e.MemberID,
 			RootID:     e.RootID,

@@ -8,27 +8,21 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-// Type prefixes (docs/concepts/model.md#ids-and-slugs). Principal ids have
-// none; they never leave identity.
-const (
-	Node    = "n_"
-	Member  = "m_"
-	Binding = "b_"
-	Key     = "k_"
-	Invite  = "i_"
-)
-
-// New returns prefix + a ULID from crypto/rand.
-func New(prefix string) string {
-	return prefix + ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader).String()
+// New returns a lowercase ULID from crypto/rand. Every id has this one form,
+// with no type prefix (docs/concepts/model.md#ids-and-slugs).
+func New() string {
+	return strings.ToLower(ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader).String())
 }
 
-// Valid reports whether s is prefix + a ULID. No case folding.
-func Valid(prefix, s string) bool {
-	rest, ok := strings.CutPrefix(s, prefix)
-	if !ok {
-		return false
-	}
-	_, err := ulid.ParseStrict(rest)
-	return err == nil && strings.ToUpper(rest) == rest
+// Valid reports whether s is a lowercase ULID. An uppercase one isn't
+// canonical and matches nothing.
+func Valid(s string) bool {
+	_, err := ulid.ParseStrict(s)
+	return err == nil && strings.ToLower(s) == s
+}
+
+// IsID reports whether a path ref is read as an id rather than a slug: ids
+// start with a digit, slugs with a letter.
+func IsID(ref string) bool {
+	return ref != "" && ref[0] >= '0' && ref[0] <= '9'
 }

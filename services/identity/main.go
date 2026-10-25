@@ -55,26 +55,19 @@ func main() {
 	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Identity serves nothing until it has the control plane's config, then
-	// makes sure the sign-in node exists (docs/concepts/config.md#how-a-change-reaches-readers).
+	// Identity serves nothing until it has the control plane's config
+	// (docs/concepts/config.md#how-a-change-reaches-readers).
 	src := &feed.Source{}
-	follower := feed.NewFollower(cfg.ControlPlaneURL, cfg.InternalAuthToken, src, baseLogger)
+	follower := feed.NewFollower(cfg.ControlPlaneURL, src, baseLogger)
 	if err := follower.Load(runCtx); err != nil {
 		pool.Close()
 		baseLogger.Info().Err(err).Msg("stopped before config loaded")
 		return
 	}
 	nodeStore := nodes.NewStore(pool)
-	signIn, err := nodeStore.EnsureSignIn(runCtx, src.Current())
-	if err != nil {
-		pool.Close()
-		log.Fatalf("failed to create the sign-in node: %v", err)
-	}
-
-	memberStore := members.NewStore(pool, nodeStore, signIn.ID, cfg.APIKeyBrand)
-	sweeper := nodes.NewSweeper(nodeStore, src, baseLogger)
-	sweeper.Also("expire bindings", memberStore.ExpireDue)
-	follower.OnChange = sweeper.Kick
+	memberStore := members.NewStore(pool, nodeStore, cfg.APIKeyBrand)
+	sweeper := nodes.NewSweeper(nodeStore, baseLogger)
+	sweeper.Also("expire invites", memberStore.ExpireInvites)
 	go follower.Follow(runCtx)
 	go sweeper.Run(runCtx)
 
@@ -83,14 +76,13 @@ func main() {
 	lifecycleHandler := lifecycle.NewHandler(lifecycle.NewStore(pool))
 
 	app := newPublicApp(telem, nodeHandler, memberHandler)
-	internalApp := newInternalApp(telem, pool, src, cfg.InternalAuthToken, lifecycleHandler, nodeHandler, memberHandler)
+	internalApp := newInternalApp(telem, pool, src, lifecycleHandler, nodeHandler, memberHandler)
 
 	baseLogger.Info().
 		Str("port", cfg.Port).
 		Str("internal_port", cfg.InternalPort).
 		Str("apikey_brand", cfg.APIKeyBrand).
 		Int64("revision", src.Current().Revision).
-		Str("sign_in_node", signIn.ID).
 		Msg("starting identity server")
 
 	errCh := make(chan error, 2)
@@ -150,7 +142,6 @@ func newInternalApp(
 	telem *telemetry.Telemetry,
 	pool *pgxpool.Pool,
 	src *feed.Source,
-	internalToken string,
 	lifecycleHandler *lifecycle.Handler,
 	nodeHandler *nodes.Handler,
 	memberHandler *members.Handler,
@@ -175,6 +166,8 @@ func newInternalApp(
 	app.Get("/metrics", adaptor.HTTPHandler(metrics.Handler()))
 
 	// Health and /metrics stay off traces and HTTP RED (docs/reference/health.md).
+	// No token: internal ports are reachable only inside the deployment's
+	// network (docs/reference/api/internal.md).
 	internalAPI := app.Group("/internal",
 		otel.Middleware(
 			otel.WithTracerProvider(telem.TracerProvider()),
@@ -183,7 +176,6 @@ func newInternalApp(
 			otel.WithSpanNameFormatter(middleware.HTTPSpanName),
 		),
 		middleware.RequestLogger(telem),
-		middleware.RequireInternalToken(internalToken),
 	)
 	lifecycleHandler.MountInternal(internalAPI)
 	memberHandler.MountInternal(internalAPI)

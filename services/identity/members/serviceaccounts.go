@@ -63,7 +63,7 @@ func normalizeName(raw string) (string, error) {
 
 // CreateServiceAccount makes a service account born at nodeID, in one
 // transaction: principal, member in the node's tree, binding at the node.
-func (s *Store) CreateServiceAccount(ctx context.Context, snap *feed.Snapshot, nodeID, name, role string, expiresAt *time.Time) (*ServiceAccount, *Binding, error) {
+func (s *Store) CreateServiceAccount(ctx context.Context, snap *feed.Snapshot, nodeID, name, role string) (*ServiceAccount, *Binding, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_service_account", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
@@ -81,11 +81,11 @@ func (s *Store) CreateServiceAccount(ctx context.Context, snap *feed.Snapshot, n
 	if err != nil {
 		return nil, nil, op.Reject(err, nodes.ErrNotFound)
 	}
-	if err := s.checkRole(snap, role, n.Kind, expiresAt, "expires_at"); err != nil {
+	if err := checkRole(snap, role, n.Kind, "role"); err != nil {
 		return nil, nil, op.Expected("invalid", err)
 	}
 	now := s.now().UTC()
-	principalID := id.New("")
+	principalID := id.New()
 	if _, err := w.tx.Exec(ctx, `
 		INSERT INTO principals (id, kind, name, born_node_id, created_at, updated_at)
 		VALUES ($1, 'service_account', $2, $3, $4, $4)
@@ -96,7 +96,7 @@ func (s *Store) CreateServiceAccount(ctx context.Context, snap *feed.Snapshot, n
 	if err != nil {
 		return nil, nil, op.Fail(err)
 	}
-	b, err := s.insertBinding(ctx, w, memberID, n.ID, role, expiresAt)
+	b, err := s.insertBinding(ctx, w, memberID, n.ID, role)
 	if err != nil {
 		return nil, nil, op.Fail(err)
 	}
@@ -130,7 +130,7 @@ func (s *Store) ListServiceAccounts(ctx context.Context, nodeID string, limit in
 
 // serviceAccount reads a live service account born at nodeID, and its principal.
 func (s *Store) serviceAccount(ctx context.Context, q dbx.Querier, nodeID, memberID string) (*ServiceAccount, string, error) {
-	if !id.Valid(id.Node, nodeID) || !id.Valid(id.Member, memberID) {
+	if !id.Valid(nodeID) || !id.Valid(memberID) {
 		return nil, "", ErrNotFound
 	}
 	var principalID string
@@ -188,40 +188,54 @@ func (s *Store) RenameServiceAccount(ctx context.Context, nodeID, memberID, name
 }
 
 // DeleteServiceAccount ends it as purge does: its member is removed with
-// member.removed, and its principal is deleted with its keys.
-func (s *Store) DeleteServiceAccount(ctx context.Context, nodeID, memberID string) error {
+// member.removed, and its principal is deleted with its keys. One already
+// deleted, in the node's tree, is left as it is: changed is false.
+func (s *Store) DeleteServiceAccount(ctx context.Context, nodeID, memberID string) (bool, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "delete_service_account", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
 	w, err := s.begin(ctx)
 	if err != nil {
-		return op.Fail(err)
+		return false, op.Fail(err)
 	}
 	defer w.rollback(ctx)
 	n, err := s.nodes.LockedNode(ctx, w.tx, nodeID)
 	if err != nil {
-		return op.Reject(err, nodes.ErrNotFound)
+		return false, op.Reject(err, nodes.ErrNotFound)
 	}
 	_, principalID, err := s.serviceAccount(ctx, w.tx, n.ID, memberID)
+	if err == ErrNotFound {
+		var gone bool
+		if err := w.tx.QueryRow(ctx, `
+			SELECT EXISTS (SELECT 1 FROM members WHERE id = $1 AND root_id = $2 AND principal = 'service_account' AND removed_at IS NOT NULL)
+		`, memberID, n.RootID).Scan(&gone); err != nil {
+			return false, op.Fail(err)
+		}
+		if gone {
+			op.OK("unchanged")
+			return false, nil
+		}
+		return false, op.Expected("not found", ErrNotFound)
+	}
 	if err != nil {
-		return op.Reject(err, ErrNotFound)
+		return false, op.Fail(err)
 	}
 	m, err := s.lockedMember(ctx, w, memberID)
 	if err != nil {
-		return op.Fail(err)
+		return false, op.Fail(err)
 	}
 	if err := s.removeMember(ctx, w, m); err != nil {
-		return op.Fail(err)
+		return false, op.Fail(err)
 	}
 	if _, err := w.tx.Exec(ctx, `DELETE FROM principals WHERE id = $1`, principalID); err != nil {
-		return op.Fail(err)
+		return false, op.Fail(err)
 	}
 	if err := w.commit(ctx); err != nil {
-		return op.Fail(err)
+		return false, op.Fail(err)
 	}
 	op.OK("deleted")
-	return nil
+	return true, nil
 }
 
 // --- keys ---
@@ -248,15 +262,20 @@ func scanKey(row dbx.Scannable) (*Key, error) {
 }
 
 // KeyOwner is whose keys a request addresses: a service account born at a
-// node, or a person by their directory member.
+// node, by its member id, or a person, by their user id.
 type KeyOwner struct {
-	NodeID   string // empty for a person
+	NodeID   string
 	MemberID string
+	UserID   string
 }
 
 func (s *Store) keyPrincipal(ctx context.Context, q dbx.Querier, owner KeyOwner) (string, error) {
-	if owner.NodeID == "" {
-		return s.personPrincipal(ctx, q, owner.MemberID)
+	if owner.UserID != "" {
+		u, err := s.user(ctx, q, owner.UserID)
+		if err != nil {
+			return "", err
+		}
+		return u.principalID, nil
 	}
 	_, principalID, err := s.serviceAccount(ctx, q, owner.NodeID, owner.MemberID)
 	return principalID, err
@@ -311,7 +330,7 @@ func (s *Store) CreateKey(ctx context.Context, owner KeyOwner, name string) (*Ke
 	k, err := scanKey(s.pool.QueryRow(ctx, `
 		INSERT INTO api_keys (id, principal_id, name, key_prefix, key_hash, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING `+keyColumns, id.New(id.Key), principalID, name, apikey.DisplayPrefix(secret, prefix), apikey.Hash(secret), s.now().UTC()))
+		RETURNING `+keyColumns, id.New(), principalID, name, apikey.DisplayPrefix(secret, prefix), apikey.Hash(secret), s.now().UTC()))
 	if dbx.IsForeignKeyViolation(err) {
 		return nil, op.Expected("not found", ErrNotFound) // the owner went meanwhile
 	}
@@ -330,7 +349,7 @@ func (s *Store) RevokeKey(ctx context.Context, owner KeyOwner, keyID string) (*K
 	defer cancel()
 	defer op.End()
 	principalID, err := s.keyPrincipal(ctx, s.pool, owner)
-	if err == nil && !id.Valid(id.Key, keyID) {
+	if err == nil && !id.Valid(keyID) {
 		err = ErrNotFound
 	}
 	if err != nil {

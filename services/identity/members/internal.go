@@ -19,12 +19,11 @@ type AdmitRequest struct {
 		Subject string  `json:"subject"`
 		Name    *string `json:"name"`
 	} `json:"idp"`
-	Scope string `json:"scope"`
 	Chain []struct {
 		Kind string `json:"kind"`
 		Ref  string `json:"ref"`
 	} `json:"chain"`
-	ResolveDeleted bool `json:"resolve_deleted"`
+	AllowDeleted bool `json:"allow_deleted"`
 }
 
 type AdmitNode struct {
@@ -35,13 +34,13 @@ type AdmitNode struct {
 // AdmitResponse has every field in every answer: the gateway reads a missing
 // one as identity failing.
 type AdmitResponse struct {
-	Valid     bool        `json:"valid"`
-	Found     bool        `json:"found"`
-	Principal *string     `json:"principal"`
-	Nodes     []AdmitNode `json:"nodes"`
-	MemberID  *string     `json:"member_id"`
-	Labels    []string    `json:"labels"`
-	GoodUntil *string     `json:"good_until"`
+	Valid       bool        `json:"valid"`
+	Principal   *string     `json:"principal"`
+	KeyID       *string     `json:"key_id"`
+	Nodes       []AdmitNode `json:"nodes"`
+	MemberID    *string     `json:"member_id"`
+	UserID      *string     `json:"user_id"`
+	Permissions []string    `json:"permissions"`
 }
 
 func (h *Handler) Admit(c fiber.Ctx) error {
@@ -49,7 +48,7 @@ func (h *Handler) Admit(c fiber.Ctx) error {
 	if err := c.Bind().Body(&req); err != nil {
 		return err
 	}
-	in := AdmitInput{Credential: req.Credential, Scope: req.Scope, ResolveDeleted: req.ResolveDeleted}
+	in := AdmitInput{Credential: req.Credential, AllowDeleted: req.AllowDeleted}
 	if req.IdP != nil {
 		in.IdP = &IdPClaims{Issuer: req.IdP.Issuer, Subject: req.IdP.Subject, Name: req.IdP.Name}
 	}
@@ -65,21 +64,27 @@ func (h *Handler) Admit(c fiber.Ctx) error {
 
 func admitResponse(a *Admitted) AdmitResponse {
 	out := AdmitResponse{
-		Valid: a.Valid, Found: a.Found,
-		Nodes: make([]AdmitNode, 0, len(a.Nodes)), Labels: a.Labels,
-		GoodUntil: httpx.FormatTimePtr(a.GoodUntil),
+		Valid:       a.Valid,
+		Principal:   nullable(a.Principal),
+		KeyID:       nullable(a.KeyID),
+		Nodes:       make([]AdmitNode, 0, len(a.Nodes)),
+		MemberID:    nullable(a.MemberID),
+		UserID:      nullable(a.UserID),
+		Permissions: a.Permissions,
 	}
-	if out.Labels == nil {
-		out.Labels = []string{}
-	}
-	if a.Valid {
-		out.Principal = &a.Principal
-	}
-	if a.MemberID != "" {
-		out.MemberID = &a.MemberID
+	if out.Permissions == nil {
+		out.Permissions = []string{}
 	}
 	for _, n := range a.Nodes {
 		out.Nodes = append(out.Nodes, AdmitNode{Kind: n.Kind, ID: n.ID})
 	}
 	return out
+}
+
+// nullable is s, or nil for "".
+func nullable(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

@@ -27,37 +27,24 @@ import (
 
 const testSchema = "identity_test_members"
 
-// testConfig is a feed body: org > folder > project, roles for each case, and
-// identity's read and delete routes. Folders have no read route.
+// testConfig is a feed body: org > folder > project, and roles for each case.
 const testConfig = `{
-	"revision": 1, "deletion_grace": "30d", "reserved_slugs": ["new"],
+	"revision": 1, "deletion_grace": "30d", "reserved_slugs": ["new"], "users": { "name_claim": "name" },
 	"kinds": {
-		"directory": { "sign_in": "idp" },
-		"organization": { "label": "Organization" },
-		"folder": { "label": "Folder", "parent": "organization" },
-		"project": { "label": "Project", "parent": ["organization", "folder"] }
+		"organization": { "path": "/orgs/{organization}", "list_permission": "organization:read" },
+		"folder": { "parent": "organization", "path": "/folders/{folder}", "list_permission": "folder:read" },
+		"project": { "parent": "folder", "path": "/projects/{project}", "list_permission": "project:read" }
 	},
 	"roles": {
-		"owner": { "labels": ["*"], "bindable_at": ["organization", "folder", "project"] },
-		"member": { "labels": ["organization:read"], "bindable_at": ["organization"] },
-		"developer": { "labels": ["project:read", "project:write"], "bindable_at": ["organization", "project"] },
-		"viewer": { "labels": ["project:read"], "bindable_at": ["project"] },
-		"support": { "labels": ["project:read"], "bindable_at": ["organization"], "max_duration": "7d" },
-		"gone_here": { "labels": ["project:read"], "bindable_at": ["organization"] }
+		"admin": { "permissions": ["*"], "bindable_at": ["organization", "folder", "project"] },
+		"member": { "permissions": ["organization:read"], "bindable_at": ["organization"] },
+		"developer": { "includes": ["member"], "permissions": ["project:read", "project:write"], "bindable_at": ["organization", "folder", "project"] },
+		"viewer": { "permissions": ["project:read"], "bindable_at": ["project"] },
+		"browser": { "permissions": ["folder:read"], "bindable_at": ["organization", "folder"] },
+		"nobody": { "permissions": [], "bindable_at": ["organization"] },
+		"gone_here": { "permissions": ["project:read"], "bindable_at": ["organization"] }
 	},
-	"default_role": "member",
-	"creator_role": "owner",
-	"services": {
-		"identity": { "url": "http://identity:3000", "routes": [
-			{ "path": "/orgs/{organization}", "scope": "organization", "upstream": "/nodes/{subject.organization_id}", "methods": ["GET"], "required_labels": ["organization:read"] },
-			{ "path": "/orgs/{organization}", "scope": "organization", "upstream": "/nodes/{subject.organization_id}", "methods": ["DELETE"], "required_labels": ["organization:delete"] },
-			{ "path": "/orgs/{organization}/projects/{project}", "scope": "project", "upstream": "/nodes/{subject.project_id}", "methods": ["GET"], "required_labels": ["project:read"] },
-			{ "path": "/orgs/{organization}/projects/{project}", "scope": "project", "upstream": "/nodes/{subject.project_id}", "methods": ["DELETE"], "required_labels": ["project:delete"] }
-		] },
-		"other": { "url": "http://other:3000", "routes": [
-			{ "path": "/x/{organization}/folders/{folder}", "scope": "folder", "upstream": "/nodes/{subject.folder_id}", "methods": ["GET"], "required_labels": [] }
-		] }
-	}
+	"creator_role": "admin"
 }`
 
 func parseConfig(t *testing.T, body string) *feed.Snapshot {
@@ -75,15 +62,14 @@ func (c *clock) now() time.Time          { return c.t }
 func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
 type env struct {
-	t      *testing.T
-	ctx    context.Context
-	pool   *pgxpool.Pool
-	nodes  *nodes.Store
-	store  *Store
-	src    *feed.Source
-	clock  *clock
-	signIn *nodes.Node
-	app    *fiber.App
+	t     *testing.T
+	ctx   context.Context
+	pool  *pgxpool.Pool
+	nodes *nodes.Store
+	store *Store
+	src   *feed.Source
+	clock *clock
+	app   *fiber.App
 	// internal is the internal port's /internal routes: admit and plan counts.
 	internal *fiber.App
 }
@@ -96,16 +82,11 @@ func setup(t *testing.T) *env {
 func setupWith(t *testing.T, config string) *env {
 	pool := testdb.Pool(t, testSchema)
 	c := &clock{t: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)}
-	snap := parseConfig(t, config)
 	nodeStore := nodes.NewStore(pool).WithClock(c.now)
-	signIn, err := nodeStore.EnsureSignIn(context.Background(), snap)
-	if err != nil {
-		t.Fatal(err)
-	}
 	e := &env{
-		t: t, ctx: context.Background(), pool: pool, nodes: nodeStore, clock: c, signIn: signIn,
-		src:   feed.Static(snap),
-		store: NewStore(pool, nodeStore, signIn.ID, "plat5").WithClock(c.now),
+		t: t, ctx: context.Background(), pool: pool, nodes: nodeStore, clock: c,
+		src:   feed.Static(parseConfig(t, config)),
+		store: NewStore(pool, nodeStore, "plat5").WithClock(c.now),
 	}
 	e.app = fiber.New(fiber.Config{ErrorHandler: apierrors.FiberErrorHandler})
 	nodes.NewHandler(nodeStore, e.src).Mount(e.app)
@@ -120,7 +101,7 @@ func (e *env) snap() *feed.Snapshot { return e.src.Current() }
 
 // --- fixtures ---
 
-// person makes a person and their directory member, as first sign-in will.
+// person makes a person, as first sign-in will. It returns their user id.
 func (e *env) person(subject string) string {
 	e.t.Helper()
 	w, err := e.store.begin(e.ctx)
@@ -128,9 +109,6 @@ func (e *env) person(subject string) string {
 		e.t.Fatal(err)
 	}
 	defer w.rollback(e.ctx)
-	if err := nodes.LockTrees(e.ctx, w.tx, []string{e.signIn.ID}); err != nil {
-		e.t.Fatal(err)
-	}
 	principalID, err := e.store.ensurePerson(e.ctx, w, "https://idp.test", subject)
 	if err != nil {
 		e.t.Fatal(err)
@@ -138,28 +116,40 @@ func (e *env) person(subject string) string {
 	if err := w.commit(e.ctx); err != nil {
 		e.t.Fatal(err)
 	}
-	var memberID string
-	if err := e.pool.QueryRow(e.ctx, `SELECT id FROM members WHERE principal_id = $1 AND root_id = $2`, principalID, e.signIn.ID).Scan(&memberID); err != nil {
+	var userID string
+	if err := e.pool.QueryRow(e.ctx, `SELECT user_id FROM principals WHERE id = $1`, principalID).Scan(&userID); err != nil {
 		e.t.Fatal(err)
 	}
-	return memberID
+	return userID
 }
 
-// org creates an org as dirMember, who becomes its owner. It returns the org
-// and the creator's member in it.
-func (e *env) org(dirMember, label string) (*nodes.Node, string) {
+// userOf is the user id behind an IdP subject.
+func (e *env) userOf(subject string) string {
 	e.t.Helper()
-	n, m, err := e.store.CreateRoot(e.ctx, e.snap(), nodes.CreateInput{Kind: "organization", Label: label}, dirMember)
+	var userID string
+	if err := e.pool.QueryRow(e.ctx, `
+		SELECT p.user_id FROM principals p JOIN idp_links l ON l.principal_id = p.id WHERE l.subject = $1
+	`, subject).Scan(&userID); err != nil {
+		e.t.Fatalf("user of %s: %v", subject, err)
+	}
+	return userID
+}
+
+// org creates an org as userID, who becomes its admin. It returns the org
+// and the creator's member in it.
+func (e *env) org(userID, name string) (*nodes.Node, string) {
+	e.t.Helper()
+	n, memberID, err := e.store.CreateRoot(e.ctx, e.snap(), nodes.CreateInput{Kind: "organization", DisplayName: name}, userID)
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	return n, m.ID
+	return n, memberID
 }
 
 // child creates a node with no member behind it.
-func (e *env) child(parent *nodes.Node, kind, label string) *nodes.Node {
+func (e *env) child(parent *nodes.Node, kind, name string) *nodes.Node {
 	e.t.Helper()
-	n, err := e.nodes.Create(e.ctx, e.snap(), nodes.CreateInput{ParentID: parent.ID, Kind: kind, Label: label})
+	n, err := e.nodes.Create(e.ctx, e.snap(), nodes.CreateInput{ParentID: parent.ID, Kind: kind, DisplayName: name})
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -169,20 +159,60 @@ func (e *env) child(parent *nodes.Node, kind, label string) *nodes.Node {
 // join adds a person to a root with role. It returns their member there.
 func (e *env) join(root *nodes.Node, subject, role string) string {
 	e.t.Helper()
-	m, _, err := e.store.AddMember(e.ctx, e.snap(), root.ID, AddMemberInput{Issuer: "https://idp.test", Subject: subject, Role: &role})
+	m, _, err := e.store.AddMember(e.ctx, e.snap(), root.ID, AddMemberInput{Issuer: "https://idp.test", Subject: subject, Role: role})
 	if err != nil {
 		e.t.Fatalf("join %s: %v", subject, err)
 	}
 	return m.ID
 }
 
-func (e *env) bind(n *nodes.Node, memberID, role string, expiresAt *time.Time) *Binding {
+func (e *env) bind(n *nodes.Node, memberID, role string) *Binding {
 	e.t.Helper()
-	b, err := e.store.CreateBinding(e.ctx, e.snap(), n.ID, memberID, role, expiresAt)
+	b, err := e.store.CreateBinding(e.ctx, e.snap(), n.ID, memberID, role)
 	if err != nil {
 		e.t.Fatalf("bind %s on %s: %v", role, n.ID, err)
 	}
 	return b
+}
+
+func (e *env) bindingOf(memberID, nodeID string) string {
+	e.t.Helper()
+	var id string
+	if err := e.pool.QueryRow(e.ctx, `SELECT id FROM bindings WHERE member_id = $1 AND node_id = $2`, memberID, nodeID).Scan(&id); err != nil {
+		e.t.Fatal(err)
+	}
+	return id
+}
+
+func (e *env) key(owner KeyOwner) string {
+	e.t.Helper()
+	k, err := e.store.CreateKey(e.ctx, owner, "")
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return k.Secret
+}
+
+// serviceAccount makes one born at n with role there. It returns its member
+// id and a key.
+func (e *env) serviceAccount(n *nodes.Node, role string) (string, string) {
+	e.t.Helper()
+	sa, _, err := e.store.CreateServiceAccount(e.ctx, e.snap(), n.ID, "ci", role)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return sa.ID, e.key(KeyOwner{NodeID: n.ID, MemberID: sa.ID})
+}
+
+// invite makes an invite at n with role, one use, for a day.
+func (e *env) invite(n *nodes.Node, role string, grants ...Grant) *Invite {
+	e.t.Helper()
+	one := 1
+	inv, err := e.store.CreateInvite(e.ctx, e.snap(), n.ID, InviteInput{Role: role, Grants: grants, MaxUses: &one, ExpiresIn: 24 * time.Hour})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return inv
 }
 
 func (e *env) exec(sql string, args ...any) {
@@ -206,7 +236,8 @@ func (e *env) removed(memberID string) bool {
 	return e.count(`SELECT count(*) FROM members WHERE id = $1 AND removed_at IS NOT NULL`, memberID) == 1
 }
 
-// events is the lifecycle events after id after, as "type id" lines.
+// eventsAfter is the lifecycle events after id after, as
+// "type [kind] id root [principal]" lines.
 func (e *env) eventsAfter(after int64) []string {
 	e.t.Helper()
 	rows, err := e.pool.Query(e.ctx, `
@@ -216,18 +247,18 @@ func (e *env) eventsAfter(after int64) []string {
 		e.t.Fatal(err)
 	}
 	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (string, error) {
-		var typ, subject, root string
+		var typ, ref, root string
 		var kind, principal *string
-		if err := r.Scan(&typ, &kind, &subject, &root, &principal); err != nil {
+		if err := r.Scan(&typ, &kind, &ref, &root, &principal); err != nil {
 			return "", err
 		}
 		if kind != nil {
-			typ = *kind + strings.TrimPrefix(typ, "node")
+			typ += " " + *kind
 		}
 		if principal != nil {
-			return fmt.Sprintf("%s %s %s %s", typ, subject, root, *principal), nil
+			return fmt.Sprintf("%s %s %s %s", typ, ref, root, *principal), nil
 		}
-		return fmt.Sprintf("%s %s %s", typ, subject, root), nil
+		return fmt.Sprintf("%s %s %s", typ, ref, root), nil
 	})
 	if err != nil {
 		e.t.Fatal(err)
@@ -278,19 +309,29 @@ func (r response) message() string {
 	return m
 }
 
-// call sends a request as caller (X-Plat5-Member-Id, "" for none).
-func (e *env) call(method, path, caller, body string) response {
+// call sends a request as a member (X-Plat5-Member-Id, "" for none).
+func (e *env) call(method, path, member, body string) response {
 	e.t.Helper()
-	return e.send(e.app, method, path, caller, body)
+	h := map[string]string{}
+	if member != "" {
+		h[MemberHeader] = member
+	}
+	return e.send(e.app, method, path, h, body)
+}
+
+// callUser sends a request as a user (X-Plat5-User-Id).
+func (e *env) callUser(method, path, user, body string) response {
+	e.t.Helper()
+	return e.send(e.app, method, path, map[string]string{UserHeader: user}, body)
 }
 
 // callInternal sends a request to the internal port.
 func (e *env) callInternal(method, path, body string) response {
 	e.t.Helper()
-	return e.send(e.internal, method, path, "", body)
+	return e.send(e.internal, method, path, nil, body)
 }
 
-func (e *env) send(app *fiber.App, method, path, caller, body string) response {
+func (e *env) send(app *fiber.App, method, path string, headers map[string]string, body string) response {
 	e.t.Helper()
 	var rd io.Reader
 	if body != "" {
@@ -300,8 +341,8 @@ func (e *env) send(app *fiber.App, method, path, caller, body string) response {
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if caller != "" {
-		req.Header.Set(MemberHeader, caller)
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	resp, err := app.Test(req)
 	if err != nil {
@@ -310,7 +351,7 @@ func (e *env) send(app *fiber.App, method, path, caller, body string) response {
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	out := response{status: resp.StatusCode, headers: map[string]string{}}
-	for _, h := range []string{auditx.Header, auditx.CreatedHeader, auditx.RootHeader, auditx.MemberHeader} {
+	for _, h := range []string{auditx.Header, auditx.CreatedHeader, auditx.NodesHeader, auditx.MemberHeader} {
 		out.headers[h] = resp.Header.Get(h)
 	}
 	if len(raw) > 0 {
@@ -321,7 +362,7 @@ func (e *env) send(app *fiber.App, method, path, caller, body string) response {
 	return out
 }
 
-// expect fails unless r has status (and, for an error, code).
+// expect fails unless r has status.
 func (e *env) expect(r response, status int, what string) {
 	e.t.Helper()
 	if r.status != status {
@@ -336,5 +377,3 @@ func ids(items []map[string]any) []string {
 	}
 	return out
 }
-
-func rfc(t time.Time) string { return t.UTC().Format(time.RFC3339) }

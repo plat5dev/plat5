@@ -1,20 +1,20 @@
 -- Identity's schema (docs/internals/identity-schema.md).
 
 CREATE TABLE nodes (
-    id          TEXT PRIMARY KEY,
-    kind        TEXT NOT NULL,
-    parent_id   TEXT REFERENCES nodes (id),
-    root_id     TEXT NOT NULL REFERENCES nodes (id),
-    slug        TEXT,
-    label       TEXT NOT NULL,
-    status      TEXT NOT NULL CHECK (status IN ('active', 'deleted', 'purged')),
-    deleted_at  TIMESTAMPTZ,
-    purge_after TIMESTAMPTZ,
-    deletion_id TEXT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    id           TEXT PRIMARY KEY,
+    kind         TEXT NOT NULL,
+    parent_id    TEXT REFERENCES nodes (id),
+    root_id      TEXT NOT NULL REFERENCES nodes (id),
+    slug         TEXT,
+    display_name TEXT NOT NULL,
+    status       TEXT NOT NULL CHECK (status IN ('active', 'deleted', 'purged')),
+    deleted_at   TIMESTAMPTZ,
+    purge_after  TIMESTAMPTZ,
+    deletion_id  TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
--- Slugs never reused: purged rows stay as tombstones and keep the index.
+-- A purged root keeps its slug as a tombstone; a purged node below a root frees it.
 CREATE UNIQUE INDEX nodes_slug_uidx ON nodes (COALESCE(parent_id, ''), kind, slug) WHERE slug IS NOT NULL;
 CREATE INDEX nodes_parent_idx ON nodes (parent_id, kind);
 CREATE INDEX nodes_purge_idx ON nodes (purge_after) WHERE status = 'deleted';
@@ -31,12 +31,14 @@ CREATE INDEX node_ancestors_ancestor_idx ON node_ancestors (ancestor_id, depth);
 CREATE TABLE principals (
     id            TEXT PRIMARY KEY,
     kind          TEXT NOT NULL CHECK (kind IN ('person', 'service_account')),
+    user_id       TEXT UNIQUE,
     status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
     name          TEXT,
     born_node_id  TEXT REFERENCES nodes (id),
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CHECK ((kind = 'service_account') = (born_node_id IS NOT NULL))
+    CHECK ((kind = 'service_account') = (born_node_id IS NOT NULL)),
+    CHECK ((kind = 'person') = (user_id IS NOT NULL))
 );
 CREATE INDEX principals_born_node_idx ON principals (born_node_id) WHERE born_node_id IS NOT NULL;
 
@@ -66,14 +68,12 @@ CREATE TABLE bindings (
     member_id   TEXT NOT NULL REFERENCES members (id),
     node_id     TEXT NOT NULL REFERENCES nodes (id),
     role        TEXT NOT NULL,
-    expires_at  TIMESTAMPTZ,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX bindings_uidx ON bindings (member_id, node_id);
 CREATE INDEX bindings_node_idx ON bindings (node_id);
 CREATE INDEX bindings_member_idx ON bindings (member_id);
-CREATE INDEX bindings_expiry_idx ON bindings (expires_at) WHERE expires_at IS NOT NULL;
 
 CREATE TABLE api_keys (
     id            TEXT PRIMARY KEY,
@@ -90,7 +90,6 @@ CREATE TABLE invites (
     id           TEXT PRIMARY KEY,
     node_id      TEXT NOT NULL REFERENCES nodes (id),
     role         TEXT NOT NULL,
-    role_duration TEXT,
     grants       JSONB NOT NULL DEFAULT '[]',
     token_hash   TEXT NOT NULL UNIQUE,
     token_prefix TEXT NOT NULL,
@@ -112,10 +111,4 @@ CREATE TABLE lifecycle_events (
     root_id     TEXT NOT NULL,
     principal   TEXT CHECK (principal IN ('person', 'service_account')),
     occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE kind_removals (
-    kind        TEXT PRIMARY KEY,
-    deletion_id TEXT NOT NULL,
-    removed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );

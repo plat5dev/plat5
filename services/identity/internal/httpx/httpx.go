@@ -28,15 +28,15 @@ func PathParam(c fiber.Ctx, name string) string {
 	return strings.Clone(c.Params(name))
 }
 
-// ParseListParams reads limit and starting_after, which must be an id with the
-// collection's prefix (docs/reference/lists.md).
-func ParseListParams(c fiber.Ctx, prefix string) (limit int, startingAfter string, err error) {
+// ParseListParams reads limit and starting_after, which must be an id
+// (docs/reference/lists.md).
+func ParseListParams(c fiber.Ctx) (limit int, startingAfter string, err error) {
 	limit, err = ParseLimit(c)
 	if err != nil {
 		return 0, "", err
 	}
 	startingAfter = strings.TrimSpace(c.Query("starting_after"))
-	if startingAfter != "" && !id.Valid(prefix, startingAfter) {
+	if startingAfter != "" && !id.Valid(startingAfter) {
 		return 0, "", errors.FieldError("starting_after", errors.FallbackValidation)
 	}
 	return limit, startingAfter, nil

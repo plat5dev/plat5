@@ -15,7 +15,6 @@ import (
 )
 
 const (
-	internalTokenHeader = "X-Plat5-Internal-Token"
 	// pollTimeout is longer than the control plane's long-poll wait, so an idle
 	// poll ends with 204, not a client timeout.
 	pollTimeout   = 40 * time.Second
@@ -28,19 +27,15 @@ const (
 type Follower struct {
 	client   *http.Client
 	url      string
-	token    string
 	src      *Source
 	log      zerolog.Logger
 	revision int64
-	// OnChange runs after each new snapshot is stored.
-	OnChange func()
 }
 
-func NewFollower(baseURL, internalToken string, src *Source, log zerolog.Logger) *Follower {
+func NewFollower(baseURL string, src *Source, log zerolog.Logger) *Follower {
 	return &Follower{
 		client: &http.Client{Timeout: pollTimeout},
 		url:    strings.TrimRight(baseURL, "/") + "/internal/identity",
-		token:  internalToken,
 		src:    src,
 		log:    log,
 	}
@@ -103,9 +98,6 @@ func (f *Follower) Follow(ctx context.Context) {
 		case res.snap != nil:
 			f.src.Store(res.snap)
 			f.log.Info().Int64("revision", res.revision).Int("kinds", len(res.snap.Kinds)).Msg("config reloaded")
-			if f.OnChange != nil {
-				f.OnChange()
-			}
 		}
 	}
 }
@@ -125,9 +117,6 @@ func (f *Follower) fetch(ctx context.Context, after *int64) (fetched, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return fetched{}, err
-	}
-	if f.token != "" {
-		req.Header.Set(internalTokenHeader, f.token)
 	}
 	resp, err := f.client.Do(req)
 	if err != nil {
