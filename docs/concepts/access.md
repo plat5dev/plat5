@@ -101,7 +101,7 @@ Every route, in order:
 7. **Forward** with the caller's headers ([`reference/headers.md`](../reference/headers.md)). Slugs never reach a service.
 8. **Outcome**, in the background, then respond.
 
-Both **403**s have the same body, `details.required_permissions` included, so neither says whether the node exists. The admit **403** runs before the rate limit so a caller outside a tree can't spend that tree's budget; the permission **403** runs after, so a member probing permissions is bounded by its own limit. The intent is written after the permission check, so during an audit outage a **503** never says whether a node exists.
+Both **403**s on a route have the same body, `details.required_permissions` included, so neither says whether the node exists. An `any_member` route names no permissions: its only **403** is the admit one, the caller not in the tree. The admit **403** runs before the rate limit so a caller outside a tree can't spend that tree's budget; the permission **403** runs after, so a member probing permissions is bounded by its own limit. The intent is written after the permission check, so during an audit outage a **503** never says whether a node exists.
 
 On a `public` route, authenticate and admit is skipped and there is no caller. On a user route, the chain is empty and the caller is the person's user id.
 

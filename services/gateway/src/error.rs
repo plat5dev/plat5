@@ -86,19 +86,19 @@ impl ApiError {
     }
 
     /// The one 403 body: a node that doesn't exist, a caller outside its tree, and a
-    /// missing permission all answer this, with the route's `required_permissions`:
-    /// its list, or `"any_member"`.
+    /// missing permission all answer this, with the route's `required_permissions`
+    /// list. An `any_member` route has none: its 403 only means the caller isn't in
+    /// the tree.
     pub fn forbidden(required: &Required) -> Self {
-        let required = match required {
-            Required::AnyOf(list) => serde_json::json!(list),
-            Required::AnyMember => serde_json::json!("any_member"),
-            Required::Nothing => serde_json::Value::Null,
+        let details = match required {
+            Required::AnyOf(list) => Some(serde_json::json!({ "required_permissions": list })),
+            Required::AnyMember | Required::Nothing => None,
         };
         Self {
             error_type: "invalid_request_error".to_string(),
             code: "FORBIDDEN".to_string(),
             message: "Permission denied, or it may not exist.".to_string(),
-            details: Some(serde_json::json!({ "required_permissions": required })),
+            details,
         }
     }
 
@@ -273,10 +273,10 @@ mod tests {
             serde_json::json!({ "required_permissions": ["project:read"] })
         );
         let any = ApiError::forbidden(&Required::AnyMember);
-        assert_eq!(
-            any.details,
-            Some(serde_json::json!({ "required_permissions": "any_member" }))
-        );
+        let json = String::from_utf8(any.to_json_bytes(None)).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["error"]["code"], "FORBIDDEN");
+        assert_eq!(parsed["error"]["details"], serde_json::Value::Null);
     }
 
     #[test]

@@ -43,7 +43,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `INVALID_REQUEST` | 400 | `invalid_request_error` | Malformed request. | — |
 | `VALIDATION_ERROR` | 422 | `invalid_request_error` | That doesn't look right. | `{ fields: [{ path, message }] }` |
 | `UNAUTHORIZED` | 401 | `invalid_request_error` | Authentication required. | `{ reason }` |
-| `FORBIDDEN` | 403 | `invalid_request_error` | Permission denied, or it may not exist. | `{ required_permissions }` |
+| `FORBIDDEN` | 403 | `invalid_request_error` | Permission denied, or it may not exist. | `{ required_permissions }`, or `null` on an `any_member` route |
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
 | `PLAN_STALE` | 409 | `invalid_request_error` | The deployment changed since this plan was made. Plan again. | `{ precondition, expected, actual }` |
@@ -54,7 +54,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 
 ### `FORBIDDEN`
 
-Returned by the **gateway** when the route's node doesn't exist, the caller isn't in its tree, or the caller's permissions on the node share none with the route's `required_permissions`. One body for all three, so a 403 never says whether a node exists. `details.required_permissions` is the route's list: any one of them would have admitted the request. The caller's own permissions are never in the body; the gateway logs them on a `required_permissions denied` line ([`reference/telemetry.md`](telemetry.md#gateway-permission-denied-line)).
+Returned by the **gateway** when the route's node doesn't exist, the caller isn't in its tree, or the caller's permissions on the node share none with the route's `required_permissions`. One body for all three, so a 403 never says whether a node exists. `details.required_permissions` is the route's list: any one of them would have admitted the request. On an `any_member` route, `details` is `null`: there a 403 only means the caller isn't in the tree. The caller's own permissions are never in the body; the gateway logs them on a `required_permissions denied` line ([`reference/telemetry.md`](telemetry.md#gateway-permission-denied-line)).
 
 ### `NOT_FOUND`
 

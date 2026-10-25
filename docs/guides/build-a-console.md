@@ -16,7 +16,7 @@ Paths carry slugs: `/orgs/acme/projects/web/…`. Lists show only what the calle
 
 ## Errors
 
-Show `error.message` ([`reference/errors.md`](../reference/errors.md)). A 403 never says whether a node exists, so the console shouldn't either: "Permission denied, or it may not exist." `details.required_permissions` says which permissions would have worked, for an "ask an admin for…" hint.
+Show `error.message` ([`reference/errors.md`](../reference/errors.md)). A 403 never says whether a node exists, so the console shouldn't either: "Permission denied, or it may not exist." On a route that needs permissions, `details.required_permissions` says which would have worked, for an "ask an admin for…" hint ([`FORBIDDEN`](../reference/errors.md#forbidden)).
 
 ## Who has access
 

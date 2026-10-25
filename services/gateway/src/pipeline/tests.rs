@@ -514,6 +514,11 @@ async fn admit_table() {
     assert_eq!(list.route.required, Required::AnyMember);
     let h = harness(Ok(answer_for(&list.route, &[])));
     assert!(h.decide(&list, Ok(jwt())).await.is_ok());
+    // Its 403 only means the caller isn't in the tree, so it names no permissions.
+    let h = harness(Ok(not_in_tree()));
+    let (r, _) = h.run(&list, Ok(key())).await;
+    assert_eq!(r.err(), Some(Rejection::NotFound));
+    assert_eq!(Rejection::NotFound.body(&list.route).details, None);
 
     // Identity down, or an answer missing a node → 503, and nothing counted.
     let h = harness(Err("connection refused".into()));

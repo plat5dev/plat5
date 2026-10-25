@@ -375,6 +375,12 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 	if outside.Error.Message != denied.Error.Message || missing.Error.Message != denied.Error.Message {
 		t.Fatalf("403s differ: %+v / %+v / %+v", outside, missing, denied)
 	}
+	// On an any_member route a 403 only means not in the tree: no permissions named.
+	var notMember apiError
+	s.call(outsider, "GET", orgPath+"/membership", nil, 403, &notMember)
+	if notMember.Error.Message != denied.Error.Message || notMember.Error.Details != nil {
+		t.Fatalf("any_member 403: %+v", notMember)
+	}
 
 	// What the service account holds at the project: developer, member included.
 	var held membership

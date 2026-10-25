@@ -129,6 +129,6 @@ A 401 on a matched route says what the route takes. The same sentence for no cre
 
 ### Gateway 403
 
-Always the fallback sentence, `Permission denied, or it may not exist.`, with the route's `required_permissions` in `details`.
+Always the fallback sentence, `Permission denied, or it may not exist.`, with `details` as [`FORBIDDEN`](errors.md#forbidden) gives it.
 
 Siblings (`cli`, `template-*`): update only if they snapshot exact Plat5 `message` strings.
