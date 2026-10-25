@@ -153,7 +153,7 @@ pub async fn apply(
 }
 
 /// `GET /internal/gateway`: kinds, every service's routes expanded, rate
-/// limits and CORS, with defaults filled in.
+/// limits, CORS and the IdP name claim, with defaults filled in.
 pub fn gateway_feed(revision: i64, config: &Value) -> Result<Value, Failure> {
     let c = stored(config)?;
     Ok(gateway_body(revision, &c))
@@ -166,6 +166,7 @@ pub fn gateway_body(revision: i64, c: &Config) -> Value {
         "services": expand::expand(c),
         "rate_limits": c.rate_limits,
         "cors": c.cors,
+        "users": c.users,
     })
 }
 
@@ -234,6 +235,7 @@ mod tests {
             json!({ "allowed_origins": [], "allowed_headers": [] })
         );
         assert_eq!(gateway["rate_limits"], json!({}));
+        assert_eq!(gateway["users"], json!({ "name_claim": "name" }));
         let e10s = &gateway["services"]["e10s"];
         assert_eq!(e10s["timeouts"], json!({ "connect": "10s", "read": "30s" }));
         assert_eq!(e10s["max_body_bytes"], json!(10485760));

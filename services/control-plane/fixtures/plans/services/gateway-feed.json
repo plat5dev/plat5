@@ -118,5 +118,8 @@
   "cors": {
     "allowed_origins": [],
     "allowed_headers": []
+  },
+  "users": {
+    "name_claim": "name"
   }
 }

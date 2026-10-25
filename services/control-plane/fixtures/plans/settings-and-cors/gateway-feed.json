@@ -95,5 +95,8 @@
     "allowed_headers": [
       "idempotency-key"
     ]
+  },
+  "users": {
+    "name_claim": "display_name"
   }
 }
