@@ -11,11 +11,11 @@ Control-plane admin lists (`GET /revisions`) return the full set. So does identi
 | `limit` | Optional. Default **50**, max **100**. Over-max is **clamped**, not 422. `< 1` or non-integer → **422** `VALIDATION_ERROR` |
 | `starting_after` | Optional. Exclusive cursor: the `id` of the last item on the previous page. Omit on the first page |
 
-`starting_after` must have the collection's id form: a prefixed ULID for identity (`n_01J…`), a bare ULID for audit events. Invalid → **422**. A well-formed id that isn't in the collection is not an error: the walk continues after that point in `id` order.
+`starting_after` must be an id: a lowercase ULID. Invalid → **422**. A well-formed id that isn't in the collection is not an error: the walk continues after that point in `id` order.
 
 ## Order
 
-Always **`id` ascending**. Ids are ULIDs (time-sortable) behind a type prefix.
+Always **`id` ascending**. Ids are ULIDs, so that's creation order.
 
 ## Body
 
@@ -28,14 +28,14 @@ Always **`id` ascending**. Ids are ULIDs (time-sortable) behind a type prefix.
 
 | Field | |
 |-------|--|
-| named collection | Plural resource key: `nodes`, `members`, `bindings`, `access`, `service_accounts`, `keys`, `invites`. `access` entries are keyed by binding id; `service_accounts` by member id |
+| named collection | Plural resource key: `nodes`, `members`, `users`, `bindings`, `service_accounts`, `keys`, `invites`. `service_accounts` are keyed by member id |
 | `has_more` | `true` if another page exists. Always present |
 
 When `has_more` is `true`, pass the last item's `id` as `starting_after`.
 
 ## Filtered lists
 
-Node lists through the gateway return only what the caller can read ([access](../concepts/access.md#lists)). A page can come back with fewer than `limit` items while `has_more` is `true`; keep walking until it's `false`.
+Node lists through the gateway return only what the caller can see ([access](../concepts/access.md#lists)). `?status=deleted` lists deleted nodes instead of live ones. A page can come back with fewer than `limit` items while `has_more` is `true`; keep walking until it's `false`.
 
 ## Audit events
 

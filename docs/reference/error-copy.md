@@ -49,18 +49,17 @@ Clients show `error.message`. `details.fields` is for multi-field 422s; `message
 
 | When | `message` |
 |------|-----------|
-| Label empty | Label is required. |
-| Label > 128 | Label is too long. |
+| Display name empty | Display name is required. |
+| Display name > 128 | Display name is too long. |
 | Slug malformed | Use 3 to 63 lowercase letters, digits and hyphens, starting with a letter. |
 | Slug reserved | That name is reserved. |
 | Slug taken, live or tombstone | That name is taken. |
-| Child kind not allowed here | A {kind} can't go here. |
+| Child kind whose parent is another kind | A {kind} can't go here. |
 | Restore with a deleted parent | Restore the {parent kind} first. |
 | Restore past the grace period | This can no longer be restored. |
-| Restore while its kind is removed | A {kind} can't be restored while its kind is removed. |
+| Restore of a kind not in the config, or under a parent of another kind | A {kind} can't be restored here. |
 | Create under a deleted node | Restore the {parent kind} first. |
-| Delete the sign-in node | The {kind} can't be deleted. |
-| Release the slug of a node that isn't purged | Only a purged node's slug can be released. |
+| Release the slug of a node that isn't a purged root | Only a purged root's slug can be released. |
 
 ### Members and bindings
 
@@ -78,9 +77,9 @@ Clients show `error.message`. `details.fields` is for multi-field 422s; `message
 |------|-----------|
 | `role` not in the roles document | That role doesn't exist. |
 | `role` not bindable at this kind | That role can't be given on a {kind}. |
-| `expires_at` missing or past `max_duration` | This role can be given for at most {max_duration}. |
+| `role` missing | Choose a role. |
 
-All are **422** `VALIDATION_ERROR` with `path` `role` or `expires_at`.
+All are **422** `VALIDATION_ERROR` with `path` `role`.
 
 ### Service accounts
 
@@ -95,15 +94,16 @@ All are **422** `VALIDATION_ERROR` with `path` `role` or `expires_at`.
 
 | When | `message` |
 |------|-----------|
-| `expires_at` not between 60 seconds and 30 days away | Expiry must be between 60 seconds and 30 days. |
-| `max_uses` 0 or negative | Max uses must be at least 1. |
+| `expires_in` not between `60s` and `30d` | Expiry must be between 60 seconds and 30 days. |
+| `max_uses` 0, negative, or a string other than `unlimited` | Max uses must be at least 1, or unlimited. |
 | `grants` on an invite below a root | Only an invite to the {root kind} can grant more. |
-| No `role` on an invite below a root | Choose a role. |
+| No `role` | Choose a role. |
 | Redeem of a redeemed invite | This invite has already been used. |
 | Redeem of a revoked invite | This invite is no longer valid. |
 | Redeem of an expired invite | This invite has expired. |
+| Redeem of an invite whose node is deleted | This invite's {kind} was deleted. |
 
-Unknown tokens use the generic **404** `Resource not found.` Redeemed, revoked and expired tokens are **409** `CONFLICT` with `{ "field": "status", "value": "redeemed" | "revoked" | "expired" }`.
+Unknown tokens use the generic **404** `Resource not found.` Redeemed, revoked and expired tokens are **409** `CONFLICT` with `{ "field": "status", "value": "redeemed" | "revoked" | "expired" }`; a token whose node is deleted, with `{ "field": "node", "value": "deleted" }`.
 
 ### API keys
 
@@ -126,10 +126,10 @@ A 401 on a matched route says what the route takes. The same sentence for no cre
 | Route scope | `message` |
 |-------------|-----------|
 | A kind | Authentication required: a sign-in token or an API key. |
-| The sign-in kind | Authentication required: a sign-in token or a personal API key. |
+| `user` | Authentication required: a sign-in token or a personal API key. |
 
 ### Gateway 403
 
-Always the fallback sentence, `Permission denied, or it may not exist.`, with the route's `required_labels` in `details`.
+Always the fallback sentence, `Permission denied, or it may not exist.`, with the route's `required_permissions` in `details`.
 
 Siblings (`cli`, `template-*`): update only if they snapshot exact Plat5 `message` strings.

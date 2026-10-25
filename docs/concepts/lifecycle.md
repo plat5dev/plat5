@@ -4,50 +4,43 @@ How nodes and members are born, deleted, restored and purged, and the events ser
 
 ## Creating nodes
 
-Nodes are created through the generated node routes ([`reference/api/edge-catalog.md`](../reference/api/edge-catalog.md)), or identity's service API by another front door. The creator gets `creator_role` on the new node ([access](access.md#assigning)). A slug is fixed at creation ([ids and slugs](model.md#ids-and-slugs)). Identity writes `<kind>.created`. Nothing is created under a deleted or purged parent (**409**).
-
-The sign-in node is created at boot, once identity has its first config, labelled with its kind's `label`, or the kind name if it has none.
+Nodes are created through identity's routes ([resources](../reference/config/resources.md)), or identity's service API by another front door. The creator gets `creator_role` on the new node ([access](access.md#assigning)). A slug is fixed at creation ([ids and slugs](model.md#ids-and-slugs)). Identity writes `node.created`. Nothing is created under a deleted or purged parent (**409**).
 
 A service never creates a node in its own tables first: it creates it through the node API, so the gateway's check never runs ahead of Plat5.
 
 ## Deleting, restoring and purging
 
-- **Soft deletes.** Soft for `deletion_grace` (30 days by default), restorable, then purged. The grace is fixed when the node is deleted (`purge_after`), so changing `deletion_grace` applies to new deletes only. Ids are never reused. Slugs aren't either, unless someone releases a purged node's slug by hand through identity's service API, which no generated route exposes.
+- **Soft deletes.** Soft for `deletion_grace` (30 days by default), restorable, then purged. The grace is fixed when the node is deleted (`purge_after`), so changing `deletion_grace` applies to new deletes only. Ids are never reused.
 
-- **Deletion ids.** Each delete, and each kind removal, stamps one `deletion_id` on every node it soft-deletes. A restore, or a kind applied again, restores exactly the nodes with that id. A node already deleted keeps its own id.
+- **Deletion ids.** Each delete stamps one `deletion_id` on every node it soft-deletes. A restore restores exactly the nodes with that id. A node already deleted keeps its own id.
 
-- **Deleting again.** Deleting a node that's already deleted or purged succeeds and changes nothing: it keeps its first `deletion_id` and `purge_after`, so a second delete doesn't extend the grace. The sign-in node can't be deleted (**422**).
+- **Deleting again.** Deleting a node that's already deleted or purged succeeds and changes nothing: it keeps its first `deletion_id` and `purge_after`, so a second delete doesn't extend the grace.
 
-- **What a delete revokes.** Keys of service accounts born at the node or below, and invites on the node or below.
+- **A delete revokes nothing.** While a node is deleted, nothing works on it or below: the gateway refuses it, the keys of service accounts born there are refused, and its invites can't be redeemed. Bindings, service accounts, keys and invites are all kept. To kill a key you think leaked, revoke it or delete its service account.
 
-- **What a deleted node grants.** A node with `status = 'deleted'` grants nothing on it or below, except on a `resolve_deleted` route (restore, listing deleted). Once its `purge_after` has passed, the purge sweeper sets `status = 'purged'` on it and the deleted nodes below it, deletes bindings on them, deletes service accounts born at them (principal and keys; the member is removed with `member.removed`), removes members of a purged root, and keeps the rows. Purging deletes bindings, so a person's member it leaves with none, a guest included, is removed with `member.removed`. A soft delete removes nobody: bindings stay until purge.
+- **What a deleted node grants.** Nothing on it or below, except on an `allow_deleted` route (restore). Listing deleted nodes counts its own bindings ([lists](access.md#lists)).
 
-- **Restore.** Before `purge_after`, by anyone who could delete the node: the node and the descendants its delete cascaded to come back. Keys and invites revoked by the delete stay revoked, so a key or token that leaked near the deletion stays dead. A node whose parent is deleted can't be restored until the parent is (**409**); parents are never restored for it. Restoring a live node succeeds and changes nothing. A node whose kind isn't in the config can't be restored (**409**): apply the kind again.
+- **Restore.** Before `purge_after`, by anyone who could delete the node: a full undo. The node and the descendants its delete cascaded to come back, with their bindings, service accounts, keys and unexpired invites. A node whose parent is deleted can't be restored until the parent is (**409**); parents are never restored for it. Restoring a live node succeeds and changes nothing. A node whose kind isn't in the config, or whose parent's kind isn't its kind's parent any more, can't be restored (**409**).
+
+- **Purge.** Once `purge_after` has passed, the purge sweeper sets `status = 'purged'` on the node and the deleted nodes below it, even those whose own `purge_after` is later, and deletes everything that hung off them: bindings, invites, and service accounts born there (principal and keys; the member removed with `member.removed`). A person's member it leaves with no bindings, a guest included, is removed with `member.removed`, and a purged root removes all its members. The node rows are kept. A purged node below a root frees its slug; a purged root keeps its slug as a tombstone ([ids and slugs](model.md#ids-and-slugs)).
 
 - **Background work** checks node state itself; the gateway only guards requests.
 
+## Kinds
 
-## Removing a kind
-
-Removing a kind is the only destructive change. Identity soft-deletes its nodes when the new config reaches it, through the normal node lifecycle, so the same events are emitted. Applying the kind again within the grace period restores the nodes that removal deleted (not ones deleted separately before it), with `<kind>.restored` events; after it, the kind comes back empty.
-
-Identity checks every config it reads against its nodes, so a removal it missed while down still happens. Live nodes of a kind the config doesn't have are soft-deleted, with their descendants, under one `deletion_id` that identity records for the kind. When the kind is in the config again, identity restores that removal's nodes still within their grace, except those whose parent has been deleted since, and forgets the removal. It also forgets it once all of that removal's nodes are purged, so the kind applied again after the grace starts empty. How the plan treats it: [config](config.md#classification).
-
+Only an empty kind can be removed, and a kind's parent changes only while it has no nodes ([config](config.md#blocked-changes)), so a config change never deletes or moves a node. Identity follows a new kind at once: its nodes can be created as soon as the config reaches identity.
 
 ## Members
 
 - **Removed is final.** Re-adding someone to a tree makes a new member id. The old member stays, and a lookup returns its name and `status: removed`.
 
-- **Members.** One active member per principal per tree. In an org's tree it's created with its first binding; in the directory, with the person: at first sign-in, or when an admin adds someone who hasn't signed in yet. Removal sets `removed_at`, deletes its bindings and emits `member.removed`; it's never undone, and re-adding makes a new member. A person's member outside the directory left with no bindings, by a binding delete, expiry or purge, is removed. A service account's member is removed only with the service account (deleted directly, or with its born node: either way its principal and keys are deleted); with no bindings its keys still authenticate and are refused everywhere, so a team can re-bind it.
+- **Members.** One active member per principal per tree, created with its first binding. Removal sets `removed_at`, deletes its bindings and emits `member.removed`; it's never undone, and re-adding makes a new member. A person's member left with no bindings, by a binding delete or a purge, is removed. A service account's member is removed only with the service account (deleted directly, or with its born node at purge: either way its principal and keys are deleted); with no bindings its keys still authenticate and are refused everywhere, so a team can re-bind it.
 
-- **Expiry.** A binding past `expires_at` grants nothing; a sweeper deletes it.
-
-- **Suspension.** A suspended principal's credentials are all invalid. There's no per-member suspension: remove the member instead.
-
+- **Suspension.** A suspended person's credentials are all invalid. There's no per-member suspension: remove the member instead.
 
 ### Deleting an account
 
-`DELETE /members/{member_id}` on a directory member, in one transaction: every member of the person in every tree is removed (bindings deleted, `member.removed` per tree), personal keys and IdP links are deleted, and the principal is deleted. Removed member rows stay, with no name. Nothing blocks it: an org left with no admin is recovered through an operator plane.
+`DELETE /users/{user_id}`, in one transaction: every member of the person in every tree is removed (bindings deleted, `member.removed` per tree), personal keys and IdP links are deleted, and the principal is deleted. Removed member rows stay, with no name. Nothing blocks it: an org left with no admin is recovered through an operator plane.
 
 ## Lifecycle events
 
