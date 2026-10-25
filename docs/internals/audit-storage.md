@@ -4,11 +4,15 @@ For implementers. The contract is [audit](../concepts/audit.md) and the [audit A
 
 ## Storage
 
-`audit_events` in schema `audit` on the Plat5 Postgres. Partitioned by month on `occurred_at`. Unique on `request_id`; a GIN index on the node ids (`node_ids`, the chain beside `nodes`) for reads by node, and indexes on `named_root_id` and on the person's log (`actor_member_id` where `root_id` is null). Check constraints keep `root_id` the chain's head, a named root only on a sign-in event, and `key_prefix` set exactly for keys. Partitions are kept from last month to two months ahead, at boot and hourly.
+`audit_events` in schema `audit` on the Plat5 Postgres, partitioned by month on `occurred_at`, unique on `request_id`. It holds the event as the [API](../reference/api/audit.md#event) returns it, with no check constraints between fields: audit stores what it's sent.
+
+`audit_log_keys` is one row per log an event is in: `(log, event_id, occurred_at)`, where `log` is a node id (each node in `nodes`, each in `named_nodes`, and `created_id`) or `user:` and a user id. A read is one index range on `(log, event_id DESC)`. The intent writes the chain's and the user's keys; the outcome adds the named nodes' and `created_id`'s. Partitioned with the events.
+
+Partitions are kept from last month to two months ahead, at boot and hourly.
 
 One migration. Boot refuses a schema that records a migration this build doesn't know: drop it or use a fresh database.
 
-Append-only, except the one `pending` → final transition. A trigger enforces it. No API updates or deletes an event. Events are kept: there's no retention yet, and purging a node doesn't delete its events.
+Append-only, except the one `pending` → final transition and the keys an outcome adds. A trigger enforces it. No API updates or deletes an event. Events are kept: there's no retention yet, and purging a node doesn't delete its events.
 
 ## Runtime
 
