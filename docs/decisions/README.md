@@ -1,6 +1,6 @@
 # Decisions
 
-Why Plat5 is shaped the way it is, by topic, with the Kubernetes, Google Cloud, Terraform, GitHub and Stripe references each choice follows. These are reasons, not contracts: the rules live in [`concepts/`](../concepts/) and [`reference/`](../reference/), and where a reason and a contract differ, the contract wins.
+Why Plat5 is shaped the way it is, by topic. These are reasons, not contracts: the rules live in [`concepts/`](../concepts/) and [`reference/`](../reference/), and where a reason and a contract differ, the contract wins.
 
 | Topic | Why… |
 |-------|------|

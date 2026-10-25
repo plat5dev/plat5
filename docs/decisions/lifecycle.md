@@ -4,7 +4,7 @@ Why deletes are soft, restorable and then purged, and how nodes, members and sto
 
 ## Deleting, restoring and purging
 
-Every delete is soft for `deletion_grace`, 30 days by default, restorable, then purged, as a Google Cloud project is ([delete and restore](https://docs.cloud.google.com/resource-manager/docs/delete-restore-projects)).
+Every delete is soft for `deletion_grace`, 30 days by default, restorable, then purged. A mistake can be undone for the whole grace, and the data is gone for good once it ends.
 
 | Decision | Why |
 |----------|-----|
@@ -15,11 +15,11 @@ Every delete is soft for `deletion_grace`, 30 days by default, restorable, then 
 | Restore is self-serve within the grace, by anyone who could delete; deleted nodes are listed with `?status=deleted` | The person who made the mistake can undo it |
 | A deleted node's grace is fixed when it's deleted (`purge_after`), so changing `deletion_grace` applies to new deletes only. The node carries `purge_after` | Shortening it must not purge what people were promised could be restored, and a console can show "restorable until" |
 | Each delete has a `deletion_id`; restore undoes only that id's nodes. It's a bare ULID | A node deleted separately earlier must stay deleted |
-| Deleting an already deleted or purged node succeeds and changes nothing; it keeps its `deletion_id` and `purge_after` | Kubernetes accepts a delete of something already being deleted. A second delete mustn't extend the grace |
-| Restoring a live node succeeds and changes nothing. Restoring under a deleted parent is **409**; parents are never restored for it | Google Cloud makes you undelete the parent first |
+| Deleting an already deleted or purged node succeeds and changes nothing; it keeps its `deletion_id` and `purge_after` | A client retrying a delete gets success, not an error for something that already happened. A second delete mustn't extend the grace |
+| Restoring a live node succeeds and changes nothing. Restoring under a deleted parent is **409**; parents are never restored for it | A live node already is what the restore asks for. Restoring the parent is a separate decision with its own `deletion_id`, and a child's restore mustn't bring back what someone else deleted |
 | Nothing is created under a deleted or purged parent (**409**). `PATCH`, bindings, service accounts and invites on a deleted node have no rule in the service API | The gateway already refuses deleted nodes; other front doors are trusted |
 | Purge takes the deleted nodes below it, even if their own `purge_after` is later | A child under a purged parent can never be restored, so keeping it loses nothing but storage |
-| A service account born at a purged node goes with it: principal and keys deleted, member removed with `member.removed` | Google Cloud deletes a project's service accounts with the project |
+| A service account born at a purged node goes with it: principal and keys deleted, member removed with `member.removed` | It belongs to the part of the tree it was born in. Left behind, its keys would authenticate a machine with nothing left to work on |
 | Delete answers **204**, restore **200** with the node, and releasing the slug of a node that isn't a purged root is **409** | Plain, and consistent with the rest of the API |
 | The purge sweeper runs every minute, and marks invites past `expires_at` `expired`. No settings | One background loop; no setting until someone needs one |
 
@@ -27,14 +27,14 @@ Every delete is soft for `deletion_grace`, 30 days by default, restorable, then 
 
 | Decision | Why |
 |----------|-----|
-| A kind is removed, or changes parent, only while it has no nodes that aren't purged, deleted ones included, so identity never deletes or moves nodes because of a config | A config change that soft-deletes data needs a confirmation flow, a record of what each removal deleted, and a rule for restoring it when the kind returns, possibly under other parents. Google Cloud deletes only an empty folder |
+| A kind is removed, or changes parent, only while it has no nodes that aren't purged, deleted ones included, so identity never deletes or moves nodes because of a config | A config change that soft-deletes data needs a confirmation flow, a record of what each removal deleted, and a rule for restoring it when the kind returns, possibly under other parents |
 | A deleted node blocks its kind's removal until it's purged | Every deleted node stays restorable for its whole grace, and a restore always puts it where its kind can be, so restore needs no rule for a kind that's gone or moved |
 
 ## Moving nodes
 
 | Decision | Why |
 |----------|-----|
-| A node keeps its parent for life. A move within one tree is deferred ([`TODO.md`](../../TODO.md)) | When it comes, inherited roles switch to the new parent, as Google Cloud does when a project moves |
+| A node keeps its parent for life. A move within one tree is deferred ([`TODO.md`](../../TODO.md)) | When it comes, inherited roles switch to the new parent: a node's access always follows the chain it's in |
 | Moving across trees is refused | The org is the isolation boundary ([boundaries](boundaries.md)) |
 
 ## Members
@@ -50,5 +50,5 @@ Every delete is soft for `deletion_grace`, 30 days by default, restorable, then 
 
 | Decision | Why |
 |----------|-----|
-| Each service's schema is one migration, `001_init.sql`. Boot refuses a database that records a migration the build doesn't know | Nothing has run against an older schema, so there's no upgrade path to keep. Data from elsewhere moves into a fresh database by hand |
-| Identity's code keeps only what its schema uses: key hashing and format, the error envelope, pagination, ids, audit helpers, db, metrics, middleware, telemetry | Code with no schema behind it passes only against fakes. Git history keeps the rest |
+| Each service's schema is one migration, `001_init.sql`. Boot refuses a database that records a migration the build doesn't know | One file shows the whole schema, and a build never runs against a schema it doesn't understand. Data from another database moves into a fresh one by hand |
+| Identity's code keeps only what its schema uses: key hashing and format, the error envelope, pagination, ids, audit helpers, db, metrics, middleware, telemetry | Code with no schema behind it passes only against fakes |

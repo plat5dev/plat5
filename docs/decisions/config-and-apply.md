@@ -10,7 +10,7 @@ Why the deployment's config is one document applied whole, through a plan, valid
 | A service file's one top-level key is the service's name; under it sit the service's own settings and its routes, grouped by scope, each scope with an optional `upstream_prefix` | A service's upstream shape is usually one prefix per scope. Writing it once leaves each route its relative path, methods and permissions |
 | Routes in a kind scope are relative to the node, and the public path is the kinds' pieces joined root first | The public URL shape is set once in `plat5.yml`. Widening or renaming a kind's path doesn't touch any service file |
 | Placeholders name what they hold: `{<kind>.id}`, `{member.id}`, `{user.id}`, and the route's own params bare (`{plan_id}`) | A dot always means a resolved value and params can't be kind names, so nothing is ambiguous. Only `.id` exists, so slugs never reach a service |
-| Route-level `required_permissions`, `rate_limit` and `audit` are defaults each verb can override; a list of methods is a map with no overrides | OpenAPI's path-level settings work the same way. A rule refusing the mix would only make the same thing harder to write |
+| Route-level `required_permissions`, `rate_limit` and `audit` are defaults each verb can override; a list of methods is a map with no overrides | Most verbs on a route share them, so writing them once and overriding the odd verb keeps the file short. A rule refusing the mix would only make the same thing harder to write |
 | `required_permissions: any_member` admits any member; `[]` is **422** | An empty list reads as "nothing required" to one reader and "nothing allowed" to another. Saying it is explicit config |
 | `OPTIONS` isn't a route method | The gateway answers every `OPTIONS` as a preflight, so a route for it could never match |
 | A route under a child kind's collection is **422**; the collection itself is allowed | Otherwise a customer's project named `archived` is shadowed by a literal `/projects/archived`, unreachable by slug, with no error anywhere |
@@ -18,9 +18,9 @@ Why the deployment's config is one document applied whole, through a plan, valid
 | Deployment defaults (upstream timeouts, `max_body_bytes`) sit in `defaults:` in `plat5.yml`; a service's own fields override them. Boot-only wiring, secrets and trust anchors stay env | Config decides what a deployment could decide, and a change is an apply, not a restart |
 | The config is one flat object: `plat5.yml`'s keys, with `services` as a map of name to service | The documents are checked together anyway; one shape from the file to the control plane leaves nothing to translate |
 | The config has no format key. A second format adds `version`, with a migration | An absent key means the first format; a key with one possible value says nothing |
-| One published JSON Schema, `schema/`, compiled into the control plane and copied into the CLI. `GET /schema` needs no token | A CRD's schema is the one definition of its shape. A schema isn't a secret, and editors fetch it |
+| One published JSON Schema, `schema/`, compiled into the control plane and copied into the CLI. `GET /schema` needs no token | One definition of the config's shape, used by the validator, the CLI and editors alike. A schema isn't a secret, and editors fetch it |
 | Durations are `^[1-9][0-9]*(s\|m\|h\|d)$`, for timeouts too | One number, one unit: unambiguous and easy to show in a diff |
-| The control plane's errors name a field path (`services.e10s.scopes.project.routes[2].path`); the CLI adds the file | The control plane receives one body and can't know files. Kubernetes errors work the same way: the server names the field, `kubectl` names the file |
+| The control plane's errors name a field path (`services.e10s.scopes.project.routes[2].path`); the CLI adds the file | The control plane receives one body and can't know files. The CLI split the config into files, so it knows which file holds a path |
 | The control plane holds the deployment's typed desired state, and nothing else: no wiring, secrets or trust anchors | It must never become an untyped settings bag |
 | `AUDIT_ENABLED` stays env | It's wiring: whether the deployment runs an audit service. Events already written mean the same afterwards |
 
@@ -28,7 +28,7 @@ Why the deployment's config is one document applied whole, through a plan, valid
 
 | Decision | Why |
 |----------|-----|
-| A role can name other roles in `includes`, transitively, and grants their permissions plus its own. Only permissions are included. A cycle or a missing role is **422** | Kubernetes aggregates ClusterRoles the same way ([aggregated ClusterRoles](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#aggregated-clusterroles)). `bindable_at` is where a role makes sense, which an including role decides for itself |
+| A role can name other roles in `includes`, transitively, and grants their permissions plus its own. Only permissions are included. A cycle or a missing role is **422** | A role like `admin` stays the sum of the roles under it, and a permission added to one reaches every role that includes it. `bindable_at` is where a role makes sense, which an including role decides for itself |
 | Identity resolves includes when it reads the config; the feed carries roles as written | One place resolves them, and the plan shows the roles as the team wrote them |
 | A role permission no route requires is **422**. Identity's and audit's resources count, defaults included, and so does a kind's `list_permission`. A route permission no role grants is legal | The first is a typo or a removed route, and it would grant nothing forever. The second is a route meant for `*` holders only |
 | `role` is required on member add and on invites; there is no default role | Default-deny below the root is the role you give new members. A default that only fills an omitted field hides that choice |
@@ -38,7 +38,7 @@ Why the deployment's config is one document applied whole, through a plan, valid
 
 | Decision | Why |
 |----------|-----|
-| The control plane is the one validator: the schema, the rules tying documents together, and route shapes, on every apply | It's the only writer of the config, as the Kubernetes API server validates objects once and its controllers trust them. Two copies of the route rules drift apart |
+| The control plane is the one validator: the schema, the rules tying documents together, and route shapes, on every apply | It's the only writer of the config, so what it accepted is what every reader gets, and readers trust it. Two copies of the route rules drift apart |
 | The gateway parses the feed and builds its route table, nothing more. A snapshot it can't parse or build is refused whole and reported | A partial route table is a state nobody applied |
 | A contract test, not shared code: every fixture config the control plane accepts is fed through the gateway's builder in its tests | "Apply accepted it" provably means "the gateway can build it", without shared code between two services released apart |
 | Upgrade the gateway with or before the control plane | A newer control plane can accept what an older gateway can't build; the older one keeps its last snapshot |
@@ -56,12 +56,12 @@ Why the deployment's config is one document applied whole, through a plan, valid
 
 | Decision | Why |
 |----------|-----|
-| No stored plans. A dry run returns the plan; the apply recomputes it and carries one precondition, the config revision the dry run saw | Kubernetes' server-side dry run ([dryRun](https://kubernetes.io/docs/reference/using-api/api-concepts/#dry-run)) and `resourceVersion` precondition ([concurrency control](https://kubernetes.io/docs/reference/using-api/api-concepts/#resource-versions)), with Terraform's rule that a stale saved plan is refused ([saved plans](https://developer.hashicorp.com/terraform/cli/commands/plan#out-filename)) |
-| The whole config, every apply | The rules tie kinds, roles and routes together, so a partial apply would be checked against everything else anyway. Terraform's model: what's not in the config is removed, and the plan says so |
-| A kind is removed, or changes parent, only while it has no nodes that aren't purged, deleted ones included. Otherwise the plan is blocked, listing what's in the way | Google Cloud deletes only an empty folder ([folders.delete](https://docs.cloud.google.com/resource-manager/reference/rest/v3/folders/delete)). Nodes are deleted first, each restorable on its own, so no config change destroys data and no plan needs a confirmation |
+| No stored plans. A dry run returns the plan; the apply recomputes it and carries one precondition, the config revision the dry run saw | A stored plan is state to expire and clean up. Recomputing on apply checks the config against the deployment as it is, and the precondition refuses the apply if anyone applied since the dry run, so what was reviewed is what lands |
+| The whole config, every apply | The rules tie kinds, roles and routes together, so a partial apply would be checked against everything else anyway. What's not in the config is removed, and the plan says so, so the files are always the whole desired state |
+| A kind is removed, or changes parent, only while it has no nodes that aren't purged, deleted ones included. Otherwise the plan is blocked, listing what's in the way | Nodes are deleted first, each restorable on its own, so no config change destroys data and no plan needs a confirmation |
 | Every plan line shows what changed, field by field, and service lines show their expanded routes. The summary counts lines | A line that names a change without showing it can't be reviewed. Since the plan shows everything, `plat5 apply plan.json` skips the prompt |
 | A renamed kind reads as a remove plus an add | A kind's name is in every path param, placeholder, header and event |
-| A tightened rule (a new reserved slug) applies to new values only | Kubernetes validation ratcheting ([KEP-4008](https://www.kubernetes.dev/resources/keps/4008/)) |
+| A tightened rule (a new reserved slug) applies to new values only | Values already in use keep working, in the config and in identity; only a new value has to meet the rule |
 | The control plane asks identity for counts only when a plan removes a kind or changes a parent, and answers **503** only then | Asking on every plan would deadlock a fresh stack: identity waits for a config, and the first apply would wait for identity |
 | The control plane has no seed. A fresh stack waits for its first `plat5 apply` | One path for every change, the first one included. A seed folder would re-implement the CLI's merge |
 
@@ -69,8 +69,8 @@ Why the deployment's config is one document applied whole, through a plan, valid
 
 | Decision | Why |
 |----------|-----|
-| One revision per apply; an apply with nothing to change writes none | Terraform's "No changes" |
-| Revisions store the config as sent. `config pull` writes `plat5.yml` and `services/<service>.yml` into a directory with no `.yml` files | Pull gives back what was written, like Kubernetes' last-applied annotation |
+| One revision per apply; an apply with nothing to change writes none | A revision records a change; an apply that changes nothing has nothing to record |
+| Revisions store the config as sent. `config pull` writes `plat5.yml` and `services/<service>.yml` into a directory with no `.yml` files | Pull gives back what was written, not a normalized form with defaults filled in |
 | Every feed and `GET /config` answer **404** before the first apply | Nothing loaded never reads as empty |
 | Rolling back is applying an older revision's config through the same plan | One path for every change |
 
@@ -79,7 +79,7 @@ Why the deployment's config is one document applied whole, through a plan, valid
 | Decision | Why |
 |----------|-----|
 | The gateway and identity long-poll the control plane and keep their last config while it's down | The control plane isn't on the request path |
-| Each gateway replica reports, on every long poll, the revision it loaded and any it refused with the reason. It also exports a gauge of its loaded revision and a counter of refused snapshots | Otherwise a refused snapshot shows only as a log line. This way the control plane knows where each replica stands, as `kubectl rollout status` does for a Deployment |
+| Each gateway replica reports, on every long poll, the revision it loaded and any it refused with the reason. It also exports a gauge of its loaded revision and a counter of refused snapshots | Otherwise a refused snapshot shows only as a log line. This way the control plane knows where each replica stands, and an apply can say whether it's live |
 | `plat5 apply` waits briefly for the replicas and reports them, or the refusal and why | The person who applied learns at once whether the change is live |
 | Internal ports take no token; the deployment's network is the boundary | A shared token between Plat5's own services guards nothing the network doesn't, and is one more secret to rotate |
 
@@ -87,7 +87,7 @@ Why the deployment's config is one document applied whole, through a plan, valid
 
 | Decision | Why |
 |----------|-----|
-| The CLI owns the saved plan and the diff, with `--detailed-exitcode` for drift checks in CI | Terraform's workflow ([detailed-exitcode](https://developer.hashicorp.com/terraform/cli/commands/plan#detailed-exitcode)) |
+| The CLI owns the saved plan and the diff, with `--detailed-exitcode` for drift checks in CI | A person reviews a change in the CLI, and a saved plan applies exactly what was reviewed. A distinct exit code for "changes" lets CI flag drift without parsing output |
 | The saved plan file is exactly the apply body: the config and `expect` | Nothing to translate; the file is the request |
 | The CLI embeds a copy of the schema for offline `validate` | Editors and CI catch shape errors without a deployment |
 | The CLI finds the control plane through its flags and env vars, defaulting to the local stack | Nothing to learn for local work |
@@ -96,7 +96,7 @@ Why the deployment's config is one document applied whole, through a plan, valid
 
 | Decision | Why |
 |----------|-----|
-| `plat5 start`'s project file is `plat5.dev.yml`; `plat5.yml` means the deployment's config only | One name, one meaning. A deployment never reads the dev file, as a compose file beside a Kubernetes manifest isn't the manifest |
+| `plat5 start`'s project file is `plat5.dev.yml`; `plat5.yml` means the deployment's config only | One name, one meaning. A deployment never reads the dev file, so nothing local leaks into it |
 | `plat5.dev.yml` holds nothing that's in `plat5.yml`. A service's `url` is the gateway's address; `start` joins the app's compose services the urls name to the stack's network, and with the app run on the host maps those names to it | `start` and `plat5 apply` send the same config, so a local apply never flips urls back |
 | `start` brings the stack up, applies `plat5.yml` through the same plan as `plat5 apply`, then waits for health. A blocked plan is printed and refused | Identity and the gateway are ready only once they have a config. One path for every change |
 | The dev seed goes through identity's routes: a dev token carrying a `name` claim, a node named `Dev` of each root kind, and one personal key | A personal key reaches every tree its person can. A person's name comes only from the IdP. One node per root kind avoids picking one |
@@ -106,6 +106,6 @@ Why the deployment's config is one document applied whole, through a plan, valid
 
 | Decision | Why |
 |----------|-----|
-| The config reference pages' field tables are generated from the schema between markers. A test fails when they're stale; `UPDATE_DOCS=1` rewrites them. Prose stays hand-written | Kubernetes' API reference works this way; generating whole pages would push prose into the schema |
+| The config reference pages' field tables are generated from the schema between markers. A test fails when they're stale; `UPDATE_DOCS=1` rewrites them. Prose stays hand-written | The field tables can't drift from the schema, and the explanation stays prose; generating whole pages would push prose into the schema |
 | `fixtures/catalog/` holds a config with one parent per kind and the expanded routes and identity feed the control plane serves for it. A control-plane test fails when they're stale (`UPDATE_FIXTURES=1` rewrites them); identity's, audit's and the gateway's tests read them | The control plane is Rust and identity and audit are Go. One expanded file every side tests against can't drift silently |
 | The CLI's schema copy and `init` files are checked against a `plat5` checkout beside the CLI, and skip without one | The CLI repo builds alone; the check runs wherever both are checked out, as in CI |

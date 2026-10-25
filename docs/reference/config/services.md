@@ -68,7 +68,7 @@ With the kinds in [kinds](kinds.md), the versions route is `GET` and `POST /orgs
 | `required_permissions` | `array<string> \| "any_member"?` | Any one of these permissions admits. `any_member` admits any member of the tree, guests included. Required for every verb in a kind scope, from the route or the verb. Not in `user` or `public` |
 | `rate_limit` | `array<string> \| false?` | Policies from `rate_limits` ([rate limits](rate-limits.md)). Omitted: `[default]`. `false`: none |
 | `audit` | `bool?` | Omitted: the method default. Not in `public` |
-| `allow_deleted` | `bool?` | Default `false`. `true` lets the route's node be deleted (not purged); its own bindings are kept until purge and still count here, as Google Cloud keeps a deleted project's policy so it can be undeleted. For identity's restore route ([`reference/api/internal.md`](../api/internal.md#admit)). Kind scopes only |
+| `allow_deleted` | `bool?` | Default `false`. `true` lets the route's node be deleted (not purged); its own bindings are kept until purge and still count here, so whoever managed the node can restore it. For identity's restore route ([`reference/api/internal.md`](../api/internal.md#admit)). Kind scopes only |
 <!-- end generated -->
 
 Unknown fields are **422**.

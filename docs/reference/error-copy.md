@@ -1,10 +1,10 @@
-# Error copy: Stripe-style `message`
+# Error copy: `message`
 
 Copy appendix for [`reference/errors.md`](errors.md).
 
 ## Locked
 
-Stripe's split, in our envelope:
+Who each field of the envelope is for:
 
 | Field | Owner | Use |
 |-------|--------|-----|

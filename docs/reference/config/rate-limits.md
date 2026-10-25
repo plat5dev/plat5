@@ -41,7 +41,7 @@ All of a route's policies are checked at once and counted only if every one pass
 
 | Policy | Route scope | One bucket per |
 |--------|-------------|----------------|
-| No `count_at` | A kind | Policy, the route's node, and the caller's member: each caller has their own budget at that node, as Google Cloud quotas are per user per project |
+| No `count_at` | A kind | Policy, the route's node, and the caller's member: each caller has their own budget at that node, so one busy caller can't spend another's |
 | `count_at: <kind>` | A kind | Policy and the node of that kind in the chain: everyone in it shares one budget |
 | No `count_at` | `user` | Policy and the caller's user id |
 | No `count_at` | `public` | Policy and the client IP |

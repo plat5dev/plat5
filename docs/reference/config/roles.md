@@ -33,7 +33,7 @@ This is the example role set the CLI's templates ship ([`plat5 init`](../cli.md#
 | `creator_role` | Required. What the creator of a node gets on it. Bindable at every kind |
 <!-- end generated -->
 
-A role grants its own `permissions` plus those of every role it includes, as Kubernetes aggregates ClusterRoles. An included role that isn't in `roles`, or a cycle of includes, is **422**. A permission no route requires is **422**: it's a typo, or a route that was removed. Identity's and audit's resources count, defaults included, and so does each kind's `list_permission`, which identity checks for lists.
+A role grants its own `permissions` plus those of every role it includes. An included role that isn't in `roles`, or a cycle of includes, is **422**. A permission no route requires is **422**: it's a typo, or a route that was removed. Identity's and audit's resources count, defaults included, and so does each kind's `list_permission`, which identity checks for lists.
 
 Joining a root takes a role stated on the add or the invite, so default-deny below the root is the role you give new members: with `member` above, org members see no projects until a role is bound at a project, or at the org for all of them.
 

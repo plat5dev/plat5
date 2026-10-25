@@ -62,7 +62,7 @@ Ready: a deployment that adds or reshapes a middle kind with nodes under it. The
 
 ## Request-and-approve support access
 
-Support access is a binding the customer adds and removes. A flow where support requests and the customer approves, like Google Cloud's Access Approval, is later. Ready: a customer who requires approval per access.
+Support access is a binding the customer adds and removes. A flow where support requests and the customer approves is later. Ready: a customer who requires approval per access.
 
 ## Audit event by request id
 

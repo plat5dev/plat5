@@ -39,13 +39,13 @@ How the rule holds up:
 
 ## Sharing beyond one org
 
-Google Cloud's role bindings name users, service accounts, groups, whole domains, `allAuthenticatedUsers` and `allUsers` ([IAM binding](https://docs.cloud.google.com/dotnet/docs/reference/Google.Cloud.Iam.V1/latest/Google.Cloud.Iam.V1.Binding)). Plat5 grows the same way: sharing is a question of principals, not of the tree.
+A binding joins a principal to a node, and a principal is one person or one service account. Sharing more widely adds kinds of principal, not a different tree: sharing is a question of principals, not of the tree.
 
 | Case | Today | Extension |
 |------|-------|-----------|
 | One outside person on one project | Guest bindings: an invite below the org, gated by `guests:write`, listed on the org's members list | — |
-| A whole org shared into a project; an agency across client orgs | Not possible | **Group principals:** a binding whose principal is "members of org A", like Google Cloud's `group:` and `domain:`. Open point: authored records need a per-person binding, for example one created the first time someone acts through the group |
-| Anyone with a link, or any signed-in user | Not possible | **Public principals,** like `allUsers` and `allAuthenticatedUsers` |
+| A whole org shared into a project; an agency across client orgs | Not possible | **Group principals:** a binding whose principal is "members of org A". Open point: authored records need a per-person binding, for example one created the first time someone acts through the group |
+| Anyone with a link, or any signed-in user | Not possible | **Public principals:** a binding whose principal is anyone, or anyone signed in |
 | Moving a project to another org | Refused | **Cross-org move** with a `node.moved` event; records authored before the move keep their old member ids, which resolve as former members |
 | Data in one org referring to data in another | Blocked by design | None. Share the container instead: bind people into one project |
 
@@ -56,10 +56,10 @@ None of these touches nodes, the ancestor rule, slugs or what services see; they
 | Extension | Shape |
 |-----------|-------|
 | Permissions below a node | The deferred policy hook ([`TODO.md`](../../TODO.md)) |
-| A kind nested under itself (user folders) | A kind allowed as its own parent with a depth cap, nodes past the first level addressed by id. Google Cloud folders nest the same way |
+| A kind nested under itself (user folders) | A kind allowed as its own parent with a depth cap, nodes past the first level addressed by id |
 | Per-tree custom roles | `GET /nodes/{node_id}/roles` already has the node in the path |
-| A request-and-approve flow for support access | Like Google Cloud's Access Approval ([Access Approval](https://docs.cloud.google.com/assured-workloads/access-approval/docs/approve-requests)), on top of bindings |
-| A kind optional in the middle | `parent` as a list again, which is additive. One parent per kind keeps one chain, and one public path, per route |
+| A request-and-approve flow for support access | Support asks, the customer approves, and the approval adds a binding the customer can remove. Built on bindings, with no new kind of access |
+| A kind optional in the middle | `parent` as a list, which is additive. One parent per kind keeps one chain, and one public path, per route |
 
 ## Costs accepted
 

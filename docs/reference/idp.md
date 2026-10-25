@@ -20,8 +20,8 @@ Also required on tokens: signature via JWKS, `exp`, and a `kid` in the JWT heade
 
 | `AUTH_SUBJECT_CLAIM` | Typical IdP |
 |----------------------|-------------|
-| `sub` (the default) | Auth0, many standard OIDC providers |
-| `properties.user_id` | Nested custom subject properties (e.g. OpenAuth-style, Plat5 Auth) |
+| `sub` (the default) | Standard OIDC providers |
+| `properties.user_id` | Nested custom subject properties (Plat5 Auth) |
 | `user_id` | Flat custom claim |
 
 Local compose defaults use `properties.user_id` and a host-published JWKS URL on port `5401`; override for your IdP.

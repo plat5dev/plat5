@@ -125,7 +125,7 @@
         },
         "allow_deleted": {
           "title": "allow_deleted",
-          "description": "Default `false`. `true` lets the route's node be deleted (not purged); its own bindings are kept until purge and still count here, as Google Cloud keeps a deleted project's policy so it can be undeleted. For identity's restore route ([`reference/api/internal.md`](../api/internal.md#admit)). Kind scopes only.",
+          "description": "Default `false`. `true` lets the route's node be deleted (not purged); its own bindings are kept until purge and still count here, so whoever managed the node can restore it. For identity's restore route ([`reference/api/internal.md`](../api/internal.md#admit)). Kind scopes only.",
           "type": "boolean"
         }
       }

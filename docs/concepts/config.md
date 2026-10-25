@@ -1,6 +1,6 @@
 # Config
 
-The deployment's desired state: settings, kinds, roles, rate limits, CORS and services, as one config. The operator applies the whole config at once, Terraform style: a dry run shows the plan, and the apply carries a precondition that makes a stale plan fail. The control plane validates the config as a whole, records it as a revision in Postgres, and serves it to the gateway and identity. It is Plat5's only supported write path for any of these.
+The deployment's desired state: settings, kinds, roles, rate limits, CORS and services, as one config. The operator applies the whole config at once: a dry run shows the plan, and the apply carries a precondition that makes a stale plan fail. The control plane validates the config as a whole, records it as a revision in Postgres, and serves it to the gateway and identity. It is Plat5's only supported write path for any of these.
 
 ## What it holds
 
@@ -70,7 +70,7 @@ The admin API: [`reference/api/control-plane.md`](../reference/api/control-plane
 
 ## Validation at apply
 
-The control plane is the one validator: it checks the schema, then these rules, on every apply. The gateway and identity trust what it serves, as Kubernetes controllers trust objects the API server validated. Each error names the field path, such as `services.e10s.scopes.project.routes[2].path` or `kinds.project.parent`; the CLI adds the file, since `services.<name>` is that service's file and everything else is `plat5.yml`.
+The control plane is the one validator: it checks the schema, then these rules, on every apply. The gateway and identity trust what it serves and don't check it again. Each error names the field path, such as `services.e10s.scopes.project.routes[2].path` or `kinds.project.parent`; the CLI adds the file, since `services.<name>` is that service's file and everything else is `plat5.yml`.
 
 1. Every `parent` is a kind, and there are no cycles. Kind names are lowercase identifiers and not `public`, `member` or `user`.
 2. Every `bindable_at` kind exists. Every role in `includes` exists, and includes don't cycle. `creator_role` is a role bindable at every kind.
@@ -108,7 +108,7 @@ POST /apply
 
 The body is the flat config [above](#the-config). A dry run ignores `expect`.
 
-This is Kubernetes' `dryRun=All` plus a `resourceVersion` precondition, with Terraform's rule that a stale plan is refused.
+A dry run writes nothing. The apply recomputes the plan and is refused if anyone applied since the dry run ([preconditions](#preconditions)), so a stale plan never lands.
 
 ### The plan
 
@@ -152,7 +152,7 @@ Changes are ordered kinds, settings, roles, rate limits, CORS, services, then by
 | A kind removed | It has nodes |
 | A kind's parent changed | It has nodes |
 
-A kind's nodes are every node of it that isn't purged, deleted ones included, so a deleted node stays restorable for its whole grace and its kind waits for the purge. The line lists how many and up to five of their ids. Delete them first through the node routes, each restorable on its own, as Google Cloud deletes only an empty folder.
+A kind's nodes are every node of it that isn't purged, deleted ones included, so a deleted node stays restorable for its whole grace and its kind waits for the purge. The line lists how many and up to five of their ids. Delete them first through the node routes, each restorable on its own.
 
 The counts come from identity ([`reference/api/internal.md`](../reference/api/internal.md#plan-counts)), asked only when the plan removes a kind or changes a parent. A plan that does neither needs no identity, so a fresh stack's first apply works before identity is up.
 
@@ -168,7 +168,7 @@ Everything else is safe:
 | Service or route added, changed or removed | A removed service's routes stop matching; its data is the service's |
 | CORS, rate limits, `users`, `defaults` or a reserved slug changed | Take effect on the readers' next poll |
 
-A kind renamed reads as a remove plus an add. Tightened rules (a new reserved slug) apply to new values only, as Kubernetes validation ratcheting does.
+A kind renamed reads as a remove plus an add. Tightened rules (a new reserved slug) apply to new values only: a node whose slug became reserved keeps it.
 
 ### Preconditions
 

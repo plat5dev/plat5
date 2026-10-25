@@ -7,7 +7,7 @@ The Plat5 gateway (`services/gateway/`). How it decides a request: [access](../c
 | Layer | Responsibility |
 |-------|---------------|
 | **Gateway** | Routing, authentication (JWT, API key), resolving the path's slugs to nodes, admission, rate limits, the permission check, upstream fill, audit intent and outcome, CORS, security headers, body limits, trace propagation |
-| **Edge / load balancer** | TLS termination (e.g. Cloudflare tunnels) |
+| **Edge / load balancer** | TLS termination |
 | **Identity** | Admit: the member and permissions for a credential on a node chain |
 | **Services** | Business logic, data access, and state rules over the node ids they're given |
 

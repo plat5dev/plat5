@@ -122,7 +122,7 @@ Lists are [paginated](../lists.md) under the plural key. Times are RFC 3339, UTC
 
 #### Membership
 
-`{ member_id, bindings, permissions }`: the bindings that count for that member at the node, each a [binding](#binding), and the permissions they grant there, sorted, with `*` as the role wrote it. Kubernetes' `SelfSubjectRulesReview` answers the same question.
+`{ member_id, bindings, permissions }`: the bindings that count for that member at the node, each a [binding](#binding), and the permissions they grant there, sorted, with `*` as the role wrote it.
 
 #### Member
 

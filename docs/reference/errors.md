@@ -54,7 +54,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 
 ### `FORBIDDEN`
 
-Returned by the **gateway** when the route's node doesn't exist, the caller isn't in its tree, or the caller's permissions on the node share none with the route's `required_permissions`. One body for all three, as Google Cloud answers "Permission denied on resource (or it may not exist)", so a 403 never says whether a node exists. `details.required_permissions` is the route's list: any one of them would have admitted the request. The caller's own permissions are never in the body; the gateway logs them on a `required_permissions denied` line ([`reference/telemetry.md`](telemetry.md#gateway-permission-denied-line)).
+Returned by the **gateway** when the route's node doesn't exist, the caller isn't in its tree, or the caller's permissions on the node share none with the route's `required_permissions`. One body for all three, so a 403 never says whether a node exists. `details.required_permissions` is the route's list: any one of them would have admitted the request. The caller's own permissions are never in the body; the gateway logs them on a `required_permissions denied` line ([`reference/telemetry.md`](telemetry.md#gateway-permission-denied-line)).
 
 ### `NOT_FOUND`
 

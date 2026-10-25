@@ -8,7 +8,7 @@ Who can do what, in one place: the ancestor rule, who can be in a tree, roles an
 
 - **Default-deny below the root.** Joining a root grants the role stated on the add or the invite. With a role that holds no permissions for child kinds, members see no projects until a role is bound at a project, or at the org for all of them. A deployment that wants default-allow gives new members a role with those permissions.
 
-- **Denied or missing.** A node you can't use and a node that doesn't exist get the same **403** "permission denied, or it may not exist", as Google Cloud answers. There's no separate visibility rule.
+- **Denied or missing.** A node you can't use and a node that doesn't exist get the same **403** "permission denied, or it may not exist", so the answer never says whether a node exists. There's no separate visibility rule.
 
 - **Node lists.** Plat5 filters node lists to what the caller can see, so `GET /orgs/{organization}/projects` returns only the projects the caller holds `project`'s `list_permission` on ([lists](#lists)). Services never filter by caller.
 
@@ -21,7 +21,7 @@ Who can do what, in one place: the ancestor rule, who can be in a tree, roles an
 
 - **Joining.** A person exists from first sign-in, or from an admin adding them. A root is joined by invite or by an admin adding someone. Nodes below a root bind people already in the tree, or guests who redeem an invite below the root.
 
-- **Guests.** A person's member with no binding at its root, only on nodes below it, made by redeeming an invite below the root. Service accounts are never guests. Invites below a root need `guests:write`, checked like any permission: on the invite's node or an ancestor. A deployment turns guests on by granting it, and keeps guest invites in the root's hands by not granting it, or `*`, through any role bindable below the root. Guests are listed on the root's members list, marked, as GitHub lists outside collaborators.
+- **Guests.** A person's member with no binding at its root, only on nodes below it, made by redeeming an invite below the root. Service accounts are never guests. Invites below a root need `guests:write`, checked like any permission: on the invite's node or an ancestor. A deployment turns guests on by granting it, and keeps guest invites in the root's hands by not granting it, or `*`, through any role bindable below the root. Guests are listed on the root's members list, marked, so an admin sees everyone who can reach the tree.
 
 - **Closed world.** A tree's data refers only to its own nodes and members. Plat5 guarantees half of this by never sending a principal id, and sending a user id only on user routes; the other half is a convention services follow. People cross trees; data doesn't.
 
@@ -58,7 +58,7 @@ Identity resolves permissions at admit, for one member on one node chain ([`refe
 
 | Write | Role |
 |-------|------|
-| Create a node | The creator gets `creator_role` on it, always, as Google Cloud binds a project's creator. A node created with no member behind the request gets no binding |
+| Create a node | The creator gets `creator_role` on it, always. A node created with no member behind the request gets no binding |
 | Create a root | The user creating it gets a member in the new tree, with `creator_role` on the root |
 | Add a member to a root | `role` in the body, required |
 | Redeem an invite at a root | The invite's `role` at the root, plus each of its `grants` |
@@ -80,7 +80,7 @@ So the permissions that reach binding routes are as strong as the strongest role
 
 ## Credentials
 
-Every credential is `Authorization: Bearer`. A value of three dot-separated segments is a JWT; anything else is sent to identity as a key, so identity alone owns the key format ([credentials](../reference/api/identity.md#credentials)), as Stripe tells keys apart by shape.
+Every credential is `Authorization: Bearer`. A value of three dot-separated segments is a JWT; anything else is sent to identity as a key, so identity alone owns the key format ([credentials](../reference/api/identity.md#credentials)).
 
 Any credential works on any route in a kind scope: a person's JWT or personal key reaches every tree they're in, and admit picks the member for the tree in the path. A service account key works only in its own tree, and never on user routes.
 
@@ -101,7 +101,7 @@ Every route, in order:
 7. **Forward** with the caller's headers ([`reference/headers.md`](../reference/headers.md)). Slugs never reach a service.
 8. **Outcome**, in the background, then respond.
 
-Both **403**s have the same body, `details.required_permissions` included, so neither says whether the node exists. A node you can't use and a node that doesn't exist answer the same, as Google Cloud's "Permission denied on resource (or it may not exist)". The admit **403** runs before the rate limit so a caller outside a tree can't spend that tree's budget; the permission **403** runs after, so a member probing permissions is bounded by its own limit. The intent is written after the permission check, so during an audit outage a **503** never says whether a node exists.
+Both **403**s have the same body, `details.required_permissions` included, so neither says whether the node exists. The admit **403** runs before the rate limit so a caller outside a tree can't spend that tree's budget; the permission **403** runs after, so a member probing permissions is bounded by its own limit. The intent is written after the permission check, so during an audit outage a **503** never says whether a node exists.
 
 On a `public` route, authenticate and admit is skipped and there is no caller. On a user route, the chain is empty and the caller is the person's user id.
 
@@ -111,12 +111,12 @@ The gateway caches each admit ([`reference/gateway.md`](../reference/gateway.md#
 
 ## Lists
 
-`/nodes/{node_id}/children/{kind}` and `/users/{user_id}/nodes` return only the nodes the caller can see, as Google Cloud's project search returns only projects the caller has `resourcemanager.projects.get` on.
+`/nodes/{node_id}/children/{kind}` and `/users/{user_id}/nodes` return only the nodes the caller can see.
 
 - **Which permission.** The kind's `list_permission`, from `plat5.yml`.
 - **Where.** At each listed node, from the union of the caller's bindings on it and its ancestors ([resolution](#resolution)).
 - **Who.** On a child list, the member in `X-Plat5-Member-Id`, which the gateway sends; without the header the list is the full list, so any front door can list. On `/users/{user_id}/nodes`, that user's members in every tree.
-- **Deleted.** `?status=deleted` uses the same permission, counting the deleted node's own bindings too: they're kept until purge, as Google Cloud lists deleted projects to anyone with `projects.get`. That includes a deleted org, which has nothing above it: `GET /user/nodes?kind=organization&status=deleted` is how a person finds one. As at admit, only the deleted node's own bindings count beside live ones: a node whose ancestor is deleted too isn't listed, since it can't be restored before that ancestor. Restoring still needs the restore route's permission.
+- **Deleted.** `?status=deleted` uses the same permission, counting the deleted node's own bindings too: they're kept until purge. That includes a deleted org, which has nothing above it: `GET /user/nodes?kind=organization&status=deleted` is how a person finds one. As at admit, only the deleted node's own bindings count beside live ones: a node whose ancestor is deleted too isn't listed, since it can't be restored before that ancestor. Restoring still needs the restore route's permission.
 
 This is why child list routes require `any_member`: anyone in the tree may ask, and the answer is what they can see. A project-only member gets their projects from `GET /orgs/{organization}/projects`, not a 403.
 
