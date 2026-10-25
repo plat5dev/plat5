@@ -148,7 +148,8 @@ Write **JSON** to stdout always (including when OTLP is enabled). No OTLP log ex
 | `trace_id` / `span_id` | When a span is active |
 | `root_id` | The tree's root node id (when admitted on a kind route) |
 | `node_id` | The route's node id (when admitted on a kind route) |
-| `member_id` | The caller's member id in that tree, or their directory member on a sign-in route |
+| `member_id` | The caller's member id in that tree (kind routes) |
+| `user_id` | The caller's user id (user routes) |
 
 Field names: [`reference/naming.md`](naming.md).
 
@@ -158,33 +159,32 @@ The gateway writes one `request completed` (or `request failed`) line per reques
 
 | Field | When | Value |
 |-------|------|-------|
-| `auth_type` | A credential was recognized | `jwt`, `apikey` |
-| `key_prefix` | An `X-API-Key` of a known shape was presented, valid or not | Identity's display prefix: the wire prefix plus the first 4 characters after it, e.g. `plat5-k-2-AbC9`. Same value as `key_prefix` on identity's key list, so a line can be matched to a key |
+| `auth_type` | A credential was presented | `jwt`, `apikey` |
+| `key_id` | Admit recognized a key | The key's id, the same `id` as on identity's key list and `actor.key_id` in audit |
 | `principal` | Admitted | `person` or `service_account` |
-| `root_id`, `node_id`, `member_id` | Admitted | As above. Never a person's principal id |
+| `root_id`, `node_id`, `member_id`, `user_id` | Admitted | As above. Never a principal id |
 
-`key_prefix` is set before validation, so 401 and 403 lines carry it. A value of an unknown shape, or with nothing after the preview, is not logged. The key or token itself, and a JWT, are never logged. The request line has no labels or role; a label-denied 403 adds the [label-denied line](#gateway-label-denied-line).
+The key or token itself, and a JWT, are never logged. The request line has no permissions or role; a permission-denied 403 adds the [permission-denied line](#gateway-permission-denied-line).
 
 ```json
-{"timestamp":"2026-10-08T18:30:00Z","level":"info","message":"request completed","request_id":"…","route":"/widgets","method":"GET","status":403,"duration_ms":3.1,"auth_type":"apikey","key_prefix":"plat5-k-2-AbC9","principal":"service_account","root_id":"n_01J…","node_id":"n_01J…","member_id":"m_01J…"}
+{"timestamp":"2026-10-08T18:30:00Z","level":"info","message":"request completed","request_id":"…","route":"/widgets","method":"GET","status":403,"duration_ms":3.1,"auth_type":"apikey","key_id":"01jbz…","principal":"service_account","root_id":"01jbw…","node_id":"01jbx…","member_id":"01jby…"}
 ```
 
-### Gateway label-denied line
+### Gateway permission-denied line
 
-A **403** `FORBIDDEN` from the label check also writes one `warn` line, `required_labels denied`, before the request line. It says why:
+A **403** `FORBIDDEN` from the permission check also writes one `warn` line, `required_permissions denied`, before the request line. It says why:
 
 | Field | Value |
 |-------|-------|
 | `request_id`, `route`, `method`, `status` | As on the request line. `route` is the route's path pattern |
-| `auth_type`, `key_prefix`, `principal`, `root_id`, `node_id`, `member_id` | As on the request line |
-| `required_labels` | The route's list, e.g. `[subscribers:write]`. Any one would have admitted |
-| `missing_labels` | The labels the caller lacks. Any-of, so on a deny this is the whole route list |
-| `labels` | The caller's labels on the node, from its bindings there and above, e.g. `[subscribers:read]`. `[]` when none |
+| `auth_type`, `key_id`, `principal`, `root_id`, `node_id`, `member_id` | As on the request line |
+| `required_permissions` | The route's list, e.g. `[subscribers:write]`. Any one would have admitted |
+| `permissions` | The caller's permissions on the node, from its bindings there and above, e.g. `[subscribers:read]`. `[]` when none |
 
-The gateway sees labels, never roles or bindings, so the line has neither; look them up with `GET /nodes/{node_id}/access`. The caller's labels go to this log line only, never to the 403 body or a service. A not-found **403** writes no label-denied line: there's no node to report.
+The gateway sees permissions, never roles or bindings, so the line has neither; look them up with `GET /nodes/{node_id}/bindings` or `GET /nodes/{node_id}/memberships/{member_id}`. The caller's permissions go to this log line only, never to the 403 body or a service. A not-found **403** writes no permission-denied line: there's no node to report.
 
 ```json
-{"timestamp":"2026-10-20T14:02:11Z","level":"warn","message":"required_labels denied","request_id":"…","route":"/orgs/{organization}/projects/{project}/subscribers","method":"POST","status":403,"auth_type":"apikey","key_prefix":"plat5-k-2-AbC9","principal":"service_account","root_id":"n_01J…","node_id":"n_01J…","member_id":"m_01J…","required_labels":"[subscribers:write]","missing_labels":"[subscribers:write]","labels":"[subscribers:read]"}
+{"timestamp":"2026-10-20T14:02:11Z","level":"warn","message":"required_permissions denied","request_id":"…","route":"/orgs/{organization}/projects/{project}/subscribers","method":"POST","status":403,"auth_type":"apikey","key_id":"01jbz…","principal":"service_account","root_id":"01jbw…","node_id":"01jbx…","member_id":"01jby…","required_permissions":"[subscribers:write]","permissions":"[subscribers:read]"}
 ```
 
 ### Error fields (5xx only)
@@ -222,7 +222,7 @@ Gateway creates the root span **before** route match: name starts as `{method}`,
 ### Plat5 span attributes (not HTTP semconv)
 
 - `request_id` on HTTP request spans (if present). Do not rename it to `request.id`.
-- `plat5.member_id`, `plat5.root_id` and `plat5.node_id` on HTTP request spans once admitted, and `jwt.kid` for a JWT, set at the gateway for ops. Never a person's principal id. A service sets only ids it was given.
+- `plat5.member_id`, `plat5.user_id`, `plat5.root_id` and `plat5.node_id` on HTTP request spans once admitted, and `jwt.kid` for a JWT, set at the gateway for ops. Never a principal id. A service sets only ids it was given.
 - `error.kind` on **error spans** (5xx only): `auth`, `network`, `db`, `io`, `internal`, `validation`
 - 4xx responses are normal business outcomes — do not set `error.kind` and do not mark the span as failed
 - Record exceptions via `span.recordException(err)` / `span.record_exception(err)`
@@ -257,11 +257,13 @@ When a metrics destination is set and `OTEL_METRICS_EXPORTER` is unset or includ
 | `db_operation_errors_total` | Counter | db_system_name, db_operation_name, db_namespace |
 | `db_operation_duration_seconds` | Histogram | db_system_name, db_operation_name, db_namespace |
 
+Gateway config ([gateway](gateway.md#control-plane)): `gateway_config_revision` (gauge, the revision the replica serves) and `gateway_config_refused_total` (counter, label `revision`).
+
 Gateway audit writes ([`concepts/audit.md`](../concepts/audit.md)):
 
 | Metric | Type | Labels |
 |--------|------|--------|
-| `audit_writes_total` | Counter | write (`intent`, `outcome`), result (`ok`, `failed`, `not_found`, `dropped`) |
+| `audit_writes_total` | Counter | write (`intent`, `outcome`, `rejected`), result (`ok`, `failed`, `not_found`, `dropped`) |
 | `audit_intent_duration_seconds` | Histogram | result (`ok`, `failed`). Time an audited request waited on its intent, retries included |
 
 Audit service: `audit_intents_total` (result `created`, `existing`) and `audit_outcomes_total` (result `applied`, `already_final`, `not_found`).

@@ -11,11 +11,11 @@ Clients show `error.message`. Branch on `code` and HTTP status. Do not parse `de
   "error": {
     "type": "invalid_request_error",
     "code": "VALIDATION_ERROR",
-    "message": "Label is required.",
+    "message": "Display name is required.",
     "request_id": "abc-123",
     "details": {
       "fields": [
-        { "path": "label", "message": "Label is required." }
+        { "path": "display_name", "message": "Display name is required." }
       ]
     }
   }
@@ -43,10 +43,9 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `INVALID_REQUEST` | 400 | `invalid_request_error` | Malformed request. | — |
 | `VALIDATION_ERROR` | 422 | `invalid_request_error` | That doesn't look right. | `{ fields: [{ path, message }] }` |
 | `UNAUTHORIZED` | 401 | `invalid_request_error` | Authentication required. | `{ reason }` |
-| `FORBIDDEN` | 403 | `invalid_request_error` | Permission denied, or it may not exist. | `{ required_labels }` |
+| `FORBIDDEN` | 403 | `invalid_request_error` | Permission denied, or it may not exist. | `{ required_permissions }` |
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
-| `ROUTE_CONFLICT` | 409 | `invalid_request_error` | (control plane) Message lists each conflicting route and its owner service. | — |
 | `PLAN_STALE` | 409 | `invalid_request_error` | The deployment changed since this plan was made. Plan again. | `{ precondition, expected, actual }` |
 | `PAYLOAD_TOO_LARGE` | 413 | `invalid_request_error` | Request body is too large. | `{ max_size_bytes }` |
 | `RATE_LIMITED` | 429 | `api_error` | Too many requests. Try again in a moment. | `{ retry_after_seconds }` |
@@ -55,7 +54,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 
 ### `FORBIDDEN`
 
-Returned by the **gateway** when the route's node doesn't exist, the caller isn't in its tree, or the caller's labels on the node share none with the route's `required_labels`. One body for all three, as Google Cloud answers "Permission denied on resource (or it may not exist)", so a 403 never says whether a node exists. `details.required_labels` is the route's list: any one of those labels would have admitted the request. The caller's own labels are never in the body; the gateway logs them on a `required_labels denied` line ([`reference/telemetry.md`](telemetry.md#gateway-label-denied-line)).
+Returned by the **gateway** when the route's node doesn't exist, the caller isn't in its tree, or the caller's permissions on the node share none with the route's `required_permissions`. One body for all three, as Google Cloud answers "Permission denied on resource (or it may not exist)", so a 403 never says whether a node exists. `details.required_permissions` is the route's list: any one of them would have admitted the request. The caller's own permissions are never in the body; the gateway logs them on a `required_permissions denied` line ([`reference/telemetry.md`](telemetry.md#gateway-permission-denied-line)).
 
 ### `NOT_FOUND`
 
@@ -63,11 +62,11 @@ From the gateway: no route matches. From a service's own API, called by id: the 
 
 ### `UNAUTHORIZED`
 
-Returned by the **gateway**, not downstream services: a bad, missing, revoked or suspended credential, or a service account key on a sign-in route. Identity unavailable is **503**. See [`reference/gateway.md`](gateway.md#admit).
+Returned by the **gateway**, not downstream services: a bad, missing, revoked or suspended credential, or a service account key on a user route. Identity unavailable is **503**. See [`reference/gateway.md`](gateway.md#admit).
 
 ### `PLAN_STALE`
 
-Returned by the **control plane** when an apply's preconditions fail: `precondition` is `revision` (someone applied since the dry run) or `confirm.<kind>` (a destructive kind is unconfirmed, or its node count changed). Nothing is applied; dry-run again ([`concepts/config.md`](../concepts/config.md#preconditions)).
+Returned by the **control plane** when an apply's preconditions fail: `precondition` is `revision`: someone applied since the dry run. Nothing is applied; dry-run again ([`concepts/config.md`](../concepts/config.md#preconditions)).
 
 ### `RATE_LIMITED`
 
@@ -75,8 +74,8 @@ Returned by the **gateway**. `Retry-After` (seconds) is the same value as `detai
 
 | Limiter | When | Key |
 |---------|------|-----|
-| Admitted route | After admission, before the label check | A node at the policy's `count_at`, plus the policy or method + path ([`reference/config/routes.md`](config/routes.md#buckets)) |
-| Failed-auth IP | Unadmitted **401**s, not-found **403**s, unmatched **404**s. Not per-route | Client IP. `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). `0` = off |
+| Admitted route | After admission, before the permission check | The policy and its bucket ([rate limits](config/rate-limits.md#buckets)) |
+| Failed-auth IP | What identity refused: **401** for an invalid key or `valid: false`, and not-found **403**s. Not per-route | Client IP. `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). `0` = off |
 
 ## Principles
 

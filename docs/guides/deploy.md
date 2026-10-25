@@ -2,7 +2,7 @@
 
 Operator guide: run Plat5 (and optionally [Plat5 Auth](https://github.com/plat5dev/auth)) on one machine with published images + Compose.
 
-This is **not** the CLI. `plat5 start` is laptop-only. On a server you pull GHCR images, fill `.env`, and apply routes yourself.
+This is **not** the CLI. `plat5 start` is laptop-only. On a server you pull GHCR images, fill `.env`, and apply your config yourself.
 
 Local contracts stay in this repo (see the [docs map](../README.md)). Auth env/OIDC live in the Auth repo. This page is the cross-product operator path those READMEs already link.
 
@@ -82,21 +82,23 @@ cp .env.template .env
 docker compose -f docker-compose.prod.yml --env-file .env up -d
 ```
 
-Required: `POSTGRES_PASSWORD`, `ADMIN_TOKEN`, `INTERNAL_AUTH_TOKEN`, `AUTH_ISSUER`, `AUTH_JWKS_URI`.
+Required: `POSTGRES_PASSWORD`, `ADMIN_TOKEN`, `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_ALLOWED_AUDIENCES`.
+
+The services' internal ports take no token: compose keeps them on the `plat5` network and publishes none of them. Never expose one outside the deployment.
 
 Pin `PLAT5_VERSION` to a released tag (see `.env.template`).
 
 ```
 AUTH_ISSUER=https://auth.example.com
 AUTH_JWKS_URI=https://auth.example.com/.well-known/jwks.json
-AUTH_ALLOWED_AUDIENCES=<same as AUTH_ALLOWED_CLIENTS>
-AUTH_SUBJECT_CLAIM=properties.user_id   # Plat5 Auth; use sub for many OIDC IdPs
+AUTH_ALLOWED_AUDIENCES=<same as AUTH_ALLOWED_CLIENTS>   # or * to accept any
+AUTH_SUBJECT_CLAIM=properties.user_id   # Plat5 Auth; the default, sub, suits most OIDC IdPs
 # APIKEY_BRAND=plat5                    # optional; identity only; keys {brand}-k-2-…
 ```
 
-The tree's kinds and the roles live in the control plane, in `plat5.yml`, which you keep in a repo with the routes files it lists ([`concepts/config.md`](../concepts/config.md#the-config)). Compose seeds a `plat5.yml` from its seed folder on first boot, so edit it before first boot. After that the seed is not read again: change the config with `plat5 apply`, which shows the plan first, and identity picks it up without a restart. Identity doesn't start serving until it has both. Formats and rules: [`reference/config/kinds.md`](../reference/config/kinds.md), [`concepts/access.md`](../concepts/access.md).
+The tree's kinds, the roles and the routes live in the control plane, in `plat5.yml`, which you keep in a repo with the service files it lists ([`concepts/config.md`](../concepts/config.md#the-config)). A fresh stack has no config: identity and the gateway wait until you apply one with `plat5 apply`, which shows the plan first. Later changes go the same way, and identity and the gateway pick them up without a restart. Start from `plat5 init`'s files ([CLI](../reference/cli.md#the-local-stack)). Formats and rules: [`reference/config/kinds.md`](../reference/config/kinds.md), [`concepts/access.md`](../concepts/access.md).
 
-Audit is on by default: the gateway records each audited request in its tree's audit log, through the `audit` service. While audit is down, audited requests are **503**. `AUDIT_ENABLED=false` on the gateway turns it off for the whole deployment; then you may stop the `audit` service and skip its catalog. Model and guarantees: [`concepts/audit.md`](../concepts/audit.md).
+Audit is on by default: the gateway records each audited request in its tree's audit log, through the `audit` service. While audit is down, audited requests are **503**. `AUDIT_ENABLED=false` on the gateway says the deployment runs no audit service; then stop the `audit` service and leave `services/audit.yml` out of `plat5.yml`. Model and guarantees: [`concepts/audit.md`](../concepts/audit.md).
 
 `POSTGRES_PASSWORD` is interpolated into `DATABASE_URL`. Use a **URL-safe** value (hex). `+` / `/` from raw base64 break the URL (`invalid port`).
 
@@ -104,7 +106,7 @@ Compose network name is **`plat5_plat5`** (`name: plat5` + network `plat5`). Att
 
 The control plane's **:5002 is not published**. Apply from a container on `plat5_plat5`, or an SSH tunnel. Do not put the admin API on the public internet: `ADMIN_TOKEN` can route traffic and change what every role grants.
 
-CORS answers `*` until the config has an allowlist. Add it to `plat5.yml` and apply:
+CORS allows no cross-origin requests until the config lists origins. Add them to `plat5.yml` and apply:
 
 ```yaml
 cors:
@@ -128,33 +130,34 @@ Do not put SMTP submission on a tunnel.
 
 ## 4. Attach your API
 
-1. Run the process on **`plat5_plat5`** (external network). Hostname = the service name in its routes file (e.g. `api` → `url: http://api:3000`).
+1. Run the process on **`plat5_plat5`** (external network). Hostname = the host in its service file's `url` (e.g. `url: http://api:3000`).
 2. Trust the path and `X-Plat5-*` headers the gateway wrote. Do not validate JWTs. [`reference/gateway.md`](../reference/gateway.md).
-3. Generate the identity and audit catalog from your kinds, then apply it and your routes (prod does **not** seed routes):
+3. Write a service file for it, list it in `plat5.yml`'s `services` beside `services/identity.yml` and `services/audit.yml`, and apply:
 
 ```yaml
-# routes/api.yml, listed in plat5.yml's services; set url to what the gateway can reach
+# services/api.yml, listed in plat5.yml's services; set url to what the gateway can reach
 api:
   url: http://api:3000
-  routes:
-    - path: /orgs/{organization}/projects/{project}/widgets
-      scope: project
-      upstream: /projects/{subject.project_id}/widgets
-      methods:
-        GET:  { required_labels: [project:read] }
-        POST: { required_labels: [widgets:write] }
+  scopes:
+    project:
+      upstream_prefix: /projects/{project.id}
+      routes:
+        - path: /widgets
+          methods:
+            GET:  { required_permissions: [project:read] }
+            POST: { required_permissions: [widgets:write] }
 ```
 
 ```bash
-plat5 routes generate    # writes routes/identity.yml and routes/audit.yml from your kinds; edit as needed
-plat5 apply              # plat5.yml and every routes file it lists; shows the plan, asks to confirm
+plat5 routes list        # every route the gateway will serve, identity's and audit's included
+plat5 apply              # plat5.yml and every service file it lists; shows the plan, asks to confirm
 ```
 
-Identity's edge routes are a catalog you apply, generated from your kinds ([`reference/api/edge-catalog.md`](../reference/api/edge-catalog.md#generated-routes)). Omitting a route hides it from the gateway; the identity process still runs. Skip the audit routes with `AUDIT_ENABLED=false`.
+Identity's and audit's routes come from their resources, for every kind, with defaults you override in their service files ([resources](../reference/config/resources.md)). Removing one hides it from the gateway; the identity process still serves it on the network. Grant your routes' permissions in `roles`, or only `*` holders can call them.
 
-Your writes are in their tree's audit log by default. Set `audit: false` on a write nobody needs there, and `audit: true` on a read worth recording ([`reference/config/routes.md`](../reference/config/routes.md#audit)).
+Your writes are in their tree's audit log by default. Set `audit: false` on a write nobody needs there, and `audit: true` on a read worth recording ([`reference/config/services.md`](../reference/config/services.md#audit)).
 
-An apply is the whole config: a service missing from `services` is removed, and the plan shows it. Format: [`reference/config/routes.md`](../reference/config/routes.md), [`concepts/config.md`](../concepts/config.md).
+An apply is the whole config: a service missing from `services` is removed, and the plan shows it. Format: [`reference/config/services.md`](../reference/config/services.md), [`concepts/config.md`](../concepts/config.md).
 
 Local CLI `upstreams:` (bare port → `host.docker.internal`) is for laptop Docker. On a shared compose network, put `url:` in the file.
 
@@ -173,7 +176,7 @@ The SPA does not need the brand. A credential's kind comes back in the API respo
 
 SPA fallback so `/callback` serves `index.html` (Pages `_redirects`: `/* /index.html 200`).
 
-Match Auth allowlists to that origin + redirect, and add the origin to the control plane's `cors` document (no document is `*`).
+Match Auth allowlists to that origin + redirect, and add the origin to `cors.allowed_origins` in `plat5.yml`.
 
 Static hosting (Cloudflare Pages, object storage, nginx) is fine. The console is not part of the Plat5 runtime.
 
@@ -183,7 +186,7 @@ Static hosting (Cloudflare Pages, object storage, nginx) is fine. The console is
 curl -sS -o /dev/null -w '%{http_code}\n' https://auth.example.com/.well-known/jwks.json
 # 200
 
-curl -sS https://api.example.com/me
+curl -sS https://api.example.com/user
 # 401 UNAUTHORIZED: route exists, no credential
 ```
 
@@ -196,8 +199,7 @@ The gateway starts serving once it has loaded routes from the control plane. Gat
 - Choose `AUTH_SUBJECT_CLAIM` before the first sign-in. Identity links each person by issuer and that claim's value, so changing the claim later signs everyone in as a new person. With Plat5 Auth use `properties.user_id` (the template default); use `sub` for generic OIDC IdPs.
 - `plat5 start` and its `plat5.dev.yml` don't operate this stack. `plat5.yml` does, through `plat5 apply`.
 - `docker compose down -v` on this stack wipes identity (nodes, people, keys), audit, and the applied config. Plat5 Auth runs as its own stack; its users go only with its own volumes.
-- Wiping Postgres loses the applied config (kinds, roles, routes, CORS) along with identity and audit. Re-apply the config from your repo. A wiped deployment re-seeds from the seed folder first.
-- After first boot, editing the seed folder does nothing. Change your `plat5.yml` and `plat5 apply`.
+- Wiping Postgres loses the applied config (kinds, roles, routes, CORS) along with identity and audit. Re-apply the config from your repo.
 - Audience and SPA client id are one string if you customize them. The brand is identity's alone.
 
 ## Pins

@@ -4,9 +4,9 @@ What a service behind Plat5 receives, what it should store, and what it must not
 
 ## What you receive
 
-Requests arrive from a front door on the private network, with node ids in the path (or `X-Plat5-<Kind>-Id`), the caller's member id in `X-Plat5-Member-Id`, and `X-Plat5-Principal`. The full table: [`reference/headers.md`](../reference/headers.md). You never get a slug, a person's principal id, or the caller's labels or role.
+Requests arrive from a front door on the private network. On a tree route: node ids in the path (or `X-Plat5-<Kind>-Id`), the caller's member id in `X-Plat5-Member-Id`, and `X-Plat5-Principal`. On a user route: the caller's user id in the path (or `X-Plat5-User-Id`). The full table: [`reference/headers.md`](../reference/headers.md). You never get a slug, a principal id, or the caller's permissions or role.
 
-Key your data by node id. Record a member id when logic depends on who did something, such as an author or an approver, and never decide access from it ([where a field goes](../concepts/model.md#where-a-field-goes)).
+Key your data by node id. Record a member id when logic depends on who did something, such as an author or an approver, and never decide access from it ([where a field goes](../concepts/model.md#where-a-field-goes)). Key a person's own data, the same in every tree, by user id, and serve it on user routes.
 
 ## Rules
 
@@ -21,14 +21,14 @@ The headers and rewritten path are authentic only if the service is on a private
 
 ## Platform integrity
 
-1. **Do not parse `Authorization`** or read `X-API-Key`. You won't receive them.
+1. **Do not parse `Authorization`.** You won't receive it.
 2. **Do not validate JWTs.** The gateway validates via JWKS.
 3. **Do not implement CORS.** The gateway handles preflight and headers.
 4. **Do not generate `X-Request-ID`.** Propagate it. Missing is a gateway bug.
 
 ## Following the tree
 
-Read identity's lifecycle feed to allocate state when a node is created, stop work when it's deleted, resume on restore, and delete data on purge. Remove member-owned records on `member.removed`. Events, and how to read them: [lifecycle](../concepts/lifecycle.md#lifecycle-events).
+Read identity's lifecycle feed to allocate state on `node.created`, stop work on `node.deleted`, resume on `node.restored`, and delete data on `node.purged`, matching on the event's `kind`. Remove member-owned records on `member.removed`. Events, and how to read them: [lifecycle](../concepts/lifecycle.md#lifecycle-events).
 
 ## Saying what changed
 
@@ -36,7 +36,7 @@ On audited routes, set `X-Plat5-Audit-Details` and, on a create, `X-Plat5-Audit-
 
 ## Publishing routes
 
-Add a routes file for the service, list it in `plat5.yml`'s `services`, and apply ([routes](../reference/config/routes.md), [config](../concepts/config.md)).
+Add a service file for the service, list it in `plat5.yml`'s `services`, grant its permissions in `roles`, and apply ([services](../reference/config/services.md), [config](../concepts/config.md)). `plat5 routes list` shows the public paths.
 
 ## Direct-exposed services
 

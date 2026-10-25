@@ -64,6 +64,19 @@ Why access is the union of bindings on a node and its ancestors, decided once at
 | On the restore route (`allow_deleted`), a deleted node's own bindings, kept until purge, still count | Google Cloud keeps a deleted project's policy so it can be undeleted. A deleted root has nothing above it to grant the restore |
 | `GET …/membership` returns the caller's member id, the bindings that count at the node, and the permissions they grant | A console shows "Admin" or "Guest", marks "you", and hides buttons, as Kubernetes' `SelfSubjectRulesReview` answers ([SelfSubjectRulesReview](https://kubernetes.io/docs/reference/kubernetes-api/authorization-resources/self-subject-rules-review-v1/)) |
 
+## At the edge
+
+| Decision | Why |
+|----------|-----|
+| The accepted JWT audiences are required; `*` accepts any, explicitly | A gateway that skips the audience check by omission accepts tokens minted for other apps on the same IdP |
+| `AUTH_SUBJECT_CLAIM` defaults to `sub` | OIDC's subject claim |
+| Env vars take base URLs; the admit path is fixed in code | One form for every URL, and the path is identity's API, not wiring |
+| A param value of `.` or `..` is **400** | It would change the path the upstream sees |
+| `max_body_bytes` per service, with a deployment default | An upload service and a JSON API need different limits |
+| The gateway adds a security header only when the upstream response hasn't set it | A service that sets its own `X-Frame-Options` for an embeddable page means it |
+| CORS allows `*` only when written as `allowed_origins: ["*"]`; an empty list or no block allows no cross-origin request | An empty list meaning "everything" is the unsafe reading of nothing. Explicit config over inference |
+| `Allow-Headers` adds `traceparent`, `tracestate` and the config's `allowed_headers` to a base list; `Expose-Headers` lists `X-Request-ID`, `Retry-After` and `X-RateLimit-*` | Browsers need to send trace context and read the request id and rate-limit state |
+
 ## Rate limits
 
 | Decision | Why |
