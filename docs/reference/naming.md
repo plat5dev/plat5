@@ -46,7 +46,7 @@ The identity service is **`identity`** (`service.name: identity`).
 
 ## Service Namespaces
 
-Full table and labels: [`reference/container-labels.md`](container-labels.md). Identity backend uses **`identity`**; gateway stays **`edge`**.
+Full table and labels: [`reference/container-labels.md`](container-labels.md). Identity backend uses **`identity`**; gateway uses **`edge`**.
 
 | Service | `service.namespace` |
 |---------|---------------------|

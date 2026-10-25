@@ -14,7 +14,7 @@ Plat5 is for a stable tenancy boundary enforced outside every handler: the tree 
 
 ## Each tree is a closed world
 
-**Data inside a tree refers only to things inside it: its nodes and its members. People cross between trees; data doesn't.** No tree's data names another tree or a person's principal id. Plat5 guarantees the second part by never sending person ids; the first is a documented convention for services.
+**Data inside a tree refers only to things inside it: its nodes and its members. People cross between trees; data doesn't.** No tree's data names another tree, a principal id or a user id. Plat5 guarantees the second part by never sending principal ids, and sending user ids only on user routes; the first is a documented convention for services.
 
 | Decision | Why |
 |----------|-----|
@@ -30,7 +30,8 @@ How the rule holds up:
 | CI publishes from the repo | The CI service account is a binding in the org | Holds |
 | "Don't notify me about my own change" | The change is an owned record, so its owner is known | Holds |
 | Notification preferences per org or project | Keyed by the person's member id in that org; leaving the org deletes them | Holds, and better |
-| Support grants an override for a customer | Support is a member of the customer's org, through an expiring binding | Holds |
+| A profile or setting the same in every org | Keyed by the user id, on user routes only | Holds |
+| Support grants an override for a customer | Support is a member of the customer's org, through a binding the customer adds and removes | Holds |
 | Operators fix data during an incident | Node routes; no author on the record; the operator plane's audit log has the operator | Holds |
 | One inbox across all of a person's orgs | The client asks each org and merges, or entries are copied in as values with no ids | Holds, with the stated pattern |
 | An agency managing many client orgs | Agency people join each org one by one; "org A manages org B" can't be expressed | Later: group principals |
@@ -42,10 +43,10 @@ Google Cloud's role bindings name users, service accounts, groups, whole domains
 
 | Case | Today | Extension |
 |------|-------|-----------|
-| One outside person on one project | Guest bindings: an invite below the org, gated by `organization:guests:write`, listed on the org's access list | — |
+| One outside person on one project | Guest bindings: an invite below the org, gated by `guests:write`, listed on the org's members list | — |
 | A whole org shared into a project; an agency across client orgs | Not possible | **Group principals:** a binding whose principal is "members of org A", like Google Cloud's `group:` and `domain:`. Open point: authored records need a per-person binding, for example one created the first time someone acts through the group |
 | Anyone with a link, or any signed-in user | Not possible | **Public principals,** like `allUsers` and `allAuthenticatedUsers` |
-| Moving a project to another org | Refused | **Cross-org move** with a `project.moved` event; records authored before the move keep their old member ids, which resolve as former members |
+| Moving a project to another org | Refused | **Cross-org move** with a `node.moved` event; records authored before the move keep their old member ids, which resolve as former members |
 | Data in one org referring to data in another | Blocked by design | None. Share the container instead: bind people into one project |
 
 None of these touches nodes, the ancestor rule, slugs or what services see; they add principal types and change how admit unions bindings.
@@ -57,7 +58,8 @@ None of these touches nodes, the ancestor rule, slugs or what services see; they
 | Permissions below a node | The deferred policy hook ([`TODO.md`](../../TODO.md)) |
 | A kind nested under itself (user folders) | A kind allowed as its own parent with a depth cap, nodes past the first level addressed by id. Google Cloud folders nest the same way |
 | Per-tree custom roles | `GET /nodes/{node_id}/roles` already has the node in the path |
-| A request-and-approve flow for support access | Like Google Cloud's Access Approval ([Access Approval](https://docs.cloud.google.com/assured-workloads/access-approval/docs/approve-requests)), on top of expiring bindings |
+| A request-and-approve flow for support access | Like Google Cloud's Access Approval ([Access Approval](https://docs.cloud.google.com/assured-workloads/access-approval/docs/approve-requests)), on top of bindings |
+| A kind optional in the middle | `parent` as a list again, which is additive. One parent per kind keeps one chain, and one public path, per route |
 
 ## Costs accepted
 
@@ -65,4 +67,4 @@ None of these touches nodes, the ancestor rule, slugs or what services see; they
 |------|-------------------|
 | Adopting Plat5 means putting the tree under it: routes, path params and "whose data is this" line up with the kinds. It isn't an SDK drop-in | That alignment is what lets the gateway decide access once |
 | Moving off Plat5 is a migration of nodes and bindings, not an auth-provider swap | The tree is data Plat5 owns |
-| Services see a per-tree member id, never a person's id | Keeping person ids inside Plat5 is the one property that's hard to reverse, and it's intended: a person can't be correlated across orgs |
+| Services see a per-tree member id on tree routes, and a user id only on user routes | Keeping person ids out of tree data is the one property that's hard to reverse, and it's intended: a person can't be correlated across orgs from what an org's routes see |

@@ -13,14 +13,14 @@ Not for permissions on individual records inside a node, or hierarchies end user
 Do not add these because they would be convenient:
 
 - Per-record permissions inside a node in the gateway, or a policy engine (Topaz, OPA, …) in the default stack. The hook is deferred and is for permissions below a node only
-- Deny rules, or any check other than the ancestor rule and route labels
-- Role or label names or meanings in Plat5 code. Generated labels are catalog defaults the team edits
-- Telling services a person's principal id, or the caller's labels or role
-- A tree's data naming another tree, a service account bound outside its own tree, or a service account in the directory
+- Deny rules, or any check other than the ancestor rule and route permissions
+- Role or permission names or meanings in Plat5 code. Identity's and audit's default permissions are defaults the deployment overrides
+- Telling services a principal id, a user id on a tree route, or the caller's permissions or role
+- A tree's data naming another tree, a service account bound outside its own tree, or a service account on a user route
 - A customer route that lists or searches people, or SMTP in identity
 - Global or platform-admin service accounts
 - Operator headers, roles or rules in base Plat5. Each other front door owns its own, in its own repo
-- Hard deletes of nodes, reusing an id, or reusing a slug automatically
+- Hard deletes of nodes, reusing an id, or reusing a root's slug automatically
 - An org settings bag, or limits stored as per-org data
 - Cost weights, multiple windows, burst or calendar quotas, or billing fields on rate limits
 - Credentials narrower than their principal. A narrower machine is a service account with fewer bindings
@@ -46,7 +46,8 @@ None of these touches nodes, the ancestor rule, slugs, or what services see; the
 | One outside person on one project | Guest bindings | — |
 | A whole org shared into a project; an agency across client orgs | Not possible | Group principals: a binding whose principal is "members of org A" |
 | Anyone with a link, or any signed-in user | Not possible | Public principals, like `allUsers` and `allAuthenticatedUsers` |
-| Moving a project to another org | Refused | Cross-org move with a `<kind>.moved` event |
+| Moving a project to another org | Refused | Cross-org move with a `node.moved` event |
+| A kind optional in the middle (a project under an org or a folder) | One parent per kind | A list of parents, additive |
 | Folders inside folders | Not possible | A kind allowed as its own parent, with a depth cap |
 | Permissions on one record inside a node | Service state rules | The policy hook ([`TODO.md`](../../TODO.md)) |
 
@@ -54,4 +55,4 @@ None of these touches nodes, the ancestor rule, slugs, or what services see; the
 
 - Adopting Plat5 means putting the tree under it: routes, path params and "whose data is this" line up with the `kinds` document.
 - Moving off Plat5 is a migration of nodes and bindings, not an auth-provider swap.
-- Services see a per-tree member id, never a person's id, so a person can't be correlated across orgs. That's the one property that's hard to reverse, and it's intended.
+- Services see a per-tree member id on tree routes, and a user id only on user routes, so a person can't be correlated across orgs from tree data. That's the one property that's hard to reverse, and it's intended.

@@ -2,10 +2,10 @@
 
 ## Next
 
-- **End-to-end suite for the local stack.** `plat5 init` and `plat5 start` bring up a stack with `organization` and `project` kinds; e2e tests cover the flows e10s needs: create an org and a project, add a service account at the project, call a route through the gateway as it, delete the project and restore it. `e2e/` already covers these flows against `compose/`.
+- **Starter repos.** Each `template-*` API and console repo ships a `plat5.yml` with kind `path`s and `list_permission`s and the example roles, `services/<service>.yml` files in the scopes layout, and an app compose file to the contract in the CLI README; then `plat5 init` offers starters beside `--template none`. Consoles call `/user`, `/user/nodes` (with `ancestors`), `…/membership` and `…/bindings`, and send keys on `Authorization: Bearer`.
+- **The operator plane.** Its gateway, console and route list follow identity's service API (`/users/{user_id}`, `GET /members/{member_id}/user`, the IdP lookup, root slug release) in its own repo; then `plat5 start` runs an operator module.
+- **Toolbox.** Its e2e and helpers follow the user routes, bare ids, `Bearer` keys and `node.*` event types.
 - **CI for the CLI.** Its schema-copy and init-files tests (`internal/schema`, `internal/cmd`) skip unless a `plat5` checkout sits next to the CLI, so CI must check one out there.
-- **Starter repos.** Each `template-*` API and console repo in plat5dev ships a `plat5.yml` and `routes/<service>.yml` built on the generated routes, and an app compose file to the contract in the CLI README; then `plat5 init` offers starters beside `--template none`.
-- **The operator plane.** Its gateway, console and route list follow the generated routes in its own repo; then `plat5 start` runs an operator module.
 - **A name in dev tokens.** Plat5 Auth's `POST /dev/token` takes a `name` and puts it in the token as the `name` claim, so `plat5 start`'s dev person gets a name. The CLI already sends it.
 
 # Deferred
@@ -14,14 +14,14 @@
 
 Permissions on individual records inside a node ("may this member edit document D in this project?"). Who can reach a node is already Plat5's: the ancestor rule over bindings ([`docs/concepts/access.md`](docs/concepts/access.md#the-rule)). The hook is only for what's below that.
 
-- **One record, from the gateway.** An AuthZEN 1.0 evaluation after the label check. Subject is the member (`member_id` and the node chain, never a principal id). Action is the route label. Resource is the service, the route, and its non-chain path params. Cached on the admission TTL. Engine unreachable → **503**.
+- **One record, from the gateway.** An AuthZEN 1.0 evaluation after the permission check. Subject is the member (`member_id` and the node chain, never a principal id). Action is the route's permission. Resource is the service, the route, and its own path params. Cached on the admission TTL. Engine unreachable → **503**.
 - **A list, from a service.** The service asks which records the caller's member can reach (an AuthZEN search). Without an engine, the answer is everything in the node.
 
 Ready: a deployment that needs a record-level decision its service can't make as a state rule. No policy engine in the default stack.
 
 ## Audit retention
 
-Audit events are kept, including after a node is purged. Partitions are monthly, so retention is dropping old partitions. Identity's `<kind>.purged` ([`docs/concepts/lifecycle.md`](docs/concepts/lifecycle.md#lifecycle-events)) is the signal for erasing a purged tree's events.
+Audit events are kept, including after a node is purged. Partitions are monthly, so retention is dropping old partitions. Identity's `node.purged` ([`docs/concepts/lifecycle.md`](docs/concepts/lifecycle.md#lifecycle-events)) is the signal for erasing a purged tree's events.
 
 Ready: storage growth that hurts, or an org whose events must be erased on purge.
 
@@ -51,20 +51,24 @@ The extension points in [`docs/concepts/boundaries.md`](docs/concepts/boundaries
 
 ## Moving a node within its tree
 
-A node keeps its parent for life. There's no API to move one to another parent in the same tree, such as a project out of a folder into its org. So a team can't empty a `folder` kind before removing it: removing the kind deletes the projects under folders with it, and dropping `folder` from `project`'s parents is blocked while projects sit under folders ([config](docs/concepts/config.md#classification)). A move would rewrite the node's `parent_id` and its closure rows, keep its bindings, and emit an event so services can follow. It stays in one tree; moving across trees is the cross-org move above.
+A node keeps its parent for life. There's no API to move one to another parent in the same tree. So a kind can't be added in the middle of a populated tree, and a kind's parent can't change while it has nodes ([config](docs/concepts/config.md#blocked-changes)). A move would rewrite the node's `parent_id` and its closure rows, keep its bindings, and emit an event so services can follow. It stays in one tree; moving across trees is the cross-org move above.
 
-Ready: a deployment that removes or reshapes a middle kind with nodes under it.
+Ready: a deployment that adds or reshapes a middle kind with nodes under it. Then `parent` as a list (a project under an org or a folder) can come back, additively.
 
 ## Request-and-approve support access
 
-Today support access is a binding the customer adds, with the support role's `max_duration`. A flow where support requests and the customer approves, like Google Cloud's Access Approval, is later. Ready: a customer who requires approval per access.
+Support access is a binding the customer adds and removes. A flow where support requests and the customer approves, like Google Cloud's Access Approval, is later. Ready: a customer who requires approval per access.
 
 ## Audit event by request id
 
-Every error envelope gives the caller a `request_id`, but audit reads are by node, so a front door needs the node first. A read by `request_id` across roots, for other front doors only (not in the generated catalog). An event in both a person's log and a tree's comes back once. Ready: support that works from tickets carrying a `request_id`.
+Every error envelope gives the caller a `request_id`, but audit reads are by node, so a front door needs the node first. A read by `request_id` across roots, for other front doors only (no default route). An event in both a person's log and a tree's comes back once. Ready: support that works from tickets carrying a `request_id`.
 
-## Rollout status
+## Rollout status for identity
 
-Each gateway and identity replica reports the config revision it has loaded, and `plat5 apply --wait` returns once every replica has it, like `kubectl rollout status`. Today readers catch up within about a second, unconfirmed. Needs a report path from readers to the control plane, replica identities, and a rule for replicas that stop reporting.
+Gateway replicas report the revision they loaded on every long poll, and `plat5 apply` reports them ([`docs/reference/api/control-plane.md`](docs/reference/api/control-plane.md#reader-status)). Identity replicas don't report yet, and `plat5 apply` waits only briefly.
 
-Ready: a deploy or a test that must know a config change is live everywhere before it continues.
+Ready: a deploy or a test that must know a roles change is live in identity everywhere before it continues, or a `plat5 apply --wait` that blocks until every replica has the revision.
+
+## Binding end times
+
+Bindings don't expire. An optional `expires_at` on a binding can be added later without breaking anything. Ready: a customer who needs access that ends by itself, with no one to remove it.

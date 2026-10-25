@@ -16,10 +16,10 @@
 
 | Doc | What it decides |
 |-----|-----------------|
-| [model](concepts/model.md) | Kinds, nodes, principals, members, bindings; ids and slugs; the principles |
+| [model](concepts/model.md) | Kinds, nodes, principals, users, members, bindings; ids and slugs; the principles |
 | [access](concepts/access.md) | The ancestor rule, who can be in a tree, roles and bindings, credentials, how a request is decided, lists |
 | [lifecycle](concepts/lifecycle.md) | Creating, deleting, restoring and purging; members; lifecycle events |
-| [config](concepts/config.md) | `plat5.yml` and routes files, validation, plan and apply, revisions |
+| [config](concepts/config.md) | `plat5.yml` and service files, validation, plan and apply, revisions, readers |
 | [audit](concepts/audit.md) | What's recorded, in which log, and the delivery guarantee |
 | [boundaries](concepts/boundaries.md) | What Plat5 is for, what it won't do, extension points |
 
@@ -28,7 +28,7 @@
 | Doc | |
 |-----|--|
 | [deploy](guides/deploy.md) | Images, compose, TLS, attaching an app |
-| [change the config](guides/change-the-config.md) | Add or remove kinds, change roles, roll back, CI drift checks |
+| [change the config](guides/change-the-config.md) | Add or remove kinds, change roles and identity's routes, roll back, CI drift checks |
 | [write a service](guides/write-a-service.md) | What a service receives, stores, and must not do |
 | [build a console](guides/build-a-console.md) | Signing in, navigating, access, invites, restore |
 
@@ -36,12 +36,12 @@
 
 | Doc | |
 |-----|--|
-| [config/kinds](reference/config/kinds.md), [roles](reference/config/roles.md), [routes](reference/config/routes.md), [cors](reference/config/cors.md) | Config documents. Field tables generated from `schema/` |
-| [api/edge-catalog](reference/api/edge-catalog.md) | Generated edge routes and their default labels |
+| [config/settings](reference/config/settings.md), [kinds](reference/config/kinds.md), [roles](reference/config/roles.md), [rate limits](reference/config/rate-limits.md), [cors](reference/config/cors.md), [services](reference/config/services.md) | Config documents. Field tables generated from `schema/` |
+| [config/resources](reference/config/resources.md) | Identity's and audit's routes: their resources, defaults and default permissions |
 | [api/identity](reference/api/identity.md) | Identity's service API |
 | [api/control-plane](reference/api/control-plane.md) | The admin API |
 | [api/audit](reference/api/audit.md) | Audit events and reads |
-| [api/internal](reference/api/internal.md) | Admit, plan counts, feeds, audit writes |
+| [api/internal](reference/api/internal.md) | Admit, plan counts, feeds and reader reports, audit writes |
 | [cli](reference/cli.md) | The `plat5` CLI |
 | [gateway](reference/gateway.md) | Gateway behavior: admit, cache, rate limits, CORS, client IP, boot |
 | [headers](reference/headers.md) | Every `X-Plat5-*` header |

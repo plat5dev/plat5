@@ -37,7 +37,7 @@ A node has a generated id, a slug fixed at creation, and a display name that can
 
 | Decision | Why |
 |----------|-----|
-| Each kind declares its piece of the path (`/projects/{project}`), and Plat5 joins the pieces root first. Routes are written relative to their node | The public URL shape is set once, in `plat5.yml`; routes files hold only what's the service's own. Kubernetes nests a namespace the same way (`/namespaces/{ns}/pods/{name}`), as GitHub addresses `/{owner}/{repo}` |
+| Each kind declares its piece of the path (`/projects/{project}`), and Plat5 joins the pieces root first. Routes are written relative to their node | The public URL shape is set once, in `plat5.yml`; service files hold only what's the service's own. Kubernetes nests a namespace the same way (`/namespaces/{ns}/pods/{name}`), as GitHub addresses `/{owner}/{repo}` |
 | The pieces nest in parent order | Slugs are unique only within their parent, so the parent has to be in the path. A flat, id-only path can come later |
 | Node ids are accepted wherever a slug is | A client holding an id never needs the slug |
 | The gateway resolves slugs to ids and forwards only ids, with every ancestor's id available to the upstream | Services store ids only |
