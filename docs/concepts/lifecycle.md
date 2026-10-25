@@ -56,20 +56,22 @@ A feed of births and ends other services may act on. Written in the same transac
 ```
 GET /internal/lifecycle-events?starting_after=<id>&limit=<n>
 { "lifecycle_events": [
-  { "id": "812", "type": "project.deleted", "node_id": "n_…", "root_id": "n_…", "occurred_at": "…" },
-  { "id": "813", "type": "member.removed", "member_id": "m_…", "root_id": "n_…", "principal": "person", "occurred_at": "…" }
+  { "id": "812", "type": "node.deleted", "kind": "project", "node_id": "01jbx…", "root_id": "01jbw…", "occurred_at": "…" },
+  { "id": "813", "type": "member.removed", "member_id": "01jby…", "root_id": "01jbw…", "principal": "person", "occurred_at": "…" }
 ], "has_more": false }
 ```
 
+The set of types is fixed, whatever kinds a deployment declares. Node events carry the node's `kind`.
+
 | Event | When | A service should |
 |-------|------|------------------|
-| `<kind>.created` | A node is created | Allocate state if it wants to before the first request |
-| `<kind>.deleted` | Soft delete, directly or by cascade | Stop background work; keep the data |
-| `<kind>.restored` | Restore within the grace period | Resume |
-| `<kind>.purged` | `deletion_grace` after delete | Delete the data |
-| `member.created` | A principal joins a tree: first sign-in, a redeemed invite, an admin add, a service account create, a root create | Nothing usually |
+| `node.created` | A node is created | Allocate state if it wants to before the first request |
+| `node.deleted` | Soft delete, directly or by cascade | Stop background work; keep the data |
+| `node.restored` | Restore within the grace period | Resume |
+| `node.purged` | `deletion_grace` after delete | Delete the data |
+| `member.created` | A principal joins a tree: a redeemed invite, an admin add, a service account create, a root create | Nothing usually |
 | `member.removed` | Removed, left, account deleted, a person left with no bindings, a service account deleted, or its root purged | Remove records owned by that member that should go with it |
 
-`principal` is `person` or `service_account`. No principal id, name or role. Binding changes aren't events: they change access, which is the gateway's concern, not service data.
+`principal` is `person` or `service_account`. No principal id, user id, name or role. Binding changes aren't events: they change access, which is the gateway's concern, not service data.
 
 `id` is a decimal string from a sequence; event writes are serialized, so `id` order is commit order. Pass it back as `starting_after`; don't do arithmetic on it. Delivery is at least once from the consumer's side, so acting on an event must be idempotent. Events are kept ([`TODO.md`](../../TODO.md)).

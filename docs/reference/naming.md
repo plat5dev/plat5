@@ -1,6 +1,6 @@
 # Naming Conventions
 
-Formats and terminology for labels, routes, metrics, and error codes across Plat5.
+Formats and terminology for permissions, routes, metrics, and error codes across Plat5.
 
 ## Project Terminology
 
@@ -19,17 +19,17 @@ Plat5 owns the tree of nodes (kinds from config), the principals who can reach t
 
 | Concept | Formal name | Notes |
 |---------|-------------|--------|
-| A level of the tree | **Kind** | Declared in the `kinds` document: `organization`, `project`, … |
-| One instance of a kind | **Node** | Wire id `n_…`. Has a slug, a label and a status |
+| A level of the tree | **Kind** | Declared in the `kinds` document: `organization`, `project`, … One parent kind, or none |
+| One instance of a kind | **Node** | Has an id, a slug, a display name and a status |
 | A node with no parent | **Root** | Its tree is the isolation boundary. An organization is a root. Do not call it tenant |
-| Where every person signs in | **Directory** | The sign-in kind's single node. Private: customers can't list or search people |
 | A person or a service account | **Principal** | Its id never leaves identity |
-| A principal in one tree | **Member** | Wire id `m_…`. In the directory, a person's member id is their **user id** |
-| A role on a member at a node | **Binding** | Wire id `b_…`. Access is the union of bindings on the node and its ancestors |
-| A member with no binding at its root | **Guest** | Derived, not stored |
-| What a binding holds | **Role** | Deployment-defined slug; its labels come from the roles document ([`concepts/access.md`](../concepts/access.md)). Plat5 names no roles |
-| Route requirement | **Label** | Opaque `[a-z0-9:._-]+`. Routes require them (`required_labels`); roles grant them |
-| What a route addresses | **Scope** | A kind name, or `public` |
+| A person on their own routes | **User** | The user id is sent only on user routes. Private: customers can't list or search people |
+| A principal in one tree | **Member** | The id services see as the caller on tree routes |
+| A role on a member at a node | **Binding** | Access is the union of bindings on the node and its ancestors |
+| A person's member with no binding at its root | **Guest** | Derived, not stored. Never a service account |
+| What a binding holds | **Role** | Deployment-defined slug; its permissions come from the roles document ([`concepts/access.md`](../concepts/access.md)). Plat5 names no roles |
+| Route requirement | **Permission** | Opaque `[a-z0-9:._-]+`. Routes require them (`required_permissions`); roles grant them |
+| What a route addresses | **Scope** | A kind name, `user`, or `public` |
 | Non-human principal | **Service account** | Born at a node of an org's tree |
 | Credential | **API key** | A person's personal key, or a service account's key. No sessions |
 
@@ -79,30 +79,30 @@ Services address everything by id. Identity:
 |---------|---------|
 | A node | `/nodes/{node_id}/...` |
 | A new root | `/roots/{kind}` |
-| A person (their directory member) | `/members/{member_id}/...` |
+| A person | `/users/{user_id}/...` |
 | Internal (not on the gateway) | `/internal/admit`, `/internal/plan`, `/internal/lifecycle-events` |
 
-Audit follows the same pattern: `/nodes/{node_id}/audit-events` and `/members/{member_id}/audit-events` public, `/internal/events/{request_id}` internal ([`concepts/audit.md`](../concepts/audit.md)).
+Audit follows the same pattern: `/nodes/{node_id}/audit-events` and `/users/{user_id}/audit-events` public, `/internal/events/{request_id}` internal ([`concepts/audit.md`](../concepts/audit.md)).
 
-Edge paths carry slugs, one param per kind named as the kind, and the kind's `segment`:
+Public paths carry slugs: each kind's `path` piece, root first, then the route's own path relative to the node:
 
-| Edge | Scope | Upstream fills |
+| Public path | Scope | Upstream placeholders |
 |------|-------|----------------|
-| `/orgs/{organization}/...` | `organization` | `{subject.organization_id}`, `{subject.member_id}` |
-| `/orgs/{organization}/projects/{project}/...` | `project` | `{subject.organization_id}`, `{subject.project_id}`, `{subject.member_id}` |
-| `/me/...` | the sign-in kind | `{subject.member_id}`: the person's user id |
+| `/orgs/{organization}/...` | `organization` | `{organization.id}`, `{member.id}` |
+| `/orgs/{organization}/projects/{project}/...` | `project` | `{organization.id}`, `{project.id}`, `{member.id}` |
+| `/user/...` | `user` | `{user.id}` |
 
-There is no `/api` prefix. Slugs never reach a service. Full contract: [`reference/config/routes.md`](config/routes.md), [`reference/gateway.md`](gateway.md).
+The route's own params are bare in both: `{plan_id}`. There is no `/api` prefix. Slugs never reach a service. Full contract: [`reference/config/services.md`](config/services.md), [`reference/gateway.md`](gateway.md).
 
 ## Subject headers
 
-`X-Plat5-<Kind>-Id` per node in the chain (title case, `_` → `-`), `X-Plat5-Member-Id`, `X-Plat5-Principal`. Always: `X-Request-ID`, `traceparent`. Services are never told a person's principal id, or the caller's role or labels.
+Tree routes: `X-Plat5-<Kind>-Id` per node in the chain (title case, `_` → `-`), `X-Plat5-Member-Id`, `X-Plat5-Principal`. User routes: `X-Plat5-User-Id`, `X-Plat5-Principal`. Always: `X-Request-ID`, `traceparent`. Services are never told a principal id, or the caller's role or permissions.
 
 ## Log Fields
 
 - Format: `snake_case`
-- Common: `request_id`, `root_id`, `node_id`, `member_id`, `duration_ms`, `error_kind`
-- Credential (gateway request line): `auth_type`, `key_prefix` (display prefix, never the key). See [`reference/telemetry.md`](telemetry.md#gateway-request-line)
+- Common: `request_id`, `root_id`, `node_id`, `member_id`, `user_id`, `duration_ms`, `error_kind`
+- Credential (gateway request line): `auth_type`, `key_id` (never the key). See [`reference/telemetry.md`](telemetry.md#gateway-request-line)
 - Service-specific fields should be namespaced: `auth_provider`, `db_operation`
 
 ## Metric Names
@@ -127,7 +127,7 @@ There is no `/api` prefix. Slugs never reach a service. Full contract: [`referen
 - Table names: `snake_case`, plural: `nodes`, `members`, `bindings`, `api_keys`
 - Column names: `snake_case`: `created_at`, `updated_at`, `node_id`, `root_id`, `member_id`
 - Foreign key columns: `<entity>_id`
-- New row ids: prefixed **ULID** strings (`n_`, `m_`, `b_`, `k_`, `i_`)
+- New row ids: lowercase **ULID** strings, no prefix
 - A service keys its data by node id (`project_id`), and authored records by member id
 
 ## Related
@@ -138,5 +138,5 @@ There is no `/api` prefix. Slugs never reach a service. Full contract: [`referen
 | [`reference/api/identity.md`](api/identity.md) | Identity service API |
 | [`reference/container-labels.md`](container-labels.md) | Namespace values |
 | [`reference/gateway.md`](gateway.md) | Headers and service rules |
-| [`reference/config/routes.md`](config/routes.md) | Route scopes, chain params and publish |
+| [`reference/config/services.md`](config/services.md) | Service files, route scopes and placeholders |
 | [`reference/lists.md`](lists.md) | Identity list pagination (optional for business APIs) |
