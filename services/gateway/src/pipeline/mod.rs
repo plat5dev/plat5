@@ -1,74 +1,72 @@
 //! How the gateway decides a request (docs/concepts/access.md#how-a-request-is-decided),
-//! apart from the proxy around it: authenticate and admit, rate limit, the label
-//! check, and the subject fill. The proxy writes the audit intent between the rate
-//! limit and the label check, and turns a [`Rejection`] into a response.
+//! apart from the proxy around it: authenticate and admit, rate limit, the
+//! permission check, and the upstream fill. The proxy writes the audit intent after
+//! the fill, and turns a [`Rejection`] into a response.
 
-mod labels;
-mod subject;
-
-use std::collections::HashMap;
+mod fill;
+mod permissions;
 
 use std::future::Future;
+
 use tracing::{info, warn};
 
 use crate::auth::admit::{Admit, AdmitCache, AdmitCredential, AdmitRequest, ChainRef, NodeRef};
-use crate::auth::shape::key_display_prefix;
 use crate::auth::{AuthError, AuthType, Presented};
 use crate::error::{ApiError, ErrorKind};
 use crate::kinds::id_header;
 use crate::metrics;
-use crate::rate_limit::{RateLimitError, RateLimitInfo, RateLimiter};
-use crate::route_map::{LimitBucket, Route, RouteLimiter, Scope};
+use crate::rate_limit::{Bucket, RateLimitInfo, RateLimiter, Unavailable, Verdict};
+use crate::route_map::{Matched, Route, Scope};
 
-pub use labels::satisfies_required_labels;
-pub use subject::{path_and_query, RewriteError};
+pub use fill::{path_and_query, BadParam, Upstream, Values};
+pub use permissions::permitted;
 
 pub const MEMBER_ID_HEADER: &str = "X-Plat5-Member-Id";
+pub const USER_ID_HEADER: &str = "X-Plat5-User-Id";
 pub const PRINCIPAL_HEADER: &str = "X-Plat5-Principal";
 
-/// A fixed-window counter in a named bucket. Valkey in the gateway; in memory in tests.
+/// The failed-auth limiter's bucket. `@` is in no policy name, so no policy shares it.
+const AUTH_FAILURE_BUCKET: &str = "@auth-failure";
+
+/// Fixed-window counters, checked together. Valkey in the gateway; in memory in tests.
 pub trait Counter: Send + Sync {
-    fn allow(
+    fn check(
         &self,
-        bucket: &str,
-        limit: u64,
-        window_seconds: u64,
-    ) -> impl Future<Output = Result<RateLimitInfo, RateLimitError>> + Send;
+        buckets: &[Bucket],
+    ) -> impl Future<Output = Result<Verdict, Unavailable>> + Send;
 }
 
 impl Counter for RateLimiter {
-    async fn allow(
-        &self,
-        bucket: &str,
-        limit: u64,
-        window_seconds: u64,
-    ) -> Result<RateLimitInfo, RateLimitError> {
-        RateLimiter::allow(self, bucket, limit, window_seconds).await
+    async fn check(&self, buckets: &[Bucket]) -> Result<Verdict, Unavailable> {
+        RateLimiter::check(self, buckets).await
     }
 }
 
-/// A requests-per-window pair: the fallback, or the failed-auth IP limiter. `0` requests = off.
+/// The failed-auth IP limiter's requests per window. `0` requests = off.
 #[derive(Clone, Copy, Debug)]
 pub struct Limit {
     pub requests: u64,
     pub window_seconds: u64,
 }
 
-/// The caller, once admitted on a kind or sign-in route.
+/// The caller, once admitted on a kind or user route.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Caller {
     pub auth_type: AuthType,
-    pub key_prefix: Option<String>,
+    /// The key's id, from admit. None for a JWT.
+    pub key_id: Option<String>,
     /// A JWT's key id, for the request span.
     pub kid: Option<String>,
     /// `person` or `service_account`.
     pub principal: String,
-    /// The route's chain, root first. Empty on a sign-in route.
+    /// The route's chain, root first. Empty on a user route.
     pub nodes: Vec<NodeRef>,
-    /// In this tree; on a sign-in route, the person's directory member.
-    pub member_id: String,
-    /// The caller's labels on the route's node. Log only: never sent on.
-    pub labels: Vec<String>,
+    /// The caller in this tree, on a kind route.
+    pub member_id: Option<String>,
+    /// The person, on a user route.
+    pub user_id: Option<String>,
+    /// The caller's permissions on the route's node. Log only: never sent on.
+    pub permissions: Vec<String>,
 }
 
 impl Caller {
@@ -99,12 +97,13 @@ pub struct Passed {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RequestCredential {
     pub auth_type: Option<AuthType>,
-    /// Identity's display prefix for an `X-API-Key` of the right shape, valid or not.
-    pub key_prefix: Option<String>,
+    /// The key's id, once admit recognized the key.
+    pub key_id: Option<String>,
     pub principal: Option<String>,
     pub root_id: Option<String>,
     pub node_id: Option<String>,
     pub member_id: Option<String>,
+    pub user_id: Option<String>,
 }
 
 /// Why the gateway answers instead of forwarding.
@@ -114,17 +113,15 @@ pub enum Rejection {
     Unauthorized(AuthError),
     /// **403** before the rate limit: no such node, or no member in its tree.
     NotFound,
-    /// **403** after the rate limit: no route label held.
-    LabelDenied,
+    /// **403** after the rate limit: no route permission held.
+    Denied,
     /// **429**. `info` is set on an admitted route, None on the failed-auth limiter.
     RateLimited {
         retry_after: u64,
         info: Option<RateLimitInfo>,
     },
-    /// **400**: a path param that isn't one segment.
+    /// **400**: a route param that would change the upstream's path.
     BadPathParam,
-    /// **500**: a subject id that isn't one segment, or a route the load check missed.
-    Internal,
     /// **503**: identity, JWKS or Valkey.
     Unavailable,
 }
@@ -133,10 +130,9 @@ impl Rejection {
     pub fn status(&self) -> u16 {
         match self {
             Rejection::Unauthorized(_) => 401,
-            Rejection::NotFound | Rejection::LabelDenied => 403,
+            Rejection::NotFound | Rejection::Denied => 403,
             Rejection::RateLimited { .. } => 429,
             Rejection::BadPathParam => 400,
-            Rejection::Internal => 500,
             Rejection::Unavailable => 503,
         }
     }
@@ -145,37 +141,32 @@ impl Rejection {
     pub fn body(&self, route: &Route) -> ApiError {
         match self {
             Rejection::Unauthorized(err) => ApiError::unauthorized_for(&route.scope, err.details()),
-            Rejection::NotFound | Rejection::LabelDenied => {
-                ApiError::forbidden(&route.required_labels)
-            }
+            Rejection::NotFound | Rejection::Denied => ApiError::forbidden(&route.required),
             Rejection::RateLimited { retry_after, .. } => ApiError::rate_limited(*retry_after),
             Rejection::BadPathParam => ApiError::invalid_request(),
-            Rejection::Internal => ApiError::internal_error(),
             Rejection::Unavailable => ApiError::service_unavailable(),
         }
     }
 }
 
-/// The upstream request: the rewritten path (None = unchanged) and the subject headers.
+/// The upstream request: the filled path and the caller's headers.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Forward {
-    pub path: Option<String>,
+    pub path: String,
     pub headers: Vec<(String, String)>,
 }
 
 pub struct Pipeline<A, C> {
     admit: AdmitCache<A>,
     counter: C,
-    fallback: Limit,
     auth_failure: Limit,
 }
 
 impl<A: Admit, C: Counter> Pipeline<A, C> {
-    pub fn new(admit: AdmitCache<A>, counter: C, fallback: Limit, auth_failure: Limit) -> Self {
+    pub fn new(admit: AdmitCache<A>, counter: C, auth_failure: Limit) -> Self {
         Self {
             admit,
             counter,
-            fallback,
             auth_failure,
         }
     }
@@ -184,18 +175,17 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
     /// [`crate::auth::Authenticator::present`] found. `cred` is filled as far as it gets.
     pub async fn admit_and_limit(
         &self,
-        route: &Route,
-        params: &HashMap<String, String>,
-        method: &str,
+        matched: &Matched,
         ip: &str,
         presented: Result<Presented, AuthError>,
         cred: &mut RequestCredential,
     ) -> Result<Passed, Rejection> {
+        let route = &matched.route;
         let admitted = match &route.scope {
             Scope::Public => Admitted::Public,
-            _ => Admitted::Caller(self.admit(route, params, ip, presented, cred).await?),
+            _ => Admitted::Caller(self.admit(matched, ip, presented, cred).await?),
         };
-        let rate_limit = self.limit(route, method, ip, &admitted).await?;
+        let rate_limit = self.limit(route, ip, &admitted).await?;
         Ok(Passed {
             admitted,
             rate_limit,
@@ -204,37 +194,27 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
 
     async fn admit(
         &self,
-        route: &Route,
-        params: &HashMap<String, String>,
+        matched: &Matched,
         ip: &str,
         presented: Result<Presented, AuthError>,
         cred: &mut RequestCredential,
     ) -> Result<Caller, Rejection> {
+        let route = &matched.route;
         let presented = match presented {
             Ok(p) => p,
-            Err(err) => return Err(self.unauthorized(err, None, &route.scope, ip).await),
+            // Refused here, without identity: not counted.
+            Err(err) => return Err(unauthorized(err, None, &route.scope)),
         };
         let auth_type = presented.auth_type();
         cred.auth_type = Some(auth_type);
-        let (secret, credential, kid) = match presented {
-            Presented::Key(key) => {
-                cred.key_prefix = key_display_prefix(&key);
-                if cred.key_prefix.is_none() {
-                    // The wrong shape never reaches identity.
-                    return Err(self
-                        .unauthorized(AuthError::InvalidKey, Some(auth_type), &route.scope, ip)
-                        .await);
-                }
-                (key.clone(), AdmitCredential::Credential(key), None)
-            }
+        let (credential, kid) = match presented {
+            Presented::Key(key) => (AdmitCredential::Credential(key), None),
             Presented::Jwt {
-                token,
                 issuer,
                 subject,
                 name,
                 kid,
             } => (
-                token,
                 AdmitCredential::Idp {
                     issuer,
                     subject,
@@ -243,241 +223,190 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
                 kid,
             ),
         };
-
-        let mut chain = Vec::with_capacity(route.chain.len());
-        for kind in &route.chain {
-            let Some(reference) = params.get(kind) else {
-                warn!(route = %route.path, kind = %kind, "chain param missing from a matched path");
-                return Err(Rejection::Internal);
-            };
-            chain.push(ChainRef {
-                kind: kind.clone(),
-                reference: reference.clone(),
-            });
-        }
         let req = AdmitRequest {
             credential,
-            scope: route.scope.name().to_string(),
-            chain,
-            resolve_deleted: route.resolve_deleted,
+            chain: route
+                .chain
+                .iter()
+                .zip(&matched.refs)
+                .map(|(kind, reference)| ChainRef {
+                    kind: kind.clone(),
+                    reference: reference.clone(),
+                })
+                .collect(),
+            allow_deleted: route.allow_deleted,
         };
         let answer = self
             .admit
-            .get(&secret, &req)
+            .get(&req)
             .await
             .map_err(|_| Rejection::Unavailable)?;
+        cred.key_id = answer.key_id.clone();
 
         if !answer.valid {
-            let err = match auth_type {
-                AuthType::ApiKey => AuthError::InvalidKey,
-                AuthType::Jwt => AuthError::InvalidToken {
-                    reason: "inactive_person",
-                },
-            };
-            return Err(self
-                .unauthorized(err, Some(auth_type), &route.scope, ip)
-                .await);
+            let rejection =
+                unauthorized(AuthError::InvalidCredential, Some(auth_type), &route.scope);
+            return Err(self.count_refusal(ip).await.unwrap_or(rejection));
         }
-        let member_id = match (&answer.member_id, answer.found) {
-            (Some(member_id), true) => member_id.clone(),
-            _ => {
-                // Before the rate limit, so a caller outside a tree can't spend its budget.
-                return Err(self
-                    .note_unadmitted(ip)
-                    .await
-                    .unwrap_or(Rejection::NotFound));
-            }
-        };
+        if answer.refused(&req) {
+            // Before the rate limit, so a caller outside a tree can't spend its budget.
+            return Err(self.count_refusal(ip).await.unwrap_or(Rejection::NotFound));
+        }
         let caller = Caller {
             auth_type,
-            key_prefix: cred.key_prefix.clone(),
+            key_id: answer.key_id.clone(),
             kid,
             principal: answer.principal.clone().unwrap_or_default(),
             nodes: answer.nodes.clone(),
-            member_id,
-            labels: answer.labels.clone(),
+            member_id: answer.member_id.clone().filter(|_| !req.chain.is_empty()),
+            user_id: answer.user_id.clone().filter(|_| req.chain.is_empty()),
+            permissions: answer.permissions.clone(),
         };
         cred.principal = Some(caller.principal.clone());
-        cred.member_id = Some(caller.member_id.clone());
+        cred.member_id = caller.member_id.clone();
+        cred.user_id = caller.user_id.clone();
         cred.root_id = caller.root_id().map(str::to_string);
         cred.node_id = caller.node_id().map(str::to_string);
         Ok(caller)
     }
 
-    async fn unauthorized(
-        &self,
-        err: AuthError,
-        auth_type: Option<AuthType>,
-        scope: &Scope,
-        ip: &str,
-    ) -> Rejection {
-        if !err.is_client_error() {
-            warn!(
-                error_kind = ErrorKind::Network.as_str(),
-                error_message = err.as_str(),
-                "authentication infrastructure unavailable"
-            );
-            return Rejection::Unavailable;
+    /// The failed-auth IP limiter, on what identity refused. Some(rejection) when
+    /// it answers instead.
+    async fn count_refusal(&self, ip: &str) -> Option<Rejection> {
+        if self.auth_failure.requests == 0 {
+            return None;
         }
-        let auth_type = auth_type.map_or("none", AuthType::as_str);
-        metrics::record_auth_failure(auth_type, err.as_str());
-        info!(
-            error_kind = ErrorKind::Auth.as_str(),
-            auth_type,
-            error_message = err.as_str(),
-            scope = scope.name(),
-            "authentication failed"
-        );
-        self.note_unadmitted(ip)
-            .await
-            .unwrap_or(Rejection::Unauthorized(err))
-    }
-
-    /// The failed-auth IP limiter: unadmitted 401s, not-found 403s and unmatched
-    /// 404s. Some(rejection) when it answers instead.
-    pub async fn note_unadmitted(&self, ip: &str) -> Option<Rejection> {
-        match self
-            .counter
-            .allow(
-                &format!("ip:{ip}"),
-                self.auth_failure.requests,
-                self.auth_failure.window_seconds,
-            )
-            .await
-        {
-            Ok(_) => None,
-            Err(RateLimitError::Exceeded { retry_after, .. }) => Some(Rejection::RateLimited {
+        let bucket = Bucket {
+            key: format!("{AUTH_FAILURE_BUCKET}:{ip}"),
+            requests: self.auth_failure.requests,
+            window_seconds: self.auth_failure.window_seconds,
+        };
+        match self.counter.check(&[bucket]).await {
+            Ok(Verdict::Allowed(_)) => None,
+            Ok(Verdict::Exceeded { retry_after, .. }) => Some(Rejection::RateLimited {
                 retry_after,
                 info: None,
             }),
-            Err(RateLimitError::Unavailable) => Some(Rejection::Unavailable),
+            Err(Unavailable) => Some(Rejection::Unavailable),
         }
     }
 
-    /// Rate limit: every policy on the route counts in its node's bucket, and every one
-    /// must pass. Ok carries the tightest policy's numbers.
+    /// Every policy on the route, checked at once. Ok carries the tightest one's numbers.
     async fn limit(
         &self,
         route: &Route,
-        method: &str,
         ip: &str,
         admitted: &Admitted,
     ) -> Result<Option<RateLimitInfo>, Rejection> {
-        let buckets = buckets(route, method, ip, admitted, self.fallback)?;
-        let mut passed: Vec<RateLimitInfo> = Vec::new();
-        let mut exceeded: Vec<(u64, RateLimitInfo)> = Vec::new();
-        for (bucket, requests, window) in &buckets {
-            match self.counter.allow(bucket, *requests, *window).await {
-                Ok(info) => passed.push(info),
-                Err(RateLimitError::Exceeded { retry_after, info }) => {
-                    exceeded.push((retry_after, info))
-                }
-                Err(RateLimitError::Unavailable) => return Err(Rejection::Unavailable),
-            }
+        let buckets = buckets(route, ip, admitted);
+        match self.counter.check(&buckets).await {
+            Ok(Verdict::Allowed(infos)) => Ok(tightest(infos)),
+            Ok(Verdict::Exceeded { retry_after, infos }) => Err(Rejection::RateLimited {
+                retry_after,
+                info: tightest(infos),
+            }),
+            Err(Unavailable) => Err(Rejection::Unavailable),
         }
-        if !exceeded.is_empty() {
-            let retry_after = exceeded.iter().map(|(r, _)| *r).max().unwrap_or(1);
-            let info = tightest(exceeded.into_iter().map(|(_, i)| i));
-            return Err(Rejection::RateLimited { retry_after, info });
-        }
-        Ok(tightest(passed.into_iter()))
     }
 }
 
+/// A 401: logged and metered. JWKS not loaded is the gateway's own trouble, **503**.
+fn unauthorized(err: AuthError, auth_type: Option<AuthType>, scope: &Scope) -> Rejection {
+    if !err.is_client_error() {
+        warn!(
+            error_kind = ErrorKind::Network.as_str(),
+            error_message = err.as_str(),
+            "authentication infrastructure unavailable"
+        );
+        return Rejection::Unavailable;
+    }
+    let auth_type = auth_type.map_or("none", AuthType::as_str);
+    metrics::record_auth_failure(auth_type, err.as_str());
+    info!(
+        error_kind = ErrorKind::Auth.as_str(),
+        auth_type,
+        error_message = err.as_str(),
+        scope = scope.name(),
+        "authentication failed"
+    );
+    Rejection::Unauthorized(err)
+}
+
 /// The policy with the fewest requests left; on a tie, the one that resets last.
-fn tightest(infos: impl Iterator<Item = RateLimitInfo>) -> Option<RateLimitInfo> {
-    infos.min_by(|a, b| {
+fn tightest(infos: Vec<RateLimitInfo>) -> Option<RateLimitInfo> {
+    infos.into_iter().min_by(|a, b| {
         a.remaining
             .cmp(&b.remaining)
             .then_with(|| b.reset_epoch.cmp(&a.reset_epoch))
     })
 }
 
-/// Each policy's bucket, with its requests and window
-/// (docs/reference/config/routes.md#buckets).
-fn buckets(
-    route: &Route,
-    method: &str,
-    ip: &str,
-    admitted: &Admitted,
-    fallback: Limit,
-) -> Result<Vec<(String, u64, u64)>, Rejection> {
-    let node = |count_at: Option<&str>| -> Result<String, Rejection> {
-        match (&route.scope, admitted) {
-            (Scope::Public, _) => Ok(ip.to_string()),
-            (Scope::SignIn(_), Admitted::Caller(c)) => Ok(c.member_id.clone()),
-            (Scope::Kind(kind), Admitted::Caller(c)) => {
-                let at = count_at.unwrap_or(kind);
-                c.nodes
-                    .iter()
-                    .find(|n| n.kind == at)
-                    .map(|n| n.id.clone())
-                    .ok_or(Rejection::Internal)
+/// Each policy's bucket (docs/reference/config/rate-limits.md#buckets): per caller
+/// at the route's node, at the `count_at` node, per user, or per client IP.
+pub fn buckets(route: &Route, ip: &str, admitted: &Admitted) -> Vec<Bucket> {
+    route
+        .policies
+        .iter()
+        .map(|policy| {
+            let at = match (admitted, policy.count_at) {
+                (Admitted::Public, _) => format!("ip:{ip}"),
+                (Admitted::Caller(c), Some(i)) => c.nodes[i].id.clone(),
+                (Admitted::Caller(c), None) => match (&c.member_id, &c.user_id) {
+                    (Some(member), _) => {
+                        format!("{}:{member}", c.node_id().unwrap_or_default())
+                    }
+                    (None, user) => format!("user:{}", user.as_deref().unwrap_or_default()),
+                },
+            };
+            Bucket {
+                key: format!("{}:{at}", policy.name),
+                requests: policy.requests,
+                window_seconds: policy.window_seconds,
             }
-            _ => Err(Rejection::Internal),
-        }
-    };
-    let method_path = |node: String| format!("{method} {} {node}", route.path);
-    match &route.limiter {
-        RouteLimiter::Unlimited => Ok(Vec::new()),
-        RouteLimiter::Inherit if fallback.requests == 0 => Ok(Vec::new()),
-        RouteLimiter::Inherit => Ok(vec![(
-            method_path(node(None)?),
-            fallback.requests,
-            fallback.window_seconds,
-        )]),
-        RouteLimiter::Policies(policies) => policies
-            .iter()
-            .map(|p| {
-                let at = node(p.count_at.as_deref())?;
-                let bucket = match &p.bucket {
-                    LimitBucket::MethodPath => method_path(at),
-                    LimitBucket::Named(prefix) => format!("{prefix}:{at}"),
-                };
-                Ok((bucket, p.requests, p.window_seconds))
-            })
-            .collect(),
-    }
+        })
+        .collect()
 }
 
-/// Labels: the caller's labels on the node against the route's.
+/// The permission check, on a kind route.
 pub fn authorize(route: &Route, admitted: &Admitted) -> Result<(), Rejection> {
     match admitted {
-        Admitted::Public => Ok(()),
-        Admitted::Caller(c) if satisfies_required_labels(&route.required_labels, &c.labels) => {
-            Ok(())
+        Admitted::Caller(c) if !permitted(&route.required, &c.permissions) => {
+            Err(Rejection::Denied)
         }
-        Admitted::Caller(_) => Err(Rejection::LabelDenied),
+        _ => Ok(()),
     }
 }
 
-/// Fill: the upstream path and the subject headers. Nothing on a public route.
-pub fn forward(
-    route: &Route,
-    params: &HashMap<String, String>,
-    admitted: &Admitted,
-) -> Result<Forward, Rejection> {
-    let (nodes, member_id) = match admitted {
-        Admitted::Public => (&[][..], None),
-        Admitted::Caller(c) => (c.nodes.as_slice(), Some(c.member_id.as_str())),
+/// Fill: the upstream path and the caller's headers. No headers on a public route.
+pub fn forward(matched: &Matched, admitted: &Admitted) -> Result<Forward, Rejection> {
+    let route = &matched.route;
+    let caller = match admitted {
+        Admitted::Public => None,
+        Admitted::Caller(c) => Some(c),
     };
-    let path = match route.upstream.as_deref() {
-        None => None,
-        Some(template) => Some(
-            subject::substitute(template, params, subject::Subject { nodes, member_id }).map_err(
-                |e| match e {
-                    RewriteError::PathParam => Rejection::BadPathParam,
-                    RewriteError::Subject | RewriteError::Internal => Rejection::Internal,
-                },
-            )?,
-        ),
-    };
+    let nodes: Vec<&str> = caller
+        .map(|c| c.nodes.iter().map(|n| n.id.as_str()).collect())
+        .unwrap_or_default();
+    let path = route
+        .upstream
+        .fill(Values {
+            nodes: &nodes,
+            member_id: caller.and_then(|c| c.member_id.as_deref()),
+            user_id: caller.and_then(|c| c.user_id.as_deref()),
+            params: &matched.params,
+        })
+        .map_err(|BadParam| Rejection::BadPathParam)?;
     let mut headers = Vec::new();
-    if let Admitted::Caller(c) = admitted {
+    if let Some(c) = caller {
         for node in &c.nodes {
             headers.push((id_header(&node.kind), node.id.clone()));
         }
-        headers.push((MEMBER_ID_HEADER.to_string(), c.member_id.clone()));
+        if let Some(member) = &c.member_id {
+            headers.push((MEMBER_ID_HEADER.to_string(), member.clone()));
+        }
+        if let Some(user) = &c.user_id {
+            headers.push((USER_ID_HEADER.to_string(), user.clone()));
+        }
         headers.push((PRINCIPAL_HEADER.to_string(), c.principal.clone()));
     }
     Ok(Forward { path, headers })

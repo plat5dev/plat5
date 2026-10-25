@@ -7,15 +7,14 @@ use serde::Serialize;
 use tracing::{Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-const INTERNAL_TOKEN_HEADER: &str = "X-Plat5-Internal-Token";
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
-/// Shared HTTP client for gateway → identity (and similar) internal calls.
+/// Shared HTTP client for gateway → identity and audit internal calls. They take
+/// no token: internal ports are reachable only inside the deployment's network.
 /// Domain modules keep their own request/response types; this only does transport.
 #[derive(Clone)]
 pub struct InternalHttpClient {
     client: reqwest::Client,
-    internal_token: Option<String>,
 }
 
 #[derive(Debug)]
@@ -34,21 +33,24 @@ impl InternalHttpError {
     }
 }
 
+impl Default for InternalHttpClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InternalHttpClient {
-    pub fn new(internal_token: Option<String>) -> Self {
-        Self::with_timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS), internal_token)
+    pub fn new() -> Self {
+        Self::with_timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
     }
 
-    pub fn with_timeout(timeout: Duration, internal_token: Option<String>) -> Self {
+    pub fn with_timeout(timeout: Duration) -> Self {
         let client = reqwest::Client::builder()
             .timeout(timeout)
             .build()
             .expect("failed to create reqwest client");
 
-        Self {
-            client,
-            internal_token,
-        }
+        Self { client }
     }
 
     /// Send JSON with `method` and a per-call `timeout`. Returns the status, 2xx or not;
@@ -64,10 +66,7 @@ impl InternalHttpClient {
         B: Serialize + ?Sized,
     {
         let span = client_span(&method, url);
-        let mut req = self.client.request(method, url).timeout(timeout).json(body);
-        if let Some(token) = &self.internal_token {
-            req = req.header(INTERNAL_TOKEN_HEADER, token);
-        }
+        let req = self.client.request(method, url).timeout(timeout).json(body);
         let result = traced(req, &span)
             .send()
             .instrument(span.clone())
@@ -87,10 +86,7 @@ impl InternalHttpClient {
         R: DeserializeOwned,
     {
         let span = client_span(&reqwest::Method::POST, url);
-        let mut req = self.client.post(url).json(body);
-        if let Some(token) = &self.internal_token {
-            req = req.header(INTERNAL_TOKEN_HEADER, token);
-        }
+        let req = self.client.post(url).json(body);
 
         let response = traced(req, &span)
             .send()

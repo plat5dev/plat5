@@ -1,8 +1,9 @@
 //! The pipeline against the catalog fixture
-//! (services/control-plane/fixtures/catalog/identity-feed.json): every generated
-//! route, and every row of the admit table (docs/reference/gateway.md#admit).
+//! (services/control-plane/fixtures/catalog/gateway-feed.json): every route through
+//! match, admit, limits, the permission check and the fill, and every row of the
+//! admit table (docs/reference/gateway.md#admit).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -10,46 +11,56 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use super::*;
-use crate::auth::admit::tests::{admitted, invalid, not_found, FakeAdmit};
-use crate::auth::admit::{AdmitAnswer, NodeRef};
+use crate::auth::admit::tests::{
+    admitted, invalid, not_in_tree, user, FakeAdmit, KEY_ID, MEMBER, USER,
+};
+use crate::auth::admit::AdmitAnswer;
 use crate::control_plane::{build, Snapshot};
-use crate::rate_limit::{RateLimitError, RateLimitInfo};
+use crate::rate_limit::RateLimitInfo;
+use crate::route_map::Required;
 
 const IP: &str = "203.0.113.7";
+const IP_BUCKET: &str = "@auth-failure:203.0.113.7";
 
-fn key() -> String {
-    format!("plat5-k-2-{}", "A".repeat(43))
+fn key() -> Presented {
+    Presented::Key("plat5-k-2-AAAA".into())
 }
 
-/// The fixture's identity feed, as the gateway feed for the same config.
-fn fixture() -> Value {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../control-plane/fixtures/catalog/identity-feed.json"
-    );
-    serde_json::from_str(&std::fs::read_to_string(path).expect("catalog fixture")).unwrap()
-}
-
-fn snapshot_with(extra_services: Value) -> Snapshot {
-    let f = fixture();
-    let mut services = f["services"].clone();
-    for (name, svc) in extra_services.as_object().unwrap() {
-        services[name] = svc.clone();
+fn jwt() -> Presented {
+    Presented::Jwt {
+        issuer: "https://auth".into(),
+        subject: "sub-1".into(),
+        name: Some("Dana".into()),
+        kid: Some("kid-1".into()),
     }
-    build(json!({
-        "revision": f["revision"],
-        "kinds": f["kinds"],
-        "services": services,
-        "cors": { "allowed_origins": [] }
-    }))
-    .expect("the catalog fixture builds")
+}
+
+pub fn fixture(path: &str) -> Value {
+    let path = format!(
+        "{}/../control-plane/fixtures/{path}",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    serde_json::from_str(&std::fs::read_to_string(&path).expect("fixture")).unwrap()
+}
+
+/// The catalog feed, with `extra` services and `rate_limits` added.
+fn snapshot_with(extra_services: Value, extra_limits: Value) -> Snapshot {
+    let mut feed = fixture("catalog/gateway-feed.json");
+    for (name, svc) in extra_services.as_object().unwrap() {
+        feed["services"][name] = svc.clone();
+    }
+    for (name, policy) in extra_limits.as_object().unwrap() {
+        feed["rate_limits"][name] = policy.clone();
+    }
+    build(feed).expect("the catalog fixture builds")
 }
 
 fn catalog() -> Snapshot {
-    snapshot_with(json!({}))
+    snapshot_with(json!({}), json!({}))
 }
 
-/// Fixed-window counters in memory, recording each bucket counted.
+/// Fixed-window counters in memory: every bucket checked at once, counted only
+/// if all pass. Records each bucket counted.
 #[derive(Default)]
 struct MemCounter {
     counts: Mutex<HashMap<String, u64>>,
@@ -71,36 +82,36 @@ impl MemCounter {
 }
 
 impl Counter for Arc<MemCounter> {
-    async fn allow(
-        &self,
-        bucket: &str,
-        limit: u64,
-        window_seconds: u64,
-    ) -> Result<RateLimitInfo, RateLimitError> {
-        if limit == 0 {
-            return Ok(RateLimitInfo {
-                limit: 0,
-                remaining: 0,
-                reset_epoch: 1,
+    async fn check(&self, buckets: &[Bucket]) -> Result<Verdict, Unavailable> {
+        let mut counts = self.counts.lock().unwrap();
+        let full = |b: &Bucket| counts.get(&b.key).copied().unwrap_or(0) >= b.requests;
+        let allowed = !buckets.iter().any(full);
+        let mut infos = Vec::new();
+        let mut retry_after = 0;
+        for b in buckets {
+            let n = counts.entry(b.key.clone()).or_default();
+            let was_full = *n >= b.requests;
+            if allowed {
+                *n += 1;
+                self.order.lock().unwrap().push(b.key.clone());
+            } else if was_full {
+                retry_after = retry_after.max(b.window_seconds);
+            }
+            infos.push(RateLimitInfo {
+                limit: b.requests,
+                remaining: if was_full && !allowed {
+                    0
+                } else {
+                    b.requests.saturating_sub(*n)
+                },
+                reset_epoch: b.window_seconds,
             });
         }
-        self.order.lock().unwrap().push(bucket.to_string());
-        let mut counts = self.counts.lock().unwrap();
-        let n = counts.entry(bucket.to_string()).or_default();
-        *n += 1;
-        let info = RateLimitInfo {
-            limit,
-            remaining: limit.saturating_sub(*n),
-            reset_epoch: window_seconds,
-        };
-        if *n > limit {
-            Err(RateLimitError::Exceeded {
-                retry_after: window_seconds,
-                info,
-            })
+        Ok(if allowed {
+            Verdict::Allowed(infos)
         } else {
-            Ok(info)
-        }
+            Verdict::Exceeded { retry_after, infos }
+        })
     }
 }
 
@@ -117,25 +128,20 @@ fn harness(answer: Result<AdmitAnswer, String>) -> Harness {
             requests: 60,
             window_seconds: 60,
         },
-        Limit {
-            requests: 60,
-            window_seconds: 60,
-        },
     )
 }
 
-fn harness_with(
-    answer: Result<AdmitAnswer, String>,
-    fallback: Limit,
-    auth_failure: Limit,
-) -> Harness {
+fn harness_with(answer: Result<AdmitAnswer, String>, auth_failure: Limit) -> Harness {
     let admit = Arc::new(FakeAdmit::new(answer));
     let counter = Arc::new(MemCounter::default());
     Harness {
         pipeline: Pipeline::new(
-            AdmitCache::new(admit.clone(), Duration::from_secs(300)),
+            AdmitCache::new(
+                admit.clone(),
+                Duration::from_secs(300),
+                Duration::from_secs(10),
+            ),
             counter.clone(),
-            fallback,
             auth_failure,
         ),
         admit,
@@ -148,92 +154,78 @@ impl Harness {
         *self.admit.answer.lock().unwrap() = Ok(answer);
     }
 
+    fn calls(&self) -> usize {
+        self.admit.calls.load(Ordering::SeqCst)
+    }
+
+    fn last_request(&self) -> AdmitRequest {
+        self.admit.last.lock().unwrap().clone().unwrap()
+    }
+
     async fn run(
         &self,
-        route: &Route,
-        params: &HashMap<String, String>,
+        matched: &Matched,
         presented: Result<Presented, AuthError>,
     ) -> (Result<Passed, Rejection>, RequestCredential) {
         let mut cred = RequestCredential::default();
-        // GET when the route has it, else the first in order: methods is a set.
-        let method = if route.methods.contains("GET") {
-            "GET".to_string()
-        } else {
-            route.methods.iter().min().unwrap().clone()
-        };
         let r = self
             .pipeline
-            .admit_and_limit(route, params, &method, IP, presented, &mut cred)
+            .admit_and_limit(matched, IP, presented, &mut cred)
             .await;
         (r, cred)
     }
 
-    /// The whole decision: admit and limit, the label check, and the fill.
+    /// The whole decision: admit and limit, the permission check, and the fill.
     async fn decide(
         &self,
-        route: &Route,
-        params: &HashMap<String, String>,
+        matched: &Matched,
         presented: Result<Presented, AuthError>,
     ) -> Result<(Admitted, Forward), Rejection> {
-        let passed = self.run(route, params, presented).await.0?;
-        authorize(route, &passed.admitted)?;
-        let fwd = forward(route, params, &passed.admitted)?;
+        let passed = self.run(matched, presented).await.0?;
+        authorize(&matched.route, &passed.admitted)?;
+        let fwd = forward(matched, &passed.admitted)?;
         Ok((passed.admitted, fwd))
     }
 }
 
-/// A concrete request path for a route, and its params: a slug per chain kind,
-/// a value per other param.
-fn concrete(route: &Route) -> (String, HashMap<String, String>) {
-    let mut params = HashMap::new();
-    let path = route
+/// A concrete request path for a route: a slug per chain kind, a value per own param.
+fn concrete(route: &Route) -> String {
+    route
         .path
         .split('/')
         .map(
             |seg| match seg.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-                Some(name) => {
-                    let value = if route.is_chain_param(name) {
-                        format!("{}-slug", name.replace('_', "-"))
-                    } else {
-                        format!("v-{name}")
-                    };
-                    params.insert(name.to_string(), value.clone());
-                    value
+                Some(name) if route.chain.iter().any(|k| k == name) => {
+                    format!("{}-slug", name.replace('_', "-"))
                 }
+                Some(name) => format!("01v{}", name.replace('_', "")),
                 None => seg.to_string(),
             },
         )
         .collect::<Vec<_>>()
-        .join("/");
-    (path, params)
+        .join("/")
 }
 
 fn node_id(kind: &str) -> String {
-    format!("n_{kind}")
+    format!("01n{kind}")
 }
 
-fn chain_nodes(route: &Route) -> Vec<(String, String)> {
-    route
+/// The answer for a route's caller: the chain's nodes on a kind route, the user on
+/// a user route.
+fn answer_for(route: &Route, permissions: &[&str]) -> AdmitAnswer {
+    if route.scope == Scope::User {
+        return user();
+    }
+    let ids: Vec<(String, String)> = route
         .chain
         .iter()
         .map(|k| (k.clone(), node_id(k)))
-        .collect()
-}
-
-fn answer_for(route: &Route, labels: &[&str]) -> AdmitAnswer {
-    let nodes = chain_nodes(route);
-    let pairs: Vec<(&str, &str)> = nodes
-        .iter()
-        .map(|(k, i)| (k.as_str(), i.as_str()))
         .collect();
-    admitted(&pairs, labels)
+    let pairs: Vec<(&str, &str)> = ids.iter().map(|(k, i)| (k.as_str(), i.as_str())).collect();
+    admitted(&pairs, permissions)
 }
 
-fn find<'a>(
-    snapshot: &'a Snapshot,
-    method: &str,
-    path: &str,
-) -> (&'a Route, HashMap<String, String>) {
+fn find(snapshot: &Snapshot, method: &str, path: &str) -> Matched {
     snapshot
         .routes
         .find_route(path, method)
@@ -247,32 +239,63 @@ fn header<'a>(fwd: &'a Forward, name: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
+/// The upstream with each placeholder replaced by what the gateway sends.
+fn expected_upstream(
+    feed_upstream: &str,
+    route: &Route,
+    params: &BTreeMap<String, String>,
+) -> String {
+    let mut want = feed_upstream.to_string();
+    for kind in &route.chain {
+        want = want.replace(&format!("{{{kind}.id}}"), &node_id(kind));
+    }
+    want = want
+        .replace("{member.id}", MEMBER)
+        .replace("{user.id}", USER);
+    for (name, value) in params {
+        want = want.replace(&format!("{{{name}}}"), value);
+    }
+    want
+}
+
 #[tokio::test]
-async fn every_catalog_route_matches_admits_and_fills_its_upstream() {
-    let snapshot = catalog();
+async fn every_catalog_route_matches_admits_limits_and_fills_its_upstream() {
+    let feed = fixture("catalog/gateway-feed.json");
+    let snapshot = build(feed.clone()).unwrap();
     let mut seen = 0;
     let mut restore_routes = 0;
-    for route in snapshot.routes.routes() {
-        for method in &route.methods {
+    for (service, svc) in feed["services"].as_object().unwrap() {
+        for doc in svc["routes"].as_array().unwrap() {
             seen += 1;
-            let (path, params) = concrete(route);
-            let (matched, matched_params) = find(&snapshot, method, &path);
+            let method = doc["method"].as_str().unwrap();
+            let template = doc["path"].as_str().unwrap();
+            let probe = snapshot
+                .routes
+                .routes()
+                .find(|r| r.path == template && r.method == method)
+                .unwrap()
+                .clone();
+            let path = concrete(&probe);
+            let matched = find(&snapshot, method, &path);
+            let route = matched.route.clone();
             assert_eq!(
-                (matched.service.as_str(), matched.path.as_str()),
                 (route.service.as_str(), route.path.as_str()),
+                (service.as_str(), template),
                 "{method} {path} matched another route"
             );
-            assert_eq!(matched_params, params);
 
-            let h = harness(Ok(answer_for(route, &["*"])));
+            let h = harness(Ok(answer_for(&route, &["*"])));
             let (admitted, fwd) = h
-                .decide(matched, &params, Ok(Presented::Key(key())))
+                .decide(&matched, Ok(key()))
                 .await
-                .unwrap_or_else(|r| panic!("{method} {} refused: {r:?}", route.path));
+                .unwrap_or_else(|r| panic!("{method} {template} refused: {r:?}"));
 
-            // Admit got the scope, the chain as written, and resolve_deleted.
-            let req = h.admit.last.lock().unwrap().clone().unwrap();
-            assert_eq!(req.scope, route.scope.name());
+            // Admit got the credential as presented, the chain as written, and allow_deleted.
+            let req = h.last_request();
+            assert_eq!(
+                req.credential,
+                AdmitCredential::Credential("plat5-k-2-AAAA".into())
+            );
             let refs: Vec<(String, String)> = req
                 .chain
                 .iter()
@@ -281,170 +304,156 @@ async fn every_catalog_route_matches_admits_and_fills_its_upstream() {
             let want: Vec<(String, String)> = route
                 .chain
                 .iter()
-                .map(|k| (k.clone(), params[k].clone()))
+                .map(|k| (k.clone(), format!("{k}-slug")))
                 .collect();
-            assert_eq!(refs, want, "{}", route.path);
-            assert_eq!(req.resolve_deleted, route.resolve_deleted);
-            if route.path.ends_with("/restore") {
+            assert_eq!(refs, want, "{template}");
+            assert_eq!(req.allow_deleted, doc["allow_deleted"].as_bool().unwrap());
+            if template.ends_with("/restore") {
                 restore_routes += 1;
-                assert!(
-                    req.resolve_deleted,
-                    "{} must resolve a deleted node",
-                    route.path
-                );
+                assert!(req.allow_deleted, "{template} must admit a deleted node");
             }
+
+            // The default policy, per caller: at the node for a member, by user id on user routes.
+            let bucket = match &route.scope {
+                Scope::User => format!("default:user:{USER}"),
+                _ => format!("default:{}:{MEMBER}", node_id(route.chain.last().unwrap())),
+            };
+            assert_eq!(h.counter.buckets(), vec![bucket], "{template}");
 
             // The upstream is the template with ids: no slug ever reaches a service.
-            let mut want_path = route
-                .upstream
-                .clone()
-                .expect("generated routes have upstreams");
-            for kind in &route.chain {
-                want_path = want_path.replace(&format!("{{subject.{kind}_id}}"), &node_id(kind));
-            }
-            want_path = want_path.replace("{subject.member_id}", "m_1");
-            for (name, value) in &params {
-                want_path = want_path.replace(&format!("{{path.{name}}}"), value);
-            }
-            assert_eq!(
-                fwd.path.as_deref(),
-                Some(want_path.as_str()),
-                "{}",
-                route.path
-            );
+            let want_path =
+                expected_upstream(doc["upstream"].as_str().unwrap(), &route, &matched.params);
+            assert!(!want_path.contains('{'), "{template}: {want_path}");
+            assert_eq!(fwd.path, want_path, "{template}");
             for kind in &route.chain {
                 assert!(
-                    !fwd.path.as_deref().unwrap().contains(&params[kind]),
-                    "{}: slug in upstream",
-                    route.path
+                    !fwd.path.contains("-slug"),
+                    "{template}: slug of {kind} in upstream"
                 );
             }
 
-            // Subject headers: one per chain node, the member and the principal.
+            // Headers: the chain's ids, the member and the principal; or the user.
             let Admitted::Caller(caller) = admitted else {
-                panic!("{} admitted as public", route.path)
+                panic!("{template} admitted as public")
             };
-            assert_eq!(caller.nodes.len(), route.chain.len());
-            for kind in &route.chain {
-                assert_eq!(
-                    header(&fwd, &crate::kinds::id_header(kind)),
-                    Some(node_id(kind).as_str())
-                );
-            }
-            assert_eq!(header(&fwd, MEMBER_ID_HEADER), Some("m_1"));
-            assert_eq!(header(&fwd, PRINCIPAL_HEADER), Some("person"));
-            assert_eq!(fwd.headers.len(), route.chain.len() + 2, "{}", route.path);
-
             match &route.scope {
-                Scope::SignIn(kind) => {
-                    assert_eq!(kind, "directory");
-                    assert!(route.chain.is_empty());
+                Scope::Kind(kind) => {
+                    assert_eq!(route.chain.last(), Some(kind));
+                    assert_eq!(caller.nodes.len(), route.chain.len());
+                    for kind in &route.chain {
+                        assert_eq!(
+                            header(&fwd, &crate::kinds::id_header(kind)),
+                            Some(node_id(kind).as_str())
+                        );
+                    }
+                    assert_eq!(header(&fwd, MEMBER_ID_HEADER), Some(MEMBER));
+                    assert_eq!(header(&fwd, USER_ID_HEADER), None);
+                    assert_eq!(fwd.headers.len(), route.chain.len() + 2, "{template}");
                 }
-                Scope::Kind(kind) => assert_eq!(route.chain.last(), Some(kind)),
+                Scope::User => {
+                    assert!(req.chain.is_empty());
+                    assert_eq!(header(&fwd, USER_ID_HEADER), Some(USER));
+                    assert_eq!(header(&fwd, MEMBER_ID_HEADER), None);
+                    assert_eq!(fwd.headers.len(), 2, "{template}");
+                }
                 Scope::Public => panic!("the catalog has no public routes"),
             }
+            assert_eq!(header(&fwd, PRINCIPAL_HEADER), Some("person"));
         }
     }
-    assert!(seen >= 90, "only {seen} route methods in the catalog");
-    assert!(restore_routes >= 3, "a restore route per non-sign-in kind");
+    assert_eq!(seen, 84, "identity's 80 routes and audit's 4");
+    assert_eq!(snapshot.routes.route_count(), seen);
+    assert_eq!(restore_routes, 3, "a restore route per kind");
 }
 
 #[tokio::test]
-async fn generated_labels_gate_their_routes() {
+async fn required_permissions_gate_their_routes() {
     let snapshot = catalog();
+    let mut any_member = 0;
     for route in snapshot.routes.routes() {
-        if route.required_labels.is_empty() {
-            continue;
+        let matched = find(&snapshot, &route.method, &concrete(route));
+        match &route.required {
+            Required::AnyOf(list) => {
+                for permission in list {
+                    let h = harness(Ok(answer_for(route, &[permission.as_str()])));
+                    assert!(
+                        h.decide(&matched, Ok(key())).await.is_ok(),
+                        "{}",
+                        route.path
+                    );
+                }
+                let h = harness(Ok(answer_for(route, &["some:other-permission"])));
+                assert_eq!(
+                    h.decide(&matched, Ok(key())).await.err(),
+                    Some(Rejection::Denied),
+                    "{}",
+                    route.path
+                );
+            }
+            Required::AnyMember => {
+                any_member += 1;
+                let h = harness(Ok(answer_for(route, &[])));
+                assert!(
+                    h.decide(&matched, Ok(jwt())).await.is_ok(),
+                    "{}",
+                    route.path
+                );
+            }
+            Required::Nothing => assert_eq!(route.scope, Scope::User, "{}", route.path),
         }
-        let (_, params) = concrete(route);
-        for label in &route.required_labels {
-            let h = harness(Ok(answer_for(route, &[label.as_str()])));
-            assert!(h
-                .decide(route, &params, Ok(Presented::Key(key())))
-                .await
-                .is_ok());
-        }
-        let h = harness(Ok(answer_for(route, &["some:other-label"])));
-        assert_eq!(
-            h.decide(route, &params, Ok(Presented::Key(key())))
-                .await
-                .err(),
-            Some(Rejection::LabelDenied),
-            "{}",
-            route.path
-        );
     }
+    assert!(
+        any_member >= 10,
+        "child lists, membership, roles: {any_member}"
+    );
 }
 
 /// `GET /orgs/{organization}/projects/{project}`: `project:read`.
-fn project_read(snapshot: &Snapshot) -> (Route, HashMap<String, String>) {
-    let (r, p) = find(snapshot, "GET", "/orgs/acme/projects/web");
-    assert_eq!(r.required_labels, vec!["project:read"]);
-    (r.clone(), p)
+fn project_read(snapshot: &Snapshot) -> Matched {
+    let m = find(snapshot, "GET", "/orgs/acme/projects/web");
+    assert_eq!(
+        m.route.required,
+        Required::AnyOf(vec!["project:read".into()])
+    );
+    m
 }
-
-fn jwt() -> Presented {
-    Presented::Jwt {
-        token: "header.payload.sig".into(),
-        issuer: "https://auth".into(),
-        subject: "sub-1".into(),
-        name: Some("Dana".into()),
-        kid: Some("kid-1".into()),
-    }
-}
-
-const IP_BUCKET: &str = "ip:203.0.113.7";
 
 #[tokio::test]
 async fn admit_table() {
     let snapshot = catalog();
-    let (route, params) = project_read(&snapshot);
-    let route_bucket = "GET /orgs/{organization}/projects/{project} n_project";
-    let ok = || answer_for(&route, &["project:read"]);
+    let read = project_read(&snapshot);
+    let route_bucket = format!("default:{}:{MEMBER}", node_id("project"));
+    let ok = || answer_for(&read.route, &["project:read"]);
 
     // valid: false → 401, counted on the failed-auth limiter, before the rate limit.
-    let h = harness(Ok(invalid()));
-    let (r, cred) = h.run(&route, &params, Ok(Presented::Key(key()))).await;
-    assert_eq!(
-        r.err(),
-        Some(Rejection::Unauthorized(AuthError::InvalidKey))
-    );
-    assert_eq!(cred.key_prefix.as_deref(), Some("plat5-k-2-AAAA"));
-    assert_eq!(h.counter.buckets(), vec![IP_BUCKET]);
+    for presented in [key(), jwt()] {
+        let h = harness(Ok(invalid()));
+        let (r, cred) = h.run(&read, Ok(presented)).await;
+        assert_eq!(
+            r.err(),
+            Some(Rejection::Unauthorized(AuthError::InvalidCredential))
+        );
+        assert_eq!(cred.key_id, None);
+        assert_eq!(h.counter.buckets(), vec![IP_BUCKET]);
+    }
 
-    // A JWT for a suspended person is the same 401.
-    let h = harness(Ok(invalid()));
-    let (r, _) = h.run(&route, &params, Ok(jwt())).await;
-    assert_eq!(r.as_ref().err().map(Rejection::status), Some(401));
-
-    // A key of the wrong shape never reaches identity.
-    let h = harness(Ok(ok()));
-    let (r, cred) = h
-        .run(&route, &params, Ok(Presented::Key("plat5-sk-1-old".into())))
-        .await;
-    assert_eq!(
-        r.err(),
-        Some(Rejection::Unauthorized(AuthError::InvalidKey))
-    );
-    assert_eq!(cred.key_prefix, None);
-    assert_eq!(h.admit.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(h.counter.buckets(), vec![IP_BUCKET]);
-
-    // No credential, or a bad JWT → 401 without identity; the JWT's reason in details.
+    // No credential, or a JWT refused locally → 401 without identity, not counted;
+    // the JWT's reason in details.
     for err in [
         AuthError::MissingAuthorization,
+        AuthError::InvalidAuthorizationHeader,
         AuthError::InvalidToken {
             reason: "token_expired",
         },
         AuthError::MissingSubject,
     ] {
         let h = harness(Ok(ok()));
-        let (r, _) = h.run(&route, &params, Err(err.clone())).await;
+        let (r, _) = h.run(&read, Err(err.clone())).await;
         let rejection = r.err().unwrap();
         assert_eq!(rejection, Rejection::Unauthorized(err.clone()));
-        assert_eq!(h.admit.calls.load(Ordering::SeqCst), 0);
-        assert_eq!(h.counter.buckets(), vec![IP_BUCKET]);
-        let body = rejection.body(&route);
+        assert_eq!(h.calls(), 0);
+        assert!(h.counter.buckets().is_empty(), "{err:?} is not counted");
+        let body = rejection.body(&read.route);
         assert_eq!(
             body.message,
             "Authentication required: a sign-in token or an API key."
@@ -452,231 +461,244 @@ async fn admit_table() {
         assert_eq!(body.details, err.details());
     }
 
-    // found: false, or no member in the tree → 403 before the rate limit.
-    let mut no_member = ok();
-    no_member.member_id = None;
-    no_member.labels = vec![];
-    for answer in [not_found(), no_member] {
-        let h = harness(Ok(answer));
-        let (r, _) = h.run(&route, &params, Ok(Presented::Key(key()))).await;
-        assert_eq!(r.err(), Some(Rejection::NotFound));
-        assert_eq!(
-            h.counter.buckets(),
-            vec![IP_BUCKET],
-            "the tree's budget isn't spent"
-        );
-    }
-
-    // No route label → passes the rate limit (spending it), then 403.
-    let h = harness(Ok(answer_for(&route, &["project:write"])));
-    let (r, cred) = h.run(&route, &params, Ok(Presented::Key(key()))).await;
-    let passed = r.unwrap();
-    assert_eq!(h.counter.buckets(), vec![route_bucket]);
+    // member_id: null (no such node, or not in the tree) → 403 before the rate limit.
+    let h = harness(Ok(not_in_tree()));
+    let (r, cred) = h.run(&read, Ok(key())).await;
+    assert_eq!(r.err(), Some(Rejection::NotFound));
+    assert_eq!(cred.key_id.as_deref(), Some(KEY_ID));
     assert_eq!(
-        authorize(&route, &passed.admitted),
-        Err(Rejection::LabelDenied)
+        h.counter.buckets(),
+        vec![IP_BUCKET],
+        "the tree's budget isn't spent"
     );
-    assert_eq!(cred.member_id.as_deref(), Some("m_1"));
-    assert_eq!(cred.root_id.as_deref(), Some("n_organization"));
-    assert_eq!(cred.node_id.as_deref(), Some("n_project"));
-    assert_eq!(cred.principal.as_deref(), Some("person"));
 
-    // Both 403s have one body, required_labels included.
-    let nf = Rejection::NotFound.body(&route);
-    let ld = Rejection::LabelDenied.body(&route);
-    assert_eq!(nf.to_json_bytes(Some("r")), ld.to_json_bytes(Some("r")));
+    // No route permission → passes the rate limit (spending it), then 403.
+    let h = harness(Ok(answer_for(&read.route, &["project:write"])));
+    let (r, cred) = h.run(&read, Ok(key())).await;
+    let passed = r.unwrap();
+    assert_eq!(h.counter.buckets(), vec![route_bucket.clone()]);
+    assert_eq!(
+        authorize(&read.route, &passed.admitted),
+        Err(Rejection::Denied)
+    );
+    assert_eq!(
+        cred,
+        RequestCredential {
+            auth_type: Some(AuthType::ApiKey),
+            key_id: Some(KEY_ID.into()),
+            principal: Some("person".into()),
+            root_id: Some(node_id("organization")),
+            node_id: Some(node_id("project")),
+            member_id: Some(MEMBER.into()),
+            user_id: None,
+        }
+    );
+
+    // Both 403s have one body, required_permissions included.
+    let nf = Rejection::NotFound.body(&read.route);
+    let denied = Rejection::Denied.body(&read.route);
+    assert_eq!(nf.to_json_bytes(Some("r")), denied.to_json_bytes(Some("r")));
     assert_eq!(
         nf.details,
-        Some(json!({ "required_labels": ["project:read"] }))
+        Some(json!({ "required_permissions": ["project:read"] }))
     );
-    assert_eq!(Rejection::NotFound.status(), 403);
 
-    // The label, or `*` → forwarded.
-    for labels in [&["project:read"][..], &["*"], &["a", "project:read"]] {
-        let h = harness(Ok(answer_for(&route, labels)));
-        assert!(
-            h.decide(&route, &params, Ok(Presented::Key(key())))
-                .await
-                .is_ok(),
-            "{labels:?}"
-        );
+    // The permission, or `*` → forwarded.
+    for permissions in [&["project:read"][..], &["*"], &["a", "project:read"]] {
+        let h = harness(Ok(answer_for(&read.route, permissions)));
+        assert!(h.decide(&read, Ok(key())).await.is_ok(), "{permissions:?}");
     }
 
-    // A `[]` route admits any member, with no labels at all.
-    let (list, list_params) = find(&snapshot, "GET", "/orgs/acme/projects");
-    assert!(list.required_labels.is_empty());
-    let h = harness(Ok(answer_for(list, &[])));
-    assert!(h.decide(list, &list_params, Ok(jwt())).await.is_ok());
+    // An any_member route admits a member with no permissions at all.
+    let list = find(&snapshot, "GET", "/orgs/acme/projects");
+    assert_eq!(list.route.required, Required::AnyMember);
+    let h = harness(Ok(answer_for(&list.route, &[])));
+    assert!(h.decide(&list, Ok(jwt())).await.is_ok());
 
-    // Identity down, non-2xx, or a missing field → 503, and nothing counted.
+    // Identity down, or an answer missing a node → 503, and nothing counted.
     let h = harness(Err("connection refused".into()));
-    let (r, _) = h.run(&route, &params, Ok(Presented::Key(key()))).await;
+    let (r, _) = h.run(&read, Ok(key())).await;
     assert_eq!(r.err(), Some(Rejection::Unavailable));
     assert!(h.counter.buckets().is_empty());
     let mut short = ok();
     short.nodes.pop();
     let h = harness(Ok(short));
-    let (r, _) = h.run(&route, &params, Ok(Presented::Key(key()))).await;
+    let (r, _) = h.run(&read, Ok(key())).await;
     assert_eq!(r.err(), Some(Rejection::Unavailable));
 
     // JWKS not loaded → 503.
     let h = harness(Ok(ok()));
-    let (r, _) = h
-        .run(&route, &params, Err(AuthError::JwtValidationUnavailable))
-        .await;
+    let (r, _) = h.run(&read, Err(AuthError::JwtValidationUnavailable)).await;
     assert_eq!(r.err(), Some(Rejection::Unavailable));
     assert!(h.counter.buckets().is_empty());
 }
 
 #[tokio::test]
+async fn a_jwt_is_sent_to_admit_as_its_issuer_subject_and_name() {
+    let snapshot = catalog();
+    let read = project_read(&snapshot);
+    let h = harness(Ok(AdmitAnswer {
+        key_id: None,
+        ..answer_for(&read.route, &["project:read"])
+    }));
+    let (admitted, _) = h.decide(&read, Ok(jwt())).await.unwrap();
+    assert_eq!(
+        h.last_request().credential,
+        AdmitCredential::Idp {
+            issuer: "https://auth".into(),
+            subject: "sub-1".into(),
+            name: Some("Dana".into()),
+        }
+    );
+    let Admitted::Caller(c) = admitted else {
+        panic!()
+    };
+    assert_eq!(
+        (c.auth_type, c.kid.as_deref(), c.key_id),
+        (AuthType::Jwt, Some("kid-1"), None)
+    );
+}
+
+#[tokio::test]
 async fn the_failed_auth_limiter_answers_once_exceeded() {
     let snapshot = catalog();
-    let (route, params) = project_read(&snapshot);
+    let read = project_read(&snapshot);
     let h = harness_with(
-        Ok(not_found()),
-        Limit {
-            requests: 60,
-            window_seconds: 60,
-        },
+        Ok(not_in_tree()),
         Limit {
             requests: 2,
             window_seconds: 30,
         },
     );
     for _ in 0..2 {
-        let (r, _) = h.run(&route, &params, Ok(Presented::Key(key()))).await;
+        let (r, _) = h.run(&read, Ok(key())).await;
         assert_eq!(r.err(), Some(Rejection::NotFound));
     }
-    let (r, _) = h.run(&route, &params, Ok(Presented::Key(key()))).await;
-    assert_eq!(
-        r.err(),
-        Some(Rejection::RateLimited {
-            retry_after: 30,
-            info: None
-        })
+    let limited = Some(Rejection::RateLimited {
+        retry_after: 30,
+        info: None,
+    });
+    let (r, _) = h.run(&read, Ok(key())).await;
+    assert_eq!(r.err(), limited);
+    // A JWT refused locally still answers 401: it costs no Valkey trip.
+    let (r, _) = h
+        .run(
+            &read,
+            Err(AuthError::InvalidToken {
+                reason: "token_expired",
+            }),
+        )
+        .await;
+    assert_eq!(r.err().map(|r| r.status()), Some(401));
+
+    // Off at 0.
+    let h = harness_with(
+        Ok(invalid()),
+        Limit {
+            requests: 0,
+            window_seconds: 60,
+        },
     );
-    // Unmatched 404s count against the same limiter.
-    assert_eq!(
-        h.pipeline.note_unadmitted(IP).await,
-        Some(Rejection::RateLimited {
-            retry_after: 30,
-            info: None
-        })
-    );
+    let (r, _) = h.run(&read, Ok(key())).await;
+    assert_eq!(r.err().map(|r| r.status()), Some(401));
+    assert!(h.counter.buckets().is_empty());
 }
 
 #[tokio::test]
 async fn restore_admits_a_deleted_node_through_its_own_entry() {
     let snapshot = catalog();
-    let (read, params) = project_read(&snapshot);
-    let (restore, _) = find(&snapshot, "POST", "/orgs/acme/projects/web/restore");
-    assert!(restore.resolve_deleted);
-    let h = harness(Ok(not_found()));
-    let (r, _) = h.run(&read, &params, Ok(Presented::Key(key()))).await;
+    let read = project_read(&snapshot);
+    let restore = find(&snapshot, "POST", "/orgs/acme/projects/web/restore");
+    assert!(restore.route.allow_deleted);
+    let h = harness(Ok(not_in_tree()));
+    let (r, _) = h.run(&read, Ok(key())).await;
     assert_eq!(r.err(), Some(Rejection::NotFound));
     // The deleted project resolves on the restore route; the read's cached
-    // not-found must not answer it.
-    h.set_answer(answer_for(restore, &["project:delete"]));
-    assert!(h
-        .decide(restore, &params, Ok(Presented::Key(key())))
-        .await
-        .is_ok());
-    assert_eq!(h.admit.calls.load(Ordering::SeqCst), 2);
+    // refusal must not answer it.
+    h.set_answer(answer_for(&restore.route, &["project:delete"]));
+    assert!(h.decide(&restore, Ok(key())).await.is_ok());
+    assert_eq!(h.calls(), 2);
 }
 
 #[tokio::test]
-async fn sign_in_routes_send_the_directory_member_and_no_nodes() {
+async fn user_routes_send_the_user_and_no_nodes() {
     let snapshot = catalog();
-    let (me, params) = find(&snapshot, "GET", "/me");
-    let h = harness(Ok(AdmitAnswer {
-        nodes: vec![],
-        member_id: Some("m_dir".into()),
-        ..admitted(&[], &[])
-    }));
-    let (admitted, fwd) = h.decide(me, &params, Ok(jwt())).await.unwrap();
-    let req = h.admit.last.lock().unwrap().clone().unwrap();
-    assert_eq!(req.scope, "directory");
-    assert!(req.chain.is_empty());
-    assert_eq!(fwd.path.as_deref(), Some("/members/m_dir"));
+    let me = find(&snapshot, "GET", "/user");
+    let h = harness(Ok(user()));
+    let (admitted, fwd) = h.decide(&me, Ok(jwt())).await.unwrap();
+    assert!(h.last_request().chain.is_empty());
+    assert_eq!(fwd.path, format!("/users/{USER}"));
     assert_eq!(
         fwd.headers,
         vec![
-            (MEMBER_ID_HEADER.to_string(), "m_dir".to_string()),
+            (USER_ID_HEADER.to_string(), USER.to_string()),
             (PRINCIPAL_HEADER.to_string(), "person".to_string()),
         ]
     );
     let Admitted::Caller(c) = admitted else {
         panic!()
     };
-    assert_eq!(c.root_id(), None);
-    assert_eq!(c.kid.as_deref(), Some("kid-1"));
+    assert_eq!((c.root_id(), c.member_id.as_deref()), (None, None));
+    assert_eq!(h.counter.buckets(), vec![format!("default:user:{USER}")]);
+
+    // A service account's key: identity answers valid: false, and it's a 401.
+    let h = harness(Ok(invalid()));
+    let (r, _) = h.run(&me, Ok(key())).await;
+    let rejection = r.err().unwrap();
+    assert_eq!(rejection.status(), 401);
     assert_eq!(
-        h.counter.buckets(),
-        vec!["GET /me m_dir"],
-        "a sign-in route counts at the caller's directory member"
-    );
-    assert_eq!(
-        Rejection::Unauthorized(AuthError::InvalidKey)
-            .body(me)
-            .message,
+        rejection.body(&me.route).message,
         "Authentication required: a sign-in token or a personal API key."
     );
 }
 
-fn policies_service() -> Value {
+fn e10s() -> Value {
+    let route =
+        |path: &str, method: &str, scope: &str, upstream: &str, required: Value, limits: Value| {
+            json!({ "path": path, "method": method, "scope": scope, "upstream": upstream,
+                "required_permissions": required, "rate_limit": limits,
+                "audit": false, "allow_deleted": false })
+        };
     json!({
         "e10s": {
             "url": "http://e10s:3000",
-            "rate_limits": {
-                "per-project": { "requests": 3, "window_seconds": 1, "count_at": "project" },
-                "per-org": { "requests": 2, "window_seconds": 10, "count_at": "organization", "shared": true },
-                "per-node": { "requests": 50, "window_seconds": 60 }
-            },
-            "routes": [{
-                "path": "/orgs/{organization}/projects/{project}/check",
-                "scope": "project",
-                "upstream": "/projects/{subject.project_id}/check",
-                "methods": ["POST"],
-                "required_labels": ["check"],
-                "rate_limit": ["per-project", "per-org", "per-node"]
-            }, {
-                "path": "/orgs/{organization}/projects/{project}/free",
-                "scope": "project",
-                "upstream": "/projects/{subject.project_id}/free",
-                "methods": ["GET"],
-                "required_labels": [],
-                "rate_limit": false
-            }, {
-                "path": "/health",
-                "scope": "public",
-                "methods": ["GET"]
-            }, {
-                "path": "/forged",
-                "scope": "public",
-                "upstream": "/forged",
-                "methods": ["GET"]
-            }]
+            "timeouts": { "connect": "2s", "read": "30s" },
+            "max_body_bytes": 1048576,
+            "routes": [
+                route("/orgs/{organization}/projects/{project}/check", "POST", "project",
+                      "/projects/{project.id}/check", json!(["check"]),
+                      json!(["evals-caller", "evals-org"])),
+                route("/orgs/{organization}/projects/{project}/free", "GET", "project",
+                      "/projects/{project.id}/free", json!("any_member"), json!([])),
+                route("/orgs/{organization}/projects/{project}/plans/{plan_id}", "GET", "project",
+                      "/projects/{project.id}/plans/{plan_id}", json!(["project:read"]), json!([])),
+                route("/health", "GET", "public", "/health", json!(null), json!(["default"])),
+            ]
         }
     })
 }
 
-#[tokio::test]
-async fn several_policies_each_count_at_their_node_and_all_must_pass() {
-    let snapshot = snapshot_with(policies_service());
-    let (route, params) = find(&snapshot, "POST", "/orgs/acme/projects/web/check");
-    let h = harness(Ok(answer_for(route, &["check"])));
+fn e10s_limits() -> Value {
+    json!({
+        "evals-caller": { "requests": 3, "window_seconds": 1 },
+        "evals-org": { "requests": 2, "window_seconds": 10, "count_at": "organization" }
+    })
+}
 
-    let (r, _) = h.run(route, &params, Ok(Presented::Key(key()))).await;
-    let passed = r.unwrap();
+#[tokio::test]
+async fn policies_count_per_caller_or_at_count_at_all_at_once() {
+    let snapshot = snapshot_with(e10s(), e10s_limits());
+    let check = find(&snapshot, "POST", "/orgs/acme/projects/web/check");
+    let h = harness(Ok(answer_for(&check.route, &["check"])));
+    let caller_bucket = format!("evals-caller:{}:{MEMBER}", node_id("project"));
+    let org_bucket = format!("evals-org:{}", node_id("organization"));
+
+    let passed = h.run(&check, Ok(key())).await.0.unwrap();
     assert_eq!(
         h.counter.buckets(),
-        vec![
-            "e10s:per-project:n_project",
-            "per-org:n_organization",
-            "e10s:per-node:n_project",
-        ]
+        vec![caller_bucket.clone(), org_bucket.clone()]
     );
-    // The tightest: the fewest left. per-org has 1 of 2.
+    // The tightest: the fewest left. The org has 1 of 2.
     assert_eq!(
         passed.rate_limit,
         Some(RateLimitInfo {
@@ -686,10 +708,9 @@ async fn several_policies_each_count_at_their_node_and_all_must_pass() {
         })
     );
 
-    // The org's budget runs out first; every policy still counts.
-    let (r, _) = h.run(route, &params, Ok(Presented::Key(key()))).await;
-    assert!(r.is_ok());
-    let (r, _) = h.run(route, &params, Ok(Presented::Key(key()))).await;
+    // The org's budget runs out first; the refused request spends nothing.
+    assert!(h.run(&check, Ok(key())).await.0.is_ok());
+    let (r, _) = h.run(&check, Ok(key())).await;
     assert_eq!(
         r.err(),
         Some(Rejection::RateLimited {
@@ -701,102 +722,65 @@ async fn several_policies_each_count_at_their_node_and_all_must_pass() {
             }),
         })
     );
-    assert_eq!(h.counter.count("e10s:per-project:n_project"), 3);
-    assert_eq!(h.counter.count("e10s:per-node:n_project"), 3);
-
-    // Two exceeded: the longest wait.
-    let (r, _) = h.run(route, &params, Ok(Presented::Key(key()))).await;
-    let Err(Rejection::RateLimited { retry_after, info }) = r else {
-        panic!()
-    };
-    assert_eq!(retry_after, 10);
-    assert_eq!(info.unwrap().remaining, 0);
+    assert_eq!(
+        h.counter.count(&caller_bucket),
+        2,
+        "refused requests spend nothing"
+    );
+    assert_eq!(h.counter.count(&org_bucket), 2);
 }
 
 #[tokio::test]
-async fn fallback_unlimited_and_public_buckets() {
-    let snapshot = snapshot_with(policies_service());
+async fn no_policy_counts_nowhere_and_public_counts_by_ip() {
+    let snapshot = snapshot_with(e10s(), e10s_limits());
 
-    // The fallback counts at the route's own node.
-    let (route, params) = project_read(&snapshot);
-    let h = harness(Ok(answer_for(&route, &["project:read"])));
-    h.run(&route, &params, Ok(Presented::Key(key())))
-        .await
-        .0
-        .unwrap();
-    assert_eq!(
-        h.counter.buckets(),
-        vec!["GET /orgs/{organization}/projects/{project} n_project"]
-    );
-
-    // `rate_limit: false` counts nowhere; a fallback of 0 is unlimited.
-    let (free, free_params) = find(&snapshot, "GET", "/orgs/acme/projects/web/free");
-    let h = harness(Ok(answer_for(free, &[])));
-    let passed = h
-        .run(free, &free_params, Ok(Presented::Key(key())))
-        .await
-        .0
-        .unwrap();
-    assert!(passed.rate_limit.is_none() && h.counter.buckets().is_empty());
-    let h = harness_with(
-        Ok(answer_for(&route, &["project:read"])),
-        Limit {
-            requests: 0,
-            window_seconds: 60,
-        },
-        Limit {
-            requests: 60,
-            window_seconds: 60,
-        },
-    );
-    let passed = h
-        .run(&route, &params, Ok(Presented::Key(key())))
-        .await
-        .0
-        .unwrap();
+    let free = find(&snapshot, "GET", "/orgs/acme/projects/web/free");
+    let h = harness(Ok(answer_for(&free.route, &[])));
+    let passed = h.run(&free, Ok(key())).await.0.unwrap();
     assert!(passed.rate_limit.is_none() && h.counter.buckets().is_empty());
 
-    // A public route skips admit, counts by client IP and sends no subject.
-    let (health, health_params) = find(&snapshot, "GET", "/health");
+    // A public route skips admit, counts by client IP and sends no caller.
+    let health = find(&snapshot, "GET", "/health");
     let h = harness(Ok(invalid()));
     let (admitted, fwd) = h
-        .decide(health, &health_params, Err(AuthError::MissingAuthorization))
+        .decide(&health, Err(AuthError::MissingAuthorization))
         .await
         .unwrap();
     assert_eq!(admitted, Admitted::Public);
-    assert_eq!(h.admit.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(h.counter.buckets(), vec![format!("GET /health {IP}")]);
+    assert_eq!(h.calls(), 0);
+    assert_eq!(h.counter.buckets(), vec![format!("default:ip:{IP}")]);
     assert_eq!(
         fwd,
         Forward {
-            path: None,
+            path: "/health".into(),
             headers: vec![]
         }
     );
 }
 
 #[tokio::test]
-async fn a_bad_path_param_is_400_and_a_bad_subject_id_500() {
-    let snapshot = catalog();
-    let (route, mut params) = find(&snapshot, "DELETE", "/orgs/acme/projects/web/bindings/b_1");
-    params.insert("binding_id".into(), "b/1".into());
-    let h = harness(Ok(answer_for(route, &["*"])));
-    let err = h
-        .decide(route, &params, Ok(Presented::Key(key())))
-        .await
-        .err();
-    assert_eq!(err.as_ref().map(Rejection::status), Some(400));
-
-    let (route, params) = project_read(&snapshot);
-    let mut bad = answer_for(&route, &["*"]);
-    bad.nodes[1] = NodeRef {
-        kind: "project".into(),
-        id: "n/x".into(),
-    };
-    let h = harness(Ok(bad));
-    let err = h
-        .decide(&route, &params, Ok(Presented::Key(key())))
-        .await
-        .err();
-    assert_eq!(err.as_ref().map(Rejection::status), Some(500));
+async fn a_param_that_would_change_the_upstream_path_is_400() {
+    let snapshot = snapshot_with(e10s(), e10s_limits());
+    for value in ["..", ".", "%2e%2e", "a%2Fb", "a%3Fb"] {
+        let plan = find(
+            &snapshot,
+            "GET",
+            &format!("/orgs/acme/projects/web/plans/{value}"),
+        );
+        assert_eq!(plan.params["plan_id"], value);
+        let h = harness(Ok(answer_for(&plan.route, &["project:read"])));
+        assert_eq!(
+            h.decide(&plan, Ok(key())).await.err(),
+            Some(Rejection::BadPathParam),
+            "{value}"
+        );
+    }
+    let plan = find(&snapshot, "GET", "/orgs/acme/projects/web/plans/pro.v2");
+    let h = harness(Ok(answer_for(&plan.route, &["project:read"])));
+    let (_, fwd) = h.decide(&plan, Ok(key())).await.unwrap();
+    assert_eq!(
+        fwd.path,
+        format!("/projects/{}/plans/pro.v2", node_id("project"))
+    );
+    assert_eq!(Rejection::BadPathParam.status(), 400);
 }

@@ -110,10 +110,19 @@ pub async fn write_rate_limited(
     Ok(true)
 }
 
+const SECURITY_HEADERS: &[(&str, &str)] = &[
+    ("X-Content-Type-Options", "nosniff"),
+    ("X-Frame-Options", "DENY"),
+    ("Referrer-Policy", "strict-origin-when-cross-origin"),
+];
+
+/// Each security header the response hasn't set (docs/reference/gateway.md#security-headers).
 pub fn apply_security_headers(header: &mut ResponseHeader) -> Result<()> {
-    header.insert_header("X-Content-Type-Options", "nosniff")?;
-    header.insert_header("X-Frame-Options", "DENY")?;
-    header.insert_header("Referrer-Policy", "strict-origin-when-cross-origin")?;
+    for (name, value) in SECURITY_HEADERS {
+        if !header.headers.contains_key(*name) {
+            header.insert_header(*name, *value)?;
+        }
+    }
     Ok(())
 }
 
@@ -137,5 +146,21 @@ pub async fn write_rejection(
             write_rate_limited(cors, session, ctx, retry_after, info.as_ref()).await
         }
         other => write_json_error(cors, session, ctx, other.status(), other.body(route)).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn security_headers_fill_only_what_the_upstream_left_unset() {
+        let mut h = ResponseHeader::build(200, None).unwrap();
+        h.insert_header("X-Frame-Options", "SAMEORIGIN").unwrap();
+        apply_security_headers(&mut h).unwrap();
+        let get = |name: &str| h.headers.get(name).unwrap().to_str().unwrap().to_string();
+        assert_eq!(get("X-Frame-Options"), "SAMEORIGIN");
+        assert_eq!(get("X-Content-Type-Options"), "nosniff");
+        assert_eq!(get("Referrer-Policy"), "strict-origin-when-cross-origin");
     }
 }

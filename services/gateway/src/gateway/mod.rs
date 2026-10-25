@@ -4,10 +4,8 @@ mod cors;
 mod response;
 mod upstream;
 
-use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
@@ -35,21 +33,17 @@ use crate::pipeline::{
     RequestCredential,
 };
 use crate::rate_limit::RateLimiter;
-use crate::route_map::{Route, Scope};
+use crate::route_map::{Matched, Required, Route, Scope};
 
 pub use client_ip::TrustedProxies;
 pub use context::GatewayContext;
 pub use cors::CorsPolicy;
 
-const MAX_BODY_SIZE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
-
 pub struct Gateway {
     authenticator: Authenticator,
     pipeline: GatewayPipeline,
-    /// Kinds, routes and CORS from the control plane, swapped whole on each change.
+    /// Routes, rate limits and CORS from the control plane, swapped whole on each change.
     snapshot: Arc<ArcSwap<Snapshot>>,
-    connect_timeout: Duration,
-    read_timeout: Duration,
     audit: Audit,
     trusted_proxies: TrustedProxies,
 }
@@ -62,27 +56,18 @@ impl Gateway {
         limiter: RateLimiter,
         audit: Audit,
     ) -> Self {
-        let admit = HttpAdmit::new(
-            cfg.admit_url.clone(),
-            InternalHttpClient::new(cfg.internal_auth_token.clone()),
-        );
+        let admit = HttpAdmit::new(&cfg.identity_internal_url, InternalHttpClient::new());
         Self {
             authenticator: Authenticator::new(jwt_validator, cfg.auth_subject_claim.clone()),
             pipeline: Pipeline::new(
-                AdmitCache::new(admit, Duration::from_secs(cfg.apikey_cache_ttl_secs)),
+                AdmitCache::new(admit, cfg.admit_cache_ttl, cfg.admit_negative_cache_ttl),
                 limiter,
-                Limit {
-                    requests: cfg.rate_limit_requests,
-                    window_seconds: cfg.rate_limit_window_seconds,
-                },
                 Limit {
                     requests: cfg.rate_limit_auth_failure_requests,
                     window_seconds: cfg.rate_limit_auth_failure_window_seconds,
                 },
             ),
             snapshot,
-            connect_timeout: cfg.upstream_connect_timeout,
-            read_timeout: cfg.upstream_read_timeout,
             audit,
             trusted_proxies: cfg.trusted_proxies.clone(),
         }
@@ -99,8 +84,7 @@ impl Gateway {
         let mut header = ResponseHeader::build(204, None)?;
         response::apply_security_headers(&mut header)?;
         self.cors()
-            .apply(&mut header, ctx.request_origin.as_deref())?;
-        header.insert_header("Access-Control-Max-Age", "86400")?;
+            .apply_preflight(&mut header, ctx.request_origin.as_deref())?;
         session
             .write_response_header(Box::new(header), true)
             .await?;
@@ -121,12 +105,12 @@ impl Gateway {
         let Ok(len) = len_str.parse::<u64>() else {
             return Ok(None);
         };
-        if len <= MAX_BODY_SIZE_BYTES {
+        if len <= ctx.max_body_bytes {
             return Ok(None);
         }
         warn!(
             content_length = len,
-            max_body_size = MAX_BODY_SIZE_BYTES,
+            max_body_size = ctx.max_body_bytes,
             "request body too large"
         );
         Ok(Some(
@@ -135,40 +119,30 @@ impl Gateway {
                 session,
                 ctx,
                 413,
-                ApiError::payload_too_large(MAX_BODY_SIZE_BYTES),
+                ApiError::payload_too_large(ctx.max_body_bytes),
             )
             .await?,
         ))
     }
 
-    /// The matched route, its params, and the sign-in kind's name claim, from one snapshot.
-    fn resolve_route(
-        &self,
-        path: &str,
-        method: &str,
-    ) -> Option<(Route, HashMap<String, String>, String)> {
+    /// The matched route and the name claim, from one snapshot.
+    fn resolve_route(&self, path: &str, method: &str) -> Option<(Matched, String)> {
         let snapshot = self.snapshot.load();
         snapshot
             .routes
             .find_route(path, method)
-            .map(|(route, params)| {
-                (
-                    route.clone(),
-                    params,
-                    snapshot.kinds.name_claim().to_string(),
-                )
-            })
+            .map(|matched| (matched, snapshot.name_claim.clone()))
     }
 
     async fn prepare_upstream(
         &self,
         session: &mut Session,
         ctx: &mut GatewayContext,
-        route: &Route,
-        params: &HashMap<String, String>,
+        matched: &Matched,
         name_claim: &str,
         request_id: &str,
     ) -> Result<bool> {
+        let route = &matched.route;
         if let Err(err) = session
             .req_header_mut()
             .insert_header("X-Request-ID", request_id)
@@ -199,10 +173,9 @@ impl Gateway {
             }
         };
         // request_filter has entered the root span: a JWT's kid is recorded on it.
-        let method = ctx.method_label().to_string();
         let decided = self
             .pipeline
-            .admit_and_limit(route, params, &method, &ip, presented, &mut ctx.credential)
+            .admit_and_limit(matched, &ip, presented, &mut ctx.credential)
             .await;
         let passed = match decided {
             Ok(passed) => passed,
@@ -214,51 +187,53 @@ impl Gateway {
         ctx.rate_limit = passed.rate_limit;
         let admitted = passed.admitted;
         upstream::record_admission_span(ctx, &admitted);
+        let caller = match &admitted {
+            Admitted::Caller(c) => Some(c),
+            Admitted::Public => None,
+        };
+        let audited = self.audit.enabled() && route.audit;
 
-        // Audited: the intent is written before anything past the limiter can answer,
-        // and nothing reaches the service unless it is (docs/concepts/audit.md#delivery).
-        if let Admitted::Caller(caller) = &admitted {
-            if self.audit.enabled() && route.audited(ctx.method_label()) {
-                ctx.audit = Some(AuditState::default());
-                ctx.audit_sign_in_route = matches!(route.scope, Scope::SignIn(_));
-                let intent = audit_intent(session, ctx, route, params, caller, request_id, &ip);
-                if self.audit.write_intent(&intent).await.is_err() {
-                    return response::write_rejection(
-                        &self.cors(),
-                        session,
-                        ctx,
-                        route,
-                        Rejection::Unavailable,
-                    )
-                    .await;
-                }
-            }
-        }
-
-        // After the limiter, so a label-denied request still spends budget.
-        if let Err(rejection) = authorize(route, &admitted) {
-            if let Admitted::Caller(caller) = &admitted {
-                log_label_denied(ctx, route, caller);
-            }
-            return response::write_rejection(&self.cors(), session, ctx, route, rejection).await;
-        }
-
-        let forwarding = match forward(route, params, &admitted) {
+        // After the limiter, so a denied request still spends budget.
+        let forwarding = authorize(route, &admitted).and_then(|()| forward(matched, &admitted));
+        let forwarding = match forwarding {
             Ok(f) => f,
             Err(rejection) => {
+                if let Some(caller) = caller {
+                    if rejection == Rejection::Denied {
+                        log_permission_denied(ctx, route, caller);
+                    }
+                    // A refusal after admit is one background event.
+                    if audited {
+                        let intent = audit_intent(session, ctx, matched, caller, request_id, &ip);
+                        self.audit
+                            .send_rejected(intent, rejection.status(), request_context(ctx));
+                    }
+                }
                 return response::write_rejection(&self.cors(), session, ctx, route, rejection)
-                    .await
+                    .await;
             }
         };
-        if let Err(err) = upstream::build_and_store_upstream_peer(
-            session,
-            ctx,
-            route,
-            forwarding,
-            route.timeouts.connect.unwrap_or(self.connect_timeout),
-            route.timeouts.read.unwrap_or(self.read_timeout),
-        )
-        .await
+
+        // Audited: nothing reaches the service unless the intent is written
+        // (docs/concepts/audit.md#delivery).
+        if let (Some(caller), true) = (caller, audited) {
+            ctx.audit = Some(AuditState::default());
+            ctx.audit_user_route = route.scope == Scope::User;
+            let intent = audit_intent(session, ctx, matched, caller, request_id, &ip);
+            if self.audit.write_intent(&intent).await.is_err() {
+                return response::write_rejection(
+                    &self.cors(),
+                    session,
+                    ctx,
+                    route,
+                    Rejection::Unavailable,
+                )
+                .await;
+            }
+        }
+
+        if let Err(err) =
+            upstream::build_and_store_upstream_peer(session, ctx, route, forwarding).await
         {
             let status = match err {
                 upstream::UpstreamError::Internal => 500,
@@ -275,6 +250,13 @@ impl Gateway {
         }
         Ok(false)
     }
+}
+
+/// The request's trace, for a write that lands after the response.
+fn request_context(ctx: &GatewayContext) -> opentelemetry::Context {
+    ctx.root_span()
+        .map(|span| span.context())
+        .unwrap_or_default()
 }
 
 /// The client IP for audit and the IP limits ([`client_ip`]). A peer that is
@@ -302,8 +284,7 @@ fn client_ip(session: &Session, trusted: &TrustedProxies) -> String {
 fn audit_intent(
     session: &Session,
     ctx: &GatewayContext,
-    route: &Route,
-    params: &HashMap<String, String>,
+    matched: &Matched,
     caller: &Caller,
     request_id: &str,
     ip: &str,
@@ -311,22 +292,18 @@ fn audit_intent(
     audit::Intent {
         request_id: request_id.to_string(),
         occurred_at: audit::rfc3339_millis(ctx.received_at),
-        root_id: caller.root_id().map(str::to_string),
         nodes: caller.nodes.clone(),
         actor: audit::Actor {
             member_id: caller.member_id.clone(),
+            user_id: caller.user_id.clone(),
             principal: caller.principal.clone(),
             auth_type: caller.auth_type.as_str(),
-            key_prefix: caller.key_prefix.clone(),
+            key_id: caller.key_id.clone(),
         },
-        service: route.service.clone(),
-        method: ctx.method_label().to_string(),
-        route: route.path.clone(),
-        params: params
-            .iter()
-            .filter(|(name, _)| !route.is_chain_param(name))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect(),
+        service: matched.route.service.clone(),
+        method: matched.route.method.clone(),
+        route: matched.route.path.clone(),
+        params: matched.params.clone(),
         ip: ip.to_string(),
         user_agent: session
             .req_header()
@@ -362,19 +339,22 @@ struct RequestLog<'a> {
     credential: &'a RequestCredential,
 }
 
-/// `[a,b]`: a label list as one log field.
-fn label_list(labels: &[String]) -> String {
-    format!("[{}]", labels.join(","))
+/// `[a,b]`: a permission list as one log field.
+fn permission_list(permissions: &[String]) -> String {
+    format!("[{}]", permissions.join(","))
 }
 
-/// The why of a label-denied 403, next to the request line
-/// (docs/reference/telemetry.md#gateway-label-denied-line). Any one of
-/// `required_labels` would have admitted, so all of them are missing. `labels` is
-/// the caller's on the node; the gateway never sees roles or bindings. Log only:
-/// services and the 403 body never get the caller's labels.
-fn log_label_denied(ctx: &GatewayContext, route: &Route, caller: &Caller) {
-    let required = label_list(&route.required_labels);
-    let labels = label_list(&caller.labels);
+/// The why of a permission-denied 403, next to the request line
+/// (docs/reference/telemetry.md#gateway-permission-denied-line). Any one of
+/// `required_permissions` would have admitted. `permissions` is the caller's on the
+/// node; the gateway never sees roles or bindings. Log only: services and the 403
+/// body never get the caller's permissions.
+fn log_permission_denied(ctx: &GatewayContext, route: &Route, caller: &Caller) {
+    let required = match &route.required {
+        Required::AnyOf(list) => permission_list(list),
+        Required::AnyMember => "any_member".to_string(),
+        Required::Nothing => "[]".to_string(),
+    };
     let cred = &ctx.credential;
     warn!(
         request_id = ctx.request_id.as_deref(),
@@ -382,22 +362,20 @@ fn log_label_denied(ctx: &GatewayContext, route: &Route, caller: &Caller) {
         method = %ctx.method_label(),
         status = 403u16,
         auth_type = cred.auth_type.map(|t| t.as_str()),
-        key_prefix = cred.key_prefix.as_deref(),
+        key_id = cred.key_id.as_deref(),
         principal = cred.principal.as_deref(),
         root_id = cred.root_id.as_deref(),
         node_id = cred.node_id.as_deref(),
         member_id = cred.member_id.as_deref(),
-        required_labels = %required,
-        missing_labels = %required,
-        labels = %labels,
-        "required_labels denied"
+        required_permissions = %required,
+        permissions = %permission_list(&caller.permissions),
+        "required_permissions denied"
     );
 }
 
 /// One line per request (docs/reference/telemetry.md#gateway-request-line). Credential
-/// fields are present only when known: `key_prefix` as soon as an `X-API-Key` of the
-/// right shape is presented (so 401 and 403 carry it), the ids once admitted. Never
-/// the key or token itself, never a person's principal id.
+/// fields are present only when known: `key_id` once admit recognized a key, the ids
+/// once admitted. Never the key or token itself, never a principal id.
 fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
     let RequestLog {
         request_id,
@@ -410,11 +388,12 @@ fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
         credential,
     } = log;
     let auth_type = credential.auth_type.map(|t| t.as_str());
-    let key_prefix = credential.key_prefix.as_deref();
+    let key_id = credential.key_id.as_deref();
     let principal = credential.principal.as_deref();
     let root_id = credential.root_id.as_deref();
     let node_id = credential.node_id.as_deref();
     let member_id = credential.member_id.as_deref();
+    let user_id = credential.user_id.as_deref();
 
     match error {
         Some(err) => {
@@ -427,11 +406,12 @@ fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
                 status,
                 duration_ms,
                 auth_type,
-                key_prefix,
+                key_id,
                 principal,
                 root_id,
                 node_id,
                 member_id,
+                user_id,
                 error = %err,
                 "request failed"
             );
@@ -446,11 +426,12 @@ fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
                 status,
                 duration_ms,
                 auth_type,
-                key_prefix,
+                key_id,
                 principal,
                 root_id,
                 node_id,
                 member_id,
+                user_id,
                 "request completed"
             );
         }
@@ -491,31 +472,9 @@ impl ProxyHttp for Gateway {
             return self.handle_preflight(session, ctx).await;
         }
 
-        if let Some(done) = self.reject_oversized_content_length(session, ctx).await? {
-            return Ok(done);
-        }
-
-        let Some((route, params, name_claim)) = self.resolve_route(&path, &method) else {
+        // Unmatched: 404, not counted by the failed-auth limiter.
+        let Some((matched, name_claim)) = self.resolve_route(&path, &method) else {
             warn!("no matching route");
-            let ip = client_ip(session, &self.trusted_proxies);
-            if let Some(limited) = self.pipeline.note_unadmitted(&ip).await {
-                return match limited {
-                    Rejection::RateLimited { retry_after, .. } => {
-                        response::write_rate_limited(&self.cors(), session, ctx, retry_after, None)
-                            .await
-                    }
-                    other => {
-                        response::write_json_error(
-                            &self.cors(),
-                            session,
-                            ctx,
-                            other.status(),
-                            ApiError::service_unavailable(),
-                        )
-                        .await
-                    }
-                };
-            }
             return response::write_json_error(
                 &self.cors(),
                 session,
@@ -526,14 +485,19 @@ impl ProxyHttp for Gateway {
             .await;
         };
 
+        let route = &matched.route;
         ctx.route = Some(route.path.clone());
+        ctx.max_body_bytes = route.max_body_bytes;
         if let Some(ref span) = ctx.root_span {
             span.record("http.route", route.path.as_str());
             span.context()
                 .span()
                 .update_name(format!("{} {}", method, route.path));
         }
-        self.prepare_upstream(session, ctx, &route, &params, &name_claim, &request_id)
+        if let Some(done) = self.reject_oversized_content_length(session, ctx).await? {
+            return Ok(done);
+        }
+        self.prepare_upstream(session, ctx, &matched, &name_claim, &request_id)
             .await
     }
 
@@ -546,10 +510,10 @@ impl ProxyHttp for Gateway {
     ) -> Result<()> {
         if let Some(chunk) = body {
             ctx.body_bytes = ctx.body_bytes.saturating_add(chunk.len() as u64);
-            if ctx.body_bytes > MAX_BODY_SIZE_BYTES {
+            if ctx.body_bytes > ctx.max_body_bytes {
                 warn!(
                     body_bytes = ctx.body_bytes,
-                    max_body_size = MAX_BODY_SIZE_BYTES,
+                    max_body_size = ctx.max_body_bytes,
                     "request body exceeded maximum during streaming"
                 );
                 return Err(Error::new(ErrorType::HTTPStatus(413)));
@@ -578,7 +542,7 @@ impl ProxyHttp for Gateway {
 
         if code > 0 && session.response_written().is_none() {
             let error = match code {
-                413 => ApiError::payload_too_large(MAX_BODY_SIZE_BYTES),
+                413 => ApiError::payload_too_large(ctx.max_body_bytes),
                 502 => ApiError::service_unavailable(),
                 _ => ApiError::internal_error(),
             };
@@ -645,13 +609,19 @@ impl ProxyHttp for Gateway {
         };
         let details = header(audit::DETAILS_HEADER);
         let created = header(audit::CREATED_HEADER);
-        let named_root = header(audit::ROOT_HEADER);
+        let named_nodes = header(audit::NODES_HEADER);
         let named_member = header(audit::MEMBER_HEADER);
-        for name in audit::SERVICE_HEADERS {
-            upstream_response.remove_header(*name);
+        let service_headers: Vec<_> = upstream_response
+            .headers
+            .keys()
+            .filter(|name| name.as_str().starts_with(audit::SERVICE_HEADER_PREFIX))
+            .cloned()
+            .collect();
+        for name in service_headers {
+            upstream_response.remove_header(&name);
         }
         let route_label = ctx.route_label().to_string();
-        let sign_in_route = ctx.audit_sign_in_route;
+        let user_route = ctx.audit_user_route;
         if let Some(state) = ctx.audit.as_mut() {
             let status = upstream_response.status.as_u16();
             state.upstream_status = Some(status);
@@ -670,19 +640,19 @@ impl ProxyHttp for Gateway {
                     warn!(route = %route_label, "ignoring an invalid audit created id");
                 }
             }
-            // The root pair adds a log only on a sign-in route's success, and only as a pair.
-            if named_root.is_some() || named_member.is_some() {
-                let pair = named_root
+            // Named nodes add logs only on a user route's success, and only as a pair.
+            if named_nodes.is_some() || named_member.is_some() {
+                let pair = named_nodes
                     .as_deref()
-                    .and_then(audit::parse_id)
+                    .and_then(audit::parse_nodes)
                     .zip(named_member.as_deref().and_then(audit::parse_id));
-                if sign_in_route && (200..300).contains(&status) && pair.is_some() {
+                if user_route && (200..300).contains(&status) && pair.is_some() {
                     state.named = pair;
                 } else {
                     warn!(
                         route = %route_label,
                         status,
-                        "ignoring audit root and member: not a pair on a sign-in route's success"
+                        "ignoring audit nodes and member: not a pair on a user route's success"
                     );
                 }
             }
@@ -743,12 +713,8 @@ impl ProxyHttp for Gateway {
         if let Some(state) = ctx.audit.take() {
             let written = session.response_written().map(|r| r.status.as_u16());
             let outcome = audit::outcome_for(state, ctx.forwarded, written);
-            let parent = ctx
-                .root_span()
-                .map(|span| span.context())
-                .unwrap_or_default();
             self.audit
-                .send_outcome(request_id.to_string(), outcome, parent);
+                .send_outcome(request_id.to_string(), outcome, request_context(ctx));
         }
 
         ctx.finish_root_span();

@@ -3,16 +3,19 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
+use once_cell::sync::Lazy;
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{Client, RedisError, Script};
 use tracing::{info, warn};
 
-const KEY_PREFIX: &str = "gw:rl:";
+/// Every counter key starts with this, so a Valkey shared with other software is safe.
+pub const KEY_PREFIX: &str = "plat5:rl:";
 
 /// Command and connect bound. A dead socket must surface as an error inside this window.
 const VALKEY_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// Cluster-wide fixed-window limiter. Valkey is required.
+/// Cluster-wide fixed-window limiter. Valkey is required. A request's buckets are
+/// checked together in one round trip and counted only if every one passes.
 ///
 /// Clones share one connection. A timeout or dropped socket is replaced in the
 /// background so a later request succeeds once Valkey answers again.
@@ -34,14 +37,30 @@ pub struct RateLimitInfo {
     pub reset_epoch: u64,
 }
 
-#[derive(Debug)]
-pub enum RateLimitError {
+/// One fixed-window counter: `key` under [`KEY_PREFIX`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Bucket {
+    pub key: String,
+    pub requests: u64,
+    pub window_seconds: u64,
+}
+
+/// What a check of a request's buckets found, one info per bucket, in order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// Every bucket passed, and each was counted.
+    Allowed(Vec<RateLimitInfo>),
+    /// At least one was full; none was counted. `retry_after` is the longest wait
+    /// among the full ones.
     Exceeded {
         retry_after: u64,
-        info: RateLimitInfo,
+        infos: Vec<RateLimitInfo>,
     },
-    Unavailable,
 }
+
+/// Valkey didn't answer in time, or answered something else: **503**.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Unavailable;
 
 impl RateLimiter {
     pub async fn connect(url: &str) -> Result<Self, RedisError> {
@@ -65,59 +84,31 @@ impl RateLimiter {
         result
     }
 
-    pub async fn allow(
-        &self,
-        bucket: &str,
-        limit: u64,
-        window_secs: u64,
-    ) -> Result<RateLimitInfo, RateLimitError> {
-        if limit == 0 || window_secs == 0 {
-            return Ok(RateLimitInfo {
-                limit: 0,
-                remaining: 0,
-                reset_epoch: now_epoch().saturating_add(1),
-            });
+    /// Check every bucket, and count them all only if all pass. No buckets, no trip.
+    pub async fn check(&self, buckets: &[Bucket]) -> Result<Verdict, Unavailable> {
+        if buckets.is_empty() {
+            return Ok(Verdict::Allowed(Vec::new()));
         }
-        let key = format!("{KEY_PREFIX}{bucket}");
+        let mut invocation = CHECK.prepare_invoke();
+        for bucket in buckets {
+            invocation
+                .key(format!("{KEY_PREFIX}{}", bucket.key))
+                .arg(bucket.requests)
+                .arg(bucket.window_seconds);
+        }
         let mut conn = self.conn();
-        let result: Result<Vec<i64>, RedisError> = Script::new(ALLOW_SCRIPT)
-            .key(&key)
-            .arg(limit)
-            .arg(window_secs)
-            .invoke_async(&mut conn)
-            .await;
-        match result {
-            Ok(vals) if vals.len() >= 3 => {
-                let allowed = vals[0] == 1;
-                let count = vals[1].max(0) as u64;
-                let ttl = vals[2].max(1) as u64;
-                let remaining = if allowed {
-                    limit.saturating_sub(count)
-                } else {
-                    0
-                };
-                let info = RateLimitInfo {
-                    limit,
-                    remaining,
-                    reset_epoch: now_epoch().saturating_add(ttl),
-                };
-                if allowed {
-                    Ok(info)
-                } else {
-                    Err(RateLimitError::Exceeded {
-                        retry_after: ttl,
-                        info,
-                    })
-                }
+        match invocation.invoke_async::<Vec<i64>>(&mut conn).await {
+            Ok(vals) if vals.len() == 1 + 2 * buckets.len() => {
+                Ok(verdict(buckets, vals[0] == 1, &vals[1..], now_epoch()))
             }
             Ok(_) => {
                 warn!("rate limit script returned unexpected value");
-                Err(RateLimitError::Unavailable)
+                Err(Unavailable)
             }
             Err(err) => {
                 warn!(error = %err, "rate limit valkey error");
                 self.note_disconnect(&err);
-                Err(RateLimitError::Unavailable)
+                Err(Unavailable)
             }
         }
     }
@@ -173,23 +164,62 @@ async fn open_manager(client: Client) -> Result<ConnectionManager, RedisError> {
     ConnectionManager::new_with_config(client, manager_config()).await
 }
 
-const ALLOW_SCRIPT: &str = r#"
-local n = tonumber(redis.call('GET', KEYS[1]) or '0')
-local limit = tonumber(ARGV[1])
-local window = tonumber(ARGV[2])
-if n >= limit then
-  local ttl = redis.call('TTL', KEYS[1])
+/// KEYS are the buckets; ARGV holds each one's limit and window, in order.
+/// Returns `{allowed, count1, ttl1, count2, ttl2, ...}`: every bucket is read
+/// first, and incremented only when none is full.
+const CHECK_SCRIPT: &str = r#"
+local allowed = 1
+for i, key in ipairs(KEYS) do
+  local n = tonumber(redis.call('GET', key) or '0')
+  if n >= tonumber(ARGV[2 * i - 1]) then allowed = 0 end
+end
+local out = {allowed}
+for i, key in ipairs(KEYS) do
+  local window = tonumber(ARGV[2 * i])
+  local n
+  if allowed == 1 then
+    n = redis.call('INCR', key)
+    if n == 1 then redis.call('EXPIRE', key, window) end
+  else
+    n = tonumber(redis.call('GET', key) or '0')
+  end
+  local ttl = redis.call('TTL', key)
   if ttl < 0 then ttl = window end
-  return {0, n, ttl}
+  table.insert(out, n)
+  table.insert(out, ttl)
 end
-n = redis.call('INCR', KEYS[1])
-if n == 1 then
-  redis.call('EXPIRE', KEYS[1], window)
-end
-local ttl = redis.call('TTL', KEYS[1])
-if ttl < 0 then ttl = window end
-return {1, n, ttl}
+return out
 "#;
+
+static CHECK: Lazy<Script> = Lazy::new(|| Script::new(CHECK_SCRIPT));
+
+/// The verdict from the script's counts and TTLs (`counts` is `{count, ttl}` per bucket).
+fn verdict(buckets: &[Bucket], allowed: bool, counts: &[i64], now: u64) -> Verdict {
+    let mut infos = Vec::with_capacity(buckets.len());
+    let mut retry_after = 0;
+    for (bucket, pair) in buckets.iter().zip(counts.chunks(2)) {
+        let count = pair[0].max(0) as u64;
+        let ttl = pair[1].max(1) as u64;
+        let full = !allowed && count >= bucket.requests;
+        if full {
+            retry_after = retry_after.max(ttl);
+        }
+        infos.push(RateLimitInfo {
+            limit: bucket.requests,
+            remaining: if full {
+                0
+            } else {
+                bucket.requests.saturating_sub(count)
+            },
+            reset_epoch: now.saturating_add(ttl),
+        });
+    }
+    if allowed {
+        Verdict::Allowed(infos)
+    } else {
+        Verdict::Exceeded { retry_after, infos }
+    }
+}
 
 fn now_epoch() -> u64 {
     SystemTime::now()
@@ -205,6 +235,64 @@ mod tests {
     use std::time::Instant;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
+
+    fn bucket() -> Bucket {
+        Bucket {
+            key: "bucket".into(),
+            requests: 10,
+            window_seconds: 60,
+        }
+    }
+
+    #[test]
+    fn a_full_bucket_refuses_and_counts_nothing() {
+        let buckets = [
+            Bucket {
+                key: "a".into(),
+                requests: 3,
+                window_seconds: 1,
+            },
+            Bucket {
+                key: "b".into(),
+                requests: 2,
+                window_seconds: 10,
+            },
+        ];
+        assert_eq!(
+            verdict(&buckets, true, &[1, 1, 2, 9], 100),
+            Verdict::Allowed(vec![
+                RateLimitInfo {
+                    limit: 3,
+                    remaining: 2,
+                    reset_epoch: 101
+                },
+                RateLimitInfo {
+                    limit: 2,
+                    remaining: 0,
+                    reset_epoch: 109
+                },
+            ])
+        );
+        // b is full: nothing was counted, and a's count is as it was.
+        assert_eq!(
+            verdict(&buckets, false, &[1, 1, 2, 9], 100),
+            Verdict::Exceeded {
+                retry_after: 9,
+                infos: vec![
+                    RateLimitInfo {
+                        limit: 3,
+                        remaining: 2,
+                        reset_epoch: 101
+                    },
+                    RateLimitInfo {
+                        limit: 2,
+                        remaining: 0,
+                        reset_epoch: 109
+                    },
+                ]
+            }
+        );
+    }
 
     #[tokio::test]
     async fn connect_to_silent_peer_times_out() {
@@ -253,8 +341,8 @@ mod tests {
             .await
             .expect("connect");
         limiter.ping().await.expect("ping");
-        let info = limiter.allow("bucket", 10, 60).await.expect("allow");
-        assert_eq!(info.remaining, 9);
+        let verdict = limiter.check(&[bucket()]).await.expect("check");
+        assert!(matches!(verdict, Verdict::Allowed(ref infos) if infos[0].remaining == 9));
 
         live.store(false, Ordering::SeqCst);
         let started = Instant::now();
@@ -269,8 +357,8 @@ mod tests {
             started.elapsed()
         );
         let allow_started = Instant::now();
-        let allow_err = limiter.allow("bucket", 10, 60).await;
-        assert!(matches!(allow_err, Err(RateLimitError::Unavailable)));
+        let allow_err = limiter.check(&[bucket()]).await;
+        assert_eq!(allow_err, Err(Unavailable));
         assert!(
             allow_started.elapsed() < Duration::from_secs(2),
             "allow hung for {:?}",
@@ -280,7 +368,7 @@ mod tests {
         live.store(true, Ordering::SeqCst);
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if limiter.ping().await.is_ok() && limiter.allow("bucket", 10, 60).await.is_ok() {
+            if limiter.ping().await.is_ok() && limiter.check(&[bucket()]).await.is_ok() {
                 break;
             }
             assert!(

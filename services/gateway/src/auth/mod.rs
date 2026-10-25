@@ -1,10 +1,10 @@
-//! Who presented a request: an `X-API-Key`, or a verified JWT's issuer and subject
-//! (docs/concepts/access.md#credentials). Admit then says whose it is.
+//! Who presented a request: the `Authorization: Bearer` value, as a verified JWT's
+//! issuer and subject or as a key (docs/concepts/access.md#credentials). Admit then
+//! says whose it is.
 
 pub mod admit;
 pub mod call;
 pub mod jwt;
-pub mod shape;
 
 use pingora::http::RequestHeader;
 use serde_json::Value;
@@ -33,11 +33,10 @@ impl AuthType {
 /// The credential on a request, before admit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Presented {
-    /// `X-API-Key`, as sent. Its shape is not checked yet.
+    /// A bearer value that isn't a JWT, as sent: identity owns the key format.
     Key(String),
     /// A verified JWT.
     Jwt {
-        token: String,
         issuer: String,
         subject: String,
         name: Option<String>,
@@ -62,8 +61,8 @@ pub enum AuthError {
         reason: &'static str,
     },
     MissingSubject,
-    /// An `X-API-Key` that isn't `{brand}-k-2-{secret}`, or that admit doesn't accept.
-    InvalidKey,
+    /// Identity answered `valid: false`.
+    InvalidCredential,
     /// JWKS isn't loaded: **503**.
     JwtValidationUnavailable,
 }
@@ -75,7 +74,7 @@ impl AuthError {
             AuthError::InvalidAuthorizationHeader => "invalid_authorization",
             AuthError::InvalidToken { reason } => reason,
             AuthError::MissingSubject => "missing_subject",
-            AuthError::InvalidKey => "invalid_credential",
+            AuthError::InvalidCredential => "invalid_credential",
             AuthError::JwtValidationUnavailable => "jwks_unavailable",
         }
     }
@@ -94,6 +93,11 @@ impl AuthError {
     }
 }
 
+/// Three dot-separated segments is a JWT; anything else is a key.
+pub fn is_jwt(token: &str) -> bool {
+    token.split('.').count() == 3
+}
+
 /// JWT verification and its claim cache.
 pub struct Authenticator {
     jwt_validator: JwtValidatorState,
@@ -110,18 +114,13 @@ impl Authenticator {
         }
     }
 
-    /// The request's credential. `X-API-Key` present means it is the credential,
-    /// including an empty value; don't fall through to `Authorization`.
-    /// `name_claim` is the sign-in kind's.
+    /// The request's credential, from `Authorization: Bearer`. `name_claim` is
+    /// `users.name_claim`.
     pub async fn present(
         &self,
         req: &RequestHeader,
         name_claim: &str,
     ) -> Result<Presented, AuthError> {
-        if let Some(value) = req.headers.get("X-API-Key") {
-            let key = value.to_str().map_err(|_| AuthError::InvalidKey)?;
-            return Ok(Presented::Key(key.to_string()));
-        }
         let authorization = req
             .headers
             .get("Authorization")
@@ -133,6 +132,9 @@ impl Authenticator {
             (Some("Bearer"), Some(token), None) => token,
             _ => return Err(AuthError::InvalidAuthorizationHeader),
         };
+        if !is_jwt(token) {
+            return Ok(Presented::Key(token.to_string()));
+        }
 
         let (claims, kid) = match self.jwt_cache.get(token).await {
             Some(cached) => {
@@ -149,7 +151,7 @@ impl Authenticator {
                     token,
                     self.jwt_validator.get_issuer(),
                     jwks,
-                    self.jwt_validator.get_allowed_audiences().to_vec(),
+                    self.jwt_validator.get_allowed_audiences().clone(),
                 )
                 .await
                 .map_err(|e| AuthError::InvalidToken {
@@ -164,7 +166,6 @@ impl Authenticator {
             extract_claim_path(&claims, &self.subject_claim).ok_or(AuthError::MissingSubject)?;
         let name_path: Vec<String> = vec![name_claim.to_string()];
         Ok(Presented::Jwt {
-            token: token.to_string(),
             // Validation checked `iss` against the configured issuer.
             issuer: self.jwt_validator.get_issuer(),
             subject,
@@ -187,7 +188,7 @@ pub fn jwt_error_reason(err: &jsonwebtoken::errors::Error) -> &'static str {
     }
 }
 
-/// Walk a dotted path into JWT claims JSON (e.g. `properties.user_id`, `sub`).
+/// Walk a dotted path into JWT claims JSON (e.g. `sub`, `properties.user_id`).
 /// A missing or empty string is None.
 pub fn extract_claim_path(claims: &Value, path: &[String]) -> Option<String> {
     let mut cur = claims;
@@ -201,7 +202,7 @@ pub fn extract_claim_path(claims: &Value, path: &[String]) -> Option<String> {
     Some(s.to_string())
 }
 
-/// Parse `AUTH_SUBJECT_CLAIM` into path segments. Empty → the default, `properties.user_id`.
+/// Parse `AUTH_SUBJECT_CLAIM` into path segments. Empty → the default, `sub`.
 pub fn parse_subject_claim(raw: &str) -> Vec<String> {
     let parts: Vec<String> = raw
         .split('.')
@@ -209,7 +210,7 @@ pub fn parse_subject_claim(raw: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .collect();
     if parts.is_empty() {
-        vec!["properties".to_string(), "user_id".to_string()]
+        vec!["sub".to_string()]
     } else {
         parts
     }
@@ -218,16 +219,17 @@ pub fn parse_subject_claim(raw: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::jwt::Audiences;
     use serde_json::json;
 
     #[test]
-    fn parse_default_and_sub() {
+    fn parse_default_and_nested() {
         assert_eq!(
             parse_subject_claim("properties.user_id"),
             vec!["properties", "user_id"]
         );
         assert_eq!(parse_subject_claim("sub"), vec!["sub"]);
-        assert_eq!(parse_subject_claim(""), vec!["properties", "user_id"]);
+        assert_eq!(parse_subject_claim(""), vec!["sub"]);
     }
 
     #[test]
@@ -250,34 +252,59 @@ mod tests {
             JwtValidatorState::new(
                 "https://auth".into(),
                 "http://127.0.0.1:1/jwks".into(),
-                vec![],
+                Audiences::Any,
             ),
             parse_subject_claim("sub"),
         )
     }
 
-    #[tokio::test]
-    async fn the_api_key_header_wins_and_never_falls_through() {
-        let a = authenticator();
+    fn request(authorization: Option<&str>) -> RequestHeader {
         let mut req = RequestHeader::build("GET", b"/x", None).unwrap();
-        req.insert_header("Authorization", "Bearer x.y.z").unwrap();
-        req.insert_header("X-API-Key", "").unwrap();
-        assert_eq!(
-            a.present(&req, "name").await,
-            Ok(Presented::Key(String::new()))
-        );
+        if let Some(value) = authorization {
+            req.insert_header("Authorization", value).unwrap();
+        }
+        req
+    }
 
-        let req = RequestHeader::build("GET", b"/x", None).unwrap();
+    #[tokio::test]
+    async fn anything_but_a_jwt_on_bearer_is_a_key_as_sent() {
+        let a = authenticator();
+        for key in ["plat5-k-2-abc", "sk_live_x", "a.b", "a.b.c.d"] {
+            assert_eq!(
+                a.present(&request(Some(&format!("Bearer {key}"))), "name")
+                    .await,
+                Ok(Presented::Key(key.to_string())),
+                "{key}"
+            );
+        }
+        assert!(is_jwt("header.payload.sig") && is_jwt(".."));
+    }
+
+    #[tokio::test]
+    async fn a_jwt_needs_jwks_and_other_schemes_are_refused() {
+        let a = authenticator();
         assert_eq!(
-            a.present(&req, "name").await,
+            a.present(&request(None), "name").await,
             Err(AuthError::MissingAuthorization)
         );
-
-        let mut req = RequestHeader::build("GET", b"/x", None).unwrap();
-        req.insert_header("Authorization", "Basic abc").unwrap();
+        for value in ["Basic abc", "Bearer", "Bearer a b", "bearer x"] {
+            assert_eq!(
+                a.present(&request(Some(value)), "name").await,
+                Err(AuthError::InvalidAuthorizationHeader),
+                "{value}"
+            );
+        }
+        // The JWKS URL answers nothing: a JWT can't be verified.
+        assert_eq!(
+            a.present(&request(Some("Bearer h.p.s")), "name").await,
+            Err(AuthError::JwtValidationUnavailable)
+        );
+        let mut req = request(None);
+        req.insert_header("X-API-Key", "plat5-k-2-abc").unwrap();
         assert_eq!(
             a.present(&req, "name").await,
-            Err(AuthError::InvalidAuthorizationHeader)
+            Err(AuthError::MissingAuthorization),
+            "X-API-Key is not a credential"
         );
     }
 }

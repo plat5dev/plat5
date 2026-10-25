@@ -1,10 +1,10 @@
 //! Audit log writes (docs/concepts/audit.md). On an audited route the gateway writes
-//! an intent before forward and waits on it, then an outcome after, in the background.
-//! An event is in the log of the chain's root on a kind route, and in the person's
-//! own (keyed by their directory member) on a sign-in route. Audit is on or off for
-//! the whole deployment. Wire: docs/reference/api/internal.md#audit.
+//! an intent after the permission check and the fill, and waits on it, then an
+//! outcome after, in the background. Its own refusals after admit are one
+//! background write: an intent that carries its `rejected` outcome. Audit is on or
+//! off for the whole deployment. Wire: docs/reference/api/internal.md#audit.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -25,14 +25,17 @@ use crate::metrics;
 pub const DETAILS_HEADER: &str = "X-Plat5-Audit-Details";
 /// The id a create produced.
 pub const CREATED_HEADER: &str = "X-Plat5-Audit-Created";
-/// On a sign-in route, the root of the tree the service changed and the member in it.
-pub const ROOT_HEADER: &str = "X-Plat5-Audit-Root";
+/// On a user route, the chain of nodes the service changed, root first, and the
+/// person's member in that tree.
+pub const NODES_HEADER: &str = "X-Plat5-Audit-Nodes";
 pub const MEMBER_HEADER: &str = "X-Plat5-Audit-Member";
-/// Every header a service uses to talk to the audit log. Stripped from every response.
-pub const SERVICE_HEADERS: &[&str] = &[DETAILS_HEADER, CREATED_HEADER, ROOT_HEADER, MEMBER_HEADER];
+/// Every response header a service uses to talk to the audit log starts with
+/// this. Stripped from every response.
+pub const SERVICE_HEADER_PREFIX: &str = "x-plat5-audit-";
 pub const MAX_DETAILS_BYTES: usize = 4096;
 /// An id from a service header: one path segment of visible ASCII.
 pub const MAX_ID_BYTES: usize = 128;
+pub const MAX_NAMED_NODES: usize = 32;
 pub const MAX_USER_AGENT_CHARS: usize = 512;
 
 const INTENT_ATTEMPTS: u32 = 3;
@@ -40,11 +43,11 @@ const INTENT_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(500);
 /// The client waits on the intent, so every attempt fits in this.
 const INTENT_BUDGET: Duration = Duration::from_secs(1);
 
-const OUTCOME_QUEUE: usize = 10_000;
-const OUTCOME_IN_FLIGHT: usize = 64;
-const OUTCOME_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(2);
-/// Wait before each outcome retry. About five minutes in all, then it stays pending.
-const OUTCOME_BACKOFF: &[Duration] = &[
+const BACKGROUND_QUEUE: usize = 10_000;
+const BACKGROUND_IN_FLIGHT: usize = 64;
+const BACKGROUND_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(2);
+/// Wait before each background retry. About five minutes in all, then it's dropped.
+const BACKGROUND_BACKOFF: &[Duration] = &[
     Duration::from_millis(200),
     Duration::from_secs(1),
     Duration::from_secs(5),
@@ -56,34 +59,42 @@ const OUTCOME_BACKOFF: &[Duration] = &[
     Duration::from_secs(60),
 ];
 
-/// The member whose credential was admitted, and which credential. A JWT has no
-/// key prefix.
-#[derive(Debug, Serialize)]
+/// Whose credential was admitted, and which credential: the member on a kind
+/// route, the user on a user route. A JWT has no key id.
+#[derive(Debug, Clone, Serialize)]
 pub struct Actor {
-    pub member_id: String,
+    pub member_id: Option<String>,
+    pub user_id: Option<String>,
     /// `person` or `service_account`.
     pub principal: String,
     pub auth_type: &'static str,
-    pub key_prefix: Option<String>,
+    pub key_id: Option<String>,
 }
 
 /// Everything the gateway knows before forward. `request_id` is in the URL.
-/// On a sign-in route `root_id` is null and `nodes` empty: the person's log is
-/// keyed by `actor.member_id`.
-#[derive(Debug, Serialize)]
+/// On a user route `nodes` is empty.
+#[derive(Debug, Clone, Serialize)]
 pub struct Intent {
     #[serde(skip)]
     pub request_id: String,
     pub occurred_at: String,
-    pub root_id: Option<String>,
     pub nodes: Vec<NodeRef>,
     pub actor: Actor,
     pub service: String,
     pub method: String,
     pub route: String,
-    pub params: HashMap<String, String>,
+    pub params: BTreeMap<String, String>,
     pub ip: String,
     pub user_agent: Option<String>,
+}
+
+/// A gateway refusal after admit: the intent, written final.
+#[derive(Debug, Serialize)]
+pub struct Rejected {
+    #[serde(flatten)]
+    pub intent: Intent,
+    pub outcome: OutcomeKind,
+    pub status: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -105,11 +116,11 @@ pub struct Outcome {
     pub details: Option<Box<RawValue>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_id: Option<String>,
-    /// On a sign-in route, the root the service named and the member in it.
+    /// On a user route, the chain the service named and the member in it.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub root_id: Option<String>,
+    pub named_nodes: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub member_id: Option<String>,
+    pub named_member_id: Option<String>,
 }
 
 /// An audited request between its intent and its outcome.
@@ -119,8 +130,8 @@ pub struct AuditState {
     pub upstream_status: Option<u16>,
     pub details: Option<Box<RawValue>>,
     pub created_id: Option<String>,
-    /// The root and member a service named on a sign-in route's 2xx.
-    pub named: Option<(String, String)>,
+    /// The chain and member a service named on a user route's 2xx.
+    pub named: Option<(Vec<String>, String)>,
 }
 
 /// How the request ended. `forwarded` = the gateway handed it to the upstream.
@@ -137,18 +148,18 @@ pub fn outcome_for(state: AuditState, forwarded: bool, written_status: Option<u1
             status,
             details: None,
             created_id: None,
-            root_id: None,
-            member_id: None,
+            named_nodes: None,
+            named_member_id: None,
         };
     }
-    let (root_id, member_id) = state.named.unzip();
+    let (named_nodes, named_member_id) = state.named.unzip();
     Outcome {
         outcome,
         status,
         details: state.details,
         created_id: state.created_id,
-        root_id,
-        member_id,
+        named_nodes,
+        named_member_id,
     }
 }
 
@@ -160,6 +171,15 @@ pub fn parse_id(value: &[u8]) -> Option<String> {
             .iter()
             .all(|b| (0x21..=0x7e).contains(b) && *b != b'/');
     ok.then(|| String::from_utf8_lossy(value).into_owned())
+}
+
+/// The named-nodes header: comma-separated ids, at most [`MAX_NAMED_NODES`], or None.
+pub fn parse_nodes(value: &[u8]) -> Option<Vec<String>> {
+    let ids: Vec<String> = value
+        .split(|b| *b == b',')
+        .map(|id| parse_id(id.trim_ascii()))
+        .collect::<Option<_>>()?;
+    (ids.len() <= MAX_NAMED_NODES).then_some(ids)
 }
 
 /// The details header as one JSON object of visible ASCII within the cap, or None.
@@ -215,6 +235,23 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[derive(Debug)]
 pub struct IntentNotWritten;
 
+/// A write the client doesn't wait on, queued and retried.
+#[derive(Debug)]
+enum Background {
+    Outcome(Outcome),
+    Rejected(Box<Rejected>),
+}
+
+impl Background {
+    /// The `write` label on `audit_writes_total`.
+    fn write(&self) -> &'static str {
+        match self {
+            Background::Outcome(_) => "outcome",
+            Background::Rejected(_) => "rejected",
+        }
+    }
+}
+
 /// The deployment's audit writer. Off = no writes and no waits.
 #[derive(Clone)]
 pub struct Audit {
@@ -224,7 +261,7 @@ pub struct Audit {
 struct Inner {
     base_url: String,
     http: InternalHttpClient,
-    outcomes: mpsc::Sender<(String, Outcome, opentelemetry::Context)>,
+    background: mpsc::Sender<(String, Background, opentelemetry::Context)>,
 }
 
 impl Audit {
@@ -232,26 +269,22 @@ impl Audit {
         Self { inner: None }
     }
 
-    /// On when `base_url` is set. Outcome writes run on `runtime`, with their own client.
-    pub fn new(
-        base_url: Option<String>,
-        internal_token: Option<String>,
-        runtime: &tokio::runtime::Handle,
-    ) -> Self {
+    /// On when `base_url` is set. Background writes run on `runtime`, with their own client.
+    pub fn new(base_url: Option<String>, runtime: &tokio::runtime::Handle) -> Self {
         let Some(base_url) = base_url else {
             return Self::off();
         };
-        let (tx, rx) = mpsc::channel(OUTCOME_QUEUE);
-        runtime.spawn(run_outcomes(
+        let (tx, rx) = mpsc::channel(BACKGROUND_QUEUE);
+        runtime.spawn(run_background(
             base_url.clone(),
-            InternalHttpClient::new(internal_token.clone()),
+            InternalHttpClient::new(),
             rx,
         ));
         Self {
             inner: Some(Arc::new(Inner {
                 base_url,
-                http: InternalHttpClient::new(internal_token),
-                outcomes: tx,
+                http: InternalHttpClient::new(),
+                background: tx,
             })),
         }
     }
@@ -287,7 +320,7 @@ impl Audit {
                     metrics::record_audit_intent_duration("ok", start.elapsed().as_secs_f64());
                     return Ok(());
                 }
-                // A 4xx is the same on every try: a bug or a token mismatch.
+                // A 4xx is the same on every try: a field audit can't store.
                 Ok(status @ 400..=499) => {
                     last_error = format!("audit returned status {status}");
                     break;
@@ -316,16 +349,32 @@ impl Audit {
         outcome: Outcome,
         parent: opentelemetry::Context,
     ) {
+        self.queue(request_id, Background::Outcome(outcome), parent);
+    }
+
+    /// Queue a refusal after admit, as one event written final. Never waits.
+    pub fn send_rejected(&self, intent: Intent, status: u16, parent: opentelemetry::Context) {
+        let request_id = intent.request_id.clone();
+        let rejected = Rejected {
+            intent,
+            outcome: OutcomeKind::Rejected,
+            status,
+        };
+        self.queue(request_id, Background::Rejected(Box::new(rejected)), parent);
+    }
+
+    fn queue(&self, request_id: String, write: Background, parent: opentelemetry::Context) {
         let Some(inner) = &self.inner else {
             return;
         };
-        if let Err(err) = inner.outcomes.try_send((request_id, outcome, parent)) {
-            let (request_id, _, _) = err.into_inner();
+        if let Err(err) = inner.background.try_send((request_id, write, parent)) {
+            let (request_id, write, _) = err.into_inner();
             warn!(
                 request_id = %request_id,
-                "audit outcome queue full; event stays pending"
+                write = write.write(),
+                "audit queue full; write dropped"
             );
-            metrics::record_audit_write("outcome", "dropped");
+            metrics::record_audit_write(write.write(), "dropped");
         }
     }
 }
@@ -334,24 +383,24 @@ fn event_url(base_url: &str, request_id: &str) -> String {
     format!("{base_url}/internal/events/{request_id}")
 }
 
-async fn run_outcomes(
+async fn run_background(
     base_url: String,
     http: InternalHttpClient,
-    mut rx: mpsc::Receiver<(String, Outcome, opentelemetry::Context)>,
+    mut rx: mpsc::Receiver<(String, Background, opentelemetry::Context)>,
 ) {
-    let permits = Arc::new(Semaphore::new(OUTCOME_IN_FLIGHT));
-    while let Some((request_id, outcome, parent)) = rx.recv().await {
+    let permits = Arc::new(Semaphore::new(BACKGROUND_IN_FLIGHT));
+    while let Some((request_id, write, parent)) = rx.recv().await {
         let Ok(permit) = permits.clone().acquire_owned().await else {
             return;
         };
         let http = http.clone();
         let url = event_url(&base_url, &request_id);
-        let span = tracing::info_span!("audit.outcome");
+        let span = tracing::info_span!("audit.write", write = write.write());
         // Err only when the span is disabled: nothing to trace then.
         let _ = span.set_parent(parent);
         tokio::spawn(
             async move {
-                write_outcome(&http, &url, &request_id, &outcome, OUTCOME_BACKOFF).await;
+                write_background(&http, &url, &request_id, &write, BACKGROUND_BACKOFF).await;
                 drop(permit);
             }
             .instrument(span),
@@ -359,36 +408,48 @@ async fn run_outcomes(
     }
 }
 
-/// PATCH the outcome until audit takes it, says there is no intent, or the backoff
-/// runs out. Audit applies an outcome once, so a retry after a lost reply is harmless.
-async fn write_outcome(
+/// Send a background write until audit takes it, refuses it, or the backoff runs
+/// out. Every write is idempotent by `request_id`, so a retry after a lost reply is
+/// harmless.
+async fn write_background(
     http: &InternalHttpClient,
     url: &str,
     request_id: &str,
-    outcome: &Outcome,
+    write: &Background,
     backoff: &[Duration],
 ) {
+    let label = write.write();
     let mut waits = backoff.iter();
     loop {
-        match http
-            .send_json(Method::PATCH, url, outcome, OUTCOME_ATTEMPT_TIMEOUT)
-            .await
-        {
+        let sent = match write {
+            Background::Outcome(outcome) => {
+                http.send_json(Method::PATCH, url, outcome, BACKGROUND_ATTEMPT_TIMEOUT)
+                    .await
+            }
+            Background::Rejected(rejected) => {
+                http.send_json(Method::PUT, url, rejected, BACKGROUND_ATTEMPT_TIMEOUT)
+                    .await
+            }
+        };
+        match sent {
             Ok(200..=299) => {
-                metrics::record_audit_write("outcome", "ok");
+                metrics::record_audit_write(label, "ok");
                 return;
             }
-            // The intent never landed (the 503 path): nothing to finish.
-            Ok(404) => {
-                metrics::record_audit_write("outcome", "not_found");
+            // An outcome whose intent never landed (the 503 path): nothing to finish.
+            Ok(404) if matches!(write, Background::Outcome(_)) => {
+                metrics::record_audit_write(label, "not_found");
                 return;
             }
             Ok(status @ 400..=499) => {
                 error!(
                     error_kind = ErrorKind::Internal.as_str(),
-                    status, request_id, "audit refused the outcome; event stays pending"
+                    status,
+                    request_id,
+                    write = label,
+                    "audit refused the write"
                 );
-                metrics::record_audit_write("outcome", "failed");
+                metrics::record_audit_write(label, "failed");
                 return;
             }
             _ => {}
@@ -396,9 +457,11 @@ async fn write_outcome(
         let Some(wait) = waits.next() else {
             error!(
                 error_kind = ErrorKind::Network.as_str(),
-                request_id, "audit outcome not written; event stays pending"
+                request_id,
+                write = label,
+                "audit write not taken; giving up"
             );
-            metrics::record_audit_write("outcome", "failed");
+            metrics::record_audit_write(label, "failed");
             return;
         };
         tokio::time::sleep(*wait).await;
@@ -462,12 +525,16 @@ mod tests {
 
     #[test]
     fn outcome_follows_how_the_request_ended() {
+        let named = (
+            vec!["01o".to_string(), "01p".to_string()],
+            "01m".to_string(),
+        );
         let responded = outcome_for(
             AuditState {
                 upstream_status: Some(201),
                 details: parse_details(br#"{"a":1}"#),
-                created_id: Some("org-9".into()),
-                named: Some(("org-9".into(), "m-9".into())),
+                created_id: Some("01o".into()),
+                named: Some(named.clone()),
             },
             true,
             Some(201),
@@ -475,9 +542,9 @@ mod tests {
         assert_eq!(responded.outcome, OutcomeKind::Responded);
         assert_eq!(responded.status, Some(201));
         assert!(responded.details.is_some());
-        assert_eq!(responded.created_id.as_deref(), Some("org-9"));
-        assert_eq!(responded.root_id.as_deref(), Some("org-9"));
-        assert_eq!(responded.member_id.as_deref(), Some("m-9"));
+        assert_eq!(responded.created_id.as_deref(), Some("01o"));
+        assert_eq!(responded.named_nodes, Some(named.0.clone()));
+        assert_eq!(responded.named_member_id.as_deref(), Some("01m"));
 
         // What a service said counts only when it answered.
         let cut = outcome_for(
@@ -485,12 +552,12 @@ mod tests {
                 upstream_status: None,
                 details: None,
                 created_id: Some("x".into()),
-                named: Some(("o".into(), "m".into())),
+                named: Some(named),
             },
             true,
             Some(502),
         );
-        assert!(cut.created_id.is_none() && cut.root_id.is_none());
+        assert!(cut.created_id.is_none() && cut.named_nodes.is_none());
 
         let no_response = outcome_for(AuditState::default(), true, Some(502));
         assert_eq!(no_response.outcome, OutcomeKind::NoResponse);
@@ -499,14 +566,14 @@ mod tests {
         let gone = outcome_for(AuditState::default(), true, None);
         assert_eq!(gone.status, None);
 
-        let rejected = outcome_for(AuditState::default(), false, Some(403));
+        let rejected = outcome_for(AuditState::default(), false, Some(503));
         assert_eq!(rejected.outcome, OutcomeKind::Rejected);
-        assert_eq!(rejected.status, Some(403));
+        assert_eq!(rejected.status, Some(503));
     }
 
     #[test]
     fn ids_are_one_visible_segment() {
-        assert_eq!(parse_id(b"01J9ZX").as_deref(), Some("01J9ZX"));
+        assert_eq!(parse_id(b"01j9zx").as_deref(), Some("01j9zx"));
         for bad in [
             &b""[..],
             b"a b",
@@ -519,88 +586,100 @@ mod tests {
     }
 
     #[test]
+    fn named_nodes_are_up_to_32_ids() {
+        assert_eq!(
+            parse_nodes(b"01o, 01p,01e"),
+            Some(vec!["01o".into(), "01p".into(), "01e".into()])
+        );
+        let many = vec!["01x"; MAX_NAMED_NODES].join(",");
+        assert_eq!(parse_nodes(many.as_bytes()).map(|v| v.len()), Some(32));
+        let too_many = vec!["01x"; MAX_NAMED_NODES + 1].join(",");
+        for bad in [
+            &b""[..],
+            b"01o,",
+            b"01o,,01p",
+            b"01o,a/b",
+            too_many.as_bytes(),
+        ] {
+            assert!(
+                parse_nodes(bad).is_none(),
+                "{:?}",
+                String::from_utf8_lossy(bad)
+            );
+        }
+    }
+
+    #[test]
     fn wire_shapes() {
-        let intent = Intent {
-            request_id: "req-1".into(),
-            occurred_at: "2026-10-08T18:30:00.123Z".into(),
-            root_id: Some("n_org".into()),
-            nodes: vec![
-                NodeRef {
-                    kind: "organization".into(),
-                    id: "n_org".into(),
-                },
-                NodeRef {
-                    kind: "project".into(),
-                    id: "n_proj".into(),
-                },
-            ],
-            actor: Actor {
-                member_id: "m_1".into(),
-                principal: "service_account".into(),
-                auth_type: "apikey",
-                key_prefix: Some("plat5-k-2-AbC9".into()),
-            },
-            service: "identity".into(),
-            method: "PATCH".into(),
-            route: "/orgs/{organization}/projects/{project}/bindings/{binding_id}".into(),
-            params: HashMap::from([("binding_id".into(), "b_2".into())]),
-            ip: "203.0.113.7".into(),
-            user_agent: None,
-        };
-        let v = serde_json::to_value(&intent).unwrap();
-        assert!(v.get("request_id").is_none(), "request_id is in the URL");
-        assert_eq!(v["root_id"], "n_org");
+        let mut tree = intent();
+        tree.method = "PATCH".into();
+        tree.nodes.push(NodeRef {
+            kind: "project".into(),
+            id: "01p".into(),
+        });
+        tree.route = "/orgs/{organization}/projects/{project}/bindings/{binding_id}".into();
+        tree.params = BTreeMap::from([("binding_id".into(), "01b".into())]);
+        let v = serde_json::to_value(&tree).unwrap();
         assert_eq!(
-            v["nodes"][1],
-            serde_json::json!({ "kind": "project", "id": "n_proj" })
+            v,
+            serde_json::json!({
+                "occurred_at": tree.occurred_at,
+                "nodes": [{ "kind": "organization", "id": "01o" }, { "kind": "project", "id": "01p" }],
+                "actor": { "member_id": "01m", "user_id": null, "principal": "service_account",
+                           "auth_type": "apikey", "key_id": "01k" },
+                "service": "s", "method": "PATCH",
+                "route": "/orgs/{organization}/projects/{project}/bindings/{binding_id}",
+                "params": { "binding_id": "01b" }, "ip": "127.0.0.1", "user_agent": null
+            }),
+            "request_id is in the URL"
         );
-        assert_eq!(
-            v["actor"],
-            serde_json::json!({ "member_id": "m_1", "principal": "service_account",
-                                "auth_type": "apikey", "key_prefix": "plat5-k-2-AbC9" })
-        );
-        assert!(v["user_agent"].is_null());
 
         let person = Intent {
-            root_id: None,
             nodes: vec![],
             actor: Actor {
-                member_id: "m_dir".into(),
+                member_id: None,
+                user_id: Some("01u".into()),
                 principal: "person".into(),
                 auth_type: "jwt",
-                key_prefix: None,
+                key_id: None,
             },
-            ..intent
+            ..intent()
         };
         let v = serde_json::to_value(&person).unwrap();
-        assert!(
-            v["root_id"].is_null(),
-            "a sign-in route's event has no root"
-        );
         assert_eq!(v["nodes"], serde_json::json!([]));
-        assert!(v["actor"]["key_prefix"].is_null());
+        assert_eq!(
+            v["actor"],
+            serde_json::json!({ "member_id": null, "user_id": "01u", "principal": "person",
+                                "auth_type": "jwt", "key_id": null })
+        );
+
+        let rejected = Rejected {
+            intent: intent(),
+            outcome: OutcomeKind::Rejected,
+            status: 403,
+        };
+        let v = serde_json::to_value(&rejected).unwrap();
+        assert_eq!(v["outcome"], "rejected");
+        assert_eq!(v["status"], 403);
+        assert_eq!(v["service"], "s");
+        assert_eq!(v["actor"]["member_id"], "01m");
 
         let named = outcome_for(
             AuditState {
                 upstream_status: Some(201),
-                named: Some(("n_org".into(), "m_org".into())),
+                named: Some((vec!["01o".into()], "01m".into())),
                 ..AuditState::default()
             },
             true,
             Some(201),
         );
-        let v = serde_json::to_value(&named).unwrap();
-        assert_eq!(v["root_id"], "n_org");
-        assert_eq!(v["member_id"], "m_org");
+        assert_eq!(
+            serde_json::to_value(&named).unwrap(),
+            serde_json::json!({ "outcome": "responded", "status": 201, "details": null,
+                                "named_nodes": ["01o"], "named_member_id": "01m" })
+        );
 
-        let out = Outcome {
-            outcome: OutcomeKind::NoResponse,
-            status: None,
-            details: None,
-            created_id: None,
-            root_id: None,
-            member_id: None,
-        };
+        let out = outcome_for(AuditState::default(), true, None);
         assert_eq!(
             serde_json::to_string(&out).unwrap(),
             r#"{"outcome":"no_response","status":null,"details":null}"#
@@ -643,32 +722,28 @@ mod tests {
         Intent {
             request_id: "req-1".into(),
             occurred_at: rfc3339_millis(SystemTime::now()),
-            root_id: Some("n_org".into()),
             nodes: vec![NodeRef {
                 kind: "organization".into(),
-                id: "n_org".into(),
+                id: "01o".into(),
             }],
             actor: Actor {
-                member_id: "m_1".into(),
-                principal: "person".into(),
+                member_id: Some("01m".into()),
+                user_id: None,
+                principal: "service_account".into(),
                 auth_type: "apikey",
-                key_prefix: Some("plat5-k-2-AbC9".into()),
+                key_id: Some("01k".into()),
             },
             service: "s".into(),
             method: "POST".into(),
             route: "/r".into(),
-            params: HashMap::new(),
+            params: BTreeMap::new(),
             ip: "127.0.0.1".into(),
             user_agent: None,
         }
     }
 
     fn audit_at(url: String) -> Audit {
-        Audit::new(
-            Some(url),
-            Some("tok".into()),
-            &tokio::runtime::Handle::current(),
-        )
+        Audit::new(Some(url), &tokio::runtime::Handle::current())
     }
 
     #[tokio::test]
@@ -716,28 +791,48 @@ mod tests {
             outcome_for(AuditState::default(), false, None),
             opentelemetry::Context::new(),
         );
+        Audit::off().send_rejected(intent(), 403, opentelemetry::Context::new());
     }
 
     #[tokio::test]
     async fn outcome_retries_until_taken_and_stops_on_404() {
-        let http = InternalHttpClient::new(None);
-        let out = outcome_for(AuditState::default(), false, Some(403));
+        let http = InternalHttpClient::new();
+        let out = Background::Outcome(outcome_for(AuditState::default(), false, Some(503)));
         let quick = [Duration::from_millis(1); 4];
 
         let (url, hits) = fake_audit(vec![503, 503, 204]).await;
-        write_outcome(&http, &format!("{url}/x"), "req-1", &out, &quick).await;
+        write_background(&http, &format!("{url}/x"), "req-1", &out, &quick).await;
         assert_eq!(hits.load(Ordering::SeqCst), 3);
 
         let (url, hits) = fake_audit(vec![404]).await;
-        write_outcome(&http, &format!("{url}/x"), "req-1", &out, &quick).await;
+        write_background(&http, &format!("{url}/x"), "req-1", &out, &quick).await;
         assert_eq!(hits.load(Ordering::SeqCst), 1);
 
         let (url, hits) = fake_audit(vec![503]).await;
-        write_outcome(&http, &format!("{url}/x"), "req-1", &out, &quick).await;
+        write_background(&http, &format!("{url}/x"), "req-1", &out, &quick).await;
         assert_eq!(
             hits.load(Ordering::SeqCst),
             5,
             "first try plus one per backoff step"
         );
+    }
+
+    #[tokio::test]
+    async fn a_rejected_write_retries_until_taken_and_stops_on_a_4xx() {
+        let http = InternalHttpClient::new();
+        let rejected = Background::Rejected(Box::new(Rejected {
+            intent: intent(),
+            outcome: OutcomeKind::Rejected,
+            status: 403,
+        }));
+        let quick = [Duration::from_millis(1); 4];
+
+        let (url, hits) = fake_audit(vec![503, 201]).await;
+        write_background(&http, &format!("{url}/x"), "req-1", &rejected, &quick).await;
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+
+        let (url, hits) = fake_audit(vec![422]).await;
+        write_background(&http, &format!("{url}/x"), "req-1", &rejected, &quick).await;
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
     }
 }

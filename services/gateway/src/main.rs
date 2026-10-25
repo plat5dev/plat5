@@ -24,9 +24,10 @@ fn main() {
     // Use a single Tokio runtime for all async initialization.
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
-    // Routes and CORS: wait for the first snapshot, then follow the control plane.
+    // Routes, rate limits and CORS: wait for the first snapshot, then follow the
+    // control plane.
     let snapshot = rt.block_on(async {
-        ControlPlane::connect(&cfg.control_plane_url, cfg.internal_auth_token.clone())
+        ControlPlane::connect(&cfg.control_plane_url, telemetry::service_instance_id())
             .await
             .snapshot()
     });
@@ -51,12 +52,8 @@ fn main() {
         .block_on(gateway::rate_limit::RateLimiter::connect(&cfg.valkey_url))
         .unwrap_or_else(|e| panic!("failed to connect to valkey: {e}"));
 
-    // Outcome writes run on this runtime, off the request path.
-    let audit = gateway::audit::Audit::new(
-        cfg.audit_url.clone(),
-        cfg.internal_auth_token.clone(),
-        rt.handle(),
-    );
+    // Background audit writes run on this runtime, off the request path.
+    let audit = gateway::audit::Audit::new(cfg.audit_url.clone(), rt.handle());
     if let Some(url) = cfg.audit_url.as_deref() {
         info!(audit_url = %url, "audit on");
     } else {

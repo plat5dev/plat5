@@ -36,6 +36,16 @@ impl Drop for TelemetryGuard {
     }
 }
 
+/// `service.instance.id`: `OTEL_SERVICE_INSTANCE_ID`, else the hostname. Also the
+/// replica id the gateway reports to the control plane.
+pub fn service_instance_id() -> String {
+    env::var("OTEL_SERVICE_INSTANCE_ID")
+        .ok()
+        .filter(|id| !id.is_empty())
+        .or_else(|| env::var("HOSTNAME").ok().filter(|h| !h.is_empty()))
+        .unwrap_or_else(|| format!("gateway-{}", std::process::id()))
+}
+
 /// Init tracing + optional OTLP per docs/reference/telemetry.md.
 ///
 /// Defaults when an OTLP destination is set:
@@ -79,10 +89,7 @@ pub fn init_telemetry() -> Result<TelemetryGuard, Box<dyn std::error::Error + Se
     let service_name = env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "gateway".to_string());
     let service_namespace =
         env::var("OTEL_SERVICE_NAMESPACE").unwrap_or_else(|_| "edge".to_string());
-    let service_instance_id = env::var("OTEL_SERVICE_INSTANCE_ID")
-        .ok()
-        .or_else(|| env::var("HOSTNAME").ok())
-        .unwrap_or_else(|| format!("{}-{}", service_name, std::process::id()));
+    let service_instance_id = service_instance_id();
     let deployment_env = env::var("OTEL_DEPLOYMENT_ENV")
         .or_else(|_| env::var("DEPLOYMENT_ENV"))
         .unwrap_or_else(|_| "development".to_string());

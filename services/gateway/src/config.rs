@@ -1,52 +1,43 @@
 use std::env;
 use std::time::Duration;
 
+use crate::auth::jwt::Audiences;
 use crate::auth::parse_subject_claim;
 use crate::gateway::TrustedProxies;
 
 const DEFAULT_PORT: &str = "5001";
 const DEFAULT_INTERNAL_PORT: &str = "8000";
-const DEFAULT_SUBJECT_CLAIM: &str = "properties.user_id";
-const DEFAULT_APIKEY_CACHE_TTL_SECS: u64 = 300;
-const DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS: u64 = 10_000;
-const DEFAULT_UPSTREAM_READ_TIMEOUT_MS: u64 = 30_000;
-const DEFAULT_RATE_LIMIT_REQUESTS: u64 = 60;
-const DEFAULT_RATE_LIMIT_WINDOW_SECONDS: u64 = 60;
+const DEFAULT_SUBJECT_CLAIM: &str = "sub";
+const DEFAULT_ADMIT_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const DEFAULT_ADMIT_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(10);
 const DEFAULT_RATE_LIMIT_AUTH_FAILURE_REQUESTS: u64 = 60;
 const DEFAULT_RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS: u64 = 60;
 
-/// Process configuration loaded from environment.
+/// Process configuration loaded from environment (docs/reference/env.md#gateway).
 #[derive(Clone, Debug)]
 pub struct GatewayConfig {
     pub port: String,
     pub internal_port: String,
-    /// The control plane's internal base URL (`CONTROL_PLANE_URL`): routes and
-    /// CORS origins come from `{url}/internal/gateway`.
+    /// The control plane's internal base URL (`CONTROL_PLANE_URL`): kinds, routes,
+    /// rate limits and CORS come from `{url}/internal/gateway`.
     pub control_plane_url: String,
     /// Valkey for rate-limit counters. Required.
     pub valkey_url: String,
 
     pub auth_issuer: String,
     pub auth_jwks_uri: String,
-    pub auth_allowed_audiences: Vec<String>,
+    pub auth_allowed_audiences: Audiences,
     /// Dotted claim path segments for the person's IdP subject (`AUTH_SUBJECT_CLAIM`).
     pub auth_subject_claim: Vec<String>,
 
-    /// Identity's admit (`ADMIT_URL`): every credential, with the route's chain.
-    /// The gateway does not know the brand; identity does.
-    pub admit_url: String,
-    pub internal_auth_token: Option<String>,
+    /// Identity's internal base URL (`IDENTITY_INTERNAL_URL`); admit is at `/internal/admit`.
+    pub identity_internal_url: String,
 
-    /// TTL for every cached admit answer (`APIKEY_CACHE_TTL_SECS`).
-    pub apikey_cache_ttl_secs: u64,
+    /// How long an admit answer is kept (`ADMIT_CACHE_TTL`).
+    pub admit_cache_ttl: Duration,
+    /// How long a refusal is kept (`ADMIT_NEGATIVE_CACHE_TTL`).
+    pub admit_negative_cache_ttl: Duration,
 
-    /// Defaults for a service whose route config sets no `timeouts`.
-    pub upstream_connect_timeout: Duration,
-    pub upstream_read_timeout: Duration,
-
-    /// Gateway fallback. `0` = unlimited fallback (routes may still override).
-    pub rate_limit_requests: u64,
-    pub rate_limit_window_seconds: u64,
     pub rate_limit_auth_failure_requests: u64,
     pub rate_limit_auth_failure_window_seconds: u64,
 
@@ -79,25 +70,15 @@ impl GatewayConfig {
     pub fn from_env() -> Result<Self, GatewayConfigError> {
         let auth_issuer = require_env("AUTH_ISSUER")?;
         let auth_jwks_uri = require_env("AUTH_JWKS_URI")?;
-        let admit_url = require_env("ADMIT_URL")?;
-        let control_plane_url = require_env("CONTROL_PLANE_URL")?
-            .trim()
-            .trim_end_matches('/')
-            .to_string();
+        let auth_allowed_audiences = parse_audiences(&require_env("AUTH_ALLOWED_AUDIENCES")?)
+            .ok_or(GatewayConfigError::Invalid {
+                key: "AUTH_ALLOWED_AUDIENCES",
+                message: "list at least one audience, or *".to_string(),
+            })?;
+        let identity_internal_url = base_url(require_env("IDENTITY_INTERNAL_URL")?);
+        let control_plane_url = base_url(require_env("CONTROL_PLANE_URL")?);
         let valkey_url = require_env("VALKEY_URL")?;
         let audit_url = audit_url_from_env()?;
-        let rate_limit_requests =
-            parse_u64_env("RATE_LIMIT_REQUESTS", DEFAULT_RATE_LIMIT_REQUESTS)?;
-        let rate_limit_window_seconds = parse_u64_env(
-            "RATE_LIMIT_WINDOW_SECONDS",
-            DEFAULT_RATE_LIMIT_WINDOW_SECONDS,
-        )?;
-        if rate_limit_requests > 0 && rate_limit_window_seconds == 0 {
-            return Err(GatewayConfigError::Invalid {
-                key: "RATE_LIMIT_WINDOW_SECONDS",
-                message: "must be > 0 when RATE_LIMIT_REQUESTS > 0".to_string(),
-            });
-        }
         let rate_limit_auth_failure_requests = parse_u64_env(
             "RATE_LIMIT_AUTH_FAILURE_REQUESTS",
             DEFAULT_RATE_LIMIT_AUTH_FAILURE_REQUESTS,
@@ -130,31 +111,20 @@ impl GatewayConfig {
 
             auth_issuer,
             auth_jwks_uri,
-            auth_allowed_audiences: csv_env("AUTH_ALLOWED_AUDIENCES"),
+            auth_allowed_audiences,
             auth_subject_claim: parse_subject_claim(
                 &env::var("AUTH_SUBJECT_CLAIM")
                     .unwrap_or_else(|_| DEFAULT_SUBJECT_CLAIM.to_string()),
             ),
 
-            admit_url,
-            internal_auth_token: optional_nonempty_env("INTERNAL_AUTH_TOKEN"),
+            identity_internal_url,
 
-            apikey_cache_ttl_secs: parse_u64_env(
-                "APIKEY_CACHE_TTL_SECS",
-                DEFAULT_APIKEY_CACHE_TTL_SECS,
+            admit_cache_ttl: duration_env("ADMIT_CACHE_TTL", DEFAULT_ADMIT_CACHE_TTL)?,
+            admit_negative_cache_ttl: duration_env(
+                "ADMIT_NEGATIVE_CACHE_TTL",
+                DEFAULT_ADMIT_NEGATIVE_CACHE_TTL,
             )?,
 
-            upstream_connect_timeout: Duration::from_millis(parse_u64_env(
-                "UPSTREAM_CONNECT_TIMEOUT_MS",
-                DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS,
-            )?),
-            upstream_read_timeout: Duration::from_millis(parse_u64_env(
-                "UPSTREAM_READ_TIMEOUT_MS",
-                DEFAULT_UPSTREAM_READ_TIMEOUT_MS,
-            )?),
-
-            rate_limit_requests,
-            rate_limit_window_seconds,
             rate_limit_auth_failure_requests,
             rate_limit_auth_failure_window_seconds,
 
@@ -164,21 +134,41 @@ impl GatewayConfig {
     }
 }
 
-fn require_env(key: &'static str) -> Result<String, GatewayConfigError> {
-    env::var(key).map_err(|_| GatewayConfigError::Missing(key))
+/// A duration as the config writes one: a whole number and `s`, `m`, `h` or `d`.
+pub fn parse_duration(raw: &str) -> Option<Duration> {
+    let raw = raw.trim();
+    let split = raw.find(|c: char| !c.is_ascii_digit())?;
+    let (number, unit) = raw.split_at(split);
+    let n: u64 = number.parse().ok()?;
+    let secs = |mult: u64| n.checked_mul(mult).map(Duration::from_secs);
+    match unit {
+        "s" => secs(1),
+        "m" => secs(60),
+        "h" => secs(3600),
+        "d" => secs(86_400),
+        _ => None,
+    }
 }
 
-fn optional_nonempty_env(key: &str) -> Option<String> {
-    env::var(key).ok().filter(|s| !s.is_empty())
-}
-
-fn csv_env(key: &str) -> Vec<String> {
-    env::var(key)
-        .unwrap_or_default()
+/// `*` accepts any audience; otherwise a comma-separated list. None when empty.
+fn parse_audiences(raw: &str) -> Option<Audiences> {
+    if raw.trim() == "*" {
+        return Some(Audiences::Any);
+    }
+    let list: Vec<String> = raw
         .split(',')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .collect()
+        .collect();
+    (!list.is_empty()).then_some(Audiences::OneOf(list))
+}
+
+fn base_url(raw: String) -> String {
+    raw.trim().trim_end_matches('/').to_string()
+}
+
+fn require_env(key: &'static str) -> Result<String, GatewayConfigError> {
+    env::var(key).map_err(|_| GatewayConfigError::Missing(key))
 }
 
 fn parse_u64_env(key: &'static str, default: u64) -> Result<u64, GatewayConfigError> {
@@ -186,6 +176,16 @@ fn parse_u64_env(key: &'static str, default: u64) -> Result<u64, GatewayConfigEr
         Ok(raw) => raw.trim().parse().map_err(|e| GatewayConfigError::Invalid {
             key,
             message: format!("{e}"),
+        }),
+        Err(_) => Ok(default),
+    }
+}
+
+fn duration_env(key: &'static str, default: Duration) -> Result<Duration, GatewayConfigError> {
+    match env::var(key) {
+        Ok(raw) => parse_duration(&raw).ok_or_else(|| GatewayConfigError::Invalid {
+            key,
+            message: format!("{raw:?} is not a duration such as 10s or 5m"),
         }),
         Err(_) => Ok(default),
     }
@@ -254,5 +254,26 @@ mod tests {
             None
         );
         assert!(parse_audit(Some("no"), Some("http://audit:3003")).is_err());
+    }
+
+    #[test]
+    fn durations_are_a_number_and_a_unit() {
+        assert_eq!(parse_duration("10s"), Some(Duration::from_secs(10)));
+        assert_eq!(parse_duration("5m"), Some(Duration::from_secs(300)));
+        assert_eq!(parse_duration("2h"), Some(Duration::from_secs(7200)));
+        assert_eq!(parse_duration("30d"), Some(Duration::from_secs(2_592_000)));
+        for bad in ["", "10", "s", "1.5s", "10 s", "-1s", "10w", "500ms"] {
+            assert_eq!(parse_duration(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn audiences_are_a_list_or_any() {
+        assert_eq!(parse_audiences("*"), Some(Audiences::Any));
+        assert_eq!(
+            parse_audiences("api, console"),
+            Some(Audiences::OneOf(vec!["api".into(), "console".into()]))
+        );
+        assert_eq!(parse_audiences(" , "), None);
     }
 }

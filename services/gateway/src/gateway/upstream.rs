@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use http::header::HeaderName;
 use http::HeaderValue;
 use opentelemetry::global;
@@ -16,13 +14,9 @@ use crate::route_map::Route;
 
 use super::context::GatewayContext;
 
-const CLIENT_CREDENTIAL_HEADERS: &[&str] = &["Authorization", "X-API-Key"];
-
 /// Consumed by the gateway; never leaked to services.
 pub fn strip_client_credentials(req: &mut RequestHeader) {
-    for name in CLIENT_CREDENTIAL_HEADERS {
-        req.remove_header(*name);
-    }
+    req.remove_header("Authorization");
 }
 
 /// Every `X-Plat5-*` a client sent: a client can't name a node or a member
@@ -43,7 +37,12 @@ pub fn record_admission_span(ctx: &GatewayContext, admitted: &Admitted) {
     let (Some(span), Admitted::Caller(caller)) = (&ctx.root_span, admitted) else {
         return;
     };
-    span.record("plat5.member_id", caller.member_id.as_str());
+    if let Some(member) = &caller.member_id {
+        span.record("plat5.member_id", member.as_str());
+    }
+    if let Some(user) = &caller.user_id {
+        span.record("plat5.user_id", user.as_str());
+    }
     if let Some(root) = caller.root_id() {
         span.record("plat5.root_id", root);
     }
@@ -69,8 +68,6 @@ pub async fn build_and_store_upstream_peer(
     ctx: &mut GatewayContext,
     route: &Route,
     forward: Forward,
-    connect_timeout: Duration,
-    read_timeout: Duration,
 ) -> std::result::Result<(), UpstreamError> {
     let req = session.req_header_mut();
     strip_client_credentials(req);
@@ -80,33 +77,27 @@ pub async fn build_and_store_upstream_peer(
             warn!(
                 error_kind = ErrorKind::Internal.as_str(),
                 error_message = %err,
-                "failed to set a subject header"
+                "failed to set a caller header"
             );
             return Err(UpstreamError::Internal);
         }
     }
 
-    if let Some(upstream_path) = forward.path {
-        let query = session.req_header().uri.query().map(str::to_string);
-        let path_and_query = path_and_query(&upstream_path, query.as_deref());
-        let new_uri = http::Uri::builder()
-            .path_and_query(path_and_query.as_str())
-            .build()
-            .map_err(|err| {
-                warn!(
-                    error_kind = ErrorKind::Internal.as_str(),
-                    error_message = %err,
-                    "failed to build upstream URI"
-                );
-                UpstreamError::Internal
-            })?;
-        session.req_header_mut().set_uri(new_uri);
-        debug!(
-            route = %route.path,
-            upstream = %upstream_path,
-            "path rewritten"
-        );
-    }
+    let query = session.req_header().uri.query().map(str::to_string);
+    let path_and_query = path_and_query(&forward.path, query.as_deref());
+    let new_uri = http::Uri::builder()
+        .path_and_query(path_and_query.as_str())
+        .build()
+        .map_err(|err| {
+            warn!(
+                error_kind = ErrorKind::Internal.as_str(),
+                error_message = %err,
+                "failed to build upstream URI"
+            );
+            UpstreamError::Internal
+        })?;
+    session.req_header_mut().set_uri(new_uri);
+    debug!(route = %route.path, upstream = %forward.path, "path rewritten");
 
     {
         let mut injector = RequestHeaderInjector {
@@ -130,8 +121,8 @@ pub async fn build_and_store_upstream_peer(
     };
     info!(route = %route.path, upstream = %peer_addr, "forwarding request to upstream");
     let mut peer = HttpPeer::new(socket_addr, false, String::new());
-    peer.options.connection_timeout = Some(connect_timeout);
-    peer.options.read_timeout = Some(read_timeout);
+    peer.options.connection_timeout = Some(route.timeouts.connect);
+    peer.options.read_timeout = Some(route.timeouts.read);
     ctx.upstream_peer = Some(Box::new(peer));
     Ok(())
 }
@@ -209,13 +200,11 @@ mod tests {
         let mut req = RequestHeader::build("GET", b"/api/x", None).unwrap();
         req.insert_header("Authorization", "Bearer secret-jwt")
             .unwrap();
-        req.insert_header("X-API-Key", "plat5-k-2-test").unwrap();
         req.insert_header("X-Request-ID", "req-1").unwrap();
 
         strip_client_credentials(&mut req);
 
         assert!(req.headers.get("Authorization").is_none());
-        assert!(req.headers.get("X-API-Key").is_none());
         assert_eq!(
             req.headers
                 .get("X-Request-ID")
@@ -227,8 +216,9 @@ mod tests {
     #[test]
     fn strips_every_plat5_header_a_client_sent() {
         let mut req = RequestHeader::build("GET", b"/x", None).unwrap();
-        req.insert_header("X-Plat5-Member-Id", "m_forged").unwrap();
-        req.insert_header("x-plat5-project-id", "n_forged").unwrap();
+        req.insert_header("X-Plat5-Member-Id", "01forged").unwrap();
+        req.insert_header("X-Plat5-User-Id", "01forged").unwrap();
+        req.insert_header("x-plat5-project-id", "01forged").unwrap();
         req.insert_header("X-Plat5-Audit-Details", "{}").unwrap();
         req.insert_header("X-Request-ID", "req-1").unwrap();
         strip_plat5_headers(&mut req);
@@ -242,7 +232,6 @@ mod tests {
         req.insert_header("X-Request-ID", "req-2").unwrap();
         strip_client_credentials(&mut req);
         assert!(req.headers.get("Authorization").is_none());
-        assert!(req.headers.get("X-API-Key").is_none());
         assert_eq!(
             req.headers
                 .get("X-Request-ID")

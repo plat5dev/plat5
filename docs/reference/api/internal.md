@@ -60,7 +60,7 @@ On `INTERNAL_PORT`. Each is one read, at one head, in one Postgres snapshot.
 
 | Path | Reader | `200` body |
 |------|--------|------------|
-| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "rate_limits", "cors" }`. **404** before the first apply |
+| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "rate_limits", "cors", "users" }`. **404** before the first apply. `users` gives the gateway `name_claim`, the JWT claim it sends to admit as `name` |
 | `GET /internal/identity` | identity | `{ "revision", "deletion_grace", "reserved_slugs", "users", "kinds", "roles", "creator_role" }`. **404** before the first apply |
 
 The gateway's `services` are expanded: each service's `url`, `timeouts` and `max_body_bytes` with `defaults` filled in, and its `routes` as the gateway matches them, one per method:

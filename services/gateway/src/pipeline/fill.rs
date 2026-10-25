@@ -1,80 +1,128 @@
-use std::collections::HashMap;
+//! A route's upstream template: compiled when the route is built, filled per
+//! request (docs/reference/config/services.md#upstream).
 
-use crate::auth::admit::NodeRef;
+use std::collections::BTreeMap;
 
-/// What the gateway sends a service: each chain node's id, and the caller's member
-/// id in that tree. Never a slug, never a person's id.
-#[derive(Clone, Copy)]
-pub struct Subject<'a> {
-    pub nodes: &'a [NodeRef],
-    pub member_id: Option<&'a str>,
-}
+use crate::route_map::Scope;
 
-impl Subject<'_> {
-    fn field(&self, name: &str) -> Option<&str> {
-        if name == "member_id" {
-            return self.member_id;
-        }
-        let kind = name.strip_suffix("_id")?;
-        self.nodes
-            .iter()
-            .find(|n| n.kind == kind)
-            .map(|n| n.id.as_str())
-    }
+#[derive(Debug, PartialEq, Eq)]
+enum Part {
+    Text(String),
+    /// `{<kind>.id}`: the chain node at this position.
+    Node(usize),
+    /// `{member.id}`
+    Member,
+    /// `{user.id}`
+    User,
+    /// `{<param>}`: one of the route's own params, as matched.
+    Param(String),
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum RewriteError {
-    /// Client path param is not one segment.
-    PathParam,
-    /// Subject id is not one segment. Platform bug.
-    Subject,
-    /// Template the gateway's own load check should have refused.
-    Internal,
+pub struct Upstream {
+    parts: Vec<Part>,
 }
 
-/// Substitute `{subject.*}` and `{path.*}` in an absolute upstream template.
-/// Inserted values are not scanned again.
-pub fn substitute(
-    template: &str,
-    path_params: &HashMap<String, String>,
-    subject: Subject<'_>,
-) -> Result<String, RewriteError> {
-    let mut out = String::with_capacity(template.len());
-    let mut rest = template;
-    while let Some(start) = rest.find('{') {
-        out.push_str(&rest[..start]);
-        let after = &rest[start + 1..];
-        let Some(end) = after.find('}') else {
-            return Err(RewriteError::Internal);
-        };
-        let body = &after[..end];
-        let Some((namespace, name)) = body.split_once('.') else {
-            return Err(RewriteError::Internal);
-        };
-        let value = match namespace {
-            "subject" => subject.field(name).ok_or(RewriteError::Internal)?,
-            "path" => path_params
-                .get(name)
-                .map(String::as_str)
-                .ok_or(RewriteError::Internal)?,
-            _ => return Err(RewriteError::Internal),
-        };
-        if !one_segment(value) {
-            return Err(match namespace {
-                "path" => RewriteError::PathParam,
-                _ => RewriteError::Subject,
-            });
+/// What the gateway fills an upstream with. Never a slug, never a principal id.
+#[derive(Clone, Copy)]
+pub struct Values<'a> {
+    /// The chain's node ids, root first.
+    pub nodes: &'a [&'a str],
+    pub member_id: Option<&'a str>,
+    pub user_id: Option<&'a str>,
+    pub params: &'a BTreeMap<String, String>,
+}
+
+/// A route param that would change the path the upstream sees: **400**.
+#[derive(Debug, PartialEq, Eq)]
+pub struct BadParam;
+
+impl Upstream {
+    /// Err names a placeholder the scope doesn't provide.
+    pub fn compile(
+        template: &str,
+        scope: &Scope,
+        chain: &[String],
+        own_params: &[&str],
+    ) -> Result<Self, String> {
+        let mut parts = Vec::new();
+        let mut rest = template;
+        while let Some(start) = rest.find('{') {
+            if start > 0 {
+                parts.push(Part::Text(rest[..start].to_string()));
+            }
+            let after = &rest[start + 1..];
+            let end = after
+                .find('}')
+                .ok_or_else(|| "unclosed { in upstream".to_string())?;
+            let name = &after[..end];
+            let part = match name.split_once('.') {
+                Some(("member", "id")) if matches!(scope, Scope::Kind(_)) => Some(Part::Member),
+                Some(("user", "id")) if *scope == Scope::User => Some(Part::User),
+                Some((kind, "id")) => chain.iter().position(|k| k == kind).map(Part::Node),
+                Some(_) => None,
+                None => own_params
+                    .contains(&name)
+                    .then(|| Part::Param(name.to_string())),
+            };
+            parts.push(part.ok_or_else(|| format!("upstream placeholder {{{name}}}"))?);
+            rest = &after[end + 1..];
         }
-        out.push_str(value);
-        rest = &after[end + 1..];
+        if !rest.is_empty() {
+            parts.push(Part::Text(rest.to_string()));
+        }
+        Ok(Self { parts })
     }
-    out.push_str(rest);
-    Ok(out)
+
+    /// The upstream path. Inserted values are not scanned again.
+    pub fn fill(&self, values: Values<'_>) -> Result<String, BadParam> {
+        let mut out = String::new();
+        for part in &self.parts {
+            match part {
+                Part::Text(text) => out.push_str(text),
+                Part::Node(i) => out.push_str(values.nodes[*i]),
+                Part::Member => out.push_str(values.member_id.unwrap_or_default()),
+                Part::User => out.push_str(values.user_id.unwrap_or_default()),
+                Part::Param(name) => {
+                    let value = values.params.get(name).ok_or(BadParam)?;
+                    if !stays_one_segment(value) {
+                        return Err(BadParam);
+                    }
+                    out.push_str(value);
+                }
+            }
+        }
+        Ok(out)
+    }
 }
 
-fn one_segment(value: &str) -> bool {
-    !value.is_empty() && !value.contains('/') && !value.contains('?') && !value.contains('#')
+/// A param value, decoded, that is not `.` or `..` and holds no `/`, `?` or `#`.
+fn stays_one_segment(value: &str) -> bool {
+    let decoded = percent_decode(value.as_bytes());
+    decoded != b"." && decoded != b".." && !decoded.iter().any(|b| b"/?#".contains(b))
+}
+
+fn percent_decode(raw: &[u8]) -> Vec<u8> {
+    let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
+    let mut out = Vec::with_capacity(raw.len());
+    let mut i = 0;
+    while i < raw.len() {
+        let decoded = match raw.get(i..i + 3) {
+            Some([b'%', h, l]) => hex(*h).zip(hex(*l)).map(|(h, l)| h << 4 | l),
+            _ => None,
+        };
+        match decoded {
+            Some(b) => {
+                out.push(b);
+                i += 3;
+            }
+            None => {
+                out.push(raw[i]);
+                i += 1;
+            }
+        }
+    }
+    out
 }
 
 pub fn path_and_query(path: &str, query: Option<&str>) -> String {
@@ -88,87 +136,100 @@ pub fn path_and_query(path: &str, query: Option<&str>) -> String {
 mod tests {
     use super::*;
 
-    fn params(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+    fn chain() -> Vec<String> {
+        vec!["organization".into(), "project".into()]
+    }
+
+    fn project() -> Scope {
+        Scope::Kind("project".into())
+    }
+
+    fn params(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect()
     }
 
-    fn nodes(pairs: &[(&str, &str)]) -> Vec<NodeRef> {
-        pairs
-            .iter()
-            .map(|(kind, id)| NodeRef {
-                kind: kind.to_string(),
-                id: id.to_string(),
-            })
-            .collect()
-    }
-
     #[test]
-    fn substitutes_subject_and_path() {
-        let chain = nodes(&[("organization", "n_o"), ("project", "n_p")]);
-        let got = substitute(
-            "/projects/{subject.project_id}/plans/{path.key}/by/{subject.member_id}",
-            &params(&[("key", "pro"), ("project", "web")]),
-            Subject {
-                nodes: &chain,
-                member_id: Some("m_1"),
-            },
+    fn fills_node_ids_the_member_and_params() {
+        let up = Upstream::compile(
+            "/projects/{project.id}/plans/{plan_id}/by/{member.id}/in/{organization.id}",
+            &project(),
+            &chain(),
+            &["plan_id"],
         )
         .unwrap();
-        assert_eq!(got, "/projects/n_p/plans/pro/by/m_1");
+        let p = params(&[("plan_id", "pro")]);
+        let got = up
+            .fill(Values {
+                nodes: &["01o", "01p"],
+                member_id: Some("01m"),
+                user_id: None,
+                params: &p,
+            })
+            .unwrap();
+        assert_eq!(got, "/projects/01p/plans/pro/by/01m/in/01o");
     }
 
     #[test]
-    fn path_param_slash_is_client_error() {
-        let err = substitute(
-            "/widgets/{path.widget_id}",
-            &params(&[("widget_id", "a/b")]),
-            Subject {
+    fn a_user_route_fills_the_user() {
+        let up = Upstream::compile("/users/{user.id}/keys", &Scope::User, &[], &[]).unwrap();
+        let p = params(&[]);
+        let got = up
+            .fill(Values {
                 nodes: &[],
                 member_id: None,
-            },
-        )
-        .unwrap_err();
-        assert_eq!(err, RewriteError::PathParam);
+                user_id: Some("01u"),
+                params: &p,
+            })
+            .unwrap();
+        assert_eq!(got, "/users/01u/keys");
     }
 
     #[test]
-    fn subject_slash_is_platform_error() {
-        let chain = nodes(&[("organization", "n/1")]);
-        let err = substitute(
-            "/nodes/{subject.organization_id}",
-            &params(&[]),
-            Subject {
-                nodes: &chain,
-                member_id: None,
-            },
-        )
-        .unwrap_err();
-        assert_eq!(err, RewriteError::Subject);
+    fn a_placeholder_the_scope_lacks_cannot_compile() {
+        for (template, scope) in [
+            ("/x/{folder.id}", project()),
+            ("/x/{project.slug}", project()),
+            ("/x/{user.id}", project()),
+            ("/x/{member.id}", Scope::User),
+            ("/x/{member.id}", Scope::Public),
+            ("/x/{project}", project()),
+            ("/x/{other}", project()),
+            ("/x/{plan_id", project()),
+        ] {
+            let err = Upstream::compile(template, &scope, &chain(), &["plan_id"]).unwrap_err();
+            assert!(err.contains("upstream"), "{template}: {err}");
+        }
     }
 
     #[test]
-    fn a_field_the_subject_lacks_is_internal() {
-        let err = substitute(
-            "/nodes/{subject.folder_id}",
-            &params(&[]),
-            Subject {
+    fn a_param_that_changes_the_path_is_refused() {
+        let up = Upstream::compile("/w/{id}", &Scope::Public, &[], &["id"]).unwrap();
+        let fill = |v: &str| {
+            let p = params(&[("id", v)]);
+            up.fill(Values {
                 nodes: &[],
-                member_id: Some("m_1"),
-            },
-        )
-        .unwrap_err();
-        assert_eq!(err, RewriteError::Internal);
+                member_id: None,
+                user_id: None,
+                params: &p,
+            })
+        };
+        for bad in [".", "..", "%2e%2E", "%2E", "a%2Fb", "a%3fb", "a%23b"] {
+            assert_eq!(fill(bad), Err(BadParam), "{bad}");
+        }
+        for ok in ["a.b", "...", "%41", "a%2", "%zz", "a%20b"] {
+            assert_eq!(fill(ok), Ok(format!("/w/{ok}")), "{ok}");
+        }
     }
 
     #[test]
     fn preserves_query() {
         assert_eq!(
-            path_and_query("/members/m1/nodes", Some("kind=project")),
-            "/members/m1/nodes?kind=project"
+            path_and_query("/users/01u/nodes", Some("kind=project")),
+            "/users/01u/nodes?kind=project"
         );
-        assert_eq!(path_and_query("/me", None), "/me");
+        assert_eq!(path_and_query("/users/01u", None), "/users/01u");
     }
 }

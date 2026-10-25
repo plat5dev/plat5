@@ -1,8 +1,9 @@
 use once_cell::sync::Lazy;
-use opentelemetry::metrics::{Counter, Histogram};
+use opentelemetry::metrics::{Counter, Gauge, Histogram};
 use opentelemetry::{global, KeyValue};
 use prometheus::{
-    histogram_opts, register_histogram_vec, register_int_counter_vec, HistogramVec, IntCounterVec,
+    histogram_opts, register_histogram_vec, register_int_counter_vec, register_int_gauge,
+    HistogramVec, IntCounterVec, IntGauge,
 };
 
 /// Registers process metrics (CPU, memory, file descriptors, etc.)
@@ -82,7 +83,7 @@ pub static AUTH_CACHE_MISSES_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
 pub static AUDIT_WRITES_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "audit_writes_total",
-        "Audit writes to the audit service by write (intent, outcome) and result",
+        "Audit writes to the audit service by write (intent, outcome, rejected) and result",
         &["write", "result"]
     )
     .expect("failed to register audit_writes_total")
@@ -98,6 +99,23 @@ pub static AUDIT_INTENT_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
         .expect("failed to register audit_intent_duration_seconds")
 });
 
+pub static GATEWAY_CONFIG_REVISION: Lazy<IntGauge> = Lazy::new(|| {
+    register_int_gauge!(
+        "gateway_config_revision",
+        "The control-plane revision this replica serves"
+    )
+    .expect("failed to register gateway_config_revision")
+});
+
+pub static GATEWAY_CONFIG_REFUSED_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "gateway_config_refused_total",
+        "Control-plane snapshots this replica refused, by revision",
+        &["revision"]
+    )
+    .expect("failed to register gateway_config_refused_total")
+});
+
 // OTEL dual-write instruments. No-op until a MeterProvider is installed.
 struct OtelInstruments {
     http_requests: Counter<u64>,
@@ -108,6 +126,8 @@ struct OtelInstruments {
     auth_cache_misses: Counter<u64>,
     audit_writes: Counter<u64>,
     audit_intent_duration: Histogram<f64>,
+    config_revision: Gauge<i64>,
+    config_refused: Counter<u64>,
 }
 
 static OTEL: Lazy<OtelInstruments> = Lazy::new(|| {
@@ -144,7 +164,7 @@ static OTEL: Lazy<OtelInstruments> = Lazy::new(|| {
         audit_writes: meter
             .u64_counter("audit_writes_total")
             .with_description(
-                "Audit writes to the audit service by write (intent, outcome) and result",
+                "Audit writes to the audit service by write (intent, outcome, rejected) and result",
             )
             .build(),
         audit_intent_duration: meter
@@ -153,6 +173,14 @@ static OTEL: Lazy<OtelInstruments> = Lazy::new(|| {
                 "Time an audited request waited on its intent write, retries included",
             )
             .with_boundaries(vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0])
+            .build(),
+        config_revision: meter
+            .i64_gauge("gateway_config_revision")
+            .with_description("The control-plane revision this replica serves")
+            .build(),
+        config_refused: meter
+            .u64_counter("gateway_config_refused_total")
+            .with_description("Control-plane snapshots this replica refused, by revision")
             .build(),
     }
 });
@@ -220,8 +248,8 @@ pub fn record_auth_cache_miss(auth_type: &str) {
         .add(1, &[KeyValue::new("auth_type", auth_type.to_string())]);
 }
 
-/// `write` is `intent` or `outcome`. `result`: `ok`, `failed`, `not_found` (outcome
-/// with no intent), or `dropped` (outcome queue full).
+/// `write` is `intent`, `outcome` or `rejected`. `result`: `ok`, `failed`,
+/// `not_found` (outcome with no intent), or `dropped` (background queue full).
 pub fn record_audit_write(write: &str, result: &str) {
     AUDIT_WRITES_TOTAL.with_label_values(&[write, result]).inc();
     OTEL.audit_writes.add(
@@ -241,4 +269,20 @@ pub fn record_audit_intent_duration(result: &str, duration_secs: f64) {
         duration_secs,
         &[KeyValue::new("result", result.to_string())],
     );
+}
+
+/// The revision this replica now serves.
+pub fn record_config_revision(revision: i64) {
+    GATEWAY_CONFIG_REVISION.set(revision);
+    OTEL.config_revision.record(revision, &[]);
+}
+
+/// A snapshot this replica refused.
+pub fn record_config_refused(revision: i64) {
+    let revision = revision.to_string();
+    GATEWAY_CONFIG_REFUSED_TOTAL
+        .with_label_values(&[&revision])
+        .inc();
+    OTEL.config_refused
+        .add(1, &[KeyValue::new("revision", revision)]);
 }

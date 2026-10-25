@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::fmt;
 
-use crate::route_map::Scope;
+use crate::route_map::{Required, Scope};
 
 /// Standard error kinds for telemetry.
 /// Used in span attributes and log fields.
@@ -78,7 +78,7 @@ impl ApiError {
         let mut err = Self::unauthorized(details);
         err.message = match scope {
             Scope::Kind(_) => "Authentication required: a sign-in token or an API key.",
-            Scope::SignIn(_) => "Authentication required: a sign-in token or a personal API key.",
+            Scope::User => "Authentication required: a sign-in token or a personal API key.",
             Scope::Public => "Authentication required.",
         }
         .to_string();
@@ -86,13 +86,19 @@ impl ApiError {
     }
 
     /// The one 403 body: a node that doesn't exist, a caller outside its tree, and a
-    /// missing label all answer this, with the route's `required_labels`.
-    pub fn forbidden(required_labels: &[String]) -> Self {
+    /// missing permission all answer this, with the route's `required_permissions`:
+    /// its list, or `"any_member"`.
+    pub fn forbidden(required: &Required) -> Self {
+        let required = match required {
+            Required::AnyOf(list) => serde_json::json!(list),
+            Required::AnyMember => serde_json::json!("any_member"),
+            Required::Nothing => serde_json::Value::Null,
+        };
         Self {
             error_type: "invalid_request_error".to_string(),
             code: "FORBIDDEN".to_string(),
             message: "Permission denied, or it may not exist.".to_string(),
-            details: Some(serde_json::json!({ "required_labels": required_labels })),
+            details: Some(serde_json::json!({ "required_permissions": required })),
         }
     }
 
@@ -180,9 +186,9 @@ mod tests {
 
     #[test]
     fn test_unauthorized_names_what_the_scope_takes() {
-        let sign_in = ApiError::unauthorized_for(&Scope::SignIn("directory".into()), None);
+        let user = ApiError::unauthorized_for(&Scope::User, None);
         assert_eq!(
-            sign_in.message,
+            user.message,
             "Authentication required: a sign-in token or a personal API key."
         );
         let kind = ApiError::unauthorized_for(&Scope::Kind("project".into()), None);
@@ -253,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_forbidden_serialization() {
-        let err = ApiError::forbidden(&["project:read".to_string()]);
+        let err = ApiError::forbidden(&Required::AnyOf(vec!["project:read".to_string()]));
         let json = String::from_utf8(err.to_json_bytes(None)).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["error"]["type"], "invalid_request_error");
@@ -264,7 +270,12 @@ mod tests {
         );
         assert_eq!(
             parsed["error"]["details"],
-            serde_json::json!({ "required_labels": ["project:read"] })
+            serde_json::json!({ "required_permissions": ["project:read"] })
+        );
+        let any = ApiError::forbidden(&Required::AnyMember);
+        assert_eq!(
+            any.details,
+            Some(serde_json::json!({ "required_permissions": "any_member" }))
         );
     }
 

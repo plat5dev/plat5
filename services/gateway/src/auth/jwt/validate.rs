@@ -6,13 +6,14 @@ use jsonwebtoken::{decode, decode_header, DecodingKey, TokenData, Validation};
 use serde_json::Value;
 use tracing::debug;
 
+use super::Audiences;
 use crate::metrics;
 
 pub async fn validate_token(
     token: &str,
     issuer: String,
     jwks: JwkSet,
-    allowed_audiences: Vec<String>,
+    allowed_audiences: Audiences,
 ) -> Result<(TokenData<Value>, String), JwtError> {
     let token = token.to_string();
     let span = tracing::Span::current();
@@ -32,7 +33,7 @@ fn validate_token_sync(
     token: &str,
     issuer: &str,
     jwks: &JwkSet,
-    allowed_audiences: &[String],
+    allowed_audiences: &Audiences,
 ) -> Result<(TokenData<Value>, String), JwtError> {
     let header = decode_header(token)?;
 
@@ -48,10 +49,9 @@ fn validate_token_sync(
 
     let mut validation = Validation::new(alg);
     validation.set_issuer(&[issuer]);
-    if !allowed_audiences.is_empty() {
-        validation.set_audience(allowed_audiences);
-    } else {
-        validation.validate_aud = false;
+    match allowed_audiences {
+        Audiences::OneOf(list) => validation.set_audience(list),
+        Audiences::Any => validation.validate_aud = false,
     }
     validation.set_required_spec_claims(&["exp"]);
 

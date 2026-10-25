@@ -7,6 +7,8 @@ use jsonwebtoken::jwk::JwkSet;
 use tokio::sync::{broadcast, Mutex};
 use tracing::{info, warn};
 
+use super::Audiences;
+
 const FETCH_TIMEOUT_SECS: u64 = 10;
 const RETRY_INTERVAL_SECS: u64 = 2;
 const REFRESH_INTERVAL_SECS: u64 = 15 * 60;
@@ -17,7 +19,7 @@ type JwksFetchTx = broadcast::Sender<Result<Arc<JwkSet>, String>>;
 pub struct JwtValidatorState {
     issuer: Arc<str>,
     jwks_uri: Arc<str>,
-    allowed_audiences: Arc<[String]>,
+    allowed_audiences: Audiences,
     jwks: Arc<ArcSwapOption<JwkSet>>,
     client: reqwest::Client,
     /// In-flight cold-path fetch. Waiters subscribe; the network call runs without this lock.
@@ -26,7 +28,7 @@ pub struct JwtValidatorState {
 }
 
 impl JwtValidatorState {
-    pub fn new(issuer: String, jwks_uri: String, allowed_audiences: Vec<String>) -> Self {
+    pub fn new(issuer: String, jwks_uri: String, allowed_audiences: Audiences) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
             .build()
@@ -35,7 +37,7 @@ impl JwtValidatorState {
         Self {
             issuer: issuer.into(),
             jwks_uri: jwks_uri.into(),
-            allowed_audiences: allowed_audiences.into(),
+            allowed_audiences,
             jwks: Arc::new(ArcSwapOption::empty()),
             client,
             in_flight: Arc::new(Mutex::new(None)),
@@ -105,7 +107,7 @@ impl JwtValidatorState {
         self.issuer.to_string()
     }
 
-    pub fn get_allowed_audiences(&self) -> &[String] {
+    pub fn get_allowed_audiences(&self) -> &Audiences {
         &self.allowed_audiences
     }
 
