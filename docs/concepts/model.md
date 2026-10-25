@@ -52,7 +52,7 @@ A path segment that starts with a digit is read as a node id, anything else as a
 5. **Services see node ids and the caller's member id on tree routes, and a user id only on user routes. Never a principal id.**
 6. **Services do no auth, so any front door can call them.** A service's API is its paths and documented headers, reachable only on the private network. Plat5's gateway is one front door; others (an operator plane, an internal job, a custom gateway) bring their own rules and docs.
 7. **The deployment's data, not Plat5's names.** Kinds, roles, permissions and routes are all config.
-8. **Changes are planned before they apply; deletes are soft.**
+8. **Config changes are planned before they apply; deletes are soft.**
 
 ## Where each decision lives
 

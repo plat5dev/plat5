@@ -220,7 +220,7 @@ func checkRole(snap *feed.Snapshot, roleSlug, kind, field string) error {
 		return errors.FieldError(field, "That role doesn't exist.")
 	}
 	if !role.BindableAtKind(kind) {
-		return errors.FieldError(field, fmt.Sprintf("That role can't be given on a %s.", kind))
+		return errors.FieldError(field, fmt.Sprintf("That role can't be given on this %s.", kind))
 	}
 	return nil
 }

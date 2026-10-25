@@ -72,7 +72,7 @@ func TestCreateInvite(t *testing.T) {
 		{org.ID, `{"role": "member", "grants": [{"node_id": "` + otherFolder.ID + `", "role": "browser"}]}`, "That doesn't look right."},
 		{org.ID, `{"role": "member", "grants": [{"node_id": "` + org.ID + `", "role": "admin"}]}`, "That doesn't look right."},
 		{org.ID, `{"role": "member", "grants": [{"node_id": "` + p.ID + `", "role": "viewer"}, {"node_id": "` + p.ID + `", "role": "admin"}]}`, "That doesn't look right."},
-		{org.ID, `{"role": "member", "grants": [{"node_id": "` + p.ID + `", "role": "member"}]}`, "That role can't be given on a project."},
+		{org.ID, `{"role": "member", "grants": [{"node_id": "` + p.ID + `", "role": "member"}]}`, "That role can't be given on this project."},
 		{org.ID, `{"role": "member", "grants": [{"node_id": "` + p.ID + `"}]}`, "Choose a role."},
 	} {
 		r := e.call("POST", "/nodes/"+c.node+"/invites", "", c.body)

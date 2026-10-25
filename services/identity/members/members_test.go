@@ -53,7 +53,7 @@ func TestAddMember(t *testing.T) {
 		{`{"role": "member"}`, "Choose someone to add."},
 		{`{"idp": {"issuer": "i", "subject": "a"}}`, "Choose a role."},
 		{`{"idp": {"issuer": "i", "subject": "a"}, "role": "nope"}`, "That role doesn't exist."},
-		{`{"idp": {"issuer": "i", "subject": "a"}, "role": "viewer"}`, "That role can't be given on a organization."},
+		{`{"idp": {"issuer": "i", "subject": "a"}, "role": "viewer"}`, "That role can't be given on this organization."},
 	} {
 		r := e.call("POST", "/nodes/"+org.ID+"/members", "", c.body)
 		if r.status != 422 || r.message() != c.msg {
@@ -284,7 +284,7 @@ func TestServiceAccountsAndKeys(t *testing.T) {
 		{`{"name": "x"}`, "Choose a role."},
 		{`{"role": "viewer"}`, "Name is required."},
 		{`{"name": "` + strings.Repeat("x", 129) + `", "role": "viewer"}`, "Name is too long."},
-		{`{"name": "x", "role": "member"}`, "That role can't be given on a project."},
+		{`{"name": "x", "role": "member"}`, "That role can't be given on this project."},
 	} {
 		r := e.call("POST", "/nodes/"+p.ID+"/service-accounts", "", c.body)
 		if r.status != 422 || r.message() != c.msg {

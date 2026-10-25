@@ -54,7 +54,7 @@ Clients show `error.message`. `details.fields` is for multi-field 422s; `message
 | Slug malformed | Use 3 to 63 lowercase letters, digits and hyphens, starting with a letter. |
 | Slug reserved | That name is reserved. |
 | Slug taken, live or tombstone | That name is taken. |
-| Child kind whose parent is another kind | A {kind} can't go here. |
+| Child kind whose parent is another kind | Kind {kind} can't go here. |
 | Restore with a deleted parent | Restore the {parent kind} first. |
 | Restore past the grace period | This can no longer be restored. |
 | Create under a deleted node | Restore the {parent kind} first. |
@@ -75,7 +75,7 @@ Clients show `error.message`. `details.fields` is for multi-field 422s; `message
 | When | `message` |
 |------|-----------|
 | `role` not in the roles document | That role doesn't exist. |
-| `role` not bindable at this kind | That role can't be given on a {kind}. |
+| `role` not bindable at this kind | That role can't be given on this {kind}. |
 | `role` missing | Choose a role. |
 
 All are **422** `VALIDATION_ERROR` with `path` `role`.

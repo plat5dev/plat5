@@ -858,7 +858,7 @@ func slugTaken(slug string) error {
 }
 
 func kindNotHere(kind string) error {
-	return errors.FieldError("kind", fmt.Sprintf("A %s can't go here.", kind))
+	return errors.FieldError("kind", fmt.Sprintf("Kind %s can't go here.", kind))
 }
 
 func parentNotLive(parent *Node) error {

@@ -105,7 +105,7 @@ func TestCreateChildBindsTheCreator(t *testing.T) {
 	}
 
 	r = e.call("POST", "/nodes/"+org.ID+"/children/project", admin, `{"display_name": "X"}`)
-	if r.status != 422 || r.message() != "A project can't go here." {
+	if r.status != 422 || r.message() != "Kind project can't go here." {
 		t.Fatalf("kind not allowed here: %d %v", r.status, r.body)
 	}
 	e.expect(e.call("POST", "/nodes/"+id.New()+"/children/folder", admin, `{"display_name": "X"}`), 404, "missing parent")

@@ -294,7 +294,7 @@ fn check_spec(config: &Config, spec: &Spec, errs: &mut Vec<FieldError>) -> bool 
                     errs,
                     &spec.path_at,
                     format!(
-                        "under the {child} collection {collection}: a {child} with that slug would be shadowed. Only {collection} itself can be a route here"
+                        "under the {child} collection {collection}: the {child} with that slug would be shadowed. Only {collection} itself can be a route here"
                     ),
                 );
                 ok = false;

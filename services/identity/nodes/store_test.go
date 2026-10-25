@@ -247,7 +247,7 @@ func TestCreateKindRules(t *testing.T) {
 	} {
 		_, err := e.store.Create(e.ctx, e.snap, tc.in)
 		apiErr := wantAPIError(t, err, 422, "VALIDATION_ERROR")
-		if tc.name == "a kind under another kind than its parent" && apiErr.Message != "A project can't go here." {
+		if tc.name == "a kind under another kind than its parent" && apiErr.Message != "Kind project can't go here." {
 			t.Fatalf("%s: message %q", tc.name, apiErr.Message)
 		}
 	}
