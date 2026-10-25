@@ -57,7 +57,7 @@ func main() {
 	handler := events.NewHandler(store)
 
 	app := newPublicApp(telem, handler)
-	internalApp := newInternalApp(telem, pool, cfg.InternalAuthToken, handler)
+	internalApp := newInternalApp(telem, pool, handler)
 
 	baseLogger := telem.Logger()
 	baseLogger.Info().
@@ -127,7 +127,6 @@ func newPublicApp(telem *telemetry.Telemetry, handler *events.Handler) *fiber.Ap
 func newInternalApp(
 	telem *telemetry.Telemetry,
 	pool *pgxpool.Pool,
-	internalToken string,
 	handler *events.Handler,
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
@@ -150,6 +149,8 @@ func newInternalApp(
 	app.Get("/metrics", adaptor.HTTPHandler(metrics.Handler()))
 
 	// Health and /metrics stay off traces and HTTP RED (docs/reference/health.md).
+	// The internal port takes no token: it's reachable only inside the
+	// deployment's network (docs/reference/api/internal.md).
 	internalAPI := app.Group("/internal",
 		otel.Middleware(
 			otel.WithTracerProvider(telem.TracerProvider()),
@@ -158,7 +159,6 @@ func newInternalApp(
 			otel.WithSpanNameFormatter(middleware.HTTPSpanName),
 		),
 		middleware.RequestLogger(telem),
-		middleware.RequireInternalToken(internalToken),
 	)
 	handler.MountInternal(internalAPI)
 	return app

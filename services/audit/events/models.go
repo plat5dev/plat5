@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// Outcomes (docs/reference/api/audit.md#event). Pending is the only one an
-// intent writes.
+// Outcomes (docs/reference/api/audit.md#event). Pending is the one an intent
+// writes; a rejected intent arrives final.
 const (
 	OutcomePending    = "pending"
 	OutcomeRejected   = "rejected"
@@ -23,13 +23,14 @@ const (
 	AuthAPIKey = "apikey"
 )
 
-// Actor is the member whose credential was admitted. KeyPrefix is nil for a
-// JWT.
+// Actor is who the gateway admitted. On a kind route MemberID is set; on a
+// user route UserID is. KeyID is nil for a JWT.
 type Actor struct {
-	MemberID  string  `json:"member_id"`
-	Principal string  `json:"principal"`
-	AuthType  string  `json:"auth_type"`
-	KeyPrefix *string `json:"key_prefix"`
+	MemberID  *string `json:"member_id"`
+	UserID    *string `json:"user_id"`
+	Principal *string `json:"principal"`
+	AuthType  *string `json:"auth_type"`
+	KeyID     *string `json:"key_id"`
 }
 
 // Node is one node of the chain a route addressed.
@@ -38,9 +39,8 @@ type Node struct {
 	ID   string `json:"id"`
 }
 
-// Intent is what the gateway knows before forward. On a kind route RootID is
-// Nodes[0].ID; on a sign-in route it's nil, Nodes is empty, and the actor is
-// the person's directory member.
+// Intent is what the gateway knows before forward. RootID is Nodes[0].ID, nil
+// on a user route, whose Nodes is empty.
 type Intent struct {
 	RequestID  string
 	OccurredAt time.Time
@@ -48,32 +48,26 @@ type Intent struct {
 	Nodes      []Node
 	Actor      Actor
 	Service    string
-	Method     string
-	Route      string
+	Method     *string
+	Route      *string
 	Params     map[string]string
-	IP         string
+	IP         *string
 	UserAgent  *string
 }
 
 // Outcome is how the request ended. Status is nil when the client was gone
-// before an answer, never on responded. Details is nil for null, and only set
-// on responded.
+// before an answer. Details is nil for null.
 //
-// CreatedID is the id a create produced. Named is the tree a sign-in route
-// changed, and the member in it: it adds the event to that root's log. Both
-// only on responded.
+// CreatedID is the id a create produced. NamedNodes and NamedMemberID are the
+// chain a user route changed and the member in it: they add the event to
+// each named node's log.
 type Outcome struct {
-	Outcome   string
-	Status    *int
-	Details   json.RawMessage
-	CreatedID *string
-	Named     *Named
-}
-
-// Named is the root and member a service named on a sign-in route.
-type Named struct {
-	RootID   string
-	MemberID string
+	Outcome       string
+	Status        *int
+	Details       json.RawMessage
+	CreatedID     *string
+	NamedNodes    []string
+	NamedMemberID *string
 }
 
 type Event struct {
@@ -82,13 +76,13 @@ type Event struct {
 	Outcome
 }
 
-// Filter is one log's list query: a node's (the node and below, and the
-// trees sign-in routes named) or a person's, by which is set. Empty strings
-// and nil times do not filter.
+// Filter is one log's list query. Log is the log's key: a node id, or
+// UserLog(user id). NodeRead is a node's log, where a user route's event
+// shows its named member as the actor and no user id. Empty strings and nil
+// pointers do not filter.
 type Filter struct {
-	NodeID         string
-	MemberID       string
-	CreatedID      string
+	Log            string
+	NodeRead       bool
 	Limit          int
 	StartingAfter  string
 	ActorMemberID  string
@@ -96,8 +90,15 @@ type Filter struct {
 	Method         string
 	Route          string
 	Outcome        string
+	Status         *int
 	RequestID      string
+	CreatedID      string
 	Params         map[string]string
 	OccurredAfter  *time.Time
 	OccurredBefore *time.Time
+}
+
+// UserLog is the log key of a person's own log.
+func UserLog(userID string) string {
+	return "user:" + userID
 }

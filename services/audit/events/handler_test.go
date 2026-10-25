@@ -22,14 +22,18 @@ type fakeStore struct {
 	list      []*Event
 }
 
-func (f *fakeStore) CreateIntent(_ context.Context, in *Intent) (bool, error) {
+func (f *fakeStore) CreateIntent(_ context.Context, in *Intent, final *Outcome) (bool, error) {
 	if f.byRequest == nil {
 		f.byRequest = map[string]*Event{}
 	}
 	if _, ok := f.byRequest[in.RequestID]; ok {
 		return false, nil
 	}
-	f.byRequest[in.RequestID] = &Event{Intent: *in, Outcome: Outcome{Outcome: OutcomePending}}
+	e := &Event{Intent: *in, Outcome: Outcome{Outcome: OutcomePending}}
+	if final != nil {
+		e.Outcome = *final
+	}
+	f.byRequest[in.RequestID] = e
 	return true, nil
 }
 
@@ -51,7 +55,7 @@ func (f *fakeStore) List(_ context.Context, filter Filter) ([]*Event, bool, erro
 }
 
 func newTestApp(s *fakeStore) *fiber.App {
-	h := &Handler{store: s, now: func() time.Time { return testNow }}
+	h := &Handler{store: s}
 	app := fiber.New(fiber.Config{ErrorHandler: errors.FiberErrorHandler})
 	h.MountPublic(app)
 	h.MountInternal(app.Group("/internal"))
@@ -100,26 +104,42 @@ func TestIntentThenOutcome(t *testing.T) {
 	}
 }
 
+func TestRejectedIsWrittenFinal(t *testing.T) {
+	s := &fakeStore{}
+	app := newTestApp(s)
+
+	rejected := strings.Replace(validIntent, `"ip": "203.0.113.7",`, `"ip": "203.0.113.7", "outcome": "rejected", "status": 403,`, 1)
+	if code, body := do(t, app, http.MethodPut, "/internal/events/req-r", rejected); code != http.StatusCreated {
+		t.Fatalf("rejected: %d %s", code, body)
+	}
+	if got := s.byRequest["req-r"].Outcome; got.Outcome != OutcomeRejected || *got.Status != 403 {
+		t.Fatalf("written final: %+v", got)
+	}
+	if code, _ := do(t, app, http.MethodPut, "/internal/events/req-r", rejected); code != http.StatusOK {
+		t.Fatalf("a retried refusal is 200: %d", code)
+	}
+}
+
 func TestListShape(t *testing.T) {
-	status := 403
 	s := &fakeStore{list: []*Event{{
-		ID: "01JA2Z6Q3Y8D5V2K9N4R7T1W0X",
+		ID: "01ja2z6q3y8d5v2k9n4r7t1w0x",
 		Intent: Intent{
 			RequestID:  "req-1",
 			OccurredAt: time.Date(2026, 10, 8, 18, 30, 0, 120_000_000, time.UTC),
-			RootID:     strPtr("n_org"),
-			Nodes:      []Node{{Kind: "organization", ID: "n_org"}},
-			Actor:      Actor{MemberID: "m_1", Principal: PrincipalServiceAccount, AuthType: AuthAPIKey, KeyPrefix: strPtr("plat5-k-2-AbC9")},
-			Service:    "identity",
-			Method:     "DELETE",
-			Route:      "/orgs/{organization}",
-			IP:         "203.0.113.7",
+			RootID:     strPtr("01o"),
+			Nodes:      []Node{{Kind: "organization", ID: "01o"}},
+			Actor: Actor{MemberID: strPtr("01m"), Principal: strPtr(PrincipalServiceAccount), AuthType: strPtr(AuthAPIKey),
+				KeyID: strPtr("01k")},
+			Service: "identity",
+			Method:  strPtr("DELETE"),
+			Route:   strPtr("/orgs/{organization}"),
+			IP:      strPtr("203.0.113.7"),
 		},
-		Outcome: Outcome{Outcome: OutcomeRejected, Status: &status},
+		Outcome: Outcome{Outcome: OutcomeRejected, Status: intPtr(403)},
 	}}}
 	app := newTestApp(s)
 
-	code, body := do(t, app, http.MethodGet, "/nodes/n_org/audit-events", "")
+	code, body := do(t, app, http.MethodGet, "/nodes/01o/audit-events", "")
 	if code != http.StatusOK {
 		t.Fatalf("list: %d %s", code, body)
 	}
@@ -134,31 +154,39 @@ func TestListShape(t *testing.T) {
 	if e["occurred_at"] != "2026-10-08T18:30:00.120Z" {
 		t.Fatalf("occurred_at is UTC with milliseconds: %v", e["occurred_at"])
 	}
-	for _, k := range []string{"details", "user_agent", "created_id", "named_root_id", "named_member_id"} {
+	for _, k := range []string{"details", "user_agent", "created_id", "named_member_id"} {
 		if v, ok := e[k]; !ok || v != nil {
 			t.Fatalf("%s is present and null: %s", k, body)
 		}
 	}
+	if n, ok := e["named_nodes"].([]any); !ok || len(n) != 0 {
+		t.Fatalf("named_nodes is [] when none are named: %s", body)
+	}
 	if p, ok := e["params"].(map[string]any); !ok || len(p) != 0 {
 		t.Fatalf("params is {} when the route has none: %s", body)
 	}
-	if e["root_id"] != "n_org" || len(e["nodes"].([]any)) != 1 {
+	if e["root_id"] != "01o" || len(e["nodes"].([]any)) != 1 {
 		t.Fatalf("root and chain: %s", body)
 	}
 	actor := e["actor"].(map[string]any)
-	if actor["member_id"] != "m_1" || actor["principal"] != "service_account" || actor["auth_type"] != "apikey" || actor["key_prefix"] != "plat5-k-2-AbC9" {
+	if actor["member_id"] != "01m" || actor["user_id"] != nil || actor["principal"] != "service_account" ||
+		actor["auth_type"] != "apikey" || actor["key_id"] != "01k" {
 		t.Fatalf("actor: %s", body)
 	}
-	if s.lastList.NodeID != "n_org" || s.lastList.MemberID != "" || s.lastList.Limit != 50 {
+	if _, ok := actor["key_prefix"]; ok {
+		t.Fatalf("the key is its id: %s", body)
+	}
+	if s.lastList.Log != "01o" || !s.lastList.NodeRead || s.lastList.Limit != 50 {
 		t.Fatalf("filter: %+v", s.lastList)
 	}
 
-	// A person's own log: a sign-in route's event has no root and empty nodes.
-	s.list = []*Event{{ID: "01JA2Z6Q3Y8D5V2K9N4R7T1W0X", Intent: Intent{
-		RequestID: "req-2", OccurredAt: testNow, Actor: Actor{MemberID: "m_dir", Principal: PrincipalPerson, AuthType: AuthJWT},
-		Service: "identity", Method: "POST", Route: "/orgs", IP: "203.0.113.7",
-	}, Outcome: Outcome{Outcome: OutcomeResponded, Status: intPtr(201), Named: &Named{RootID: "n_org", MemberID: "m_org"}}}}
-	code, body = do(t, app, http.MethodGet, "/members/m_dir/audit-events", "")
+	// A person's own log: a user route's event has no root and empty nodes.
+	s.list = []*Event{{ID: "01ja2z6q3y8d5v2k9n4r7t1w0x", Intent: Intent{
+		RequestID: "req-2", OccurredAt: testNow, Nodes: []Node{},
+		Actor:   Actor{UserID: strPtr("01u"), Principal: strPtr(PrincipalPerson), AuthType: strPtr(AuthJWT)},
+		Service: "identity", Method: strPtr("POST"), Route: strPtr("/orgs"), IP: strPtr("203.0.113.7"),
+	}, Outcome: Outcome{Outcome: OutcomeResponded, Status: intPtr(201), NamedNodes: []string{"01o"}, NamedMemberID: strPtr("01m")}}}
+	code, body = do(t, app, http.MethodGet, "/users/01u/audit-events", "")
 	if code != http.StatusOK {
 		t.Fatalf("person's list: %d %s", code, body)
 	}
@@ -166,11 +194,11 @@ func TestListShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	e = resp["audit_events"].([]any)[0].(map[string]any)
-	if e["root_id"] != nil || len(e["nodes"].([]any)) != 0 || e["named_root_id"] != "n_org" || e["named_member_id"] != "m_org" ||
-		e["actor"].(map[string]any)["key_prefix"] != nil {
-		t.Fatalf("sign-in event: %s", body)
+	if e["root_id"] != nil || len(e["nodes"].([]any)) != 0 || e["named_nodes"].([]any)[0] != "01o" || e["named_member_id"] != "01m" ||
+		e["actor"].(map[string]any)["user_id"] != "01u" || e["actor"].(map[string]any)["key_id"] != nil {
+		t.Fatalf("user route event: %s", body)
 	}
-	if s.lastList.MemberID != "m_dir" || s.lastList.NodeID != "" {
+	if s.lastList.Log != "user:01u" || s.lastList.NodeRead {
 		t.Fatalf("filter: %+v", s.lastList)
 	}
 }
@@ -179,38 +207,39 @@ func TestListFilters(t *testing.T) {
 	s := &fakeStore{}
 	app := newTestApp(s)
 
-	q := "?limit=500&starting_after=01JA2Z6Q3Y8D5V2K9N4R7T1W0X&actor_member_id=m-1&service=identity&method=PATCH" +
-		"&route=%2Forgs%2F%7Borganization%7D%2Fmembers%2F%7Bmember%7D&outcome=pending&request_id=req-1" +
-		"&params%5Bmember%5D=m-2&occurred_after=2026-10-01T00:00:00Z&occurred_before=2026-10-09T00:00:00Z"
-	if code, body := do(t, app, http.MethodGet, "/nodes/n_org/audit-events"+q, ""); code != http.StatusOK {
+	q := "?limit=500&starting_after=01ja2z6q3y8d5v2k9n4r7t1w0x&actor_member_id=01m&service=identity&method=PATCH" +
+		"&route=%2Forgs%2F%7Borganization%7D%2Fmembers%2F%7Bmember_id%7D&outcome=pending&status=403&request_id=req-1" +
+		"&params%5Bmember_id%5D=01n&occurred_after=2026-10-01T00:00:00Z&occurred_before=2026-10-09T00:00:00Z"
+	if code, body := do(t, app, http.MethodGet, "/nodes/01o/audit-events"+q, ""); code != http.StatusOK {
 		t.Fatalf("list: %d %s", code, body)
 	}
 	f := s.lastList
 	if f.Limit != 100 {
 		t.Fatalf("limit is clamped to 100: %d", f.Limit)
 	}
-	if f.Route != "/orgs/{organization}/members/{member}" || f.Params["member"] != "m-2" || f.ActorMemberID != "m-1" ||
-		f.Method != "PATCH" || f.Outcome != OutcomePending || f.OccurredAfter == nil || f.OccurredBefore == nil {
+	if f.Route != "/orgs/{organization}/members/{member_id}" || f.Params["member_id"] != "01n" || f.ActorMemberID != "01m" ||
+		f.Method != "PATCH" || f.Outcome != OutcomePending || f.Status == nil || *f.Status != 403 || f.RequestID != "req-1" ||
+		f.OccurredAfter == nil || f.OccurredBefore == nil {
 		t.Fatalf("filter: %+v", f)
 	}
 
 	for name, q := range map[string]string{
-		"unknown param":   "?actor=m-1",
-		"repeated param":  "?service=a&service=b",
-		"bad outcome":     "?outcome=done",
-		"bad cursor":      "?starting_after=nope",
-		"bad time":        "?occurred_after=yesterday",
-		"empty param":     "?params%5Bmember_id%5D=",
-		"bad param name":  "?params%5Bmember-id%5D=m",
-		"zero limit":      "?limit=0",
-		"unaudited verb":  "?method=OPTIONS",
-		"empty value":     "?service=",
-		"bad request id":  "?request_id=a%20b",
-		"lowercase verb":  "?method=patch",
-		"bracketless key": "?params=m",
+		"unknown param":      "?actor=01m",
+		"repeated param":     "?service=a&service=b",
+		"bad status":         "?status=4xx",
+		"bad cursor":         "?starting_after=nope",
+		"uppercase cursor":   "?starting_after=01JA2Z6Q3Y8D5V2K9N4R7T1W0X",
+		"bad time":           "?occurred_after=yesterday",
+		"empty param":        "?params%5Bmember_id%5D=",
+		"bad param name":     "?params%5Bmember-id%5D=m",
+		"zero limit":         "?limit=0",
+		"empty value":        "?service=",
+		"bad request id":     "?request_id=a%20b",
+		"bracketless key":    "?params=m",
+		"key prefix, no key": "?key_prefix=plat5-k-2",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if code, body := do(t, app, http.MethodGet, "/nodes/n_org/audit-events"+q, ""); code != http.StatusUnprocessableEntity {
+			if code, body := do(t, app, http.MethodGet, "/nodes/01o/audit-events"+q, ""); code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 422, got %d %s", code, body)
 			}
 		})

@@ -2,25 +2,22 @@ package id
 
 import (
 	"crypto/rand"
+	"strings"
 	"time"
 
 	"github.com/oklog/ulid/v2"
 )
 
-// New returns a ULID string using crypto/rand.
-func New() string {
-	return NewAt(time.Now())
-}
-
-// NewAt returns a ULID whose time part is t, so id order is t order.
+// NewAt returns a lowercase ULID whose time part is t, so id order is t order.
 func NewAt(t time.Time) string {
-	return ulid.MustNew(ulid.Timestamp(t), rand.Reader).String()
+	return strings.ToLower(ulid.MustNew(ulid.Timestamp(t), rand.Reader).String())
 }
 
-// Valid reports whether s is a ULID. No case folding.
+// Valid reports whether s is a lowercase ULID. An uppercase one isn't
+// canonical and doesn't match.
 func Valid(s string) bool {
-	_, err := ulid.Parse(s)
-	return err == nil
+	_, err := ulid.ParseStrict(s)
+	return err == nil && s == strings.ToLower(s)
 }
 
 // Time returns the time part of a valid ULID.

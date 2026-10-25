@@ -17,18 +17,17 @@ import (
 )
 
 type store interface {
-	CreateIntent(ctx context.Context, in *Intent) (bool, error)
+	CreateIntent(ctx context.Context, in *Intent, final *Outcome) (bool, error)
 	ApplyOutcome(ctx context.Context, requestID string, out *Outcome) (string, error)
 	List(ctx context.Context, f Filter) ([]*Event, bool, error)
 }
 
 type Handler struct {
 	store store
-	now   func() time.Time
 }
 
 func NewHandler(s *Store) *Handler {
-	return &Handler{store: s, now: time.Now}
+	return &Handler{store: s}
 }
 
 // MountInternal registers the gateway's writes on a router scoped under /internal.
@@ -37,21 +36,22 @@ func (h *Handler) MountInternal(router fiber.Router) {
 	router.Patch("/events/:request_id", h.PatchOutcome)
 }
 
-// MountPublic registers the reads. The generated catalog publishes them per
-// kind as …/audit-events, and as /me/audit-events on the sign-in kind
+// MountPublic registers the reads. Audit's resources publish them as
+// …/audit-events at every kind and /user/audit-events
 // (docs/reference/api/audit.md#reading).
 func (h *Handler) MountPublic(router fiber.Router) {
 	router.Get("/nodes/:node_id/audit-events", h.ListNode)
-	router.Get("/members/:member_id/audit-events", h.ListMember)
+	router.Get("/users/:user_id/audit-events", h.ListUser)
 }
 
-// PutIntent creates the pending event, or leaves an existing one alone.
+// PutIntent creates the event, pending or, for a gateway refusal, final. An
+// existing one is left alone.
 func (h *Handler) PutIntent(c fiber.Ctx) error {
-	in, err := ParseIntent(httpx.PathParam(c, "request_id"), c.Body(), h.now())
+	in, final, err := ParseIntent(httpx.PathParam(c, "request_id"), c.Body())
 	if err != nil {
 		return err
 	}
-	created, err := h.store.CreateIntent(c.Context(), in)
+	created, err := h.store.CreateIntent(c.Context(), in, final)
 	if err != nil {
 		httpx.LogError(c.Context(), "create audit intent", err, errors.KindDB)
 		return errors.ServiceUnavailableError()
@@ -95,19 +95,19 @@ type eventResponse struct {
 	RequestID     string            `json:"request_id"`
 	RootID        *string           `json:"root_id"`
 	Nodes         []Node            `json:"nodes"`
-	NamedRootID   *string           `json:"named_root_id"`
-	NamedMemberID *string           `json:"named_member_id"`
 	Actor         Actor             `json:"actor"`
 	Service       string            `json:"service"`
-	Method        string            `json:"method"`
-	Route         string            `json:"route"`
+	Method        *string           `json:"method"`
+	Route         *string           `json:"route"`
 	Params        map[string]string `json:"params"`
-	IP            string            `json:"ip"`
+	IP            *string           `json:"ip"`
 	UserAgent     *string           `json:"user_agent"`
 	Outcome       string            `json:"outcome"`
 	Status        *int              `json:"status"`
 	Details       json.RawMessage   `json:"details"`
 	CreatedID     *string           `json:"created_id"`
+	NamedNodes    []string          `json:"named_nodes"`
+	NamedMemberID *string           `json:"named_member_id"`
 }
 
 func toResponse(e *Event) eventResponse {
@@ -123,49 +123,52 @@ func toResponse(e *Event) eventResponse {
 	if details == nil {
 		details = json.RawMessage("null")
 	}
-	resp := eventResponse{
-		ID:         e.ID,
-		OccurredAt: e.OccurredAt.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
-		RequestID:  e.RequestID,
-		RootID:     e.RootID,
-		Nodes:      nodes,
-		Actor:      e.Actor,
-		Service:    e.Service,
-		Method:     e.Method,
-		Route:      e.Route,
-		Params:     params,
-		IP:         e.IP,
-		UserAgent:  e.UserAgent,
-		Outcome:    e.Outcome.Outcome,
-		Status:     e.Status,
-		Details:    details,
-		CreatedID:  e.CreatedID,
+	named := e.NamedNodes
+	if named == nil {
+		named = []string{}
 	}
-	if e.Named != nil {
-		resp.NamedRootID, resp.NamedMemberID = &e.Named.RootID, &e.Named.MemberID
+	return eventResponse{
+		ID:            e.ID,
+		OccurredAt:    e.OccurredAt.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
+		RequestID:     e.RequestID,
+		RootID:        e.RootID,
+		Nodes:         nodes,
+		Actor:         e.Actor,
+		Service:       e.Service,
+		Method:        e.Method,
+		Route:         e.Route,
+		Params:        params,
+		IP:            e.IP,
+		UserAgent:     e.UserAgent,
+		Outcome:       e.Outcome.Outcome,
+		Status:        e.Status,
+		Details:       details,
+		CreatedID:     e.CreatedID,
+		NamedNodes:    named,
+		NamedMemberID: e.NamedMemberID,
 	}
-	return resp
 }
 
-// ListNode is one page of the events on a node and below it, newest first.
-// Audit doesn't know which nodes exist: one with no events is an empty list.
+// ListNode is one page of a node's log, newest first: the events on it and
+// below it, those that named it, and the one that created it. Audit doesn't
+// know which nodes exist: one with no events is an empty list.
 func (h *Handler) ListNode(c fiber.Ctx) error {
 	f, err := parseFilter(c)
 	if err != nil {
 		return err
 	}
-	f.NodeID = httpx.PathParam(c, "node_id")
+	f.Log, f.NodeRead = httpx.PathParam(c, "node_id"), true
 	return h.list(c, f)
 }
 
-// ListMember is one page of a person's own log, keyed by their directory
-// member, newest first.
-func (h *Handler) ListMember(c fiber.Ctx) error {
+// ListUser is one page of a person's own log, their user routes' events,
+// newest first.
+func (h *Handler) ListUser(c fiber.Ctx) error {
 	f, err := parseFilter(c)
 	if err != nil {
 		return err
 	}
-	f.MemberID = httpx.PathParam(c, "member_id")
+	f.Log = UserLog(httpx.PathParam(c, "user_id"))
 	return h.list(c, f)
 }
 
@@ -180,10 +183,6 @@ func (h *Handler) list(c fiber.Ctx, f Filter) error {
 		resp.AuditEvents = append(resp.AuditEvents, toResponse(e))
 	}
 	return c.JSON(resp)
-}
-
-var listOutcomes = map[string]bool{
-	OutcomePending: true, OutcomeRejected: true, OutcomeResponded: true, OutcomeNoResponse: true,
 }
 
 // parseFilter reads the list query. Unknown, repeated, or malformed params are
@@ -202,7 +201,7 @@ func parseFilter(c fiber.Ctx) (Filter, error) {
 		seen[key] = true
 
 		if name, ok := paramFilterName(key); ok {
-			if !validParamName(name) || value == "" || len(value) > maxParamValueLen {
+			if !validParamName(name) || value == "" || len(value) > maxTextLen {
 				bad.add(key)
 				continue
 			}
@@ -228,31 +227,26 @@ func parseFilter(c fiber.Ctx) (Filter, error) {
 			}
 			f.StartingAfter = value
 		case "actor_member_id":
-			f.ActorMemberID = filterText(&bad, key, value, maxIDLen)
+			f.ActorMemberID = filterText(&bad, key, value)
 		case "service":
-			f.Service = filterText(&bad, key, value, maxServiceLen)
+			f.Service = filterText(&bad, key, value)
 		case "method":
-			if !auditedMethods[value] {
-				bad.add(key)
-				continue
-			}
-			f.Method = value
+			f.Method = filterText(&bad, key, value)
 		case "route":
-			f.Route = filterText(&bad, key, value, maxRouteLen)
+			f.Route = filterText(&bad, key, value)
 		case "outcome":
-			if !listOutcomes[value] {
+			f.Outcome = filterText(&bad, key, value)
+		case "status":
+			n, err := strconv.Atoi(value)
+			if err != nil {
 				bad.add(key)
 				continue
 			}
-			f.Outcome = value
+			f.Status = &n
 		case "request_id":
-			if !ValidRequestID(value) {
-				bad.add(key)
-				continue
-			}
-			f.RequestID = value
+			f.RequestID = filterText(&bad, key, value)
 		case "created_id":
-			f.CreatedID = filterText(&bad, key, value, maxIDLen)
+			f.CreatedID = filterText(&bad, key, value)
 		case "occurred_after", "occurred_before":
 			t, err := time.Parse(time.RFC3339Nano, value)
 			if err != nil {
@@ -282,10 +276,49 @@ func paramFilterName(key string) (string, bool) {
 	return key[len("params[") : len(key)-1], true
 }
 
-func filterText(bad *fieldErrs, key, value string, max int) string {
-	if value == "" || len(value) > max || !printableASCII(value) {
+const maxTextLen = 1024
+
+type fieldErrs []errors.Field
+
+func (f *fieldErrs) add(path string) {
+	*f = append(*f, errors.Field{Path: path, Message: errors.FallbackValidation})
+}
+
+func (f fieldErrs) err() error {
+	if len(f) == 0 {
+		return nil
+	}
+	return errors.ValidationFields("", f...)
+}
+
+// filterText is an exact-match value: 1..maxTextLen bytes of printable ASCII.
+func filterText(bad *fieldErrs, key, value string) string {
+	if value == "" || len(value) > maxTextLen || !printableASCII(value) {
 		bad.add(key)
 		return ""
 	}
 	return value
+}
+
+func printableASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x21 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+// validParamName is a route param's name in a params[<name>] filter.
+func validParamName(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_') {
+			return false
+		}
+	}
+	return true
 }

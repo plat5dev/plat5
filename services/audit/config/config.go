@@ -15,18 +15,16 @@ const (
 // OTEL_* stays in the telemetry package (standard env contract).
 // There is no retention setting: events are kept (docs/internals/audit-storage.md).
 type Config struct {
-	Port              string
-	InternalPort      string
-	DatabaseURL       string
-	InternalAuthToken string
+	Port         string
+	InternalPort string
+	DatabaseURL  string
 }
 
 func Load() Config {
 	return Config{
-		Port:              envOr("PORT", defaultPort),
-		InternalPort:      envOr("INTERNAL_PORT", defaultInternalPort),
-		DatabaseURL:       envOr("DATABASE_URL", defaultDatabaseURL),
-		InternalAuthToken: strings.TrimSpace(os.Getenv("INTERNAL_AUTH_TOKEN")),
+		Port:         envOr("PORT", defaultPort),
+		InternalPort: envOr("INTERNAL_PORT", defaultInternalPort),
+		DatabaseURL:  envOr("DATABASE_URL", defaultDatabaseURL),
 	}
 }
 
