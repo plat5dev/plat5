@@ -22,7 +22,7 @@ The event and the read API. Concept: [audit](../../concepts/audit.md).
   "status": 201,
   "details": { "version": 7 },
   "created_id": "ver_01ja2z6r…",
-  "named_nodes": [],
+  "named_node_ids": [],
   "named_member_id": null
 }
 ```
@@ -34,7 +34,7 @@ The event and the read API. Concept: [audit](../../concepts/audit.md).
 | `request_id` | `X-Request-ID`. Joins to every service log line |
 | `root_id` | The chain's root: `nodes[0].id`. `null` on a user route |
 | `nodes` | The route's chain, root first, as ids. `[]` on a user route |
-| `named_nodes`, `named_member_id` | On a user route, the chain and member the service named. `[]` and `null` otherwise |
+| `named_node_ids`, `named_member_id` | On a user route, the chain and member the service named. `[]` and `null` otherwise |
 | `actor.member_id` | The caller's member in this tree. `null` on a user route, except in a named node's read ([reading](#reading)) |
 | `actor.user_id` | The caller's user id on a user route, in the person's own log only. `null` otherwise |
 | `actor.principal` | `person` or `service_account` |
@@ -59,7 +59,7 @@ GET /nodes/{node_id}/audit-events
 GET /users/{user_id}/audit-events
 ```
 
-On audit's public port. The first is a node's log: every event whose `nodes` or `named_nodes` contain it, or whose `created_id` is it, so the node and everything below it. In it, a named event's `actor.member_id` is `named_member_id`, its `actor.user_id` is `null`, and `actor_member_id` filters on the named member: a user id never appears outside the person's own log. The second is a person's own log: the user-route events whose actor is that user.
+On audit's public port. The first is a node's log: every event whose `nodes` or `named_node_ids` contain it, or whose `created_id` is it, so the node and everything below it. In it, a named event's `actor.member_id` is `named_member_id`, its `actor.user_id` is `null`, and `actor_member_id` filters on the named member: a user id never appears outside the person's own log. The second is a person's own log: the user-route events whose actor is that user.
 
 Audit's resources publish them: `GET …/audit-events` at every kind with `audit:read`, and `GET /user/audit-events` for the caller's own ([resources](../config/resources.md#audits-defaults)). Reading a project's history takes `audit:read` at the project, or at the org.
 

@@ -108,7 +108,7 @@ One id: visible ASCII, one path segment, at most 128 bytes. Invalid → ignored,
 
 ### Named nodes
 
-`X-Plat5-Audit-Nodes` is the node ids of the chain the route changed, root first, comma-separated, at most 32. `X-Plat5-Audit-Member` is the person's member in that tree. Each id has the same rules as `Created`. On a 2xx to an audited user route, they become `named_nodes` and `named_member_id`, and the event is in each named node's log too: a read of one returns it, with the named member as the actor and no user id. Anywhere else, or one without the other, they're ignored, with a warning.
+`X-Plat5-Audit-Nodes` is the node ids of the chain the route changed, root first, comma-separated, at most 32. `X-Plat5-Audit-Member` is the person's member in that tree. Each id has the same rules as `Created`. On a 2xx to an audited user route, they become `named_node_ids` and `named_member_id`, and the event is in each named node's log too: a read of one returns it, with the named member as the actor and no user id. Anywhere else, or one without the other, they're ignored, with a warning.
 
 The event's fields and the read API: [`reference/api/audit.md`](../reference/api/audit.md). Storage: [`internals/audit-storage.md`](../internals/audit-storage.md).
 

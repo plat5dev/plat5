@@ -25,7 +25,7 @@ CREATE TABLE audit_events (
     status            INTEGER,
     details           JSONB,
     created_id        TEXT,
-    named_nodes       TEXT[]      NOT NULL DEFAULT '{}',
+    named_node_ids       TEXT[]      NOT NULL DEFAULT '{}',
     named_member_id   TEXT,
     PRIMARY KEY (id, occurred_at),
     -- The partition key must be in a unique constraint. A retried intent sends
@@ -37,7 +37,7 @@ CREATE TABLE audit_events (
 CREATE INDEX audit_events_params ON audit_events USING GIN (params jsonb_path_ops);
 
 -- One row per log an event is in. log is a node id (each node in nodes, each
--- in named_nodes, and created_id) or 'user:' and a user id. Every read is one
+-- in named_node_ids, and created_id) or 'user:' and a user id. Every read is one
 -- range on (log, event_id DESC). Partitioned with the events.
 CREATE TABLE audit_log_keys (
     log          TEXT        NOT NULL,

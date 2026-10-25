@@ -34,7 +34,7 @@ type outcomeRequest struct {
 	Status        *int            `json:"status"`
 	Details       json.RawMessage `json:"details"`
 	CreatedID     *string         `json:"created_id"`
-	NamedNodes    []string        `json:"named_nodes"`
+	NamedNodeIDs  []string        `json:"named_node_ids"`
 	NamedMemberID *string         `json:"named_member_id"`
 }
 
@@ -98,7 +98,7 @@ func ParseIntent(requestID string, body []byte) (*Intent, *Outcome, error) {
 	if req.Outcome == nil || *req.Outcome == OutcomePending {
 		return in, nil, nil
 	}
-	return in, &Outcome{Outcome: *req.Outcome, Status: req.Status, NamedNodes: []string{}}, nil
+	return in, &Outcome{Outcome: *req.Outcome, Status: req.Status, NamedNodeIDs: []string{}}, nil
 }
 
 // ParseOutcome reads an outcome body. Pending is not an outcome.
@@ -117,11 +117,11 @@ func ParseOutcome(requestID string, body []byte) (*Outcome, error) {
 		Outcome:       *req.Outcome,
 		Status:        req.Status,
 		CreatedID:     req.CreatedID,
-		NamedNodes:    req.NamedNodes,
+		NamedNodeIDs:  req.NamedNodeIDs,
 		NamedMemberID: req.NamedMemberID,
 	}
-	if out.NamedNodes == nil {
-		out.NamedNodes = []string{}
+	if out.NamedNodeIDs == nil {
+		out.NamedNodeIDs = []string{}
 	}
 	details := bytes.TrimSpace(req.Details)
 	if len(details) > 0 && !bytes.Equal(details, []byte("null")) {

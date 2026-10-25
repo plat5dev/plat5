@@ -37,5 +37,3 @@ Why audit events carry the node chain, live in one log per root and per person, 
 | Reading is `audit:read`, with no kind in the name, checked at the node or above | A binding's reach is where it sits and below, so a role bound at a project already delegates that project's history without the org's. Two kinds of tree that need different audit readers use two roles |
 | `GET /user/audit-events` is the caller's own user-route events, with no permission | A person can always see what they did with their own account |
 | Reads filter by response status | "What failed" is the first question in an incident |
-| Audit's test serves every audit upstream in the expanded-routes fixture with the ids the gateway fills, and checks what each read returns | Permissions are decided by admit and the gateway, so they're tested where admit lives. Audit only has to serve the paths |
-| The e2e has its own audit test, skipped when `AUDIT_ENABLED=false`; the access flow's test runs unchanged with audit on | It adds what only audit can show (logs per node, the person's log, refusals) without coupling the two |

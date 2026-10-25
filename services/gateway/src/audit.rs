@@ -118,7 +118,7 @@ pub struct Outcome {
     pub created_id: Option<String>,
     /// On a user route, the chain the service named and the member in it.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub named_nodes: Option<Vec<String>>,
+    pub named_node_ids: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub named_member_id: Option<String>,
 }
@@ -148,17 +148,17 @@ pub fn outcome_for(state: AuditState, forwarded: bool, written_status: Option<u1
             status,
             details: None,
             created_id: None,
-            named_nodes: None,
+            named_node_ids: None,
             named_member_id: None,
         };
     }
-    let (named_nodes, named_member_id) = state.named.unzip();
+    let (named_node_ids, named_member_id) = state.named.unzip();
     Outcome {
         outcome,
         status,
         details: state.details,
         created_id: state.created_id,
-        named_nodes,
+        named_node_ids,
         named_member_id,
     }
 }
@@ -543,7 +543,7 @@ mod tests {
         assert_eq!(responded.status, Some(201));
         assert!(responded.details.is_some());
         assert_eq!(responded.created_id.as_deref(), Some("01o"));
-        assert_eq!(responded.named_nodes, Some(named.0.clone()));
+        assert_eq!(responded.named_node_ids, Some(named.0.clone()));
         assert_eq!(responded.named_member_id.as_deref(), Some("01m"));
 
         // What a service said counts only when it answered.
@@ -557,7 +557,7 @@ mod tests {
             true,
             Some(502),
         );
-        assert!(cut.created_id.is_none() && cut.named_nodes.is_none());
+        assert!(cut.created_id.is_none() && cut.named_node_ids.is_none());
 
         let no_response = outcome_for(AuditState::default(), true, Some(502));
         assert_eq!(no_response.outcome, OutcomeKind::NoResponse);
@@ -586,7 +586,7 @@ mod tests {
     }
 
     #[test]
-    fn named_nodes_are_up_to_32_ids() {
+    fn named_node_ids_are_up_to_32_ids() {
         assert_eq!(
             parse_nodes(b"01o, 01p,01e"),
             Some(vec!["01o".into(), "01p".into(), "01e".into()])
@@ -676,7 +676,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&named).unwrap(),
             serde_json::json!({ "outcome": "responded", "status": 201, "details": null,
-                                "named_nodes": ["01o"], "named_member_id": "01m" })
+                                "named_node_ids": ["01o"], "named_member_id": "01m" })
         );
 
         let out = outcome_for(AuditState::default(), true, None);

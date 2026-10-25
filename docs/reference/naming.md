@@ -94,7 +94,7 @@ Public paths carry slugs: each kind's `path` piece, root first, then the route's
 
 The route's own params are bare in both: `{plan_id}`. There is no `/api` prefix. Slugs never reach a service. Full contract: [`reference/config/services.md`](config/services.md), [`reference/gateway.md`](gateway.md).
 
-## Subject headers
+## Headers to services
 
 Tree routes: `X-Plat5-<Kind>-Id` per node in the chain (title case, `_` → `-`), `X-Plat5-Member-Id`, `X-Plat5-Principal`. User routes: `X-Plat5-User-Id`, `X-Plat5-Principal`. Always: `X-Request-ID`, `traceparent`. Services are never told a principal id, or the caller's role or permissions.
 

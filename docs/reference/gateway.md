@@ -27,13 +27,7 @@ POST {IDENTITY_INTERNAL_URL}/internal/admit
 
 On identity's `INTERNAL_PORT`. An empty chain is a user route. Contract: [`reference/api/internal.md`](api/internal.md#admit).
 
-| Admit result | Status |
-|--------------|--------|
-| `valid: false` | **401**, counted by the failed-auth limiter |
-| `member_id: null` on a kind route | **403**, before the rate limit, counted by the failed-auth limiter |
-| `permissions` share none with the route, and the route isn't `any_member` | **403**, after the rate limit |
-| Otherwise | Forwarded |
-| Transport error, non-2xx, missing fields | **503** |
+What the gateway answers for each result: [admit](api/internal.md#what-the-gateway-answers).
 
 ### Cache
 

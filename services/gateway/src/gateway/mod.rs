@@ -609,7 +609,7 @@ impl ProxyHttp for Gateway {
         };
         let details = header(audit::DETAILS_HEADER);
         let created = header(audit::CREATED_HEADER);
-        let named_nodes = header(audit::NODES_HEADER);
+        let named_node_ids = header(audit::NODES_HEADER);
         let named_member = header(audit::MEMBER_HEADER);
         let service_headers: Vec<_> = upstream_response
             .headers
@@ -641,8 +641,8 @@ impl ProxyHttp for Gateway {
                 }
             }
             // Named nodes add logs only on a user route's success, and only as a pair.
-            if named_nodes.is_some() || named_member.is_some() {
-                let pair = named_nodes
+            if named_node_ids.is_some() || named_member.is_some() {
+                let pair = named_node_ids
                     .as_deref()
                     .and_then(audit::parse_nodes)
                     .zip(named_member.as_deref().and_then(audit::parse_id));

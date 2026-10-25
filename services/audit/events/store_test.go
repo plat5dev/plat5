@@ -354,7 +354,7 @@ func TestReadsByNode(t *testing.T) {
 // A user route that changed a tree is in each named node's log, with the
 // named member as its actor there and no user id. The person's log keeps the
 // user id.
-func TestUserRouteEventIsInTheNamedNodesLogs(t *testing.T) {
+func TestUserRouteEventIsInTheNamedNodeIDsLogs(t *testing.T) {
 	s, pool := newTestStore(t)
 	ctx := context.Background()
 	now := time.Now()
@@ -365,7 +365,7 @@ func TestUserRouteEventIsInTheNamedNodesLogs(t *testing.T) {
 	if _, err := s.CreateIntent(ctx, testIntent("tree", now), nil); err != nil {
 		t.Fatal(err)
 	}
-	named := &Outcome{Outcome: OutcomeResponded, Status: intPtr(201), NamedNodes: []string{"01n", "01np"}, NamedMemberID: strPtr("01nm")}
+	named := &Outcome{Outcome: OutcomeResponded, Status: intPtr(201), NamedNodeIDs: []string{"01n", "01np"}, NamedMemberID: strPtr("01nm")}
 	if _, err := s.ApplyOutcome(ctx, "redeem", named); err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +376,7 @@ func TestUserRouteEventIsInTheNamedNodesLogs(t *testing.T) {
 
 	mine, _, err := s.List(ctx, Filter{Log: UserLog("01u"), Limit: 10})
 	if err != nil || len(mine) != 1 || *mine[0].Actor.UserID != "01u" || mine[0].Actor.MemberID != nil ||
-		!slices.Equal(mine[0].NamedNodes, []string{"01n", "01np"}) || *mine[0].NamedMemberID != "01nm" {
+		!slices.Equal(mine[0].NamedNodeIDs, []string{"01n", "01np"}) || *mine[0].NamedMemberID != "01nm" {
 		t.Fatalf("person's log: %v %+v", err, mine)
 	}
 	for _, log := range []string{"01n", "01np"} {
@@ -392,11 +392,11 @@ func TestUserRouteEventIsInTheNamedNodesLogs(t *testing.T) {
 		}
 	}
 	tree, _, err := s.List(ctx, Filter{Log: "01o", NodeRead: true, Limit: 10})
-	if err != nil || len(tree) != 1 || len(tree[0].NamedNodes) != 0 || tree[0].NamedMemberID != nil || *tree[0].Actor.MemberID != "01m" {
+	if err != nil || len(tree) != 1 || len(tree[0].NamedNodeIDs) != 0 || tree[0].NamedMemberID != nil || *tree[0].Actor.MemberID != "01m" {
 		t.Fatalf("tree event unchanged: %v %+v", err, tree)
 	}
 
-	if _, err := pool.Exec(ctx, `UPDATE audit_events SET named_nodes = '{01x}' WHERE request_id = 'redeem'`); err == nil {
+	if _, err := pool.Exec(ctx, `UPDATE audit_events SET named_node_ids = '{01x}' WHERE request_id = 'redeem'`); err == nil {
 		t.Fatal("a final event's named nodes changed")
 	}
 }

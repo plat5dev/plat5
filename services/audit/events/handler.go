@@ -106,7 +106,7 @@ type eventResponse struct {
 	Status        *int              `json:"status"`
 	Details       json.RawMessage   `json:"details"`
 	CreatedID     *string           `json:"created_id"`
-	NamedNodes    []string          `json:"named_nodes"`
+	NamedNodeIDs  []string          `json:"named_node_ids"`
 	NamedMemberID *string           `json:"named_member_id"`
 }
 
@@ -123,7 +123,7 @@ func toResponse(e *Event) eventResponse {
 	if details == nil {
 		details = json.RawMessage("null")
 	}
-	named := e.NamedNodes
+	named := e.NamedNodeIDs
 	if named == nil {
 		named = []string{}
 	}
@@ -144,7 +144,7 @@ func toResponse(e *Event) eventResponse {
 		Status:        e.Status,
 		Details:       details,
 		CreatedID:     e.CreatedID,
-		NamedNodes:    named,
+		NamedNodeIDs:  named,
 		NamedMemberID: e.NamedMemberID,
 	}
 }

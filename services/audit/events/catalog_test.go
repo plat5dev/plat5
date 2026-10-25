@@ -99,7 +99,7 @@ func TestFeedEveryAuditUpstreamIsServed(t *testing.T) {
 		"service": "identity", "method": "POST", "route": "/orgs", "params": {}, "ip": "203.0.113.7", "user_agent": null}`,
 		at, ids["user"]))
 	patch("create-org", fmt.Sprintf(`{"outcome": "responded", "status": 201, "details": null, "created_id": %q,
-		"named_nodes": [%q], "named_member_id": %q}`, org.ID, org.ID, member))
+		"named_node_ids": [%q], "named_member_id": %q}`, org.ID, org.ID, member))
 	// A project created on the org, then events on each node, and a refusal.
 	put("create-project", treeIntent([]Node{org}, ""))
 	patch("create-project", fmt.Sprintf(`{"outcome": "responded", "status": 201, "details": null, "created_id": %q}`, project.ID))

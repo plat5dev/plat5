@@ -159,8 +159,8 @@ func TestListShape(t *testing.T) {
 			t.Fatalf("%s is present and null: %s", k, body)
 		}
 	}
-	if n, ok := e["named_nodes"].([]any); !ok || len(n) != 0 {
-		t.Fatalf("named_nodes is [] when none are named: %s", body)
+	if n, ok := e["named_node_ids"].([]any); !ok || len(n) != 0 {
+		t.Fatalf("named_node_ids is [] when none are named: %s", body)
 	}
 	if p, ok := e["params"].(map[string]any); !ok || len(p) != 0 {
 		t.Fatalf("params is {} when the route has none: %s", body)
@@ -185,7 +185,7 @@ func TestListShape(t *testing.T) {
 		RequestID: "req-2", OccurredAt: testNow, Nodes: []Node{},
 		Actor:   Actor{UserID: strPtr("01u"), Principal: strPtr(PrincipalPerson), AuthType: strPtr(AuthJWT)},
 		Service: "identity", Method: strPtr("POST"), Route: strPtr("/orgs"), IP: strPtr("203.0.113.7"),
-	}, Outcome: Outcome{Outcome: OutcomeResponded, Status: intPtr(201), NamedNodes: []string{"01o"}, NamedMemberID: strPtr("01m")}}}
+	}, Outcome: Outcome{Outcome: OutcomeResponded, Status: intPtr(201), NamedNodeIDs: []string{"01o"}, NamedMemberID: strPtr("01m")}}}
 	code, body = do(t, app, http.MethodGet, "/users/01u/audit-events", "")
 	if code != http.StatusOK {
 		t.Fatalf("person's list: %d %s", code, body)
@@ -194,7 +194,7 @@ func TestListShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	e = resp["audit_events"].([]any)[0].(map[string]any)
-	if e["root_id"] != nil || len(e["nodes"].([]any)) != 0 || e["named_nodes"].([]any)[0] != "01o" || e["named_member_id"] != "01m" ||
+	if e["root_id"] != nil || len(e["nodes"].([]any)) != 0 || e["named_node_ids"].([]any)[0] != "01o" || e["named_member_id"] != "01m" ||
 		e["actor"].(map[string]any)["user_id"] != "01u" || e["actor"].(map[string]any)["key_id"] != nil {
 		t.Fatalf("user route event: %s", body)
 	}

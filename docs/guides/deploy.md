@@ -159,7 +159,6 @@ Your writes are in their tree's audit log by default. Set `audit: false` on a wr
 
 An apply is the whole config: a service missing from `services` is removed, and the plan shows it. Format: [`reference/config/services.md`](../reference/config/services.md), [`concepts/config.md`](../concepts/config.md).
 
-Local CLI `upstreams:` (bare port → `host.docker.internal`) is for laptop Docker. On a shared compose network, put `url:` in the file.
 
 ## 5. SPA
 

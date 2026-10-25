@@ -38,7 +38,15 @@ Every field is in every answer, so the gateway never sees a missing one. With `v
 
 Identity resolves `chain` by kind name only and doesn't check it against its kinds: a gateway a revision ahead or behind gets `member_id: null`, not an error. A body identity can't read is **422**: neither or both of `credential` and `idp`, or an `idp` without `issuer` or `subject`.
 
-How the gateway acts on each answer: [the gateway](../gateway.md#admit).
+#### What the gateway answers
+
+| Admit result | Status |
+|--------------|--------|
+| `valid: false` | **401**, counted by the failed-auth limiter |
+| `member_id: null` on a kind route | **403**, before the rate limit, counted by the failed-auth limiter |
+| `permissions` share none with the route, and the route isn't `any_member` | **403**, after the rate limit |
+| Otherwise | Forwarded |
+| Transport error, non-2xx, missing fields | **503** |
 
 ### Plan counts
 
@@ -114,10 +122,10 @@ Audit stores what it's sent and doesn't repeat the gateway's or identity's rules
 
 ```
 PATCH /internal/events/{request_id}
-{ "outcome": "responded", "status": 200, "details": { … }, "created_id": "…", "named_nodes": ["…"], "named_member_id": "…" }
+{ "outcome": "responded", "status": 200, "details": { … }, "created_id": "…", "named_node_ids": ["…"], "named_member_id": "…" }
 ```
 
-`named_nodes` and `named_member_id` only for a user-route event, from the service's [named nodes](../../concepts/audit.md#named-nodes), and only with `responded`. Sent for a tree route's event, they're ignored.
+`named_node_ids` and `named_member_id` only for a user-route event, from the service's [named nodes](../../concepts/audit.md#named-nodes), and only with `responded`. Sent for a tree route's event, they're ignored.
 
 | Result | Response |
 |--------|----------|

@@ -58,7 +58,7 @@ type Intent struct {
 // Outcome is how the request ended. Status is nil when the client was gone
 // before an answer. Details is nil for null.
 //
-// CreatedID is the id a create produced. NamedNodes and NamedMemberID are the
+// CreatedID is the id a create produced. NamedNodeIDs and NamedMemberID are the
 // chain a user route changed and the member in it: they add the event to
 // each named node's log.
 type Outcome struct {
@@ -66,7 +66,7 @@ type Outcome struct {
 	Status        *int
 	Details       json.RawMessage
 	CreatedID     *string
-	NamedNodes    []string
+	NamedNodeIDs  []string
 	NamedMemberID *string
 }
 

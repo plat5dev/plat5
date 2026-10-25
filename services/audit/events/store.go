@@ -37,7 +37,7 @@ func NewStore(pool *pgxpool.Pool) *Store {
 
 const eventColumns = `e.id, e.occurred_at, e.request_id, e.root_id, e.nodes, e.actor_member_id, e.actor_user_id,
 	e.actor_principal, e.actor_auth_type, e.actor_key_id, e.service, e.method, e.route, e.params, e.ip,
-	e.user_agent, e.outcome, e.status, e.details, e.created_id, e.named_nodes, e.named_member_id`
+	e.user_agent, e.outcome, e.status, e.details, e.created_id, e.named_node_ids, e.named_member_id`
 
 // CreateIntent writes the event unless one exists for the request id: pending,
 // or final with a gateway refusal's outcome. It joins the chain's logs and,
@@ -143,7 +143,7 @@ func (s *Store) ApplyOutcome(ctx context.Context, requestID string, out *Outcome
 	if out.Details != nil {
 		details = string(out.Details)
 	}
-	named := out.NamedNodes
+	named := out.NamedNodeIDs
 	if named == nil {
 		named = []string{}
 	}
@@ -162,10 +162,10 @@ func (s *Store) ApplyOutcome(ctx context.Context, requestID string, out *Outcome
 	err = tx.QueryRow(ctx, `
 		UPDATE audit_events
 		SET outcome = $2, status = $3, details = $4::jsonb, created_id = $5,
-			named_nodes = CASE WHEN root_id IS NULL THEN $6::text[] ELSE '{}' END,
+			named_node_ids = CASE WHEN root_id IS NULL THEN $6::text[] ELSE '{}' END,
 			named_member_id = CASE WHEN root_id IS NULL THEN $7::text END
 		WHERE request_id = $1 AND outcome = 'pending'
-		RETURNING id, occurred_at, named_nodes
+		RETURNING id, occurred_at, named_node_ids
 	`, requestID, out.Outcome, out.Status, details, out.CreatedID, named, out.NamedMemberID).Scan(&eventID, &at, &stored)
 	if dbx.IsNoRows(err) {
 		var exists bool
@@ -303,7 +303,7 @@ func scanEvent(row dbx.Scannable) (*Event, error) {
 	var nodes, params, details []byte
 	if err := row.Scan(&e.ID, &e.OccurredAt, &e.RequestID, &e.RootID, &nodes, &e.Actor.MemberID, &e.Actor.UserID,
 		&e.Actor.Principal, &e.Actor.AuthType, &e.Actor.KeyID, &e.Service, &e.Method, &e.Route, &params, &e.IP,
-		&e.UserAgent, &e.Outcome.Outcome, &e.Status, &details, &e.CreatedID, &e.NamedNodes, &e.NamedMemberID); err != nil {
+		&e.UserAgent, &e.Outcome.Outcome, &e.Status, &details, &e.CreatedID, &e.NamedNodeIDs, &e.NamedMemberID); err != nil {
 		return nil, err
 	}
 	e.OccurredAt = e.OccurredAt.UTC()

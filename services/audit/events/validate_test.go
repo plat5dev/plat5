@@ -166,7 +166,7 @@ func TestParseOutcome(t *testing.T) {
 		"no outcome":         {`{"status":200}`, "outcome"},
 		"status a string":    {`{"outcome":"responded","status":"200"}`, "status"},
 		"details not object": {`{"outcome":"responded","status":200,"details":[1]}`, "details"},
-		"named not a list":   {`{"outcome":"responded","status":201,"named_nodes":"01o"}`, "named_nodes"},
+		"named not a list":   {`{"outcome":"responded","status":201,"named_node_ids":"01o"}`, "named_node_ids"},
 	}
 	for name, tc := range bad {
 		t.Run(name, func(t *testing.T) {
@@ -181,12 +181,12 @@ func TestParseOutcome(t *testing.T) {
 
 func TestParseOutcomeIDs(t *testing.T) {
 	out, err := ParseOutcome("r", []byte(`{"outcome":"responded","status":201,"details":null,"created_id":"01o",
-		"named_nodes":["01o","01p"],"named_member_id":"01m"}`))
-	if err != nil || *out.CreatedID != "01o" || len(out.NamedNodes) != 2 || out.NamedNodes[1] != "01p" || *out.NamedMemberID != "01m" {
+		"named_node_ids":["01o","01p"],"named_member_id":"01m"}`))
+	if err != nil || *out.CreatedID != "01o" || len(out.NamedNodeIDs) != 2 || out.NamedNodeIDs[1] != "01p" || *out.NamedMemberID != "01m" {
 		t.Fatalf("ids: %+v %v", out, err)
 	}
 	out, err = ParseOutcome("r", []byte(`{"outcome":"responded","status":200,"details":null}`))
-	if err != nil || out.NamedNodes == nil || len(out.NamedNodes) != 0 || out.NamedMemberID != nil || out.CreatedID != nil {
+	if err != nil || out.NamedNodeIDs == nil || len(out.NamedNodeIDs) != 0 || out.NamedMemberID != nil || out.CreatedID != nil {
 		t.Fatalf("none named: %+v %v", out, err)
 	}
 }

@@ -40,4 +40,4 @@ Add a service file for the service, list it in `plat5.yml`'s `services`, grant i
 
 ## Direct-exposed services
 
-Some services are exposed outside the gateway on purpose (e.g. an IdP at `auth.example.com` while the gateway serves `api.example.com`). They handle their own CORS, don't rely on subject headers, and are exempt from "Do not implement CORS". TLS still typically terminates at the edge.
+Some services are exposed outside the gateway on purpose (e.g. an IdP at `auth.example.com` while the gateway serves `api.example.com`). They handle their own CORS, don't rely on the gateway's headers, and are exempt from "Do not implement CORS". TLS still typically terminates at the edge.

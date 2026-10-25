@@ -62,7 +62,7 @@ From the gateway: no route matches. From a service's own API, called by id: the 
 
 ### `UNAUTHORIZED`
 
-Returned by the **gateway**, not downstream services: a bad, missing, revoked or suspended credential, or a service account key on a user route. Identity unavailable is **503**. See [`reference/gateway.md`](gateway.md#admit).
+Returned by the **gateway**, not downstream services: a bad, missing, revoked or suspended credential, or a service account key on a user route. Identity unavailable is **503**. See [admit](api/internal.md#what-the-gateway-answers).
 
 ### `PLAN_STALE`
 

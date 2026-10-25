@@ -21,7 +21,7 @@ Every delete is soft for `deletion_grace`, 30 days by default, restorable, then 
 | Purge takes the deleted nodes below it, even if their own `purge_after` is later | A child under a purged parent can never be restored, so keeping it loses nothing but storage |
 | A service account born at a purged node goes with it: principal and keys deleted, member removed with `member.removed` | Google Cloud deletes a project's service accounts with the project |
 | Delete answers **204**, restore **200** with the node, and releasing the slug of a node that isn't a purged root is **409** | Plain, and consistent with the rest of the API |
-| The purge sweeper runs every minute and whenever a new config arrives, and marks invites past `expires_at` `expired`. No settings | One background loop; no setting until someone needs one |
+| The purge sweeper runs every minute, and marks invites past `expires_at` `expired`. No settings | One background loop; no setting until someone needs one |
 
 ## Kinds
 

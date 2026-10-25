@@ -15,7 +15,7 @@ type auditEvent struct {
 		Kind string `json:"kind"`
 		ID   string `json:"id"`
 	} `json:"nodes"`
-	NamedNodes    []string `json:"named_nodes"`
+	NamedNodeIDs  []string `json:"named_node_ids"`
 	NamedMemberID *string  `json:"named_member_id"`
 	Actor         struct {
 		MemberID  *string `json:"member_id"`
@@ -144,7 +144,7 @@ func TestAuditLogs(t *testing.T) {
 	// The org's creation, a user route, is in it because identity named the
 	// org: its actor is the creator's member there, never a user id.
 	created := find(t, orgLog, "POST", "/orgs")
-	if created.Root != nil || len(created.Nodes) != 0 || !slices.Equal(created.NamedNodes, []string{org.ID}) ||
+	if created.Root != nil || len(created.Nodes) != 0 || !slices.Equal(created.NamedNodeIDs, []string{org.ID}) ||
 		!is(created.NamedMemberID, ownerMember) || !is(created.Actor.MemberID, ownerMember) || created.Actor.UserID != nil ||
 		!is(created.CreatedID, org.ID) || created.Outcome != "responded" || *created.Status != 201 ||
 		created.Actor.Principal != "person" || created.Actor.AuthType != "jwt" || created.Actor.KeyID != nil {
