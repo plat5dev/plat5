@@ -21,6 +21,7 @@ reqwest = { version = "0.12.24", default-features = false, features = ["json", "
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 serde_yaml = "0.9"
+subtle = "2.6"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "chrono", "json"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "fs", "signal", "time"] }
 tower = "0.5"

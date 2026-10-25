@@ -2,18 +2,20 @@ mod api;
 #[cfg(test)]
 mod api_tests;
 mod apply;
-mod catalog;
 mod config;
 mod counts;
 #[cfg(test)]
 mod docgen;
 mod error;
+mod expand;
 mod feed;
+#[cfg(test)]
+mod fixtures;
 mod metrics;
 mod plan;
+mod resources;
 mod rules;
 mod schema;
-mod seed;
 mod store;
 mod telemetry;
 
@@ -30,12 +32,10 @@ use crate::store::Store;
 pub struct AppState {
     pub store: Store,
     pub feed: Feed,
-    /// Identity's plan counts, asked only when a plan removes a kind or narrows
-    /// a parent.
+    /// Identity's plan counts, asked only when a plan removes a kind or changes
+    /// a kind's parent.
     pub counts: Arc<dyn Counts>,
     pub admin_token: String,
-    /// `INTERNAL_AUTH_TOKEN`: required on `/internal/*` when set.
-    pub internal_token: Option<String>,
 }
 
 #[tokio::main]
@@ -86,22 +86,7 @@ async fn main() {
         std::process::exit(1);
     });
 
-    let internal_token = std::env::var("INTERNAL_AUTH_TOKEN")
-        .ok()
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty());
-
-    let counts: Arc<dyn Counts> = Arc::new(HttpCounts::new(&identity_url, internal_token.clone()));
-
-    // Applied before the head is read, so readers start at the seeded revision.
-    if let Some(seed_dir) = nonempty_env("SEED_DIR") {
-        seed::seed(&store, counts.as_ref(), &seed_dir)
-            .await
-            .unwrap_or_else(|e| {
-                error!(error = %e, "seed failed");
-                std::process::exit(1);
-            });
-    }
+    let counts: Arc<dyn Counts> = Arc::new(HttpCounts::new(&identity_url));
 
     let head = store.head().await.unwrap_or_else(|e| {
         error!(error = %e, "failed to read control-plane head");
@@ -114,7 +99,6 @@ async fn main() {
         feed,
         counts,
         admin_token,
-        internal_token,
     };
 
     let public = api::public_router(state.clone());

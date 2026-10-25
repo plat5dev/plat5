@@ -1,0 +1,164 @@
+{
+  "revision": 7,
+  "summary": {
+    "add": 0,
+    "change": 1,
+    "remove": 0,
+    "blocked": 0
+  },
+  "changes": [
+    {
+      "op": "change",
+      "what": "service",
+      "name": "identity",
+      "routes": [
+        {
+          "op": "change",
+          "method": "DELETE",
+          "path": "/orgs/{organization}",
+          "before": {
+            "required_permissions": [
+              "organization:delete"
+            ]
+          },
+          "after": {
+            "required_permissions": [
+              "organization:admin"
+            ]
+          }
+        },
+        {
+          "op": "add",
+          "method": "GET",
+          "path": "/orgs/{organization}/apps",
+          "after": {
+            "scope": "organization",
+            "upstream": "/nodes/{organization.id}/children/project",
+            "required_permissions": "any_member",
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "POST",
+          "path": "/orgs/{organization}/apps",
+          "after": {
+            "scope": "organization",
+            "upstream": "/nodes/{organization.id}/children/project",
+            "required_permissions": [
+              "project:create"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "GET",
+          "path": "/orgs/{organization}/invites",
+          "before": {
+            "scope": "organization",
+            "upstream": "/nodes/{organization.id}/invites",
+            "required_permissions": [
+              "organization:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "POST",
+          "path": "/orgs/{organization}/invites",
+          "before": {
+            "scope": "organization",
+            "upstream": "/nodes/{organization.id}/invites",
+            "required_permissions": [
+              "organization:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "GET",
+          "path": "/orgs/{organization}/projects",
+          "before": {
+            "scope": "organization",
+            "upstream": "/nodes/{organization.id}/children/project",
+            "required_permissions": "any_member",
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "POST",
+          "path": "/orgs/{organization}/projects",
+          "before": {
+            "scope": "organization",
+            "upstream": "/nodes/{organization.id}/children/project",
+            "required_permissions": [
+              "project:create"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "change",
+          "method": "DELETE",
+          "path": "/orgs/{organization}/projects/{project}",
+          "before": {
+            "required_permissions": [
+              "project:delete"
+            ]
+          },
+          "after": {
+            "required_permissions": [
+              "project:admin"
+            ]
+          }
+        },
+        {
+          "op": "remove",
+          "method": "GET",
+          "path": "/orgs/{organization}/projects/{project}/invites",
+          "before": {
+            "scope": "project",
+            "upstream": "/nodes/{project.id}/invites",
+            "required_permissions": [
+              "guests:write"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "POST",
+          "path": "/orgs/{organization}/projects/{project}/invites",
+          "before": {
+            "scope": "project",
+            "upstream": "/nodes/{project.id}/invites",
+            "required_permissions": [
+              "guests:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        }
+      ]
+    }
+  ]
+}

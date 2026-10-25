@@ -11,7 +11,7 @@ use axum::Router;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-use crate::counts::{CountsResponse, Effects, FixedCounts};
+use crate::counts::{CountsResponse, FixedCounts, KindCounts};
 use crate::feed::Feed;
 use crate::store::Store;
 use crate::AppState;
@@ -81,6 +81,22 @@ fn with(mut config: Value, extra: Value) -> Value {
     config
 }
 
+fn folder_counts(live: u64) -> CountsResponse {
+    CountsResponse {
+        kinds: [(
+            "folder".to_string(),
+            KindCounts {
+                live,
+                nodes: live + 1,
+                sample: (0..=live)
+                    .map(|i| format!("01jb8z3m5q000000000000000{i}"))
+                    .collect(),
+            },
+        )]
+        .into(),
+    }
+}
+
 #[tokio::test]
 async fn plan_and_apply_against_postgres() {
     let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
@@ -95,25 +111,12 @@ async fn plan_and_apply_against_postgres() {
             .unwrap();
     }
     let store = Store::connect(&url).await.unwrap();
-    let counts = Arc::new(FixedCounts::new(CountsResponse {
-        kinds_removed: [(
-            "folder".to_string(),
-            Effects {
-                nodes: 14,
-                bindings: 22,
-                service_accounts: 3,
-                keys: 9,
-            },
-        )]
-        .into(),
-        parents_narrowed: Default::default(),
-    }));
+    let counts = Arc::new(FixedCounts::new(folder_counts(2)));
     let state = AppState {
         feed: Feed::spawn(store.clone(), 0),
         store,
         counts: counts.clone(),
         admin_token: TOKEN.into(),
-        internal_token: None,
     };
     let api = Api {
         public: crate::api::public_router(state.clone()),
@@ -131,23 +134,48 @@ async fn plan_and_apply_against_postgres() {
         StatusCode::NOT_FOUND
     );
 
-    // Auth.
+    // Auth: the admin token, compared whole; the schema is open.
+    for auth in [None, Some("Bearer wrong"), Some("Bearer test-admin-tok")] {
+        let mut req = Request::get("/config");
+        if let Some(a) = auth {
+            req = req.header("authorization", a);
+        }
+        let resp = api
+            .public
+            .clone()
+            .oneshot(req.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "{auth:?}");
+    }
     let resp = api
         .public
         .clone()
-        .oneshot(Request::get("/config").body(Body::empty()).unwrap())
+        .oneshot(Request::get("/schema").body(Body::empty()).unwrap())
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 22)
+        .await
+        .unwrap();
+    let schema: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        schema["config.json"]["$id"],
+        json!("https://plat5.com/schema/config.json")
+    );
+    assert_eq!(
+        api.admin("POST", "/catalog", Some(json!({}))).await.0,
+        StatusCode::NOT_FOUND
+    );
 
-    // The first apply: a folder kind, projects under orgs or folders.
+    // The first apply: organizations, projects and folders.
     let first = fixture("remove-kind", "before.yml");
     let (status, plan) = api
         .admin("POST", "/apply?dry_run=true", Some(first.clone()))
         .await;
     assert_eq!(status, StatusCode::OK, "{plan}");
     assert_eq!(plan["revision"], json!(0));
-    assert_eq!(plan["confirm"], json!({}));
+    assert_eq!(counts.calls(), 0);
 
     let (status, err) = api.admin("POST", "/apply", Some(first.clone())).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
@@ -165,6 +193,7 @@ async fn plan_and_apply_against_postgres() {
         .await;
     assert_eq!(status, StatusCode::OK, "{applied}");
     assert_eq!(applied["revision"], json!(1));
+    assert_eq!(applied["summary"], plan["summary"]);
 
     // Stored as sent; served shaped for each reader.
     let (_, config) = api.admin("GET", "/config", None).await;
@@ -173,11 +202,14 @@ async fn plan_and_apply_against_postgres() {
     let (status, gateway) = api.feed("/internal/gateway?after=0").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(gateway["revision"], json!(1));
-    assert_eq!(gateway["cors"], json!({ "allowed_origins": [] }));
     assert_eq!(
-        gateway["services"]["e10s"]["routes"][0]["methods"],
-        json!(["GET"])
+        gateway["cors"],
+        json!({ "allowed_origins": [], "allowed_headers": [] })
     );
+    let routes = gateway["services"]["e10s"]["routes"].as_array().unwrap();
+    assert!(routes.iter().any(|r| r["path"]
+        == json!("/orgs/{organization}/folders/{folder}/plans")
+        && r["upstream"] == json!("/folders/{folder.id}/plans")));
     let (_, identity) = api.feed("/internal/identity").await;
     assert_eq!(identity["deletion_grace"], json!("30d"));
     assert_eq!(identity["creator_role"], json!("admin"));
@@ -193,23 +225,44 @@ async fn plan_and_apply_against_postgres() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(again["revision"], json!(1));
 
-    // Removing folder is destructive.
+    // Removing folder while it has live nodes is blocked.
     let next = fixture("remove-kind", "after.yml");
     let (_, plan) = api
         .admin("POST", "/apply?dry_run=true", Some(next.clone()))
         .await;
     assert_eq!(plan["revision"], json!(1));
-    assert_eq!(plan["confirm"], json!({ "folder": { "nodes": 14 } }));
+    assert_eq!(plan["summary"]["blocked"], json!(1));
+    let folder = plan["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["what"] == json!("kind"))
+        .unwrap();
+    assert_eq!(
+        folder["blocked"],
+        json!({ "reason": "kind_not_empty", "in_the_way": { "nodes": 2, "sample": [
+            "01jb8z3m5q0000000000000000", "01jb8z3m5q0000000000000001"
+        ] } })
+    );
+    let (status, err) = api
+        .admin(
+            "POST",
+            "/apply",
+            Some(with(next.clone(), json!({ "expect": { "revision": 1 } }))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        err["error"]["details"]["fields"][0]["path"],
+        json!("kinds.folder")
+    );
 
     // A stale expect.
     let (status, err) = api
         .admin(
             "POST",
             "/apply",
-            Some(with(
-                next.clone(),
-                json!({ "expect": { "revision": 0 }, "confirm": plan["confirm"] }),
-            )),
+            Some(with(next.clone(), json!({ "expect": { "revision": 0 } }))),
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT);
@@ -219,54 +272,20 @@ async fn plan_and_apply_against_postgres() {
         json!({ "precondition": "revision", "expected": 0, "actual": 1 })
     );
 
-    // A folder was made since the dry run: the confirmed count is stale.
-    counts.set(CountsResponse {
-        kinds_removed: [(
-            "folder".to_string(),
-            Effects {
-                nodes: 15,
-                ..Default::default()
-            },
-        )]
-        .into(),
-        parents_narrowed: Default::default(),
-    });
-    let (status, err) = api
-        .admin(
-            "POST",
-            "/apply",
-            Some(with(
-                next.clone(),
-                json!({ "expect": { "revision": 1 }, "confirm": plan["confirm"] }),
-            )),
-        )
-        .await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(
-        err["error"]["details"],
-        json!({ "precondition": "confirm.folder", "expected": 14, "actual": 15 })
-    );
-    assert_eq!(
-        api.admin("GET", "/config", None).await.1["revision"],
-        json!(1)
-    );
-
-    // Confirmed at the new count, it applies.
+    // Once its nodes are deleted, folder goes.
+    counts.set(folder_counts(0));
     let (status, applied) = api
         .admin(
             "POST",
             "/apply",
-            Some(with(
-                next.clone(),
-                json!({ "expect": { "revision": 1 }, "confirm": { "folder": { "nodes": 15 } } }),
-            )),
+            Some(with(next.clone(), json!({ "expect": { "revision": 1 } }))),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{applied}");
     assert_eq!(applied["revision"], json!(2));
     assert_eq!(
         applied["summary"],
-        json!({ "add": 0, "change": 2, "remove": 2, "blocked": 0 })
+        json!({ "add": 0, "change": 2, "remove": 1, "blocked": 0 })
     );
 
     let (_, revisions) = api.admin("GET", "/revisions", None).await;
@@ -284,21 +303,24 @@ async fn plan_and_apply_against_postgres() {
         StatusCode::NOT_FOUND
     );
 
-    // Validation names field paths; ownership is a 409.
+    // Validation names field paths, two routes of one shape included.
     let mut bad = next.clone();
-    bad["services"]["e10s"]["routes"][0]["scope"] = json!("team");
+    bad["services"]["e10s"]["scopes"]["team"] = bad["services"]["e10s"]["scopes"]["public"].clone();
     bad["expect"] = json!({ "revision": 2 });
     let (status, err) = api.admin("POST", "/apply", Some(bad)).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(
         err["error"]["details"]["fields"][0]["path"],
-        json!("services.e10s.routes[0].scope")
+        json!("services.e10s.scopes.team")
     );
     let mut clash = next.clone();
-    clash["services"]["other"] = json!({ "url": "http://o:1", "routes": [{ "path": "/health", "scope": "public", "methods": ["GET"] }] });
+    clash["services"]["other"] = json!({ "url": "http://o:1", "scopes": { "public": { "routes": [{ "path": "/health", "methods": ["GET"] }] } } });
     let (status, err) = api.admin("POST", "/apply?dry_run=true", Some(clash)).await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(err["error"]["code"], json!("ROUTE_CONFLICT"));
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        err["error"]["details"]["fields"][0]["path"],
+        json!("services.other.scopes.public.routes[0].path")
+    );
 
     // YAML bodies.
     let yaml = std::fs::read_to_string(
@@ -319,27 +341,25 @@ async fn plan_and_apply_against_postgres() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    // The catalog for kinds not yet applied.
-    let (status, catalog) = api
-        .admin("POST", "/catalog", Some(json!({ "kinds": first["kinds"] })))
+    // Gateway replicas report on their long poll; the status lists them.
+    let (_, status) = api.admin("GET", "/status", None).await;
+    assert_eq!(status, json!({ "revision": 2, "gateway": [] }));
+    let (code, _) = api
+        .feed("/internal/gateway?replica=gw-2&loaded=1&refused=2&reason=route%20%2Fx%3A%20bad")
         .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        catalog["services"]["identity"]["routes"]
-            .as_array()
-            .unwrap()
-            .len()
-            > 20
-    );
-    let (status, _) = api
-        .admin("POST", "/catalog", Some(json!({ "kinds": { "org": {} } })))
-        .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-
-    let (status, schema) = api.admin("GET", "/schema", None).await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(code, StatusCode::OK);
+    api.feed("/internal/gateway?replica=gw-1&loaded=1").await;
+    api.feed("/internal/gateway?replica=gw-1&loaded=2").await;
+    let (_, status) = api.admin("GET", "/status", None).await;
+    assert_eq!(status["revision"], json!(2));
+    let gateway = status["gateway"].as_array().unwrap();
+    assert_eq!(gateway.len(), 2);
+    assert_eq!(gateway[0]["replica"], json!("gw-1"));
+    assert_eq!(gateway[0]["loaded"], json!(2));
+    assert_eq!(gateway[0]["refused"], Value::Null);
     assert_eq!(
-        schema["config.json"]["$id"],
-        json!("https://plat5.com/schema/config.json")
+        gateway[1]["refused"],
+        json!({ "revision": 2, "reason": "route /x: bad" })
     );
+    assert!(gateway[1]["seen_at"].is_string());
 }

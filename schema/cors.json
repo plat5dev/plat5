@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://plat5.com/schema/cors.json",
   "title": "CORS",
-  "description": "The origins the gateway allows: the cors part of plat5.yml.",
+  "description": "The origins and request headers the gateway allows: the cors part of plat5.yml.",
   "type": "object",
   "properties": {
     "cors": {
@@ -12,11 +12,24 @@
       "properties": {
         "allowed_origins": {
           "title": "allowed_origins",
-          "description": "Up to 100. Each is `https://host` or `http://host`, with an optional `:port`. Lowercase, no path, no trailing `/`, no wildcard, no repeats: the gateway compares it byte for byte with the browser's `Origin`.",
+          "description": "Up to 100. `[\"*\"]` allows any origin; `*` is valid only alone. Otherwise each is `https://host` or `http://host`, with an optional `:port`. Lowercase, no path, no trailing `/`, no repeats: the gateway compares it byte for byte with the browser's `Origin`.",
+          "anyOf": [
+            { "const": ["*"] },
+            {
+              "type": "array",
+              "maxItems": 100,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/origin" }
+            }
+          ]
+        },
+        "allowed_headers": {
+          "title": "allowed_headers",
+          "description": "Up to 32 header names, lowercase, added to the gateway's base list of allowed request headers.",
           "type": "array",
-          "maxItems": 100,
+          "maxItems": 32,
           "uniqueItems": true,
-          "items": { "$ref": "#/$defs/origin" }
+          "items": { "$ref": "#/$defs/header_name" }
         }
       }
     }
@@ -26,6 +39,11 @@
       "title": "origin",
       "type": "string",
       "pattern": "^https?://([a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*|\\[[0-9a-f:.]+\\])(:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$"
+    },
+    "header_name": {
+      "title": "header name",
+      "type": "string",
+      "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]{1,128}$"
     }
   }
 }

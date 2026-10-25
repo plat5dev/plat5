@@ -1,0 +1,59 @@
+{
+  "revision": 7,
+  "summary": {
+    "add": 0,
+    "change": 2,
+    "remove": 0,
+    "blocked": 0
+  },
+  "changes": [
+    {
+      "op": "change",
+      "what": "kind",
+      "name": "environment",
+      "before": {
+        "parent": "organization"
+      },
+      "after": {
+        "parent": "project"
+      }
+    },
+    {
+      "op": "change",
+      "what": "service",
+      "name": "e10s",
+      "routes": [
+        {
+          "op": "remove",
+          "method": "GET",
+          "path": "/orgs/{organization}/envs/{environment}/flags",
+          "before": {
+            "scope": "environment",
+            "upstream": "/envs/{environment.id}/flags",
+            "required_permissions": [
+              "environment:read"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "GET",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/flags",
+          "after": {
+            "scope": "environment",
+            "upstream": "/envs/{environment.id}/flags",
+            "required_permissions": [
+              "environment:read"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        }
+      ]
+    }
+  ]
+}

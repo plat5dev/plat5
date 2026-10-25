@@ -1,16 +1,12 @@
 {
-  "kinds_removed": {
+  "kinds": {
     "folder": {
-      "nodes": 14,
-      "bindings": 22,
-      "service_accounts": 3,
-      "keys": 9
-    }
-  },
-  "parents_narrowed": {
-    "project": {
-      "nodes": 0,
-      "sample": []
+      "live": 0,
+      "nodes": 2,
+      "sample": [
+        "01jb8z3m5q0000000000000001",
+        "01jb8z3m5q0000000000000002"
+      ]
     }
   }
 }

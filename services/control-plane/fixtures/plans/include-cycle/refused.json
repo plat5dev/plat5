@@ -1,0 +1,6 @@
+[
+  {
+    "path": "roles.member.includes",
+    "message": "includes form a cycle: member → viewer → member"
+  }
+]

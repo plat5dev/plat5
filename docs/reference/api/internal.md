@@ -71,7 +71,7 @@ The gateway's `services` are expanded: each service's `url`, `timeouts` and `max
   "required_permissions": ["catalog:write"], "rate_limit": ["default"], "audit": true, "allow_deleted": false }
 ```
 
-Identity's and audit's resources are expanded the same way. `rate_limit` is resolved (`[]` for none), `audit` is the method default filled in, and `required_permissions` is a list or `"any_member"` (`null` outside a kind scope). Roles are served as written, with `includes`; identity resolves them. Other keys are the config's own ([config](../../concepts/config.md#the-config)), with defaults filled in: `deletion_grace` `30d`, `reserved_slugs` `[]`, `users` `{ "name_claim": "name" }`, `rate_limits` `{}`, and `cors` `{ "allowed_origins": [], "allowed_headers": [] }` when the config has none.
+Identity's and audit's resources are expanded the same way. `rate_limit` is resolved (`[]` for none), `audit` is the method default filled in (`false` in `public`, which is never audited), and `required_permissions` is a list or `"any_member"` (`null` outside a kind scope). Roles are served as written, with `includes`; identity resolves them. Other keys are the config's own ([config](../../concepts/config.md#the-config)), with defaults filled in: `deletion_grace` `30d`, `reserved_slugs` `[]`, `users` `{ "name_claim": "name" }`, `rate_limits` `{}`, and `cors` `{ "allowed_origins": [], "allowed_headers": [] }` when the config has none.
 
 Without `after`, the answer is immediate. With `?after={revision}`, the control plane waits until the head is past `after`, for up to 25 seconds. Nothing newer in that time is **204**, and the reader asks again. A cursor ahead of the head (the store was reset) is answered at once.
 

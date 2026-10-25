@@ -1,40 +1,47 @@
 kinds:
-  directory:
-    sign_in: idp
   organization:
-    label: Organization
-    segment: orgs
+    path: /orgs/{organization}
+    list_permission: organization:read
   project:
-    label: Project
     parent: organization
+    path: /projects/{project}
+    list_permission: project:read
   environment:
     parent: project
+    path: /envs/{environment}
+    list_permission: environment:read
 roles:
   admin:
-    labels: ["*"]
+    permissions: ["*"]
     bindable_at: [organization, project, environment]
   member:
-    labels: ["organization:read"]
+    permissions: [organization:read]
     bindable_at: [organization]
-default_role: member
 creator_role: admin
 services:
   e10s:
-    url: "http://e10s:3000"
-    routes:
-      - path: "/orgs/{organization}/projects/{project}/plans"
-        scope: project
-        upstream: "/projects/{subject.project_id}/plans"
-        methods:
-          GET:
-            required_labels: ["project:read"]
-          POST:
-            required_labels: ["catalog:write"]
-      - path: "/health"
-        scope: public
-        methods: [GET]
-      - path: "/orgs/{organization}/projects/{project}/environments/{environment}/flags"
-        scope: environment
-        upstream: "/environments/{subject.environment_id}/flags"
-        methods: [GET]
-        required_labels: ["environment:read"]
+    url: http://e10s:3000
+    scopes:
+      organization:
+        upstream_prefix: /orgs/{organization.id}
+        routes:
+          - path: /plans
+            methods:
+              GET: { required_permissions: [organization:read] }
+      project:
+        upstream_prefix: /projects/{project.id}
+        routes:
+          - path: /plans
+            methods:
+              GET: { required_permissions: [project:read] }
+              POST: { required_permissions: [catalog:write] }
+      environment:
+        upstream_prefix: /envs/{environment.id}
+        routes:
+          - path: /flags
+            methods:
+              GET: { required_permissions: [environment:read] }
+      public:
+        routes:
+          - path: /health
+            methods: [GET]

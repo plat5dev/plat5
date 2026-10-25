@@ -13,14 +13,9 @@
       "propertyNames": { "$ref": "#/$defs/role_slug" },
       "additionalProperties": { "$ref": "#/$defs/role" }
     },
-    "default_role": {
-      "title": "default_role",
-      "description": "Required. What joining a root grants. Bindable at every root kind other than the sign-in kind. No `max_duration`: joining without a stated end must grant something that doesn't need one.",
-      "$ref": "#/$defs/role_slug"
-    },
     "creator_role": {
       "title": "creator_role",
-      "description": "Required. What the creator of a node gets on it. Bindable at every kind that can be created. No `max_duration`.",
+      "description": "Required. What the creator of a node gets on it. Bindable at every kind.",
       "$ref": "#/$defs/role_slug"
     }
   },
@@ -31,8 +26,8 @@
       "type": "string",
       "pattern": "^[a-z0-9:._-]{1,64}$"
     },
-    "label": {
-      "title": "label",
+    "permission": {
+      "title": "permission",
       "description": "`[a-z0-9:._-]+`, max 64.",
       "type": "string",
       "pattern": "^[a-z0-9:._-]{1,64}$"
@@ -41,27 +36,29 @@
       "title": "role",
       "type": "object",
       "additionalProperties": false,
-      "required": ["labels", "bindable_at"],
+      "required": ["bindable_at"],
       "properties": {
-        "labels": {
-          "title": "labels",
-          "description": "`[a-z0-9:._-]+`, max 64 chars, unique, max 64 labels. `[]` grants nothing. `[\"*\"]` grants every label; `*` is valid only alone.",
+        "permissions": {
+          "title": "permissions",
+          "description": "`[a-z0-9:._-]+`, max 64 chars, unique, max 64 permissions. `[\"*\"]` grants every permission; `*` is valid only alone. Each must be required by some route, or be a kind's `list_permission`.",
           "anyOf": [
             { "const": ["*"] },
-            { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/label" } }
+            { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/permission" } }
           ]
+        },
+        "includes": {
+          "title": "includes",
+          "description": "Other roles whose permissions this one grants too, transitively. Only permissions are included: `bindable_at` stays the role's own.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/role_slug" }
         },
         "bindable_at": {
           "title": "bindable_at",
-          "description": "Required. The kinds this role can be bound at. Never the sign-in kind.",
+          "description": "Required. The kinds this role can be bound at.",
           "type": "array",
           "uniqueItems": true,
           "items": { "$ref": "kinds.json#/$defs/kind_name" }
-        },
-        "max_duration": {
-          "title": "max_duration",
-          "description": "Optional. A binding with this role must have an `expires_at` no further away than this. A duration: a whole number and `s`, `m`, `h` or `d` (`7d`, `8h`).",
-          "$ref": "kinds.json#/$defs/duration"
         }
       }
     }

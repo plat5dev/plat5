@@ -8,7 +8,8 @@
 //!
 //! with one row per pointer (a pointer ending in `/properties` is a row per
 //! property). `generated with types` adds a Type column. The test fails when a
-//! table is stale; `UPDATE_DOCS=1 cargo test docs` rewrites them.
+//! table is stale, or when a link in it doesn't resolve from the page;
+//! `UPDATE_DOCS=1 cargo test docs` rewrites them.
 
 use std::path::{Path, PathBuf};
 
@@ -18,7 +19,14 @@ use crate::schema;
 
 const OPEN: &str = "<!-- generated from schema";
 const CLOSE: &str = "<!-- end generated -->";
-const PAGES: &[&str] = &["kinds.md", "roles.md", "routes.md", "cors.md"];
+const PAGES: &[&str] = &[
+    "settings.md",
+    "kinds.md",
+    "roles.md",
+    "rate-limits.md",
+    "cors.md",
+    "services.md",
+];
 
 fn docs_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/reference/config")
@@ -80,7 +88,7 @@ fn type_of(file: &str, v: &Value) -> String {
         ),
         Some("object") => {
             if let Some(ap) = v.get("additionalProperties").filter(|a| a.is_object()) {
-                format!("map<string, {}>", type_of(file, ap))
+                format!("map<{}, {}>", key_type(file, v), type_of(file, ap))
             } else if let Some(props) = v.get("properties").and_then(Value::as_object) {
                 format!(
                     "{{{}}}",
@@ -94,6 +102,14 @@ fn type_of(file: &str, v: &Value) -> String {
         Some(t) => t.into(),
         None => "any".into(),
     }
+}
+
+/// A map's key: the title of its `propertyNames`, or `string`.
+fn key_type(file: &str, map: &Value) -> String {
+    map.get("propertyNames")
+        .and_then(|names| follow(file, names))
+        .and_then(|(_, names)| names.get("title")?.as_str().map(String::from))
+        .unwrap_or_else(|| "string".into())
 }
 
 /// One table's rows: (field, type, description).
@@ -181,6 +197,59 @@ fn regenerate(page: &str) -> String {
     out
 }
 
+/// The targets of the Markdown links in `text`.
+fn links(text: &str) -> Vec<&str> {
+    text.match_indices("](")
+        .filter_map(|(at, _)| {
+            let rest = &text[at + 2..];
+            rest.find(')').map(|end| &rest[..end])
+        })
+        .collect()
+}
+
+/// A heading's anchor, as GitHub makes it.
+fn anchor(heading: &str) -> String {
+    heading
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_'))
+        .map(|c| if c == ' ' { '-' } else { c })
+        .collect()
+}
+
+/// Links in a page's generated tables that don't resolve: a missing page, or
+/// an anchor no heading there makes.
+fn broken_links(page_path: &Path, page: &str) -> Vec<String> {
+    let mut broken = Vec::new();
+    let mut rest = page;
+    while let Some(start) = rest.find(OPEN) {
+        let close = rest[start..].find(CLOSE).expect("generated table ends") + start;
+        for target in links(&rest[start..close]) {
+            let (file, fragment) = target.split_once('#').unwrap_or((target, ""));
+            let file = if file.is_empty() {
+                page_path.to_path_buf()
+            } else {
+                page_path.parent().unwrap().join(file)
+            };
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                broken.push(target.to_string());
+                continue;
+            };
+            let found = fragment.is_empty()
+                || text
+                    .lines()
+                    .filter_map(|l| l.strip_prefix('#'))
+                    .any(|h| anchor(h.trim_start_matches('#')) == fragment);
+            if !found {
+                broken.push(target.to_string());
+            }
+        }
+        rest = &rest[close..];
+    }
+    broken
+}
+
 #[test]
 fn docs_reference_tables_match_the_schema() {
     let update = std::env::var("UPDATE_DOCS").is_ok_and(|v| v == "1");
@@ -190,6 +259,11 @@ fn docs_reference_tables_match_the_schema() {
         let page = std::fs::read_to_string(&path).unwrap();
         assert!(page.contains(OPEN), "{name} has no generated table");
         let fresh = regenerate(&page);
+        let broken = broken_links(&path, &fresh);
+        assert!(
+            broken.is_empty(),
+            "{name}: broken links from schema/: {broken:?}"
+        );
         if fresh != page {
             if update {
                 std::fs::write(&path, fresh).unwrap();
@@ -201,5 +275,16 @@ fn docs_reference_tables_match_the_schema() {
     assert!(
         stale.is_empty(),
         "docs/reference/config/{stale:?} don't match schema; run UPDATE_DOCS=1 cargo test docs"
+    );
+}
+
+#[test]
+fn broken_links_are_found() {
+    let page = format!(
+        "{OPEN}: x -->\n| [a](#nope) [b](settings.md) [c](../../concepts/access.md#lists) [d](#upstream) [e](gone.md) |\n{CLOSE}\n"
+    );
+    assert_eq!(
+        broken_links(&docs_dir().join("services.md"), &page),
+        ["#nope", "gone.md"]
     );
 }

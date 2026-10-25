@@ -1,15 +1,14 @@
-//! One path for every apply, from the admin API or the seed: split off `expect`
-//! and `confirm`, check the schema and the rules, plan against the head, and
-//! write if the preconditions hold. Also what the feeds serve.
-
-use std::collections::BTreeMap;
+//! One path for every apply: split off `expect`, check the schema and the
+//! rules, plan against the head, and write if the precondition holds. Also what
+//! the feeds serve.
 
 use serde_json::{json, Map, Value};
 
 use crate::config::{Config, APPLY_ONLY_KEYS};
 use crate::counts::Counts;
-use crate::plan::{self, Confirmed, Expect, Plan, Refused, Summary};
-use crate::rules::{self, RuleError};
+use crate::expand;
+use crate::plan::{self, Expect, Plan, Refused, Summary};
+use crate::rules;
 use crate::schema::{self, FieldError};
 use crate::store::{Store, StoreError};
 
@@ -17,7 +16,6 @@ use crate::store::{Store, StoreError};
 #[derive(Debug)]
 pub enum Failure {
     Invalid(Vec<FieldError>),
-    RouteConflict(Vec<String>),
     Stale {
         precondition: String,
         expected: Option<i64>,
@@ -51,12 +49,11 @@ impl From<Refused> for Failure {
     }
 }
 
-/// An apply body, checked: the config as sent, parsed, and the preconditions.
+/// An apply body, checked: the config as sent, parsed, and the precondition.
 pub struct Prepared {
     pub sent: Value,
     pub config: Config,
     pub expect: Option<Expect>,
-    pub confirm: Option<BTreeMap<String, Confirmed>>,
 }
 
 pub fn prepare(body: Value) -> Result<Prepared, Failure> {
@@ -72,18 +69,11 @@ pub fn prepare(body: Value) -> Result<Prepared, Failure> {
             pre.insert(key.to_string(), v);
         }
     }
-    let field = |key: &str, e: serde_json::Error| {
-        Failure::Invalid(vec![FieldError::new(key, e.to_string())])
-    };
     let expect = match pre.remove("expect") {
         None => None,
-        Some(v) => Some(serde_json::from_value::<Expect>(v).map_err(|e| field("expect", e))?),
-    };
-    let confirm = match pre.remove("confirm") {
-        None => None,
         Some(v) => Some(
-            serde_json::from_value::<BTreeMap<String, Confirmed>>(v)
-                .map_err(|e| field("confirm", e))?,
+            serde_json::from_value::<Expect>(v)
+                .map_err(|e| Failure::Invalid(vec![FieldError::new("expect", e.to_string())]))?,
         ),
     };
     let sent = Value::Object(body);
@@ -92,7 +82,6 @@ pub fn prepare(body: Value) -> Result<Prepared, Failure> {
         sent,
         config,
         expect,
-        confirm,
     })
 }
 
@@ -101,10 +90,7 @@ pub fn check(sent: &Value) -> Result<Config, Failure> {
     schema::check_config(sent).map_err(Failure::Invalid)?;
     let config: Config = serde_json::from_value(sent.clone())
         .map_err(|e| Failure::Invalid(vec![FieldError::new("", e.to_string())]))?;
-    rules::check(&config).map_err(|e| match e {
-        RuleError::Invalid(errs) => Failure::Invalid(errs),
-        RuleError::RouteConflict(c) => Failure::RouteConflict(c),
-    })?;
+    rules::check(&config).map_err(Failure::Invalid)?;
     Ok(config)
 }
 
@@ -147,7 +133,6 @@ pub async fn apply(
         current.as_ref(),
         &prepared.config,
         prepared.expect.as_ref(),
-        prepared.confirm.as_ref(),
         counts,
     )
     .await?;
@@ -167,31 +152,40 @@ pub async fn apply(
     })
 }
 
-/// `GET /internal/gateway`: kinds, services in the stored form, and CORS.
+/// `GET /internal/gateway`: kinds, every service's routes expanded, rate
+/// limits and CORS, with defaults filled in.
 pub fn gateway_feed(revision: i64, config: &Value) -> Result<Value, Failure> {
     let c = stored(config)?;
-    Ok(json!({
-        "revision": revision,
-        "kinds": c.kinds,
-        "services": c.stored_services(),
-        "cors": c.cors,
-    }))
+    Ok(gateway_body(revision, &c))
 }
 
-/// `GET /internal/identity`: the settings, kinds, roles and defaults, with
-/// defaults filled in, and services in the stored form.
+pub fn gateway_body(revision: i64, c: &Config) -> Value {
+    json!({
+        "revision": revision,
+        "kinds": c.kinds,
+        "services": expand::expand(c),
+        "rate_limits": c.rate_limits,
+        "cors": c.cors,
+    })
+}
+
+/// `GET /internal/identity`: the settings, kinds and roles, with defaults
+/// filled in. Roles as written, with their includes.
 pub fn identity_feed(revision: i64, config: &Value) -> Result<Value, Failure> {
     let c = stored(config)?;
-    Ok(json!({
+    Ok(identity_body(revision, &c))
+}
+
+pub fn identity_body(revision: i64, c: &Config) -> Value {
+    json!({
         "revision": revision,
         "deletion_grace": c.deletion_grace,
         "reserved_slugs": c.reserved_slugs,
+        "users": c.users,
         "kinds": c.kinds,
         "roles": c.roles,
-        "default_role": c.default_role,
         "creator_role": c.creator_role,
-        "services": c.stored_services(),
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -207,13 +201,11 @@ mod tests {
     }
 
     #[test]
-    fn prepare_splits_off_the_preconditions() {
+    fn prepare_splits_off_the_precondition() {
         let mut body = base();
         body["expect"] = json!({ "revision": 3 });
-        body["confirm"] = json!({ "folder": { "nodes": 14 } });
         let p = prepare(body).unwrap();
         assert_eq!(p.expect.unwrap().revision, 3);
-        assert_eq!(p.confirm.unwrap()["folder"], Confirmed { nodes: 14 });
         assert_eq!(p.sent, base());
     }
 
@@ -225,22 +217,40 @@ mod tests {
             panic!()
         };
         assert_eq!(errs[0].path, "expect");
+        let mut body = base();
+        body["confirm"] = json!({ "folder": { "nodes": 3 } });
+        let Err(Failure::Invalid(errs)) = prepare(body) else {
+            panic!()
+        };
+        assert_eq!(errs[0].path, "");
     }
 
     #[test]
-    fn feeds_fill_defaults_and_store_routes_expanded() {
+    fn feeds_fill_defaults_and_expand_routes() {
         let gateway = gateway_feed(4, &base()).unwrap();
         assert_eq!(gateway["revision"], json!(4));
-        assert_eq!(gateway["cors"], json!({ "allowed_origins": [] }));
-        let routes = gateway["services"]["e10s"]["routes"].as_array().unwrap();
-        // The methods map became one route per verb, each a list.
-        assert_eq!(routes.len(), 3);
-        assert_eq!(routes[0]["methods"], json!(["GET"]));
-        assert_eq!(routes[0]["required_labels"], json!(["project:read"]));
+        assert_eq!(
+            gateway["cors"],
+            json!({ "allowed_origins": [], "allowed_headers": [] })
+        );
+        assert_eq!(gateway["rate_limits"], json!({}));
+        let e10s = &gateway["services"]["e10s"];
+        assert_eq!(e10s["timeouts"], json!({ "connect": "10s", "read": "30s" }));
+        assert_eq!(e10s["max_body_bytes"], json!(10485760));
+        assert_eq!(
+            e10s["routes"][2],
+            json!({
+                "path": "/orgs/{organization}/projects/{project}/plans", "method": "GET",
+                "scope": "project", "upstream": "/projects/{project.id}/plans",
+                "required_permissions": ["project:read"], "rate_limit": [], "audit": false,
+                "allow_deleted": false
+            })
+        );
+        assert_eq!(e10s["routes"][0]["required_permissions"], Value::Null);
         let identity = identity_feed(4, &base()).unwrap();
         assert_eq!(identity["deletion_grace"], json!("30d"));
         assert_eq!(identity["reserved_slugs"], json!([]));
-        assert_eq!(identity["default_role"], json!("member"));
-        assert!(identity.get("cors").is_none());
+        assert_eq!(identity["users"], json!({ "name_claim": "name" }));
+        assert!(identity.get("services").is_none());
     }
 }

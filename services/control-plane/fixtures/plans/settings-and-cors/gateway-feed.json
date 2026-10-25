@@ -1,0 +1,99 @@
+{
+  "revision": 8,
+  "kinds": {
+    "organization": {
+      "path": "/orgs/{organization}",
+      "list_permission": "organization:read"
+    },
+    "project": {
+      "parent": "organization",
+      "path": "/projects/{project}",
+      "list_permission": "project:read"
+    }
+  },
+  "services": {
+    "e10s": {
+      "url": "http://e10s:3000",
+      "timeouts": {
+        "connect": "5s",
+        "read": "20s"
+      },
+      "max_body_bytes": 2097152,
+      "routes": [
+        {
+          "path": "/health",
+          "method": "GET",
+          "scope": "public",
+          "upstream": "/health",
+          "required_permissions": null,
+          "rate_limit": [
+            "default"
+          ],
+          "audit": false,
+          "allow_deleted": false
+        },
+        {
+          "path": "/orgs/{organization}/plans",
+          "method": "GET",
+          "scope": "organization",
+          "upstream": "/orgs/{organization.id}/plans",
+          "required_permissions": [
+            "organization:read"
+          ],
+          "rate_limit": [
+            "evals-org"
+          ],
+          "audit": false,
+          "allow_deleted": false
+        },
+        {
+          "path": "/orgs/{organization}/projects/{project}/plans",
+          "method": "GET",
+          "scope": "project",
+          "upstream": "/projects/{project.id}/plans",
+          "required_permissions": [
+            "project:read"
+          ],
+          "rate_limit": [
+            "default"
+          ],
+          "audit": false,
+          "allow_deleted": false
+        },
+        {
+          "path": "/orgs/{organization}/projects/{project}/plans",
+          "method": "POST",
+          "scope": "project",
+          "upstream": "/projects/{project.id}/plans",
+          "required_permissions": [
+            "catalog:write"
+          ],
+          "rate_limit": [
+            "default"
+          ],
+          "audit": true,
+          "allow_deleted": false
+        }
+      ]
+    }
+  },
+  "rate_limits": {
+    "default": {
+      "requests": 60,
+      "window_seconds": 60
+    },
+    "evals-org": {
+      "requests": 300,
+      "window_seconds": 1,
+      "count_at": "organization"
+    }
+  },
+  "cors": {
+    "allowed_origins": [
+      "https://app.example.com"
+    ],
+    "allowed_headers": [
+      "idempotency-key"
+    ]
+  }
+}

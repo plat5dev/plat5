@@ -1,0 +1,47 @@
+kinds:
+  organization:
+    path: /orgs/{organization}
+    list_permission: organization:read
+  project:
+    parent: organization
+    path: /projects/{project}
+    list_permission: project:read
+  environment:
+    parent: organization
+    path: /envs/{environment}
+    list_permission: environment:read
+roles:
+  admin:
+    permissions: ["*"]
+    bindable_at: [organization, project, environment]
+  member:
+    permissions: [organization:read]
+    bindable_at: [organization]
+creator_role: admin
+services:
+  e10s:
+    url: http://e10s:3000
+    scopes:
+      organization:
+        upstream_prefix: /orgs/{organization.id}
+        routes:
+          - path: /plans
+            methods:
+              GET: { required_permissions: [organization:read] }
+      project:
+        upstream_prefix: /projects/{project.id}
+        routes:
+          - path: /plans
+            methods:
+              GET: { required_permissions: [project:read] }
+              POST: { required_permissions: [catalog:write] }
+      environment:
+        upstream_prefix: /envs/{environment.id}
+        routes:
+          - path: /flags
+            methods:
+              GET: { required_permissions: [environment:read] }
+      public:
+        routes:
+          - path: /health
+            methods: [GET]

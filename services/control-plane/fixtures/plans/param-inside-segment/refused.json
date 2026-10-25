@@ -1,0 +1,6 @@
+[
+  {
+    "path": "services.files.scopes.project.routes[0].path",
+    "message": "{name}.json: a param is a whole segment, such as /files/{name}"
+  }
+]

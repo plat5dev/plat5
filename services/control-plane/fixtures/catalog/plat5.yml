@@ -1,30 +1,40 @@
-# The kinds and roles the generated catalog is checked against: a kind with
-# two parents, so every chain shape is in it. catalog.rs generates
-# identity-feed.json from this (UPDATE_FIXTURES=1 cargo test catalog), and
-# identity's tests walk every route in it (services/identity/members/catalog_test.go).
+# The config the shared fixtures are made from: one parent per kind, a chain
+# three kinds deep, the example role set, and identity's and audit's resources
+# at their defaults. The control plane's tests write what it serves for this
+# config beside it (UPDATE_FIXTURES=1 cargo test catalog); identity's, audit's
+# and the gateway's tests read those files.
+deletion_grace: 30d
+reserved_slugs: [new, settings, api, admin]
+users:
+  name_claim: name
 kinds:
-  directory:
-    sign_in: idp
-    name_claim: name
   organization:
-    label: Organization
-    segment: orgs
-  folder:
-    label: Folder
-    parent: organization
+    path: /orgs/{organization}
+    list_permission: organization:read
   project:
-    label: Project
-    parent: [organization, folder]
+    parent: organization
+    path: /projects/{project}
+    list_permission: project:read
+  environment:
+    parent: project
+    path: /envs/{environment}
+    list_permission: environment:read
 roles:
-  owner:
-    labels: ["*"]
-    bindable_at: [organization, folder, project]
+  admin:
+    permissions: ["*"]
+    bindable_at: [organization, project, environment]
   member:
-    labels: [organization:read]
+    permissions: [organization:read]
     bindable_at: [organization]
-  editor:
-    labels: [folder:read, project:read, project:write]
-    bindable_at: [organization, folder, project]
-default_role: member
-creator_role: owner
-services: {}
+  developer:
+    includes: [member]
+    permissions: [project:create, project:read, project:write, project:bindings:read]
+    bindable_at: [organization, project]
+creator_role: admin
+rate_limits:
+  default: { requests: 60, window_seconds: 60 }
+services:
+  identity:
+    url: http://identity:3000
+  audit:
+    url: http://audit:3002

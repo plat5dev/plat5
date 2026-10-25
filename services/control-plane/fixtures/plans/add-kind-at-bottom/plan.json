@@ -1,35 +1,61 @@
 {
   "revision": 7,
   "summary": {
-    "add": 2,
-    "change": 1,
+    "add": 1,
+    "change": 2,
     "remove": 0,
     "blocked": 0
   },
   "changes": [
     {
-      "class": "safe",
       "op": "add",
       "what": "kind",
-      "name": "environment"
+      "name": "environment",
+      "after": {
+        "parent": "project",
+        "path": "/envs/{environment}",
+        "list_permission": "environment:read"
+      }
     },
     {
-      "class": "safe",
       "op": "change",
       "what": "role",
-      "name": "admin"
+      "name": "admin",
+      "before": {
+        "bindable_at": [
+          "organization",
+          "project"
+        ]
+      },
+      "after": {
+        "bindable_at": [
+          "organization",
+          "project",
+          "environment"
+        ]
+      }
     },
     {
-      "class": "safe",
       "op": "change",
       "what": "service",
       "name": "e10s",
-      "routes": {
-        "add": 1,
-        "change": 0,
-        "remove": 0
-      }
+      "routes": [
+        {
+          "op": "add",
+          "method": "GET",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/flags",
+          "after": {
+            "scope": "environment",
+            "upstream": "/envs/{environment.id}/flags",
+            "required_permissions": [
+              "environment:read"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        }
+      ]
     }
-  ],
-  "confirm": {}
+  ]
 }

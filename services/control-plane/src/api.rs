@@ -13,15 +13,20 @@ use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
+use subtle::ConstantTimeEq;
+
 use crate::apply::{self, Failure};
-use crate::config::Kind;
 use crate::error::AppError;
 use crate::metrics;
-use crate::schema::{self, FieldError};
+use crate::schema;
+use crate::store::Report;
 use crate::AppState;
 
 /// How long an internal read with `after` waits for a newer revision.
 const LONG_POLL_WAIT: Duration = Duration::from_secs(25);
+
+/// How long a gateway replica stays in `GET /status` after its last poll.
+const REPLICA_SEEN_SECS: i64 = 60;
 
 pub fn public_router(state: AppState) -> Router {
     let authed = Router::new()
@@ -29,8 +34,7 @@ pub fn public_router(state: AppState) -> Router {
         .route("/config", get(get_config))
         .route("/revisions", get(list_revisions))
         .route("/revisions/{rev}", get(get_revision))
-        .route("/catalog", post(catalog))
-        .route("/schema", get(get_schema))
+        .route("/status", get(get_status))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             admin_auth_middleware,
@@ -38,19 +42,17 @@ pub fn public_router(state: AppState) -> Router {
 
     Router::new()
         .merge(authed)
+        .route("/schema", get(get_schema))
         .route_layer(middleware::from_fn(http_observability))
         .with_state(state)
 }
 
 pub fn internal_router(state: AppState) -> Router {
-    // What the runtime reads. Behind INTERNAL_AUTH_TOKEN when it is set.
+    // What the runtime reads. No token: the internal port is reachable only
+    // inside the deployment's network.
     let feeds = Router::new()
         .route("/internal/gateway", get(gateway_feed))
         .route("/internal/identity", get(identity_feed))
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            internal_auth_middleware,
-        ))
         .route_layer(middleware::from_fn(feed_observability));
 
     Router::new()
@@ -169,32 +171,12 @@ async fn admin_auth_middleware(
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|t| t == state.admin_token)
-        .unwrap_or(false);
+        .is_some_and(|t| bool::from(t.as_bytes().ct_eq(state.admin_token.as_bytes())));
 
     if !authorized {
         return Err(AppError::unauthorized(request_id));
     }
 
-    Ok(next.run(request).await)
-}
-
-async fn internal_auth_middleware(
-    State(state): State<AppState>,
-    request: Request,
-    next: Next,
-) -> Result<Response, AppError> {
-    if let Some(expected) = state.internal_token.as_deref() {
-        let got = request
-            .headers()
-            .get("x-plat5-internal-token")
-            .and_then(|v| v.to_str().ok());
-        if got != Some(expected) {
-            return Err(AppError::unauthorized_internal(request_id_from_headers(
-                request.headers(),
-            )));
-        }
-    }
     Ok(next.run(request).await)
 }
 
@@ -238,7 +220,6 @@ fn failure(request_id: &str, f: Failure) -> AppError {
     let request_id = request_id.to_string();
     match f {
         Failure::Invalid(fields) => AppError::validation(request_id, fields),
-        Failure::RouteConflict(c) => AppError::route_conflict(request_id, c),
         Failure::Stale {
             precondition,
             expected,
@@ -393,31 +374,39 @@ async fn get_revision(
     }
 }
 
-/// `{ kinds }` → identity's and audit's generated routes. Writes nothing.
-async fn catalog(
+/// Where each gateway replica stands: those that polled in the last minute.
+async fn get_status(
+    State(state): State<AppState>,
     headers: axum::http::HeaderMap,
-    body: axum::body::Bytes,
 ) -> Result<Response, AppError> {
     let request_id = request_id_from_headers(&headers);
-    let body = parse_body(&headers, &body, &request_id)?;
-    schema::check_catalog_request(&body)
-        .map_err(|e| AppError::validation(request_id.clone(), e))?;
-    let kinds: std::collections::BTreeMap<String, Kind> =
-        serde_json::from_value(body["kinds"].clone()).map_err(|e| {
-            AppError::validation(
-                request_id.clone(),
-                vec![FieldError::new("kinds", e.to_string())],
-            )
-        })?;
-    let mut errs = Vec::new();
-    crate::rules::check_kinds(&crate::config::Config::from_kinds(kinds.clone()), &mut errs);
-    if !errs.is_empty() {
-        return Err(AppError::validation(request_id, errs));
-    }
-    let services = crate::catalog::generate(&kinds);
+    let head = state
+        .store
+        .head()
+        .await
+        .map_err(|e| failure(&request_id, Failure::Store(e)))?;
+    let replicas = state
+        .store
+        .replicas(REPLICA_SEEN_SECS)
+        .await
+        .map_err(|e| failure(&request_id, Failure::Store(e)))?;
+    let gateway: Vec<Value> = replicas
+        .iter()
+        .map(|r| {
+            let refused = r.report.refused.map(|revision| {
+                json!({ "revision": revision, "reason": r.report.reason.clone().unwrap_or_default() })
+            });
+            json!({
+                "replica": r.report.replica,
+                "loaded": r.report.loaded,
+                "refused": refused,
+                "seen_at": r.seen_at.to_rfc3339(),
+            })
+        })
+        .collect();
     Ok((
         with_request_id(request_id),
-        Json(json!({ "services": services })),
+        Json(json!({ "revision": head, "gateway": gateway })),
     )
         .into_response())
 }
@@ -430,6 +419,16 @@ async fn get_schema(headers: axum::http::HeaderMap) -> Response {
 #[derive(Deserialize)]
 struct FeedQuery {
     after: Option<i64>,
+}
+
+/// The gateway's long poll also reports where its replica stands.
+#[derive(Deserialize)]
+struct GatewayQuery {
+    after: Option<i64>,
+    replica: Option<String>,
+    loaded: Option<i64>,
+    refused: Option<i64>,
+    reason: Option<String>,
 }
 
 /// With `after`, waits until the control plane is past it. False means nothing
@@ -471,9 +470,21 @@ async fn feed(
 
 async fn gateway_feed(
     State(state): State<AppState>,
-    Query(query): Query<FeedQuery>,
+    Query(query): Query<GatewayQuery>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, AppError> {
+    if let Some(replica) = query.replica.filter(|r| !r.is_empty()) {
+        let report = Report {
+            replica,
+            loaded: query.loaded.unwrap_or(0),
+            refused: query.refused,
+            reason: query.refused.and(query.reason),
+        };
+        // A report that can't be kept doesn't stop the feed.
+        if let Err(e) = state.store.report(&report).await {
+            tracing::warn!(error = %e, replica = %report.replica, "gateway report not kept");
+        }
+    }
     feed(state, query.after, &headers, apply::gateway_feed).await
 }
 

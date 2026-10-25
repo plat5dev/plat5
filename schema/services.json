@@ -1,0 +1,310 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plat5.com/schema/services.json",
+  "title": "Service file",
+  "description": "One service, keyed by its name: a service file listed in plat5.yml's services. `identity` and `audit` take resources instead of scopes.",
+  "type": "object",
+  "minProperties": 1,
+  "maxProperties": 1,
+  "propertyNames": { "$ref": "#/$defs/service_name" },
+  "properties": {
+    "identity": { "$ref": "#/$defs/identity" },
+    "audit": { "$ref": "#/$defs/audit" }
+  },
+  "additionalProperties": { "$ref": "#/$defs/service" },
+  "$defs": {
+    "service_name": {
+      "title": "service name",
+      "description": "The file's one top-level key: 1–128 of `[A-Za-z0-9._-]`. `identity` and `audit` take [resources](resources.md). The `service` on every audit event.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]{1,128}$"
+    },
+    "service": {
+      "title": "service",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "scopes"],
+      "properties": {
+        "url": {
+          "title": "url",
+          "description": "Upstream, exactly `http://host:port` (explicit port, no path, no query), from the **gateway's** network view. `https://` is **422**: TLS upstreams aren't supported. Credentials in the URL, a port outside 1–65535, or any other form is **422**.",
+          "type": "string",
+          "pattern": "^http://[^/?#@:\\s]+:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+        },
+        "timeouts": {
+          "title": "timeouts",
+          "description": "Upstream timeouts, each a duration. One left out uses `defaults.timeouts` ([settings](settings.md)).",
+          "$ref": "settings.json#/$defs/timeouts"
+        },
+        "max_body_bytes": {
+          "title": "max_body_bytes",
+          "description": "The largest request body forwarded to this service. Larger is **413**. Omitted uses `defaults.max_body_bytes`.",
+          "$ref": "settings.json#/$defs/max_body_bytes"
+        },
+        "scopes": {
+          "title": "scopes",
+          "description": "One block per scope: a kind name, `user` or `public`. At least one route in all.",
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/scope_name" },
+          "additionalProperties": { "$ref": "#/$defs/scope" }
+        }
+      }
+    },
+    "scope_name": {
+      "title": "scope",
+      "description": "A kind name, `user` or `public`.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+    },
+    "scope": {
+      "title": "scope block",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["routes"],
+      "properties": {
+        "upstream_prefix": {
+          "title": "upstream_prefix",
+          "description": "Prepended to each route's path to make its default upstream. Placeholders with a dot only ([below](#upstream)).",
+          "$ref": "#/$defs/upstream"
+        },
+        "routes": {
+          "title": "routes",
+          "description": "At least one.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/route" }
+        }
+      }
+    },
+    "route": {
+      "title": "route",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "methods"],
+      "properties": {
+        "path": {
+          "title": "path",
+          "description": "In a kind scope, relative to the node: `/` is the node itself. In `user` and `public`, absolute.",
+          "$ref": "#/$defs/path"
+        },
+        "upstream": {
+          "title": "upstream",
+          "description": "A full upstream template, replacing `upstream_prefix` plus `path`.",
+          "$ref": "#/$defs/upstream"
+        },
+        "methods": {
+          "title": "methods",
+          "description": "The verbs: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`. A list is a map with no overrides. In a map, each verb's `required_permissions`, `rate_limit` and `audit` override the route's.",
+          "oneOf": [
+            { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/verb" } },
+            {
+              "type": "object",
+              "minProperties": 1,
+              "propertyNames": { "$ref": "#/$defs/verb" },
+              "additionalProperties": {
+                "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/method" }]
+              }
+            }
+          ]
+        },
+        "required_permissions": {
+          "title": "required_permissions",
+          "description": "Any one of these permissions admits. `any_member` admits any member of the tree, guests included. Required for every verb in a kind scope, from the route or the verb. Not in `user` or `public`.",
+          "$ref": "#/$defs/required_permissions"
+        },
+        "rate_limit": {
+          "title": "rate_limit",
+          "description": "Policies from `rate_limits` ([rate limits](rate-limits.md)). Omitted: `[default]` when there's a `default` policy, otherwise none. `false`: none.",
+          "$ref": "#/$defs/rate_limit"
+        },
+        "audit": {
+          "title": "audit",
+          "description": "Omitted: the method default. Not in `public`.",
+          "type": "boolean"
+        },
+        "allow_deleted": {
+          "title": "allow_deleted",
+          "description": "Default `false`. `true` lets the route's node be deleted (not purged); its own bindings are kept until purge and still count here, as Google Cloud keeps a deleted project's policy so it can be undeleted. For identity's restore route ([`reference/api/internal.md`](../api/internal.md#admit)). Kind scopes only.",
+          "type": "boolean"
+        }
+      }
+    },
+    "path": {
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^/[\\x21-\\x7e]*$"
+    },
+    "upstream": {
+      "type": "string",
+      "pattern": "^/[^?#]*$"
+    },
+    "verb": {
+      "type": "string",
+      "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]
+    },
+    "method": {
+      "title": "method",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required_permissions": { "$ref": "#/$defs/required_permissions" },
+        "rate_limit": { "$ref": "#/$defs/rate_limit" },
+        "audit": { "type": "boolean" }
+      }
+    },
+    "required_permissions": {
+      "oneOf": [
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "roles.json#/$defs/permission" }
+        },
+        { "const": "any_member" }
+      ]
+    },
+    "rate_limit": {
+      "anyOf": [
+        {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "rate_limits.json#/$defs/policy_name" }
+        },
+        { "const": false }
+      ]
+    },
+    "identity": {
+      "title": "identity",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": { "$ref": "#/$defs/service/properties/url" },
+        "timeouts": { "$ref": "#/$defs/service/properties/timeouts" },
+        "max_body_bytes": { "$ref": "#/$defs/service/properties/max_body_bytes" },
+        "resources": {
+          "description": "Overrides for every kind, and for the user-scope resources.",
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "node", "restore", "children", "membership", "bindings", "binding",
+              "service_accounts", "service_account", "keys", "key", "invites", "invite",
+              "roles", "members", "member", "me", "my_nodes", "my_keys", "my_key", "redeem"
+            ]
+          },
+          "additionalProperties": { "$ref": "#/$defs/resource" }
+        },
+        "kinds": {
+          "description": "Overrides for one kind. They apply after `resources`.",
+          "type": "object",
+          "propertyNames": { "$ref": "kinds.json#/$defs/kind_name" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "resources": {
+                "type": "object",
+                "propertyNames": {
+                  "enum": [
+                    "node", "restore", "children", "membership", "bindings", "binding",
+                    "service_accounts", "service_account", "keys", "key", "invites", "invite",
+                    "roles", "members", "member", "roots"
+                  ]
+                },
+                "additionalProperties": { "$ref": "#/$defs/resource" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "audit": {
+      "title": "audit",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": { "$ref": "#/$defs/service/properties/url" },
+        "timeouts": { "$ref": "#/$defs/service/properties/timeouts" },
+        "max_body_bytes": { "$ref": "#/$defs/service/properties/max_body_bytes" },
+        "resources": {
+          "description": "Overrides for every kind, and for the user-scope resources.",
+          "type": "object",
+          "propertyNames": { "enum": ["events", "my_events"] },
+          "additionalProperties": { "$ref": "#/$defs/resource" }
+        },
+        "kinds": {
+          "description": "Overrides for one kind. They apply after `resources`.",
+          "type": "object",
+          "propertyNames": { "$ref": "kinds.json#/$defs/kind_name" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "resources": {
+                "type": "object",
+                "propertyNames": { "enum": ["events"] },
+                "additionalProperties": { "$ref": "#/$defs/resource" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "resource": {
+      "description": "An override of one resource's default: `false` removes it. Each key replaces its default: `path`, one verb under `methods` (`false` removes the verb), or a route-level field. Permissions can use `{kind}`.",
+      "anyOf": [
+        { "const": false },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": { "$ref": "#/$defs/path" },
+            "methods": {
+              "type": "object",
+              "propertyNames": { "$ref": "#/$defs/verb" },
+              "additionalProperties": {
+                "anyOf": [
+                  { "const": false },
+                  { "type": "null" },
+                  { "$ref": "#/$defs/resource_method" }
+                ]
+              }
+            },
+            "required_permissions": { "$ref": "#/$defs/resource_permissions" },
+            "rate_limit": { "$ref": "#/$defs/rate_limit" },
+            "audit": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "resource_method": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required_permissions": { "$ref": "#/$defs/resource_permissions" },
+        "rate_limit": { "$ref": "#/$defs/rate_limit" },
+        "audit": { "type": "boolean" }
+      }
+    },
+    "resource_permissions": {
+      "oneOf": [
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^(?:[a-z0-9:._-]|\\{kind\\})+$"
+          }
+        },
+        { "const": "any_member" }
+      ]
+    }
+  }
+}

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://plat5.com/schema/kinds.json",
   "title": "Kinds",
-  "description": "The tree's levels, and the settings for every node: the kinds part of plat5.yml.",
+  "description": "The tree's levels: the kinds part of plat5.yml.",
   "type": "object",
   "properties": {
     "kinds": {
@@ -12,80 +12,39 @@
       "minProperties": 1,
       "propertyNames": { "$ref": "#/$defs/kind_name" },
       "additionalProperties": { "$ref": "#/$defs/kind" }
-    },
-    "reserved_slugs": {
-      "title": "reserved_slugs",
-      "description": "Slugs no node may take, deployment-wide.",
-      "type": "array",
-      "uniqueItems": true,
-      "items": { "$ref": "#/$defs/slug" }
-    },
-    "deletion_grace": {
-      "title": "deletion_grace",
-      "description": "How long a deleted node stays restorable before it's purged. One value for every kind. A duration: a whole number and `s`, `m`, `h` or `d` (`30d`, `12h`). Default `30d`. A change applies to new deletes only.",
-      "$ref": "#/$defs/duration"
     }
   },
   "$defs": {
     "kind_name": {
       "title": "kind name",
-      "description": "Lowercase identifier, `[a-z][a-z0-9_]*`, max 32. Not `public` or `member`. Names the kind in route scopes, path params, subject fields (`{subject.project_id}`), headers (`X-Plat5-Project-Id`), events (`project.deleted`) and audit. Fixed once nodes exist: a rename reads as a remove plus an add.",
+      "description": "Lowercase identifier, `[a-z][a-z0-9_]*`, max 32. Not `public`, `member` or `user`. Names the kind in route scopes, path params, placeholders (`{project.id}`), headers (`X-Plat5-Project-Id`), events (`kind: project`) and audit. Fixed once nodes exist: a rename reads as a remove plus an add.",
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]{0,31}$",
-      "not": { "enum": ["public", "member"] }
+      "not": { "enum": ["public", "member", "user"] }
     },
     "kind": {
       "title": "kind",
       "type": "object",
       "additionalProperties": false,
-      "dependentRequired": { "name_claim": ["sign_in"] },
+      "required": ["path", "list_permission"],
       "properties": {
         "parent": {
           "title": "parent",
-          "description": "The kind, or list of kinds, a node sits under. Omitted for a root.",
-          "oneOf": [
-            { "$ref": "#/$defs/kind_name" },
-            { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/kind_name" } }
-          ]
+          "description": "The one kind a node sits under. Omitted for a root.",
+          "$ref": "#/$defs/kind_name"
         },
-        "label": {
-          "title": "label",
-          "description": "What consoles show. Changes any time.",
+        "path": {
+          "title": "path",
+          "description": "Required. The kind's piece of every public path: `/<collection>/{<kind name>}`, such as `/projects/{project}`. The collection has the slug shape. Plat5 joins the pieces root first, so a project's routes sit under `/orgs/{organization}/projects/{project}`.",
           "type": "string",
-          "minLength": 1,
-          "maxLength": 128
+          "pattern": "^/[a-z][a-z0-9-]{1,61}[a-z0-9]/\\{[a-z][a-z0-9_]{0,31}\\}$"
         },
-        "sign_in": {
-          "title": "sign_in",
-          "description": "`idp`. Marks the one kind people sign in to: a single-node root (the directory), created at boot. Exactly one kind has it.",
-          "const": "idp"
-        },
-        "name_claim": {
-          "title": "name_claim",
-          "description": "On the sign-in kind only. The IdP claim holding a person's name. Default `name`.",
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
-        },
-        "segment": {
-          "title": "segment",
-          "description": "The path segment for generated routes. Slug shape: lowercase letters, digits and hyphens, starting with a letter, max 63. Default: the kind name with `_` as `-`, plus `s` (`service_area` → `service-areas`).",
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9-]{0,62}$"
+        "list_permission": {
+          "title": "list_permission",
+          "description": "Required. The permission that shows a node of this kind in a list, live or deleted ([lists](../../concepts/access.md#lists)).",
+          "$ref": "roles.json#/$defs/permission"
         }
       }
-    },
-    "slug": {
-      "title": "slug",
-      "description": "Lowercase letters, digits and hyphens; starts with a letter, doesn't end with a hyphen; 3 to 63 characters.",
-      "type": "string",
-      "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$"
-    },
-    "duration": {
-      "title": "duration",
-      "description": "A whole number and a unit: `s`, `m`, `h` or `d`.",
-      "type": "string",
-      "pattern": "^[1-9][0-9]{0,8}[smhd]$"
     }
   }
 }

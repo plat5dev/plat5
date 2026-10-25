@@ -74,7 +74,7 @@ The control plane is the one validator: it checks the schema, then these rules, 
 
 1. Every `parent` is a kind, and there are no cycles. Kind names are lowercase identifiers and not `public`, `member` or `user`.
 2. Every `bindable_at` kind exists. Every role in `includes` exists, and includes don't cycle. `creator_role` is a role bindable at every kind.
-3. Every permission a role grants is required by some route, identity's and audit's included. `*` is always allowed.
+3. Every permission a role grants is required by some route, identity's and audit's included, or is a kind's `list_permission`. `*` is always allowed.
 4. Every route's scope is a kind, `user` or `public`, and its path, methods, permissions and upstream follow the [route rules](../reference/config/services.md#validation).
 5. No two routes, in one service or across services, have the same method and shape ([route matching](../reference/config/services.md#matching)).
 6. Every `rate_limit` names a policy in `rate_limits`, and a policy's `count_at` is the route's kind or an ancestor.
@@ -115,13 +115,16 @@ This is Kubernetes' `dryRun=All` plus a `resourceVersion` precondition, with Ter
 ```json
 {
   "revision": 41,
-  "summary": { "add": 1, "change": 2, "remove": 0, "blocked": 1 },
+  "summary": { "add": 1, "change": 3, "remove": 0, "blocked": 1 },
   "changes": [
     { "op": "add", "what": "kind", "name": "environment",
       "after": { "parent": "project", "path": "/envs/{environment}", "list_permission": "environment:read" } },
     { "op": "remove", "what": "kind", "name": "folder",
       "before": { "parent": "organization", "path": "/folders/{folder}", "list_permission": "folder:read" },
       "blocked": { "reason": "kind_not_empty", "in_the_way": { "nodes": 3, "sample": ["01jbx…"] } } },
+    { "op": "change", "what": "role", "name": "admin",
+      "before": { "bindable_at": ["organization", "project", "folder"] },
+      "after": { "bindable_at": ["organization", "project", "environment"] } },
     { "op": "change", "what": "role", "name": "developer",
       "before": { "permissions": ["project:read"] }, "after": { "permissions": ["project:read", "project:write"] } },
     { "op": "change", "what": "service", "name": "identity",

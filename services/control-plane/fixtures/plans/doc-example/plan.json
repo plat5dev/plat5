@@ -1,64 +1,762 @@
 {
   "revision": 7,
   "summary": {
-    "add": 2,
-    "change": 1,
-    "remove": 1,
+    "add": 1,
+    "change": 3,
+    "remove": 0,
     "blocked": 1
   },
   "changes": [
     {
-      "class": "safe",
       "op": "add",
       "what": "kind",
-      "name": "environment"
-    },
-    {
-      "class": "destructive",
-      "op": "remove",
-      "what": "kind",
-      "name": "folder",
-      "effects": {
-        "nodes": 14,
-        "bindings": 22,
-        "service_accounts": 3,
-        "keys": 9
+      "name": "environment",
+      "after": {
+        "parent": "project",
+        "path": "/envs/{environment}",
+        "list_permission": "environment:read"
       }
     },
     {
-      "class": "blocked",
-      "op": "change",
+      "op": "remove",
       "what": "kind",
-      "name": "project",
-      "reason": "parent_narrowed",
-      "in_the_way": {
-        "nodes": 3,
-        "sample": [
-          "n_…"
+      "name": "folder",
+      "before": {
+        "parent": "organization",
+        "path": "/folders/{folder}",
+        "list_permission": "folder:read"
+      },
+      "blocked": {
+        "reason": "kind_not_empty",
+        "in_the_way": {
+          "nodes": 3,
+          "sample": [
+            "01jb8z3m5q0000000000000001",
+            "01jb8z3m5q0000000000000002",
+            "01jb8z3m5q0000000000000003"
+          ]
+        }
+      }
+    },
+    {
+      "op": "change",
+      "what": "role",
+      "name": "admin",
+      "before": {
+        "bindable_at": [
+          "organization",
+          "project",
+          "folder"
+        ]
+      },
+      "after": {
+        "bindable_at": [
+          "organization",
+          "project",
+          "environment"
         ]
       }
     },
     {
-      "class": "safe",
       "op": "change",
       "what": "role",
-      "name": "admin"
+      "name": "developer",
+      "before": {
+        "permissions": [
+          "project:read"
+        ]
+      },
+      "after": {
+        "permissions": [
+          "project:read",
+          "project:write"
+        ]
+      }
     },
     {
-      "class": "safe",
       "op": "change",
       "what": "service",
-      "name": "e10s",
-      "routes": {
-        "add": 1,
-        "change": 0,
-        "remove": 0
-      }
+      "name": "identity",
+      "routes": [
+        {
+          "op": "remove",
+          "method": "GET",
+          "path": "/orgs/{organization}/folders",
+          "before": {
+            "scope": "organization",
+            "upstream": "/nodes/{organization.id}/children/folder",
+            "required_permissions": "any_member",
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "POST",
+          "path": "/orgs/{organization}/folders",
+          "before": {
+            "scope": "organization",
+            "upstream": "/nodes/{organization.id}/children/folder",
+            "required_permissions": [
+              "folder:create"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "GET",
+          "path": "/orgs/{organization}/folders/{folder}",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}",
+            "required_permissions": [
+              "folder:read"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "PATCH",
+          "path": "/orgs/{organization}/folders/{folder}",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}",
+            "required_permissions": [
+              "folder:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "DELETE",
+          "path": "/orgs/{organization}/folders/{folder}",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}",
+            "required_permissions": [
+              "folder:delete"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "GET",
+          "path": "/orgs/{organization}/folders/{folder}/bindings",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/bindings",
+            "required_permissions": [
+              "folder:bindings:read"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "POST",
+          "path": "/orgs/{organization}/folders/{folder}/bindings",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/bindings",
+            "required_permissions": [
+              "folder:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "PATCH",
+          "path": "/orgs/{organization}/folders/{folder}/bindings/{binding_id}",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/bindings/{binding_id}",
+            "required_permissions": [
+              "folder:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "DELETE",
+          "path": "/orgs/{organization}/folders/{folder}/bindings/{binding_id}",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/bindings/{binding_id}",
+            "required_permissions": [
+              "folder:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "GET",
+          "path": "/orgs/{organization}/folders/{folder}/invites",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/invites",
+            "required_permissions": [
+              "guests:write"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "POST",
+          "path": "/orgs/{organization}/folders/{folder}/invites",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/invites",
+            "required_permissions": [
+              "guests:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "DELETE",
+          "path": "/orgs/{organization}/folders/{folder}/invites/{invite_id}",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/invites/{invite_id}",
+            "required_permissions": [
+              "guests:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "GET",
+          "path": "/orgs/{organization}/folders/{folder}/membership",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/memberships/{member.id}",
+            "required_permissions": "any_member",
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "POST",
+          "path": "/orgs/{organization}/folders/{folder}/restore",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/restore",
+            "required_permissions": [
+              "folder:delete"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": true
+          }
+        },
+        {
+          "op": "remove",
+          "method": "GET",
+          "path": "/orgs/{organization}/folders/{folder}/roles",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/roles",
+            "required_permissions": "any_member",
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "GET",
+          "path": "/orgs/{organization}/folders/{folder}/service-accounts",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/service-accounts",
+            "required_permissions": [
+              "folder:bindings:read"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "POST",
+          "path": "/orgs/{organization}/folders/{folder}/service-accounts",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/service-accounts",
+            "required_permissions": [
+              "folder:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "GET",
+          "path": "/orgs/{organization}/folders/{folder}/service-accounts/{service_account_id}",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/service-accounts/{service_account_id}",
+            "required_permissions": [
+              "folder:bindings:read"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "PATCH",
+          "path": "/orgs/{organization}/folders/{folder}/service-accounts/{service_account_id}",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/service-accounts/{service_account_id}",
+            "required_permissions": [
+              "folder:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "DELETE",
+          "path": "/orgs/{organization}/folders/{folder}/service-accounts/{service_account_id}",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/service-accounts/{service_account_id}",
+            "required_permissions": [
+              "folder:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "GET",
+          "path": "/orgs/{organization}/folders/{folder}/service-accounts/{service_account_id}/keys",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/service-accounts/{service_account_id}/keys",
+            "required_permissions": [
+              "folder:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "POST",
+          "path": "/orgs/{organization}/folders/{folder}/service-accounts/{service_account_id}/keys",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/service-accounts/{service_account_id}/keys",
+            "required_permissions": [
+              "folder:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "DELETE",
+          "path": "/orgs/{organization}/folders/{folder}/service-accounts/{service_account_id}/keys/{key_id}",
+          "before": {
+            "scope": "folder",
+            "upstream": "/nodes/{folder.id}/service-accounts/{service_account_id}/keys/{key_id}",
+            "required_permissions": [
+              "folder:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "GET",
+          "path": "/orgs/{organization}/projects/{project}/envs",
+          "after": {
+            "scope": "project",
+            "upstream": "/nodes/{project.id}/children/environment",
+            "required_permissions": "any_member",
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "POST",
+          "path": "/orgs/{organization}/projects/{project}/envs",
+          "after": {
+            "scope": "project",
+            "upstream": "/nodes/{project.id}/children/environment",
+            "required_permissions": [
+              "environment:create"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "GET",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}",
+            "required_permissions": [
+              "environment:read"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "PATCH",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}",
+            "required_permissions": [
+              "environment:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "DELETE",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}",
+            "required_permissions": [
+              "environment:delete"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "GET",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/bindings",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/bindings",
+            "required_permissions": [
+              "environment:bindings:read"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "POST",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/bindings",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/bindings",
+            "required_permissions": [
+              "environment:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "PATCH",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/bindings/{binding_id}",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/bindings/{binding_id}",
+            "required_permissions": [
+              "environment:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "DELETE",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/bindings/{binding_id}",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/bindings/{binding_id}",
+            "required_permissions": [
+              "environment:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "GET",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/invites",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/invites",
+            "required_permissions": [
+              "guests:write"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "POST",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/invites",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/invites",
+            "required_permissions": [
+              "guests:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "DELETE",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/invites/{invite_id}",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/invites/{invite_id}",
+            "required_permissions": [
+              "guests:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "GET",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/membership",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/memberships/{member.id}",
+            "required_permissions": "any_member",
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "POST",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/restore",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/restore",
+            "required_permissions": [
+              "environment:delete"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": true
+          }
+        },
+        {
+          "op": "add",
+          "method": "GET",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/roles",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/roles",
+            "required_permissions": "any_member",
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "GET",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/service-accounts",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/service-accounts",
+            "required_permissions": [
+              "environment:bindings:read"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "POST",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/service-accounts",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/service-accounts",
+            "required_permissions": [
+              "environment:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "GET",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/service-accounts/{service_account_id}",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}",
+            "required_permissions": [
+              "environment:bindings:read"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "PATCH",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/service-accounts/{service_account_id}",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}",
+            "required_permissions": [
+              "environment:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "DELETE",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/service-accounts/{service_account_id}",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}",
+            "required_permissions": [
+              "environment:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "GET",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/service-accounts/{service_account_id}/keys",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}/keys",
+            "required_permissions": [
+              "environment:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "POST",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/service-accounts/{service_account_id}/keys",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}/keys",
+            "required_permissions": [
+              "environment:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "DELETE",
+          "path": "/orgs/{organization}/projects/{project}/envs/{environment}/service-accounts/{service_account_id}/keys/{key_id}",
+          "after": {
+            "scope": "environment",
+            "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}/keys/{key_id}",
+            "required_permissions": [
+              "environment:bindings:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        }
+      ]
     }
-  ],
-  "confirm": {
-    "folder": {
-      "nodes": 14
-    }
-  }
+  ]
 }

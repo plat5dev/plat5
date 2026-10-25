@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plat5.com/schema/rate_limits.json",
+  "title": "Rate limits",
+  "description": "Named policies shared by every route that names them: the rate_limits part of plat5.yml.",
+  "type": "object",
+  "properties": {
+    "rate_limits": {
+      "title": "rate_limits",
+      "description": "Map of policy name → policy.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/policy_name" },
+      "additionalProperties": { "$ref": "#/$defs/policy" }
+    }
+  },
+  "$defs": {
+    "policy_name": {
+      "title": "policy name",
+      "description": "`[a-z0-9:._-]+`, max 64. `default` is the policy of every route that doesn't name its own.",
+      "type": "string",
+      "pattern": "^[a-z0-9:._-]{1,64}$"
+    },
+    "policy": {
+      "title": "policy",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requests", "window_seconds"],
+      "properties": {
+        "requests": {
+          "title": "requests",
+          "description": "Required. Greater than 0.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "window_seconds": {
+          "title": "window_seconds",
+          "description": "Required. Greater than 0.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "count_at": {
+          "title": "count_at",
+          "description": "Optional. A kind: everyone at that kind's node shares one budget. Omitted: each caller has their own budget at the route's node.",
+          "$ref": "kinds.json#/$defs/kind_name"
+        }
+      }
+    }
+  }
+}

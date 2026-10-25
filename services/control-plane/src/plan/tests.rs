@@ -3,111 +3,112 @@
 //! - `before.yml`: the applied config; absent before the first apply
 //! - `after.yml`: the config planned
 //! - `counts.json`: what identity answers, if the plan asks
-//! - `plan.json`: the expected plan, or `refused.json`: the field paths it's
-//!   refused at
+//! - `plan.json`: the plan, and `gateway-feed.json`: what the gateway is served
+//!   for `after.yml`; or `refused.json`: the rule errors `after.yml` is refused
+//!   with
 //!
-//! Every config passes the schema and the rules first, as at apply.
+//! `plan.json`, `gateway-feed.json` and `refused.json` are derived:
+//! `UPDATE_FIXTURES=1 cargo test plan` rewrites them.
 
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
 use super::*;
-use crate::counts::{CountsResponse, FixedCounts, NoCounts};
+use crate::apply::{self, Failure};
+use crate::counts::{CountsResponse, FixedCounts, KindCounts, NoCounts};
+use crate::fixtures;
 
-fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/plans")
+fn plans() -> PathBuf {
+    fixtures::dir().join("plans")
 }
 
-pub(crate) fn load(path: &Path) -> Config {
-    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let yaml: serde_yaml::Value = serde_yaml::from_str(&text).unwrap();
-    let value: Value = serde_json::to_value(yaml).unwrap();
-    crate::schema::check_config(&value)
-        .unwrap_or_else(|e| panic!("{}: schema: {e:?}", path.display()));
-    let config: Config = serde_json::from_value(value).unwrap();
-    crate::rules::check(&config).unwrap_or_else(|e| panic!("{}: rules: {e:?}", path.display()));
-    config
+fn load(path: &Path) -> Config {
+    match apply::check(&fixtures::yaml(path)) {
+        Ok(c) => c,
+        Err(f) => panic!("{}: {f:?}", path.display()),
+    }
 }
 
-fn read_json(path: &Path) -> Option<Value> {
-    let text = std::fs::read_to_string(path).ok()?;
-    Some(serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display())))
+fn read_counts(dir: &Path) -> CountsResponse {
+    std::fs::read_to_string(dir.join("counts.json"))
+        .map(|t| serde_json::from_str(&t).unwrap())
+        .unwrap_or_default()
 }
 
 #[tokio::test]
-async fn fixture_configs_classify() {
-    let mut cases: Vec<PathBuf> = std::fs::read_dir(fixtures())
+async fn fixture_configs_plan() {
+    let mut cases: Vec<PathBuf> = std::fs::read_dir(plans())
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| p.is_dir())
         .collect();
     cases.sort();
-    assert!(cases.len() >= 10, "fixtures missing: {cases:?}");
+    assert!(cases.len() >= 15, "fixtures missing: {cases:?}");
     for case in cases {
         let name = case.file_name().unwrap().to_string_lossy().to_string();
+        let (plan_file, feed_file, refused_file) = (
+            case.join("plan.json"),
+            case.join("gateway-feed.json"),
+            case.join("refused.json"),
+        );
+        let after = match apply::check(&fixtures::yaml(&case.join("after.yml"))) {
+            Ok(c) => c,
+            Err(Failure::Invalid(errs)) => {
+                fixtures::check_json(&refused_file, &json!(errs));
+                if fixtures::updating() {
+                    let _ = std::fs::remove_file(&plan_file);
+                    let _ = std::fs::remove_file(&feed_file);
+                }
+                assert!(!plan_file.exists(), "{name}: refused, but has a plan.json");
+                continue;
+            }
+            Err(f) => panic!("{name}: {f:?}"),
+        };
+        if fixtures::updating() {
+            let _ = std::fs::remove_file(&refused_file);
+        }
+        assert!(
+            !refused_file.exists(),
+            "{name}: accepted, but has a refused.json"
+        );
         let before = case.join("before.yml");
         let before = before.exists().then(|| load(&before));
-        let after = load(&case.join("after.yml"));
-        let counts: CountsResponse = read_json(&case.join("counts.json"))
-            .map(|v| serde_json::from_value(v).unwrap())
-            .unwrap_or_default();
         let revision = if before.is_some() { 7 } else { 0 };
-        let got = dry_run(revision, before.as_ref(), &after, &FixedCounts::new(counts)).await;
-
-        if let Some(want) = read_json(&case.join("refused.json")) {
-            let Err(Refused::Invalid(errs)) = got else {
-                panic!("{name}: want refused, got {got:?}");
-            };
-            let paths: Vec<&str> = errs.iter().map(|e| e.path.as_str()).collect();
-            assert_eq!(json!(paths), want, "{name}: {errs:?}");
-            continue;
-        }
-        let plan = got.unwrap_or_else(|e| panic!("{name}: {e:?}"));
-        let want =
-            read_json(&case.join("plan.json")).unwrap_or_else(|| panic!("{name}: no plan.json"));
-        assert_eq!(
-            serde_json::to_value(&plan).unwrap(),
-            want,
-            "{name}: got {}",
-            serde_json::to_string_pretty(&plan).unwrap()
-        );
+        let counts = FixedCounts::new(read_counts(&case));
+        let plan = dry_run(revision, before.as_ref(), &after, &counts)
+            .await
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        fixtures::check_json(&plan_file, &serde_json::to_value(&plan).unwrap());
+        fixtures::check_json(&feed_file, &apply::gateway_body(revision + 1, &after));
     }
 }
 
 fn case(name: &str) -> (Config, Config, CountsResponse) {
-    let dir = fixtures().join(name);
-    let counts = read_json(&dir.join("counts.json"))
-        .map(|v| serde_json::from_value(v).unwrap())
-        .unwrap_or_default();
+    let dir = plans().join(name);
     (
         load(&dir.join("before.yml")),
         load(&dir.join("after.yml")),
-        counts,
+        read_counts(&dir),
     )
 }
 
-fn confirm(kind: &str, nodes: u64) -> BTreeMap<String, Confirmed> {
-    BTreeMap::from([(kind.to_string(), Confirmed { nodes })])
-}
-
 #[tokio::test]
-async fn a_confirmed_destructive_plan_applies() {
+async fn an_apply_recomputes_the_plan() {
     let (before, after, counts) = case("remove-kind");
     let counts = FixedCounts::new(counts);
     let plan = dry_run(7, Some(&before), &after, &counts).await.unwrap();
-    assert_eq!(plan.confirm, confirm("folder", 14));
     let applied = apply(
         7,
         Some(&before),
         &after,
         Some(&Expect { revision: 7 }),
-        Some(&plan.confirm),
         &counts,
     )
     .await
     .unwrap();
     assert_eq!(applied, plan);
+    assert_eq!(counts.calls(), 2);
 }
 
 #[tokio::test]
@@ -119,7 +120,6 @@ async fn a_stale_expect_is_refused_before_counting() {
         Some(&before),
         &after,
         Some(&Expect { revision: 7 }),
-        Some(&confirm("folder", 14)),
         &counts,
     )
     .await;
@@ -135,121 +135,109 @@ async fn a_stale_expect_is_refused_before_counting() {
 }
 
 #[tokio::test]
-async fn a_changed_count_is_refused() {
-    let (before, after, mut counts) = case("remove-kind");
-    let fixed = FixedCounts::new(counts.clone());
-    let plan = dry_run(7, Some(&before), &after, &fixed).await.unwrap();
-    // Someone made a folder between the dry run and the apply.
-    counts.kinds_removed.get_mut("folder").unwrap().nodes = 15;
-    fixed.set(counts);
-    let got = apply(
-        7,
-        Some(&before),
-        &after,
-        Some(&Expect { revision: 7 }),
-        Some(&plan.confirm),
-        &fixed,
-    )
-    .await;
-    assert_eq!(
-        got,
-        Err(Refused::Stale {
-            precondition: "confirm.folder".into(),
-            expected: Some(14),
-            actual: Some(15)
-        })
-    );
-}
-
-#[tokio::test]
-async fn an_unconfirmed_or_overconfirmed_plan_is_refused() {
-    let (before, after, counts) = case("remove-kind");
-    let counts = FixedCounts::new(counts);
-    let expect = Expect { revision: 7 };
-    let got = apply(7, Some(&before), &after, Some(&expect), None, &counts).await;
-    assert_eq!(
-        got,
-        Err(Refused::Stale {
-            precondition: "confirm.folder".into(),
-            expected: None,
-            actual: Some(14)
-        })
-    );
-    let mut extra = confirm("folder", 14);
-    extra.insert("project".into(), Confirmed { nodes: 3 });
-    let got = apply(
-        7,
-        Some(&before),
-        &after,
-        Some(&expect),
-        Some(&extra),
-        &counts,
-    )
-    .await;
-    assert_eq!(
-        got,
-        Err(Refused::Stale {
-            precondition: "confirm.project".into(),
-            expected: Some(3),
-            actual: None
-        })
-    );
-}
-
-#[tokio::test]
 async fn an_apply_needs_expect() {
     let (before, after, counts) = case("roles");
-    let got = apply(
-        7,
-        Some(&before),
-        &after,
-        None,
-        None,
-        &FixedCounts::new(counts),
-    )
-    .await;
+    let got = apply(7, Some(&before), &after, None, &FixedCounts::new(counts)).await;
     assert!(matches!(got, Err(Refused::Invalid(e)) if e[0].path == "expect"));
 }
 
 #[tokio::test]
 async fn a_blocked_plan_is_refused() {
-    let (before, after, counts) = case("narrow-with-nodes");
+    for (name, path) in [
+        ("remove-kind-blocked", "kinds.folder"),
+        ("parent-change-blocked", "kinds.environment.parent"),
+    ] {
+        let (before, after, counts) = case(name);
+        let got = apply(
+            7,
+            Some(&before),
+            &after,
+            Some(&Expect { revision: 7 }),
+            &FixedCounts::new(counts),
+        )
+        .await;
+        assert!(
+            matches!(&got, Err(Refused::Invalid(e)) if e.len() == 1 && e[0].path == path),
+            "{name}: {got:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_node_made_since_the_dry_run_blocks_the_apply() {
+    let (before, after, counts) = case("remove-kind");
+    let fixed = FixedCounts::new(counts.clone());
+    let plan = dry_run(7, Some(&before), &after, &fixed).await.unwrap();
+    assert_eq!(plan.summary.blocked, 0);
+    fixed.set(CountsResponse {
+        kinds: [(
+            "folder".to_string(),
+            KindCounts {
+                live: 1,
+                nodes: 3,
+                sample: vec!["01jb8z3m5q0000000000000009".into()],
+            },
+        )]
+        .into(),
+    });
     let got = apply(
         7,
         Some(&before),
         &after,
         Some(&Expect { revision: 7 }),
-        None,
-        &FixedCounts::new(counts),
+        &fixed,
     )
     .await;
     assert!(
-        matches!(&got, Err(Refused::Invalid(e)) if e[0].path == "kinds.project.parent"),
+        matches!(&got, Err(Refused::Invalid(e)) if e[0].path == "kinds.folder"),
         "{got:?}"
     );
 }
 
 #[tokio::test]
 async fn identity_is_asked_only_when_the_plan_needs_counts() {
-    // The first apply, as the seed makes it with identity not yet up.
-    let after = load(&fixtures().join("first-apply/after.yml"));
+    // The first apply, with identity not yet up.
+    let after = load(&plans().join("first-apply/after.yml"));
     dry_run(0, None, &after, &NoCounts).await.unwrap();
-    apply(
-        0,
-        None,
-        &after,
-        Some(&Expect { revision: 0 }),
-        None,
-        &NoCounts,
-    )
-    .await
-    .unwrap();
-    let (before, after, _) = case("roles");
-    dry_run(7, Some(&before), &after, &NoCounts).await.unwrap();
+    apply(0, None, &after, Some(&Expect { revision: 0 }), &NoCounts)
+        .await
+        .unwrap();
+    for name in [
+        "roles",
+        "services",
+        "add-kind-at-bottom",
+        "identity-overrides",
+    ] {
+        let (before, after, _) = case(name);
+        dry_run(7, Some(&before), &after, &NoCounts)
+            .await
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    }
+    for name in ["remove-kind", "parent-change-empty"] {
+        let (before, after, _) = case(name);
+        assert!(
+            matches!(
+                dry_run(7, Some(&before), &after, &NoCounts).await,
+                Err(Refused::CountsUnavailable(_))
+            ),
+            "{name}"
+        );
+    }
+}
 
-    let (before, after, _) = case("remove-kind");
-    assert!(matches!(
-        dry_run(7, Some(&before), &after, &NoCounts).await,
-        Err(Refused::CountsUnavailable(_))
-    ));
+#[test]
+fn diff_keeps_only_what_differs() {
+    let (b, a) = diff(
+        &json!({ "parent": "organization", "path": "/x/{x}" }),
+        &json!({ "parent": "project", "path": "/x/{x}", "list_permission": "x:read" }),
+    );
+    assert_eq!(b, Some(json!({ "parent": "organization" })));
+    assert_eq!(
+        a,
+        Some(json!({ "parent": "project", "list_permission": "x:read" }))
+    );
+    let (b, a) = diff(&json!("30d"), &json!("7d"));
+    assert_eq!((b, a), (Some(json!("30d")), Some(json!("7d"))));
+    let (b, _) = diff(&json!({}), &json!({ "a": 1 }));
+    assert_eq!(b, None::<Value>);
 }

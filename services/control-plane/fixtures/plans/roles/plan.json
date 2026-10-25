@@ -8,23 +8,50 @@
   },
   "changes": [
     {
-      "class": "safe",
       "op": "change",
       "what": "role",
-      "name": "member"
+      "name": "member",
+      "before": {
+        "permissions": [
+          "organization:read"
+        ]
+      },
+      "after": {
+        "permissions": [
+          "organization:read",
+          "project:read"
+        ]
+      }
     },
     {
-      "class": "safe",
       "op": "add",
       "what": "role",
-      "name": "support"
+      "name": "support",
+      "after": {
+        "permissions": [
+          "project:read",
+          "catalog:write"
+        ],
+        "includes": [
+          "member"
+        ],
+        "bindable_at": [
+          "organization"
+        ]
+      }
     },
     {
-      "class": "safe",
       "op": "remove",
       "what": "role",
-      "name": "viewer"
+      "name": "viewer",
+      "before": {
+        "permissions": [
+          "project:read"
+        ],
+        "bindable_at": [
+          "project"
+        ]
+      }
     }
-  ],
-  "confirm": {}
+  ]
 }

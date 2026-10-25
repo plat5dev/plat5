@@ -1,42 +1,167 @@
 {
   "revision": 7,
   "summary": {
-    "add": 1,
-    "change": 4,
+    "add": 2,
+    "change": 6,
     "remove": 0,
     "blocked": 0
   },
   "changes": [
     {
-      "class": "safe",
-      "op": "change",
-      "what": "kind",
-      "name": "directory"
-    },
-    {
-      "class": "safe",
-      "op": "change",
-      "what": "kind",
-      "name": "organization"
-    },
-    {
-      "class": "safe",
       "op": "change",
       "what": "setting",
-      "name": "deletion_grace"
+      "name": "defaults",
+      "before": {
+        "timeouts": {
+          "connect": "10s",
+          "read": "30s"
+        },
+        "max_body_bytes": 10485760
+      },
+      "after": {
+        "timeouts": {
+          "connect": "5s",
+          "read": "20s"
+        },
+        "max_body_bytes": 2097152
+      }
     },
     {
-      "class": "safe",
       "op": "change",
       "what": "setting",
-      "name": "reserved_slugs"
+      "name": "deletion_grace",
+      "before": "30d",
+      "after": "7d"
     },
     {
-      "class": "safe",
+      "op": "change",
+      "what": "setting",
+      "name": "reserved_slugs",
+      "before": [],
+      "after": [
+        "new",
+        "settings"
+      ]
+    },
+    {
+      "op": "change",
+      "what": "setting",
+      "name": "users",
+      "before": {
+        "name_claim": "name"
+      },
+      "after": {
+        "name_claim": "display_name"
+      }
+    },
+    {
       "op": "add",
+      "what": "rate_limit",
+      "name": "default",
+      "after": {
+        "requests": 60,
+        "window_seconds": 60
+      }
+    },
+    {
+      "op": "add",
+      "what": "rate_limit",
+      "name": "evals-org",
+      "after": {
+        "requests": 300,
+        "window_seconds": 1,
+        "count_at": "organization"
+      }
+    },
+    {
+      "op": "change",
       "what": "cors",
-      "name": "allowed_origins"
+      "name": "cors",
+      "before": {
+        "allowed_origins": [],
+        "allowed_headers": []
+      },
+      "after": {
+        "allowed_origins": [
+          "https://app.example.com"
+        ],
+        "allowed_headers": [
+          "idempotency-key"
+        ]
+      }
+    },
+    {
+      "op": "change",
+      "what": "service",
+      "name": "e10s",
+      "before": {
+        "timeouts": {
+          "connect": "10s",
+          "read": "30s"
+        },
+        "max_body_bytes": 10485760
+      },
+      "after": {
+        "timeouts": {
+          "connect": "5s",
+          "read": "20s"
+        },
+        "max_body_bytes": 2097152
+      },
+      "routes": [
+        {
+          "op": "change",
+          "method": "GET",
+          "path": "/health",
+          "before": {
+            "rate_limit": []
+          },
+          "after": {
+            "rate_limit": [
+              "default"
+            ]
+          }
+        },
+        {
+          "op": "change",
+          "method": "GET",
+          "path": "/orgs/{organization}/plans",
+          "before": {
+            "rate_limit": []
+          },
+          "after": {
+            "rate_limit": [
+              "evals-org"
+            ]
+          }
+        },
+        {
+          "op": "change",
+          "method": "GET",
+          "path": "/orgs/{organization}/projects/{project}/plans",
+          "before": {
+            "rate_limit": []
+          },
+          "after": {
+            "rate_limit": [
+              "default"
+            ]
+          }
+        },
+        {
+          "op": "change",
+          "method": "POST",
+          "path": "/orgs/{organization}/projects/{project}/plans",
+          "before": {
+            "rate_limit": []
+          },
+          "after": {
+            "rate_limit": [
+              "default"
+            ]
+          }
+        }
+      ]
     }
-  ],
-  "confirm": {}
+  ]
 }

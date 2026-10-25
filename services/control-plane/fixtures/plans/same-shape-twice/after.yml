@@ -1,0 +1,36 @@
+# Two services route the same method and shape.
+kinds:
+  organization:
+    path: /orgs/{organization}
+    list_permission: organization:read
+  project:
+    parent: organization
+    path: /projects/{project}
+    list_permission: project:read
+roles:
+  admin:
+    permissions: ["*"]
+    bindable_at: [organization, project]
+  member:
+    permissions: [organization:read]
+    bindable_at: [organization]
+creator_role: admin
+services:
+  billing:
+    url: http://billing:3000
+    scopes:
+      organization:
+        upstream_prefix: /orgs/{organization.id}
+        routes:
+          - path: /plans/{id}
+            required_permissions: [organization:read]
+            methods: [GET]
+  e10s:
+    url: http://e10s:3000
+    scopes:
+      organization:
+        upstream_prefix: /orgs/{organization.id}
+        routes:
+          - path: /plans/{plan_id}
+            required_permissions: [organization:read]
+            methods: [GET, PUT]

@@ -3,49 +3,59 @@
   "summary": {
     "add": 0,
     "change": 2,
-    "remove": 2,
+    "remove": 1,
     "blocked": 0
   },
   "changes": [
     {
-      "class": "destructive",
       "op": "remove",
       "what": "kind",
       "name": "folder",
-      "effects": {
-        "nodes": 14,
-        "bindings": 22,
-        "service_accounts": 3,
-        "keys": 9
+      "before": {
+        "parent": "organization",
+        "path": "/folders/{folder}",
+        "list_permission": "folder:read"
       }
     },
     {
-      "class": "safe",
-      "op": "change",
-      "what": "kind",
-      "name": "project"
-    },
-    {
-      "class": "safe",
       "op": "change",
       "what": "role",
-      "name": "admin"
+      "name": "admin",
+      "before": {
+        "bindable_at": [
+          "organization",
+          "project",
+          "folder"
+        ]
+      },
+      "after": {
+        "bindable_at": [
+          "organization",
+          "project"
+        ]
+      }
     },
     {
-      "class": "safe",
       "op": "change",
       "what": "service",
       "name": "e10s",
-      "routes": {
-        "add": 0,
-        "change": 0,
-        "remove": 1
-      }
+      "routes": [
+        {
+          "op": "remove",
+          "method": "GET",
+          "path": "/orgs/{organization}/folders/{folder}/plans",
+          "before": {
+            "scope": "folder",
+            "upstream": "/folders/{folder.id}/plans",
+            "required_permissions": [
+              "folder:read"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        }
+      ]
     }
-  ],
-  "confirm": {
-    "folder": {
-      "nodes": 14
-    }
-  }
+  ]
 }

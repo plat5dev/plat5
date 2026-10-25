@@ -1,6 +1,6 @@
-//! Identity's counts for a plan: what removing a kind would delete, and what's in
-//! the way of narrowing a parent (docs/reference/api/internal.md#plan-counts).
-//! Asked only when the plan removes a kind or narrows a parent.
+//! Identity's counts for a plan: the nodes of each kind the plan removes or
+//! moves under a new parent (docs/reference/api/internal.md#plan-counts). Asked
+//! only when the plan does one of those.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -11,35 +11,19 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct CountsRequest {
-    pub kinds_removed: Vec<String>,
-    pub parents_narrowed: Vec<Narrowed>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct Narrowed {
-    pub kind: String,
-    pub removed: Vec<String>,
+    pub kinds: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 pub struct CountsResponse {
-    pub kinds_removed: BTreeMap<String, Effects>,
-    pub parents_narrowed: BTreeMap<String, InTheWay>,
+    pub kinds: BTreeMap<String, KindCounts>,
 }
 
-/// What removing a kind deletes: its nodes and descendants, live and deleted,
-/// and what hangs off them.
+/// One kind's nodes: `live` ones, all `nodes` (live and deleted), and up to five
+/// of their ids, live ones first.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
-pub struct Effects {
-    pub nodes: u64,
-    pub bindings: u64,
-    pub service_accounts: u64,
-    pub keys: u64,
-}
-
-/// Nodes under a parent kind the config no longer allows, with a few ids.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
-pub struct InTheWay {
+pub struct KindCounts {
+    pub live: u64,
     pub nodes: u64,
     pub sample: Vec<String>,
 }
@@ -54,15 +38,13 @@ pub trait Counts: Send + Sync {
 /// `POST {IDENTITY_INTERNAL_URL}/internal/plan`.
 pub struct HttpCounts {
     url: String,
-    internal_token: Option<String>,
     http: reqwest::Client,
 }
 
 impl HttpCounts {
-    pub fn new(base_url: &str, internal_token: Option<String>) -> Self {
+    pub fn new(base_url: &str) -> Self {
         Self {
             url: format!("{}/internal/plan", base_url.trim_end_matches('/')),
-            internal_token,
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
                 .build()
@@ -74,11 +56,13 @@ impl HttpCounts {
 impl Counts for HttpCounts {
     fn plan_counts(&self, request: CountsRequest) -> CountsFuture<'_> {
         Box::pin(async move {
-            let mut req = self.http.post(&self.url).json(&request);
-            if let Some(token) = &self.internal_token {
-                req = req.header("x-plat5-internal-token", token);
-            }
-            let resp = req.send().await.map_err(|e| format!("identity: {e}"))?;
+            let resp = self
+                .http
+                .post(&self.url)
+                .json(&request)
+                .send()
+                .await
+                .map_err(|e| format!("identity: {e}"))?;
             let status = resp.status();
             if !status.is_success() {
                 return Err(format!("identity: HTTP {status}"));
@@ -87,15 +71,12 @@ impl Counts for HttpCounts {
                 .json()
                 .await
                 .map_err(|e| format!("identity: bad plan counts: {e}"))?;
-            for kind in &request.kinds_removed {
-                if !counts.kinds_removed.contains_key(kind) {
-                    return Err(format!("identity: no count for removed kind {kind}"));
-                }
-            }
-            for n in &request.parents_narrowed {
-                if !counts.parents_narrowed.contains_key(&n.kind) {
-                    return Err(format!("identity: no count for narrowed kind {}", n.kind));
-                }
+            if let Some(kind) = request
+                .kinds
+                .iter()
+                .find(|k| !counts.kinds.contains_key(*k))
+            {
+                return Err(format!("identity: no count for kind {kind}"));
             }
             Ok(counts)
         })
@@ -134,28 +115,10 @@ impl Counts for FixedCounts {
         let all = self.0.lock().unwrap().clone();
         Box::pin(async move {
             Ok(CountsResponse {
-                kinds_removed: request
-                    .kinds_removed
+                kinds: request
+                    .kinds
                     .iter()
-                    .map(|k| {
-                        (
-                            k.clone(),
-                            all.kinds_removed.get(k).cloned().unwrap_or_default(),
-                        )
-                    })
-                    .collect(),
-                parents_narrowed: request
-                    .parents_narrowed
-                    .iter()
-                    .map(|n| {
-                        (
-                            n.kind.clone(),
-                            all.parents_narrowed
-                                .get(&n.kind)
-                                .cloned()
-                                .unwrap_or_default(),
-                        )
-                    })
+                    .map(|k| (k.clone(), all.kinds.get(k).cloned().unwrap_or_default()))
                     .collect(),
             })
         })

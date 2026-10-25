@@ -1,0 +1,6 @@
+[
+  {
+    "path": "services.e10s.scopes.organization.routes[0].path",
+    "message": "under the project collection /projects: a project with that slug would be shadowed. Only /projects itself can be a route here"
+  }
+]

@@ -1,0 +1,6 @@
+[
+  {
+    "path": "services.e10s.scopes.organization.routes[0].path",
+    "message": "GET /orgs/{organization}/plans/{plan_id} has the same method and shape as GET /orgs/{organization}/plans/{id} at services.billing.scopes.organization.routes[0].path"
+  }
+]

@@ -1,34 +1,38 @@
 kinds:
-  directory:
-    sign_in: idp
   organization:
-    label: Organization
-    segment: orgs
+    path: /orgs/{organization}
+    list_permission: organization:read
   project:
-    label: Project
     parent: organization
+    path: /projects/{project}
+    list_permission: project:read
 roles:
   admin:
-    labels: ["*"]
+    permissions: ["*"]
     bindable_at: [organization, project]
   member:
-    labels: ["organization:read"]
+    permissions: [organization:read]
     bindable_at: [organization]
-default_role: member
 creator_role: admin
 services:
   e10s:
-    url: "http://e10s:3000"
-    routes:
-      - path: "/orgs/{organization}/projects/{project}/plans"
-        scope: project
-        upstream: "/projects/{subject.project_id}/plans"
-        methods:
-          GET:
-            required_labels: ["project:read"]
-          POST:
-            required_labels: ["catalog:write"]
-      - path: "/health"
-        scope: public
-        methods:
-          GET: null
+    url: http://e10s:3000
+    scopes:
+      organization:
+        upstream_prefix: /orgs/{organization.id}
+        routes:
+          - path: /plans
+            methods:
+              GET: { required_permissions: [organization:read] }
+      project:
+        upstream_prefix: /projects/{project.id}
+        routes:
+          - path: /plans
+            methods:
+              GET: { required_permissions: [project:read] }
+              POST: { required_permissions: [catalog:write] }
+      public:
+        routes:
+          - path: /health
+            methods:
+              GET:

@@ -1,4 +1,5 @@
-//! Revisions in Postgres, schema `control_plane`: one row per apply, and the head.
+//! Revisions in Postgres, schema `control_plane`: one row per apply, and the head;
+//! and each gateway replica's latest report.
 //! An apply locks the head row from the read it plans against until its write,
 //! so writes are serialized and head order is commit order.
 
@@ -197,6 +198,66 @@ impl Store {
         let mut conn = self.pool.acquire().await?;
         revision_in(&mut conn, revision).await
     }
+
+    /// Keeps a gateway replica's latest report, seen now.
+    pub async fn report(&self, report: &Report) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO gateway_replicas (replica, loaded, refused, reason, seen_at)
+             VALUES ($1, $2, $3, $4, now())
+             ON CONFLICT (replica) DO UPDATE
+             SET loaded = $2, refused = $3, reason = $4, seen_at = now()",
+        )
+        .bind(&report.replica)
+        .bind(report.loaded)
+        .bind(report.refused)
+        .bind(&report.reason)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The gateway replicas that reported in the last `within_secs` seconds,
+    /// by replica id.
+    pub async fn replicas(&self, within_secs: i64) -> Result<Vec<Replica>, StoreError> {
+        let rows: Vec<ReplicaRow> = sqlx::query_as(
+            "SELECT replica, loaded, refused, reason, seen_at FROM gateway_replicas
+                 WHERE seen_at > now() - make_interval(secs => $1)
+                 ORDER BY replica",
+        )
+        .bind(within_secs as f64)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(replica, loaded, refused, reason, seen_at)| Replica {
+                report: Report {
+                    replica,
+                    loaded,
+                    refused,
+                    reason,
+                },
+                seen_at,
+            })
+            .collect())
+    }
+}
+
+type ReplicaRow = (String, i64, Option<i64>, Option<String>, DateTime<Utc>);
+
+/// What a gateway replica says on its long poll: the revision it serves, and
+/// the newest one it was served if it refused it, with why.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Report {
+    pub replica: String,
+    pub loaded: i64,
+    pub refused: Option<i64>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Replica {
+    pub report: Report,
+    pub seen_at: DateTime<Utc>,
 }
 
 async fn revision_in(

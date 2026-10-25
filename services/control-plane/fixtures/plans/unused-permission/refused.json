@@ -1,0 +1,6 @@
+[
+  {
+    "path": "roles.member.permissions[1]",
+    "message": "no route requires \"catalog:delete\", and no kind lists by it: a typo, or a route that was removed"
+  }
+]

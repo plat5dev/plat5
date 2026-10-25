@@ -5,21 +5,27 @@
   "description": "The whole config, as the CLI sends it and the control plane stores it: plat5.yml's keys, with services as a map of service name to service.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["kinds", "roles", "default_role", "creator_role"],
+  "required": ["kinds", "roles", "creator_role"],
   "properties": {
-    "deletion_grace": { "$ref": "kinds.json#/properties/deletion_grace" },
-    "reserved_slugs": { "$ref": "kinds.json#/properties/reserved_slugs" },
+    "deletion_grace": { "$ref": "settings.json#/properties/deletion_grace" },
+    "reserved_slugs": { "$ref": "settings.json#/properties/reserved_slugs" },
+    "users": { "$ref": "settings.json#/properties/users" },
+    "defaults": { "$ref": "settings.json#/properties/defaults" },
     "kinds": { "$ref": "kinds.json#/properties/kinds" },
     "roles": { "$ref": "roles.json#/properties/roles" },
-    "default_role": { "$ref": "roles.json#/properties/default_role" },
     "creator_role": { "$ref": "roles.json#/properties/creator_role" },
+    "rate_limits": { "$ref": "rate_limits.json#/properties/rate_limits" },
     "cors": { "$ref": "cors.json#/properties/cors" },
     "services": {
       "title": "services",
       "description": "Map of service name → service.",
       "type": "object",
-      "propertyNames": { "$ref": "routes.json#/$defs/service_name" },
-      "additionalProperties": { "$ref": "routes.json#/$defs/service" }
+      "propertyNames": { "$ref": "services.json#/$defs/service_name" },
+      "properties": {
+        "identity": { "$ref": "services.json#/$defs/identity" },
+        "audit": { "$ref": "services.json#/$defs/audit" }
+      },
+      "additionalProperties": { "$ref": "services.json#/$defs/service" }
     }
   }
 }

@@ -1,45 +1,164 @@
 {
   "revision": 7,
   "summary": {
-    "add": 4,
-    "change": 2,
-    "remove": 3,
+    "add": 1,
+    "change": 1,
+    "remove": 1,
     "blocked": 0
   },
   "changes": [
     {
-      "class": "safe",
       "op": "remove",
       "what": "service",
       "name": "billing",
-      "routes": {
-        "add": 0,
-        "change": 0,
-        "remove": 2
-      }
+      "before": {
+        "url": "http://billing:3000",
+        "timeouts": {
+          "connect": "10s",
+          "read": "30s"
+        },
+        "max_body_bytes": 10485760
+      },
+      "routes": [
+        {
+          "op": "remove",
+          "method": "GET",
+          "path": "/orgs/{organization}/invoices",
+          "before": {
+            "scope": "organization",
+            "upstream": "/orgs/{organization.id}/invoices",
+            "required_permissions": [
+              "billing:read"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        }
+      ]
     },
     {
-      "class": "safe",
       "op": "change",
       "what": "service",
       "name": "e10s",
-      "routes": {
-        "add": 2,
-        "change": 1,
-        "remove": 1
-      }
+      "before": {
+        "url": "http://e10s:3000",
+        "timeouts": {
+          "connect": "10s",
+          "read": "30s"
+        },
+        "max_body_bytes": 10485760
+      },
+      "after": {
+        "url": "http://e10s:4000",
+        "timeouts": {
+          "connect": "2s",
+          "read": "60s"
+        },
+        "max_body_bytes": 1048576
+      },
+      "routes": [
+        {
+          "op": "remove",
+          "method": "GET",
+          "path": "/health",
+          "before": {
+            "scope": "public",
+            "upstream": "/health",
+            "required_permissions": null,
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "GET",
+          "path": "/orgs/{organization}/projects/{project}/features",
+          "after": {
+            "scope": "project",
+            "upstream": "/projects/{project.id}/features",
+            "required_permissions": [
+              "catalog:write"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "POST",
+          "path": "/orgs/{organization}/projects/{project}/features",
+          "after": {
+            "scope": "project",
+            "upstream": "/projects/{project.id}/features",
+            "required_permissions": [
+              "catalog:write"
+            ],
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "change",
+          "method": "GET",
+          "path": "/orgs/{organization}/projects/{project}/plans",
+          "before": {
+            "required_permissions": [
+              "project:read"
+            ]
+          },
+          "after": {
+            "required_permissions": [
+              "project:read",
+              "catalog:read"
+            ]
+          }
+        }
+      ]
     },
     {
-      "class": "safe",
       "op": "add",
       "what": "service",
       "name": "notify",
-      "routes": {
-        "add": 2,
-        "change": 0,
-        "remove": 0
-      }
+      "after": {
+        "url": "http://notify:3000",
+        "timeouts": {
+          "connect": "10s",
+          "read": "30s"
+        },
+        "max_body_bytes": 10485760
+      },
+      "routes": [
+        {
+          "op": "add",
+          "method": "GET",
+          "path": "/user/notifications",
+          "after": {
+            "scope": "user",
+            "upstream": "/users/{user.id}/notifications",
+            "required_permissions": null,
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "add",
+          "method": "PUT",
+          "path": "/user/notifications",
+          "after": {
+            "scope": "user",
+            "upstream": "/users/{user.id}/notifications",
+            "required_permissions": null,
+            "rate_limit": [],
+            "audit": true,
+            "allow_deleted": false
+          }
+        }
+      ]
     }
-  ],
-  "confirm": {}
+  ]
 }

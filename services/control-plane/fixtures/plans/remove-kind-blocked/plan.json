@@ -1,0 +1,72 @@
+{
+  "revision": 7,
+  "summary": {
+    "add": 0,
+    "change": 2,
+    "remove": 0,
+    "blocked": 1
+  },
+  "changes": [
+    {
+      "op": "remove",
+      "what": "kind",
+      "name": "folder",
+      "before": {
+        "parent": "organization",
+        "path": "/folders/{folder}",
+        "list_permission": "folder:read"
+      },
+      "blocked": {
+        "reason": "kind_not_empty",
+        "in_the_way": {
+          "nodes": 3,
+          "sample": [
+            "01jb8z3m5q0000000000000001",
+            "01jb8z3m5q0000000000000002",
+            "01jb8z3m5q0000000000000003"
+          ]
+        }
+      }
+    },
+    {
+      "op": "change",
+      "what": "role",
+      "name": "admin",
+      "before": {
+        "bindable_at": [
+          "organization",
+          "project",
+          "folder"
+        ]
+      },
+      "after": {
+        "bindable_at": [
+          "organization",
+          "project"
+        ]
+      }
+    },
+    {
+      "op": "change",
+      "what": "service",
+      "name": "e10s",
+      "routes": [
+        {
+          "op": "remove",
+          "method": "GET",
+          "path": "/orgs/{organization}/folders/{folder}/plans",
+          "before": {
+            "scope": "folder",
+            "upstream": "/folders/{folder.id}/plans",
+            "required_permissions": [
+              "folder:read"
+            ],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false
+          }
+        }
+      ]
+    }
+  ]
+}

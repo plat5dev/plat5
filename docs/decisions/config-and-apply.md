@@ -30,7 +30,7 @@ Why the deployment's config is one document applied whole, through a plan, valid
 |----------|-----|
 | A role can name other roles in `includes`, transitively, and grants their permissions plus its own. Only permissions are included. A cycle or a missing role is **422** | Kubernetes aggregates ClusterRoles the same way ([aggregated ClusterRoles](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#aggregated-clusterroles)). `bindable_at` is where a role makes sense, which an including role decides for itself |
 | Identity resolves includes when it reads the config; the feed carries roles as written | One place resolves them, and the plan shows the roles as the team wrote them |
-| A role permission no route requires is **422**. Identity's and audit's resources count, defaults included. A route permission no role grants is legal | The first is a typo or a removed route, and it would grant nothing forever. The second is a route meant for `*` holders only |
+| A role permission no route requires is **422**. Identity's and audit's resources count, defaults included, and so does a kind's `list_permission`. A route permission no role grants is legal | The first is a typo or a removed route, and it would grant nothing forever. The second is a route meant for `*` holders only |
 | `role` is required on member add and on invites; there is no default role | Default-deny below the root is the role you give new members. A default that only fills an omitted field hides that choice |
 | One example role set, kept in the CLI's templates and shown in the docs. Its top role is `admin` with `*`, and no other role holds `bindings:write` | Whoever holds `bindings:write` can grant any role, so a second role holding it would be `admin` under another name |
 

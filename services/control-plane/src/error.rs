@@ -47,17 +47,6 @@ impl AppError {
         }
     }
 
-    pub fn unauthorized_internal(request_id: String) -> Self {
-        Self {
-            status: StatusCode::UNAUTHORIZED,
-            error_type: "invalid_request_error",
-            code: "UNAUTHORIZED",
-            message: "Authentication required.".into(),
-            details: Some(Box::new(json!({ "reason": "invalid_internal_token" }))),
-            request_id,
-        }
-    }
-
     pub fn not_found(request_id: String, resource: &str, id: &str) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
@@ -102,18 +91,6 @@ impl AppError {
             details: Some(Box::new(
                 json!({ "precondition": precondition, "expected": expected, "actual": actual }),
             )),
-            request_id,
-        }
-    }
-
-    /// **409**: each method and path shape owned by two services.
-    pub fn route_conflict(request_id: String, conflicts: Vec<String>) -> Self {
-        Self {
-            status: StatusCode::CONFLICT,
-            error_type: "invalid_request_error",
-            code: "ROUTE_CONFLICT",
-            message: format!("Route owned by two services: {}.", conflicts.join("; ")),
-            details: None,
             request_id,
         }
     }

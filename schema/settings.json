@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plat5.com/schema/settings.json",
+  "title": "Settings",
+  "description": "The deployment-wide settings: deletion_grace, reserved_slugs, users and defaults in plat5.yml.",
+  "type": "object",
+  "properties": {
+    "deletion_grace": {
+      "title": "deletion_grace",
+      "description": "How long a deleted node stays restorable before it's purged. One value for every kind. A duration: a whole number and `s`, `m`, `h` or `d` (`30d`, `12h`). Default `30d`. A change applies to new deletes only.",
+      "$ref": "#/$defs/duration"
+    },
+    "reserved_slugs": {
+      "title": "reserved_slugs",
+      "description": "Slugs no node may take, deployment-wide.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/slug" }
+    },
+    "users": {
+      "title": "users",
+      "description": "How identity reads a person from the IdP's token.",
+      "$ref": "#/$defs/users"
+    },
+    "defaults": {
+      "title": "defaults",
+      "description": "What a service gets for a field it leaves out.",
+      "$ref": "#/$defs/defaults"
+    }
+  },
+  "$defs": {
+    "users": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name_claim": {
+          "title": "name_claim",
+          "description": "The IdP claim holding a person's name. Default `name`.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeouts": {
+          "title": "timeouts",
+          "description": "`{ connect, read }`, each a duration. Default `10s` and `30s`.",
+          "$ref": "#/$defs/timeouts"
+        },
+        "max_body_bytes": {
+          "title": "max_body_bytes",
+          "description": "The largest request body the gateway forwards, in bytes. Default `10485760` (10 MiB).",
+          "$ref": "#/$defs/max_body_bytes"
+        }
+      }
+    },
+    "timeouts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "connect": { "$ref": "#/$defs/duration" },
+        "read": { "$ref": "#/$defs/duration" }
+      }
+    },
+    "max_body_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "slug": {
+      "title": "slug",
+      "description": "Lowercase letters, digits and hyphens; starts with a letter, doesn't end with a hyphen; 3 to 63 characters.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$"
+    },
+    "duration": {
+      "title": "duration",
+      "description": "A whole number and a unit: `s`, `m`, `h` or `d`.",
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,8}[smhd]$"
+    }
+  }
+}

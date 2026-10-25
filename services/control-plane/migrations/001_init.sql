@@ -17,3 +17,14 @@ CREATE TABLE IF NOT EXISTS config_revisions (
     request_id TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- The latest report of each gateway replica, sent on its long poll: the
+-- revision it serves, and the last one it refused with the reason. `GET /status`
+-- lists the replicas seen in the last minute.
+CREATE TABLE IF NOT EXISTS gateway_replicas (
+    replica TEXT PRIMARY KEY,
+    loaded  BIGINT NOT NULL,
+    refused BIGINT,
+    reason  TEXT,
+    seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
