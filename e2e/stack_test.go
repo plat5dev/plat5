@@ -16,6 +16,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,11 +27,14 @@ const keyID = "plat5-e2e"
 
 // stack is a running Plat5 behind its gateway, and an IdP these tests play.
 type stack struct {
-	t       *testing.T
-	gateway string
-	issuer  string
-	key     *rsa.PrivateKey
-	http    *http.Client
+	t            *testing.T
+	gateway      string
+	controlPlane string
+	adminToken   string
+	issuer       string
+	key          *rsa.PrivateKey
+	http         *http.Client
+	wait         time.Duration
 }
 
 func env(name, fallback string) string {
@@ -39,7 +44,8 @@ func env(name, fallback string) string {
 	return fallback
 }
 
-// newStack serves JWKS and waits for the gateway to answer with it loaded.
+// newStack serves JWKS, applies the e2e's config, and waits for the gateway to
+// answer with both loaded.
 func newStack(t *testing.T) *stack {
 	t.Helper()
 	if os.Getenv("PLAT5_E2E") != "1" {
@@ -54,14 +60,22 @@ func newStack(t *testing.T) *stack {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wait, err := time.ParseDuration(env("E2E_WAIT", "10m"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := &stack{
-		t:       t,
-		gateway: strings.TrimRight(env("GATEWAY_URL", "http://localhost:5400"), "/"),
-		issuer:  env("AUTH_ISSUER", "http://localhost:5401"),
-		key:     parsed.(*rsa.PrivateKey),
-		http:    &http.Client{Timeout: 10 * time.Second},
+		t:            t,
+		gateway:      strings.TrimRight(env("GATEWAY_URL", "http://localhost:5400"), "/"),
+		controlPlane: strings.TrimRight(env("CONTROL_PLANE_URL", "http://localhost:5402"), "/"),
+		adminToken:   env("ADMIN_TOKEN", "dev-admin-token"),
+		issuer:       env("AUTH_ISSUER", "http://localhost:5401"),
+		key:          parsed.(*rsa.PrivateKey),
+		http:         &http.Client{Timeout: 10 * time.Second},
+		wait:         wait,
 	}
 	s.serveJWKS(env("JWKS_ADDR", ":5401"))
+	s.applyConfig()
 	s.waitForGateway()
 	return s
 }
@@ -85,17 +99,78 @@ func (s *stack) serveJWKS(addr string) {
 	s.t.Cleanup(func() { _ = srv.Close() })
 }
 
-// waitForGateway polls GET /me with a token until the gateway has routes and JWKS.
-func (s *stack) waitForGateway() {
-	wait, err := time.ParseDuration(env("E2E_WAIT", "10m"))
+// applyConfig applies testdata/config.json through the control plane's admin
+// API: a dry run for the plan's revision, then the apply with it as `expect`.
+// A plan with no changes is skipped, so a rerun applies nothing. With audit
+// off, the config leaves the audit service out.
+func (s *stack) applyConfig() {
+	raw, err := os.ReadFile("testdata/config.json")
 	if err != nil {
 		s.t.Fatal(err)
 	}
+	var config map[string]any
+	if err := json.Unmarshal(raw, &config); err != nil {
+		s.t.Fatal(err)
+	}
+	if os.Getenv("AUDIT_ENABLED") == "false" {
+		delete(config["services"].(map[string]any), "audit")
+	}
+
+	var plan struct {
+		Revision int   `json:"revision"`
+		Changes  []any `json:"changes"`
+	}
+	deadline := time.Now().Add(s.wait)
+	for {
+		status, body, err := s.admin("POST", "/apply?dry_run=true", config)
+		if err == nil && status == http.StatusOK {
+			if err := json.Unmarshal(body, &plan); err != nil {
+				s.t.Fatalf("plan: %v: %s", err, body)
+			}
+			break
+		}
+		if err == nil && status != http.StatusServiceUnavailable {
+			s.t.Fatalf("dry run: %d %s", status, body)
+		}
+		if time.Now().After(deadline) {
+			s.t.Fatalf("control plane at %s not ready after %s: %v %d %s", s.controlPlane, s.wait, err, status, body)
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if len(plan.Changes) == 0 {
+		return
+	}
+	config["expect"] = map[string]int{"revision": plan.Revision}
+	status, body, err := s.admin("POST", "/apply", config)
+	if err != nil || status != http.StatusOK {
+		s.t.Fatalf("apply: %v %d %s", err, status, body)
+	}
+}
+
+func (s *stack) admin(method, path string, body any) (int, []byte, error) {
+	b, _ := json.Marshal(body)
+	req, err := http.NewRequest(method, s.controlPlane+path, bytes.NewReader(b))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+s.adminToken)
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	out, err := io.ReadAll(resp.Body)
+	return resp.StatusCode, out, err
+}
+
+// waitForGateway polls GET /user with a token until the gateway has routes and JWKS.
+func (s *stack) waitForGateway() {
 	probe := s.person("probe")
-	deadline := time.Now().Add(wait)
+	deadline := time.Now().Add(s.wait)
 	last := "no answer"
 	for time.Now().Before(deadline) {
-		status, body, err := s.try(probe, "GET", "/me", nil)
+		status, body, err := s.try(probe, "GET", "/user", nil)
 		if err == nil && status == http.StatusOK {
 			return
 		}
@@ -106,15 +181,13 @@ func (s *stack) waitForGateway() {
 		}
 		time.Sleep(2 * time.Second)
 	}
-	s.t.Fatalf("gateway at %s not ready after %s: %s", s.gateway, wait, last)
+	s.t.Fatalf("gateway at %s not ready after %s: %s", s.gateway, s.wait, last)
 }
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
-// caller is how a request authenticates: a JWT or an API key.
-type caller struct {
-	header, value string
-}
+// caller is a credential, sent as `Authorization: Bearer`: a JWT or an API key.
+type caller string
 
 // person is a JWT for an IdP subject, as Plat5 Auth issues them
 // (`properties.user_id`, audience `plat5`).
@@ -134,10 +207,8 @@ func (s *stack) person(subject string) caller {
 	if err != nil {
 		s.t.Fatal(err)
 	}
-	return caller{"Authorization", "Bearer " + signing + "." + b64(sig)}
+	return caller(signing + "." + b64(sig))
 }
-
-func apiKey(key string) caller { return caller{"X-API-Key", key} }
 
 func (s *stack) try(who caller, method, path string, body any) (int, []byte, error) {
 	var rd io.Reader
@@ -152,7 +223,7 @@ func (s *stack) try(who caller, method, path string, body any) (int, []byte, err
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set(who.header, who.value)
+	req.Header.Set("Authorization", "Bearer "+string(who))
 	resp, err := s.http.Do(req)
 	if err != nil {
 		return 0, nil, err
@@ -180,11 +251,53 @@ func (s *stack) call(who caller, method, path string, body any, want int, into a
 	return out
 }
 
+// settle waits out the gateway's admit cache; the e2e runs it with 1s TTLs.
+func settle() { time.Sleep(1500 * time.Millisecond) }
+
+var idShape = regexp.MustCompile(`^[0-7][0-9a-hjkmnp-tv-z]{25}$`)
+
+// isID is a bare lowercase ULID.
+func isID(s string) bool { return idShape.MatchString(s) }
+
 type node struct {
-	ID     string `json:"id"`
-	Kind   string `json:"kind"`
-	Slug   string `json:"slug"`
-	Status string `json:"status"`
+	ID          string  `json:"id"`
+	Kind        string  `json:"kind"`
+	ParentID    *string `json:"parent_id"`
+	RootID      string  `json:"root_id"`
+	Slug        string  `json:"slug"`
+	DisplayName string  `json:"display_name"`
+	Status      string  `json:"status"`
+	PurgeAfter  *string `json:"purge_after"`
+	Ancestors   []struct {
+		ID   string `json:"id"`
+		Kind string `json:"kind"`
+		Slug string `json:"slug"`
+	} `json:"ancestors"`
+}
+
+type nodeList struct {
+	Nodes []node `json:"nodes"`
+}
+
+type binding struct {
+	ID        string `json:"id"`
+	MemberID  string `json:"member_id"`
+	NodeID    string `json:"node_id"`
+	Role      string `json:"role"`
+	Inherited bool   `json:"inherited"`
+	Principal string `json:"principal"`
+}
+
+type membership struct {
+	MemberID    string    `json:"member_id"`
+	Bindings    []binding `json:"bindings"`
+	Permissions []string  `json:"permissions"`
+}
+
+type key struct {
+	ID        string `json:"id"`
+	Key       string `json:"key"`
+	KeyPrefix string `json:"key_prefix"`
 }
 
 type apiError struct {
@@ -196,7 +309,8 @@ type apiError struct {
 }
 
 // The flow e10s needs: an org and a project, a service account at the project,
-// a route called through the gateway as it, and the project deleted and restored.
+// a route called through the gateway as it, who holds what there, and the
+// project deleted and restored: a restore undoes the delete, keys included.
 func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 	s := newStack(t)
 	run := fmt.Sprintf("%d", time.Now().UnixNano())
@@ -205,12 +319,18 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 
 	// A person creates an org, and a project in it.
 	var org, project node
-	s.call(owner, "POST", "/orgs", map[string]string{"label": "E2E " + run}, 201, &org)
-	if org.Kind != "organization" || !strings.HasPrefix(org.ID, "n_") || org.Slug == "" {
+	s.call(owner, "POST", "/orgs", map[string]string{"display_name": "E2E " + run}, 201, &org)
+	if org.Kind != "organization" || !isID(org.ID) || org.Slug == "" || org.DisplayName != "E2E "+run ||
+		org.RootID != org.ID || org.ParentID != nil || len(org.Ancestors) != 0 {
 		t.Fatalf("org: %+v", org)
 	}
-	s.call(owner, "POST", "/orgs/"+org.Slug+"/projects", map[string]string{"label": "Web"}, 201, &project)
-	projectPath := "/orgs/" + org.Slug + "/projects/" + project.Slug
+	orgPath := "/orgs/" + org.Slug
+	s.call(owner, "POST", orgPath+"/projects", map[string]string{"display_name": "Web"}, 201, &project)
+	if !isID(project.ID) || project.ParentID == nil || *project.ParentID != org.ID || project.RootID != org.ID ||
+		len(project.Ancestors) != 1 || project.Ancestors[0].ID != org.ID {
+		t.Fatalf("project: %+v", project)
+	}
+	projectPath := orgPath + "/projects/" + project.Slug
 	byID := "/orgs/" + org.ID + "/projects/" + project.ID
 
 	// A service account at the project, with a key.
@@ -220,14 +340,15 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 	}
 	s.call(owner, "POST", projectPath+"/service-accounts",
 		map[string]string{"name": "ci", "role": "developer"}, 201, &sa)
-	if sa.NodeID != project.ID || !strings.HasPrefix(sa.ID, "m_") {
+	if sa.NodeID != project.ID || !isID(sa.ID) {
 		t.Fatalf("service account: %+v", sa)
 	}
-	var key struct {
-		Key string `json:"key"`
+	var saKey key
+	s.call(owner, "POST", projectPath+"/service-accounts/"+sa.ID+"/keys", map[string]string{}, 201, &saKey)
+	if !isID(saKey.ID) || !strings.HasPrefix(saKey.Key, "plat5-k-2-") {
+		t.Fatalf("key: %+v", saKey)
 	}
-	s.call(owner, "POST", projectPath+"/service-accounts/"+sa.ID+"/keys", map[string]string{}, 201, &key)
-	bot := apiKey(key.Key)
+	bot := caller(saKey.Key)
 
 	// Through the gateway as the service account: allowed by slug and by id…
 	var got node
@@ -237,60 +358,193 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 	}
 	s.call(bot, "GET", byID, nil, 200, &got)
 
-	// …refused by label: developer holds no project:delete.
+	// …refused by permission: developer holds no project:delete.
 	var denied apiError
 	s.call(bot, "DELETE", projectPath, nil, 403, &denied)
 	if denied.Error.Message != "Permission denied, or it may not exist." {
-		t.Fatalf("label 403: %+v", denied)
+		t.Fatalf("permission 403: %+v", denied)
 	}
-	if fmt.Sprint(denied.Error.Details["required_labels"]) != "[project:delete]" {
-		t.Fatalf("label 403 details: %+v", denied.Error.Details)
+	if fmt.Sprint(denied.Error.Details["required_permissions"]) != "[project:delete]" {
+		t.Fatalf("permission 403 details: %+v", denied.Error.Details)
 	}
 
 	// Someone outside the org gets the same 403, and so does a project that isn't there.
 	var outside, missing apiError
 	s.call(outsider, "GET", projectPath, nil, 403, &outside)
-	s.call(owner, "GET", "/orgs/"+org.Slug+"/projects/no-such-project", nil, 403, &missing)
+	s.call(owner, "GET", orgPath+"/projects/no-such-project", nil, 403, &missing)
 	if outside.Error.Message != denied.Error.Message || missing.Error.Message != denied.Error.Message {
 		t.Fatalf("403s differ: %+v / %+v / %+v", outside, missing, denied)
 	}
 
-	// The org's project list, filtered to what its owner can read.
-	var list struct {
-		Nodes []node `json:"nodes"`
+	// What the service account holds at the project: developer, member included.
+	var held membership
+	s.call(bot, "GET", projectPath+"/membership", nil, 200, &held)
+	want := []string{"organization:read", "project:bindings:read", "project:create", "project:read", "project:write"}
+	if held.MemberID != sa.ID || len(held.Bindings) != 1 || held.Bindings[0].Role != "developer" ||
+		!slices.Equal(held.Permissions, want) {
+		t.Fatalf("service account's membership: %+v", held)
 	}
-	s.call(owner, "GET", "/orgs/"+org.Slug+"/projects", nil, 200, &list)
+	// The creator holds admin on the org and on the project it made.
+	var mine membership
+	s.call(owner, "GET", orgPath+"/membership", nil, 200, &mine)
+	if !isID(mine.MemberID) || !slices.Equal(mine.Permissions, []string{"*"}) {
+		t.Fatalf("owner's membership: %+v", mine)
+	}
+
+	// The project's access list: its own bindings, and the org's inherited.
+	var access struct {
+		Bindings []binding `json:"bindings"`
+	}
+	s.call(owner, "GET", projectPath+"/bindings", nil, 200, &access)
+	var own, inherited []binding
+	for _, b := range access.Bindings {
+		if b.Inherited {
+			inherited = append(inherited, b)
+		} else {
+			own = append(own, b)
+		}
+	}
+	if len(inherited) != 1 || inherited[0].NodeID != org.ID || inherited[0].MemberID != mine.MemberID ||
+		inherited[0].Role != "admin" || inherited[0].Principal != "person" {
+		t.Fatalf("inherited bindings: %+v", access)
+	}
+	if len(own) != 2 || !slices.ContainsFunc(own, func(b binding) bool {
+		return b.MemberID == sa.ID && b.Role == "developer" && b.NodeID == project.ID && b.Principal == "service_account"
+	}) {
+		t.Fatalf("the project's own bindings: %+v", access)
+	}
+	s.call(owner, "GET", projectPath+"/bindings?inherited=false", nil, 200, &access)
+	if len(access.Bindings) != 2 {
+		t.Fatalf("?inherited=false: %+v", access)
+	}
+
+	// The org's project list, filtered to what its owner can read.
+	var list nodeList
+	s.call(owner, "GET", orgPath+"/projects", nil, 200, &list)
 	if len(list.Nodes) != 1 || list.Nodes[0].ID != project.ID {
 		t.Fatalf("projects: %+v", list)
 	}
 
 	// Delete the project.
 	s.call(owner, "DELETE", projectPath, nil, 204, nil)
-	time.Sleep(1500 * time.Millisecond) // APIKEY_CACHE_TTL_SECS=1
+	settle()
 
 	// The deleted project is a 403 for its owner, and listed as deleted.
 	s.call(owner, "GET", projectPath, nil, 403, nil)
-	s.call(owner, "GET", "/orgs/"+org.Slug+"/projects?state=deleted", nil, 200, &list)
-	if len(list.Nodes) != 1 || list.Nodes[0].ID != project.ID || list.Nodes[0].Status != "deleted" {
+	s.call(owner, "GET", orgPath+"/projects?status=deleted", nil, 200, &list)
+	if len(list.Nodes) != 1 || list.Nodes[0].ID != project.ID || list.Nodes[0].Status != "deleted" ||
+		list.Nodes[0].PurgeAfter == nil {
 		t.Fatalf("deleted projects: %+v", list)
 	}
-	// The service account's key was revoked with it, and its born node is gone: 401.
+	s.call(owner, "GET", orgPath+"/projects", nil, 200, &list)
+	if len(list.Nodes) != 0 {
+		t.Fatalf("live projects after the delete: %+v", list)
+	}
+	// The service account's born node is deleted, so its key is refused: 401.
 	s.call(bot, "GET", projectPath, nil, 401, nil)
 
 	// Restore it.
 	var restored node
 	s.call(owner, "POST", projectPath+"/restore", nil, 200, &restored)
-	if restored.ID != project.ID || restored.Status != "active" {
+	if restored.ID != project.ID || restored.Status != "active" || restored.PurgeAfter != nil {
 		t.Fatalf("restored: %+v", restored)
 	}
-	time.Sleep(1500 * time.Millisecond)
+	settle()
 	s.call(owner, "GET", projectPath, nil, 200, &got)
 
-	// The old key stays revoked; a new one works.
-	s.call(bot, "GET", projectPath, nil, 401, nil)
-	s.call(owner, "POST", projectPath+"/service-accounts/"+sa.ID+"/keys", map[string]string{}, 201, &key)
-	s.call(apiKey(key.Key), "GET", projectPath, nil, 200, &got)
+	// The same key works again: the delete revoked nothing.
+	s.call(bot, "GET", projectPath, nil, 200, &got)
 	if got.ID != project.ID {
 		t.Fatalf("project after restore: %+v", got)
 	}
+}
+
+// A person's own routes: their account, their trees, a personal key, and an
+// invite redeemed by someone else, who then leaves.
+func TestUserRoutesKeysInvites(t *testing.T) {
+	s := newStack(t)
+	run := fmt.Sprintf("%d", time.Now().UnixNano())
+	owner := s.person("e2e-user-owner-" + run)
+	friend := s.person("e2e-user-friend-" + run)
+
+	var me struct {
+		ID     string `json:"id"`
+		Name   string `json:"name"`
+		Status string `json:"status"`
+	}
+	s.call(owner, "GET", "/user", nil, 200, &me)
+	if !isID(me.ID) || me.Name != "E2E e2e-user-owner-"+run || me.Status != "active" {
+		t.Fatalf("user: %+v", me)
+	}
+
+	var org node
+	s.call(owner, "POST", "/orgs", map[string]string{"display_name": "People " + run}, 201, &org)
+	orgPath := "/orgs/" + org.Slug
+
+	// The org switcher.
+	var trees nodeList
+	s.call(owner, "GET", "/user/nodes?kind=organization", nil, 200, &trees)
+	if len(trees.Nodes) != 1 || trees.Nodes[0].ID != org.ID || len(trees.Nodes[0].Ancestors) != 0 {
+		t.Fatalf("user nodes: %+v", trees)
+	}
+
+	// A personal key reaches what its person can.
+	var personal key
+	s.call(owner, "POST", "/user/keys", map[string]string{"name": "laptop"}, 201, &personal)
+	if !isID(personal.ID) || !strings.HasPrefix(personal.Key, "plat5-k-2-") {
+		t.Fatalf("personal key: %+v", personal)
+	}
+	var keys struct {
+		Keys []key `json:"keys"`
+	}
+	s.call(owner, "GET", "/user/keys", nil, 200, &keys)
+	if len(keys.Keys) != 1 || keys.Keys[0].ID != personal.ID || keys.Keys[0].Key != "" ||
+		keys.Keys[0].KeyPrefix != personal.KeyPrefix {
+		t.Fatalf("user keys: %+v", keys)
+	}
+	laptop := caller(personal.Key)
+	var got node
+	s.call(laptop, "GET", orgPath, nil, 200, &got)
+	var meByKey struct {
+		ID string `json:"id"`
+	}
+	s.call(laptop, "GET", "/user", nil, 200, &meByKey)
+	if got.ID != org.ID || meByKey.ID != me.ID {
+		t.Fatalf("by personal key: %+v %+v", got, meByKey)
+	}
+
+	// An invite to the org, redeemed by a friend.
+	var invite struct {
+		ID    string `json:"id"`
+		Role  string `json:"role"`
+		Token string `json:"token"`
+	}
+	s.call(owner, "POST", orgPath+"/invites", map[string]string{"role": "member"}, 201, &invite)
+	if !isID(invite.ID) || invite.Role != "member" || !strings.HasPrefix(invite.Token, "inv_") {
+		t.Fatalf("invite: %+v", invite)
+	}
+	s.call(friend, "GET", orgPath, nil, 403, nil)
+	var redeemed struct {
+		MemberID string `json:"member_id"`
+		Node     node   `json:"node"`
+	}
+	s.call(friend, "POST", "/user/invites/redeem", map[string]string{"token": invite.Token}, 200, &redeemed)
+	if !isID(redeemed.MemberID) || redeemed.Node.ID != org.ID || redeemed.Node.Slug != org.Slug {
+		t.Fatalf("redeem: %+v", redeemed)
+	}
+	settle()
+	s.call(friend, "GET", orgPath, nil, 200, &got)
+	var held membership
+	s.call(friend, "GET", orgPath+"/membership", nil, 200, &held)
+	if held.MemberID != redeemed.MemberID || !slices.Equal(held.Permissions, []string{"organization:read"}) {
+		t.Fatalf("friend's membership: %+v", held)
+	}
+	s.call(friend, "POST", orgPath+"/projects", map[string]string{"display_name": "No"}, 403, nil)
+
+	// The friend leaves; the owner revokes the personal key.
+	s.call(friend, "DELETE", orgPath+"/membership", nil, 204, nil)
+	s.call(owner, "DELETE", "/user/keys/"+personal.ID, nil, 204, nil)
+	settle()
+	s.call(friend, "GET", orgPath, nil, 403, nil)
+	s.call(laptop, "GET", orgPath, nil, 401, nil)
 }

@@ -79,7 +79,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
-          # The control plane and the gateway compile in the config schema; unused elsewhere.
+          # The control plane compiles in the config schema; unused elsewhere.
           build-contexts: |
             schema=schema
           target: prod

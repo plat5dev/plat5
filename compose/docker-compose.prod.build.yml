@@ -13,8 +13,6 @@ services:
   gateway:
     build:
       context: ../services/gateway
-      additional_contexts:
-        schema: ../schema
       target: prod
       args:
         VERSION: ${PLAT5_VERSION:?set PLAT5_VERSION}

@@ -3,6 +3,7 @@ package e2e
 import (
 	"fmt"
 	"os"
+	"slices"
 	"testing"
 	"time"
 )
@@ -14,13 +15,14 @@ type auditEvent struct {
 		Kind string `json:"kind"`
 		ID   string `json:"id"`
 	} `json:"nodes"`
-	NamedRootID   *string `json:"named_root_id"`
-	NamedMemberID *string `json:"named_member_id"`
+	NamedNodes    []string `json:"named_nodes"`
+	NamedMemberID *string  `json:"named_member_id"`
 	Actor         struct {
-		MemberID  string  `json:"member_id"`
+		MemberID  *string `json:"member_id"`
+		UserID    *string `json:"user_id"`
 		Principal string  `json:"principal"`
 		AuthType  string  `json:"auth_type"`
-		KeyPrefix *string `json:"key_prefix"`
+		KeyID     *string `json:"key_id"`
 	} `json:"actor"`
 	Service   string            `json:"service"`
 	Method    string            `json:"method"`
@@ -32,9 +34,10 @@ type auditEvent struct {
 	CreatedID *string           `json:"created_id"`
 }
 
-// events reads a log through the gateway until no event in it is pending:
-// outcomes are written after the response.
-func (s *stack) events(who caller, path string) []auditEvent {
+// events reads a log through the gateway until it holds each wanted
+// "METHOD route" and no event in it is pending: outcomes, and refusals, are
+// written after the response.
+func (s *stack) events(who caller, path string, wants ...string) []auditEvent {
 	s.t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -42,11 +45,14 @@ func (s *stack) events(who caller, path string) []auditEvent {
 			AuditEvents []auditEvent `json:"audit_events"`
 		}
 		s.call(who, "GET", path, nil, 200, &page)
-		pending := false
+		done := true
 		for _, e := range page.AuditEvents {
-			pending = pending || e.Outcome == "pending"
+			done = done && e.Outcome != "pending"
 		}
-		if !pending || time.Now().After(deadline) {
+		for _, w := range wants {
+			done = done && slices.ContainsFunc(page.AuditEvents, func(e auditEvent) bool { return e.Method+" "+e.Route == w })
+		}
+		if done || time.Now().After(deadline) {
 			return page.AuditEvents
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -85,10 +91,13 @@ func chain(e auditEvent) string {
 	return out
 }
 
-// Each org's log holds its tree's events with their chain; each read by node
-// returns that node and below; a person's log holds what they did on sign-in
-// routes; the labels on the generated audit routes decide who reads them.
-func TestAuditLogsPerRoot(t *testing.T) {
+func is(p *string, v string) bool { return p != nil && *p == v }
+
+// An event is in the log of each node in its chain, and of the node it
+// created; a person's log holds their user-route events by user id; a user
+// route that makes a tree is in that tree's log as its member; refusals are
+// recorded and filterable; audit:read decides who reads a log.
+func TestAuditLogs(t *testing.T) {
 	if os.Getenv("AUDIT_ENABLED") == "false" {
 		t.Skip("audit is off")
 	}
@@ -97,89 +106,100 @@ func TestAuditLogsPerRoot(t *testing.T) {
 	owner := s.person("e2e-audit-owner-" + run)
 	outsider := s.person("e2e-audit-outsider-" + run)
 
+	var user struct {
+		ID string `json:"id"`
+	}
+	s.call(owner, "GET", "/user", nil, 200, &user)
 	var org, project node
-	s.call(owner, "POST", "/orgs", map[string]string{"label": "Audit " + run}, 201, &org)
-	s.call(owner, "POST", "/orgs/"+org.Slug+"/projects", map[string]string{"label": "Web"}, 201, &project)
+	s.call(owner, "POST", "/orgs", map[string]string{"display_name": "Audit " + run}, 201, &org)
 	orgPath := "/orgs/" + org.Slug
+	s.call(owner, "POST", orgPath+"/projects", map[string]string{"display_name": "Web"}, 201, &project)
 	projectPath := orgPath + "/projects/" + project.Slug
+	var held membership
+	s.call(owner, "GET", orgPath+"/membership", nil, 200, &held)
+	ownerMember := held.MemberID
 
 	var sa struct {
 		ID string `json:"id"`
 	}
 	s.call(owner, "POST", projectPath+"/service-accounts", map[string]string{"name": "ci", "role": "developer"}, 201, &sa)
-	var key struct {
-		Key       string `json:"key"`
-		KeyPrefix string `json:"key_prefix"`
-	}
-	s.call(owner, "POST", projectPath+"/service-accounts/"+sa.ID+"/keys", map[string]string{}, 201, &key)
-	bot := apiKey(key.Key)
+	var saKey key
+	s.call(owner, "POST", projectPath+"/service-accounts/"+sa.ID+"/keys", map[string]string{}, 201, &saKey)
+	bot := caller(saKey.Key)
 	s.call(bot, "GET", projectPath, nil, 200, nil)
 	s.call(bot, "DELETE", projectPath, nil, 403, nil)
 
 	orgChain := "/organization:" + org.ID
 	projectChain := orgChain + "/project:" + project.ID
+	const (
+		projects = "/orgs/{organization}/projects"
+		theProj  = "/orgs/{organization}/projects/{project}"
+		accounts = "/orgs/{organization}/projects/{project}/service-accounts"
+		keys     = "/orgs/{organization}/projects/{project}/service-accounts/{service_account_id}/keys"
+	)
 
 	// The org's log.
-	orgLog := s.events(owner, orgPath+"/audit-events")
+	orgLog := s.events(owner, orgPath+"/audit-events", "POST /orgs", "DELETE "+theProj)
+
+	// The org's creation, a user route, is in it because identity named the
+	// org: its actor is the creator's member there, never a user id.
 	created := find(t, orgLog, "POST", "/orgs")
-	if created.Root != nil || len(created.Nodes) != 0 || created.NamedRootID == nil || *created.NamedRootID != org.ID ||
-		created.CreatedID == nil || *created.CreatedID != org.ID || created.Outcome != "responded" {
+	if created.Root != nil || len(created.Nodes) != 0 || !slices.Equal(created.NamedNodes, []string{org.ID}) ||
+		!is(created.NamedMemberID, ownerMember) || !is(created.Actor.MemberID, ownerMember) || created.Actor.UserID != nil ||
+		!is(created.CreatedID, org.ID) || created.Outcome != "responded" || *created.Status != 201 ||
+		created.Actor.Principal != "person" || created.Actor.AuthType != "jwt" || created.Actor.KeyID != nil {
 		t.Fatalf("org create in the org's log: %+v", created)
 	}
-	// There the actor is the owner's member in the org, which the service named.
-	orgMember := *created.NamedMemberID
-	if created.Actor.MemberID != orgMember || created.Details["member_id"] != orgMember || created.Actor.Principal != "person" {
-		t.Fatalf("org create's actor: %+v", created)
-	}
-	projectCreate := find(t, orgLog, "POST", "/orgs/{organization}/projects")
-	if chain(projectCreate) != orgChain || *projectCreate.Root != org.ID || *projectCreate.CreatedID != project.ID ||
-		projectCreate.Actor.MemberID != orgMember || projectCreate.Actor.AuthType != "jwt" || projectCreate.Actor.KeyPrefix != nil {
+	projectCreate := find(t, orgLog, "POST", projects)
+	if chain(projectCreate) != orgChain || !is(projectCreate.Root, org.ID) || !is(projectCreate.CreatedID, project.ID) ||
+		!is(projectCreate.Actor.MemberID, ownerMember) || projectCreate.Actor.UserID != nil {
 		t.Fatalf("project create: %+v", projectCreate)
 	}
-	saCreate := find(t, orgLog, "POST", "/orgs/{organization}/projects/{project}/service-accounts")
+	saCreate := find(t, orgLog, "POST", accounts)
 	if chain(saCreate) != projectChain || *saCreate.Status != 201 || len(saCreate.Params) != 0 {
 		t.Fatalf("service account create: %+v", saCreate)
 	}
-	keyCreate := find(t, orgLog, "POST", "/orgs/{organization}/projects/{project}/service-accounts/{service_account}/keys")
-	if keyCreate.Params["service_account"] != sa.ID {
+	keyCreate := find(t, orgLog, "POST", keys)
+	if keyCreate.Params["service_account_id"] != sa.ID {
 		t.Fatalf("key create's params: %+v", keyCreate)
 	}
-	// Refused by label: rejected, as the service account and its key.
-	refused := find(t, orgLog, "DELETE", "/orgs/{organization}/projects/{project}")
+	// Refused by permission: rejected, as the service account and its key.
+	refused := find(t, orgLog, "DELETE", theProj)
 	if refused.Outcome != "rejected" || *refused.Status != 403 || chain(refused) != projectChain ||
-		refused.Actor.MemberID != sa.ID || refused.Actor.Principal != "service_account" || refused.Actor.AuthType != "apikey" ||
-		refused.Actor.KeyPrefix == nil || *refused.Actor.KeyPrefix != key.KeyPrefix {
-		t.Fatalf("label 403: %+v", refused)
+		!is(refused.Actor.MemberID, sa.ID) || refused.Actor.Principal != "service_account" ||
+		refused.Actor.AuthType != "apikey" || !is(refused.Actor.KeyID, saKey.ID) {
+		t.Fatalf("permission 403: %+v", refused)
 	}
 	// Reads aren't audited.
-	if has(orgLog, "GET", "/orgs/{organization}/projects/{project}") {
+	if has(orgLog, "GET", theProj) {
 		t.Fatalf("a GET was audited: %+v", orgLog)
 	}
 
-	// The project's log: the project and below, not the org's own events.
-	projectLog := s.events(owner, projectPath+"/audit-events")
-	for _, want := range []auditEvent{saCreate, keyCreate, refused} {
+	// The project's log: each event whose chain holds the project, and the
+	// project's own creation; not the org's.
+	projectLog := s.events(owner, projectPath+"/audit-events", "DELETE "+theProj)
+	for _, want := range []auditEvent{projectCreate, saCreate, keyCreate, refused} {
 		if find(t, projectLog, want.Method, want.Route).RequestID != want.RequestID {
 			t.Fatalf("%s %s isn't the org log's event", want.Method, want.Route)
 		}
 	}
-	if has(projectLog, "POST", "/orgs") || has(projectLog, "POST", "/orgs/{organization}/projects") {
-		t.Fatalf("org events in the project's log: %+v", projectLog)
+	if has(projectLog, "POST", "/orgs") {
+		t.Fatalf("the org's creation in the project's log: %+v", projectLog)
 	}
 	// By id, the same log.
 	if byID := s.events(owner, "/orgs/"+org.ID+"/projects/"+project.ID+"/audit-events"); len(byID) != len(projectLog) {
 		t.Fatalf("by id: %d events, by slug: %d", len(byID), len(projectLog))
 	}
 
-	// The owner's own log: the org create, with their directory member, and
-	// nothing from a kind route.
-	mine := s.events(owner, "/me/audit-events")
+	// The owner's own log: the org's creation, by user id, and nothing from a
+	// kind route.
+	mine := s.events(owner, "/user/audit-events", "POST /orgs")
 	own := find(t, mine, "POST", "/orgs")
-	if own.RequestID != created.RequestID || own.Actor.MemberID == orgMember || own.Actor.MemberID == "" ||
-		*own.NamedRootID != org.ID || *own.NamedMemberID != orgMember {
+	if own.RequestID != created.RequestID || !is(own.Actor.UserID, user.ID) || own.Actor.MemberID != nil ||
+		own.Root != nil || len(own.Nodes) != 0 {
 		t.Fatalf("org create in the person's log: %+v", own)
 	}
-	if has(mine, "POST", "/orgs/{organization}/projects") {
+	if has(mine, "POST", projects) {
 		t.Fatalf("a kind route's event in the person's log: %+v", mine)
 	}
 
@@ -187,24 +207,28 @@ func TestAuditLogsPerRoot(t *testing.T) {
 	var page struct {
 		AuditEvents []auditEvent `json:"audit_events"`
 	}
+	s.call(owner, "GET", orgPath+"/audit-events?status=403", nil, 200, &page)
+	if len(page.AuditEvents) != 1 || page.AuditEvents[0].RequestID != refused.RequestID {
+		t.Fatalf("?status=403: %+v", page)
+	}
 	s.call(owner, "GET", orgPath+"/audit-events?outcome=rejected&actor_member_id="+sa.ID, nil, 200, &page)
 	if len(page.AuditEvents) != 1 || page.AuditEvents[0].RequestID != refused.RequestID {
 		t.Fatalf("filtered: %+v", page)
 	}
-	s.call(owner, "GET", orgPath+"/audit-events?actor_member_id="+own.Actor.MemberID, nil, 200, &page)
-	if len(page.AuditEvents) != 0 {
-		t.Fatalf("the directory member in the org's log: %+v", page)
+	s.call(owner, "GET", orgPath+"/audit-events?actor_member_id="+ownerMember+"&method=POST", nil, 200, &page)
+	if len(page.AuditEvents) != 4 {
+		t.Fatalf("the owner's writes, the named create included: %+v", page)
 	}
 	s.call(owner, "GET", orgPath+"/audit-events?nope=1", nil, 422, nil)
 
-	// Labels: developer holds no project:audit:read, and someone outside the
-	// org holds nothing there.
+	// Permissions: developer holds no audit:read, and someone outside the org
+	// holds nothing there.
 	s.call(bot, "GET", projectPath+"/audit-events", nil, 403, nil)
 	s.call(outsider, "GET", orgPath+"/audit-events", nil, 403, nil)
-	if len(s.events(outsider, "/me/audit-events")) != 0 {
+	if len(s.events(outsider, "/user/audit-events")) != 0 {
 		t.Fatal("the outsider's own log isn't empty")
 	}
-	// A service account has no directory member, so its key isn't valid on
-	// a sign-in route (reference/api/internal.md#admit).
-	s.call(bot, "GET", "/me/audit-events", nil, 401, nil)
+	// A service account isn't admitted on a user route
+	// (docs/reference/api/internal.md#admit).
+	s.call(bot, "GET", "/user/audit-events", nil, 401, nil)
 }

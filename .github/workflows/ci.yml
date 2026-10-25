@@ -31,8 +31,7 @@ jobs:
             gateway:
               - '.github/workflows/ci.yml'
               - 'services/gateway/**'
-              - 'schema/**'
-              - 'services/control-plane/fixtures/catalog/**'
+              - 'services/control-plane/fixtures/**'
             control-plane:
               - '.github/workflows/ci.yml'
               - 'services/control-plane/**'
@@ -41,9 +40,11 @@ jobs:
             identity:
               - '.github/workflows/ci.yml'
               - 'services/identity/**'
+              - 'services/control-plane/fixtures/catalog/**'
             audit:
               - '.github/workflows/ci.yml'
               - 'services/audit/**'
+              - 'services/control-plane/fixtures/catalog/**'
 
   gateway:
     needs: changes

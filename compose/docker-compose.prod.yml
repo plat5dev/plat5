@@ -58,19 +58,13 @@ services:
       PORT: 5002
       INTERNAL_PORT: 5003
       ADMIN_TOKEN: ${ADMIN_TOKEN}
-      INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-plat5}?sslmode=disable
       IDENTITY_INTERNAL_URL: http://identity:3001
-      # seed-prod/plat5.yml is applied once on first boot. After that, change the
-      # config with plat5 apply (docs/guides/deploy.md); editing it does nothing.
-      SEED_DIR: /seed
       RUST_LOG: info
       OTEL_SERVICE_NAME: control-plane
       OTEL_SERVICE_NAMESPACE: edge
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       DEPLOYMENT_ENV: prod
-    volumes:
-      - ./seed-prod:/seed:ro
     networks:
       - plat5
     depends_on:
@@ -97,21 +91,20 @@ services:
       INTERNAL_PORT: 8000
       AUTH_ISSUER: ${AUTH_ISSUER}
       AUTH_JWKS_URI: ${AUTH_JWKS_URI}
-      AUTH_ALLOWED_AUDIENCES: ${AUTH_ALLOWED_AUDIENCES:-}
-      AUTH_SUBJECT_CLAIM: ${AUTH_SUBJECT_CLAIM:-properties.user_id}
-      ADMIT_URL: http://identity:3001/internal/admit
+      AUTH_ALLOWED_AUDIENCES: ${AUTH_ALLOWED_AUDIENCES:?set AUTH_ALLOWED_AUDIENCES}
+      AUTH_SUBJECT_CLAIM: ${AUTH_SUBJECT_CLAIM:-sub}
+      IDENTITY_INTERNAL_URL: http://identity:3001
+      ADMIT_CACHE_TTL: ${ADMIT_CACHE_TTL:-5m}
+      ADMIT_NEGATIVE_CACHE_TTL: ${ADMIT_NEGATIVE_CACHE_TTL:-10s}
       # Audit is on unless AUDIT_ENABLED=false (then audit need not run).
       AUDIT_ENABLED: ${AUDIT_ENABLED:-true}
       AUDIT_URL: http://audit:3003
-      INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
       RUST_LOG: info
-      RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-60}
-      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
       RATE_LIMIT_AUTH_FAILURE_REQUESTS: ${RATE_LIMIT_AUTH_FAILURE_REQUESTS:-60}
       RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS: ${RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS:-60}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       VALKEY_URL: redis://valkey:6379
-      # Kinds, routes and CORS origins (docs/reference/gateway.md#control-plane).
+      # Kinds, routes, rate limits and CORS (docs/reference/gateway.md#control-plane).
       CONTROL_PLANE_URL: http://control-plane:5003
       OTEL_SERVICE_NAME: gateway
       OTEL_SERVICE_NAMESPACE: edge
@@ -145,7 +138,6 @@ services:
     environment:
       PORT: 3000
       INTERNAL_PORT: 3001
-      INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
       APIKEY_BRAND: ${APIKEY_BRAND:-plat5}
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-plat5}?sslmode=disable
       CONTROL_PLANE_URL: http://control-plane:5003
@@ -177,7 +169,6 @@ services:
     environment:
       PORT: 3002
       INTERNAL_PORT: 3003
-      INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN}
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-plat5}?sslmode=disable
       OTEL_SERVICE_NAME: audit
       OTEL_SERVICE_NAMESPACE: audit
