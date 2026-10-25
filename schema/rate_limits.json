@@ -10,9 +10,6 @@
       "description": "Map of policy name → policy.",
       "type": "object",
       "required": ["default"],
-      "properties": {
-        "default": { "$ref": "#/$defs/policy", "properties": { "count_at": false } }
-      },
       "propertyNames": { "$ref": "#/$defs/policy_name" },
       "additionalProperties": { "$ref": "#/$defs/policy" }
     }
@@ -20,7 +17,7 @@
   "$defs": {
     "policy_name": {
       "title": "policy name",
-      "description": "`[a-z0-9:._-]+`, max 64. `default` is required, without `count_at`, and is every route's that names none.",
+      "description": "`[a-z0-9:._-]+`, max 64. `default` is required, and is every route's that names none.",
       "type": "string",
       "pattern": "^[a-z0-9:._-]{1,64}$"
     },

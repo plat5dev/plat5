@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::config::{Config, RateLimit, PUBLIC_SCOPE, USER_SCOPE};
+use crate::config::{Config, RateLimit, DEFAULT_POLICY, PUBLIC_SCOPE, USER_SCOPE};
 use crate::expand::{self, ExpandedRoute, Spec};
 use crate::schema::FieldError;
 
@@ -90,11 +90,16 @@ fn check_kinds(config: &Config, errs: &mut Vec<FieldError>) {
     }
 }
 
-/// A policy's `count_at` is a kind.
+/// A policy's `count_at` is a kind, and `default` has none.
 fn check_policies(config: &Config, errs: &mut Vec<FieldError>) {
     for (name, policy) in &config.rate_limits {
         if let Some(kind) = &policy.count_at {
-            if !config.kinds.contains_key(kind) {
+            if name == DEFAULT_POLICY {
+                errs.push(FieldError::new(
+                    format!("rate_limits.{name}"),
+                    "the default policy applies to every route, so it can't have count_at",
+                ));
+            } else if !config.kinds.contains_key(kind) {
                 errs.push(FieldError::new(
                     format!("rate_limits.{name}.count_at"),
                     format!("{kind:?} is not a kind"),
@@ -555,7 +560,6 @@ fn check_shapes(routes: &[ExpandedRoute], errs: &mut Vec<FieldError>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DEFAULT_POLICY;
     use serde_json::{json, Value};
 
     fn base() -> Value {
@@ -833,6 +837,13 @@ mod tests {
         c["rate_limits"]["per-team"] =
             json!({ "requests": 1, "window_seconds": 1, "count_at": "team" });
         errors_at(c, "rate_limits.per-team.count_at");
+        let mut c = base();
+        c["rate_limits"]["default"]["count_at"] = json!("organization");
+        let errs = errors_at(c, "rate_limits.default");
+        assert_eq!(
+            errs[0].message,
+            "the default policy applies to every route, so it can't have count_at"
+        );
         // Omitted is `default`, in every scope; `false` is none.
         let c = with_routes(
             "public",

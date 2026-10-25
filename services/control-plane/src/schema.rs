@@ -396,10 +396,6 @@ mod tests {
             ),
             ("rate_limits", Box::new(|c| c["rate_limits"] = json!({}))),
             (
-                "rate_limits.default.count_at",
-                Box::new(|c| c["rate_limits"]["default"]["count_at"] = json!("organization")),
-            ),
-            (
                 "rate_limits.default",
                 Box::new(|c| c["rate_limits"]["default"] = json!({ "requests": 1 })),
             ),

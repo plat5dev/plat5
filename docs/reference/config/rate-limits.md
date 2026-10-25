@@ -21,7 +21,7 @@ rate_limits:
 | Field | Rule |
 |-------|------|
 | `rate_limits` | Map of policy name → policy |
-| policy name | `[a-z0-9:._-]+`, max 64. `default` is required, without `count_at`, and is every route's that names none |
+| policy name | `[a-z0-9:._-]+`, max 64. `default` is required, and is every route's that names none |
 | `requests` | Required. Greater than 0 |
 | `window_seconds` | Required. Greater than 0 |
 | `count_at` | Optional. A kind: everyone at that kind's node shares one budget. Omitted: each caller has their own budget at the route's node |
