@@ -167,7 +167,7 @@ Product sentences for each: [`reference/error-copy.md`](../error-copy.md#identit
 | `X-Plat5-Member-Id` naming no active member of the node's tree, or `X-Plat5-User-Id` naming no active user | **400** |
 | An invite without `role`, or below a root with `grants` | **422** |
 | Removing a service account's member through the members route | **422** |
-| Restore with a deleted parent, past `deletion_grace`, of a kind not in the config, or under a parent of another kind than the kind's parent | **409** |
+| Restore with a deleted parent, or past `deletion_grace` | **409** |
 | Create under a deleted or purged node | **409** |
 
 ## Audit details
