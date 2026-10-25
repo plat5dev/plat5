@@ -1,22 +1,26 @@
 # Change the config
 
-Keep `plat5.yml` and the routes files in a repo, and change it only through `plat5 plan` and `plat5 apply` ([config](../concepts/config.md), [CLI](../reference/cli.md)).
+Keep `plat5.yml` and the service files in a repo, and change it only through `plat5 plan` and `plat5 apply` ([config](../concepts/config.md), [CLI](../reference/cli.md)).
 
 ## Add a kind at the bottom
 
-Add it to `kinds` in `plat5.yml` with its `parent`, regenerate the catalog (`plat5 routes generate`), add any service routes for it, and apply. Safe: one apply.
-
-## Add a kind in the middle
-
-A `folder` between org and project is two safe applies: add `folder` under `organization`, then widen `project`'s parent to `[organization, folder]`. Routes for projects in folders are new routes with `{folder}` in their chain.
+Add it to `kinds` in `plat5.yml` with its `parent`, `path` and `list_permission`, grant its permissions in `roles`, add any service routes for it, and apply. Identity and audit give it their routes ([resources](../reference/config/resources.md)); the plan lists them. `plat5 routes list` shows the result.
 
 ## Remove a kind
 
-Remove it from `kinds`, and remove every route scoped to it or with its param in the chain, in the same apply. The plan marks it destructive with the node count; `plat5 apply` asks you to confirm that count. Its nodes are soft-deleted. Applying the kind again within the grace period restores them ([lifecycle](../concepts/lifecycle.md#removing-a-kind)).
+Delete its nodes first, through the node routes: the plan is blocked while the kind has live nodes, and lists some of them. Then remove it from `kinds`, with every route scoped to it and every role permission only its routes required, in one apply ([blocked changes](../concepts/config.md#blocked-changes)).
+
+## Change a kind's parent
+
+Only while the kind has no nodes. Moving nodes between parents is deferred ([`TODO.md`](../../TODO.md)).
 
 ## Change roles
 
-Edit `roles` in `plat5.yml` and apply. Always safe: removing a role, or a kind from its `bindable_at`, makes bindings that use it grant nothing until it's back.
+Edit `roles` in `plat5.yml` and apply. Removing a role, or a kind from its `bindable_at`, makes bindings that use it grant nothing; they grant again if a role with that name comes back, so don't reuse a removed role's name for something else.
+
+## Change identity's or audit's routes
+
+Override their resources in `services/identity.yml` or `services/audit.yml`: a path, one verb's permissions, or `false` to remove a resource or a verb ([resources](../reference/config/resources.md)).
 
 ## Roll back
 
@@ -28,4 +32,4 @@ Run `plat5 plan --detailed-exitcode` on a schedule against the repo's config. Ex
 
 ## Review a plan before applying
 
-`plat5 plan -out plan.json` saves the config, the revision and the confirmed counts. Review it, then `plat5 apply plan.json`. If anyone applies in between, or a destructive count changes, it's refused and you plan again.
+`plat5 plan -out plan.json` saves the config and the revision it was planned against. Review it, then `plat5 apply plan.json`. If anyone applies in between, it's refused and you plan again.

@@ -1,63 +1,54 @@
 # Internal APIs
 
-Calls between Plat5's own services, on each service's `INTERNAL_PORT`, never on the gateway. When `INTERNAL_AUTH_TOKEN` is set, every call carries it as `X-Plat5-Internal-Token` (constant-time compare). Unset means network trust only, for dev.
+Calls between Plat5's own services, on each service's `INTERNAL_PORT`, never on the gateway. They take no token: internal ports are reachable only inside the deployment's network, never exposed outside it. Publishing one is giving away the deployment.
 
 ## Identity
 
 ### Admit
 
-One call that turns a credential and the route's node chain into the member and labels for this request. The gateway calls it on a cache miss ([`reference/gateway.md`](../gateway.md#cache)).
+One call that turns a credential and the route's node chain into the member and permissions for this request. The gateway calls it on a cache miss ([`reference/gateway.md`](../gateway.md#cache)), at `{IDENTITY_INTERNAL_URL}/internal/admit`.
 
 ```
 POST /internal/admit
 {
   "credential": "e10s-k-2-…",          // or "idp": { "issuer", "subject", "name"? }
-  "scope": "project",
   "chain": [ { "kind": "organization", "ref": "gruow" }, { "kind": "project", "ref": "gatheroom" } ],
-  "resolve_deleted": false
+  "allow_deleted": false
 }
 → 200
 {
   "valid": true,
-  "found": true,
-  "principal": "person",
-  "nodes": [ { "kind": "organization", "id": "n_…" }, { "kind": "project", "id": "n_…" } ],
-  "member_id": "m_…",
-  "labels": ["project:read", "catalog:write", "subscribers:write"],
-  "good_until": "2026-11-01T00:00:00Z"
+  "principal": "service_account",
+  "key_id": "01jbz…",
+  "nodes": [ { "kind": "organization", "id": "01jbw…" }, { "kind": "project", "id": "01jbx…" } ],
+  "member_id": "01jby…",
+  "user_id": null,
+  "permissions": ["catalog:write", "project:read"]
 }
 ```
 
-1. **Principal.** Hash the key, or look up the IdP link. A new IdP subject creates the person and their directory member; `name` (from the `name_claim`) sets or updates the person's name. A suspended person, a revoked key, or a service account whose born node is deleted is `valid: false`.
-2. **Nodes.** Resolve each `ref` (slug or id) under the previous node, by kind. A missing, purged or deleted node ends here with `found: false`. With `resolve_deleted`, the last node may be deleted (not purged), and its own bindings still count. Nothing else ever counts a deleted node's bindings.
-3. **Member.** The principal's active member in the chain's tree. None means `member_id: null` and `labels: []`.
-4. **Labels.** The union of the roles of that member's live bindings on any node in the chain ([`concepts/access.md`](../../concepts/access.md#resolution)).
-5. **Good until.** The earliest `expires_at` among the contributing bindings, or `null`.
+1. **Principal.** Hash the key, or look up the IdP link. A new IdP subject creates the person; `name` (from `users.name_claim`) sets or updates the person's name. A suspended person, a revoked key, a key identity can't read, or a service account whose born node is deleted is `valid: false`. So is a service account on a user route.
+2. **Nodes.** Resolve each `ref` (slug or id) under the previous node, by kind. A missing, purged or deleted node ends here. With `allow_deleted`, the last node may be deleted (not purged), and its own bindings still count. Nothing else ever counts a deleted node's bindings.
+3. **Member.** The principal's active member in the chain's tree.
+4. **Permissions.** The union of the roles of that member's bindings on any node in the chain, includes resolved ([`concepts/access.md`](../../concepts/access.md#resolution)).
 
-On a sign-in-kind route, `chain` is empty, the member is the person's directory member, and `labels` is `[]`. A service account has none, so its keys are `valid: false` there.
+An empty `chain` is a user route: `user_id` is the person's, and `nodes`, `member_id` and `permissions` are empty. On a tree route `user_id` is `null`.
 
-Every field is in every answer, so the gateway never sees a missing one. With `valid: false`, `found` is `false`, `principal`, `member_id` and `good_until` are `null`, and `nodes` and `labels` are empty. With `found: false`, `nodes` is empty too: a partial chain says nothing the gateway uses. On a sign-in route `nodes` is empty. `labels` is sorted, with `*` as the role wrote it.
+Every field is in every answer, so the gateway never sees a missing one. With `valid: false`, `principal`, `key_id`, `member_id` and `user_id` are `null`, and `nodes` and `permissions` are empty. A missing node and a caller outside the tree both answer `member_id: null` with empty `nodes` and `permissions`. `key_id` is the key's id for a key, `null` for a JWT. `permissions` is sorted, with `*` as the role wrote it.
 
-Identity resolves `chain` by kind name only and doesn't check it against its kinds: a gateway a revision ahead or behind gets `found: false`, not an error. A body identity can't read is **422**: neither or both of `credential` and `idp`, an `idp` without `issuer` or `subject`, `scope` empty or `public`, a chain on a sign-in route, or a chain that is empty or doesn't end at `scope` on any other.
+Identity resolves `chain` by kind name only and doesn't check it against its kinds: a gateway a revision ahead or behind gets `member_id: null`, not an error. A body identity can't read is **422**: neither or both of `credential` and `idp`, or an `idp` without `issuer` or `subject`.
 
-| Result | Gateway |
-|--------|---------|
-| `valid: false` | **401** |
-| `found: false`, or no route label in `labels` (and the route isn't `[]`), or `member_id: null` | **403** "permission denied, or it may not exist" |
-| Otherwise | Forwarded with the subject |
-| Transport error, non-2xx, missing fields | **503** |
+How the gateway acts on each answer: [the gateway](../gateway.md#admit).
 
 ### Plan counts
 
 ```
 POST /internal/plan
-{ "kinds_removed": ["folder"], "parents_narrowed": [{ "kind": "project", "removed": ["folder"] }] }
-→ { "kinds_removed": { "folder": { "nodes": 14, "bindings": 22, "service_accounts": 3, "keys": 9 } }, "parents_narrowed": { "project": { "nodes": 3, "sample": ["n_…"] } } }
+{ "kinds": ["folder"] }
+→ { "kinds": { "folder": { "live": 3, "nodes": 5, "sample": ["01jbx…"] } } }
 ```
 
-The control plane calls it on a dry run, and again on the apply to check the confirmed counts, only when the plan removes a kind or narrows a parent. A plan that does neither never calls identity ([`concepts/config.md`](../../concepts/config.md#preconditions)). `nodes` counts every node the removal would delete, live and deleted: the kind's nodes and all their descendants, of any kind (removing `folder` counts the projects under folders too). `bindings`, `service_accounts` and `keys` are those on, born at, or of service accounts born at any of them. A narrowed parent counts the kind's nodes, live and deleted, under a parent kind the config drops, except those a kind removal in the same plan deletes: removing `folder` and dropping it from `project`'s parents is one apply.
-
-The counts are what would be lost. A deleted node counts because it can still be restored; a binding past `expires_at` and a revoked key don't, because they never work again. Purged nodes never count. `sample` is up to five node ids, in id order. Every kind in the request has an entry, zeros included. All counts come from one snapshot. A body identity can't read (a kind name empty) is **422**.
+The control plane calls it on a dry run and again on the apply, only when the plan removes a kind or changes a kind's parent ([`concepts/config.md`](../../concepts/config.md#blocked-changes)). A plan that does neither never calls identity. `live` counts the kind's live nodes; `nodes` counts its live and deleted ones, purged never. `sample` is up to five of the counted nodes' ids, live ones first, in id order. Every kind in the request has an entry, zeros included. All counts come from one snapshot. A body identity can't read (a kind name empty) is **422**.
 
 ### Lifecycle events
 
@@ -69,12 +60,28 @@ On `INTERNAL_PORT`. Each is one read, at one head, in one Postgres snapshot.
 
 | Path | Reader | `200` body |
 |------|--------|------------|
-| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "cors" }`. **404** before the first apply |
-| `GET /internal/identity` | identity | `{ "revision", "deletion_grace", "reserved_slugs", "kinds", "roles", "default_role", "creator_role", "services" }`. **404** before the first apply |
+| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "rate_limits", "cors" }`. **404** before the first apply |
+| `GET /internal/identity` | identity | `{ "revision", "deletion_grace", "reserved_slugs", "users", "kinds", "roles", "creator_role" }`. **404** before the first apply |
 
-`services` is in the stored form: full paths, list-form `methods` (`route_prefix` and nested `methods` maps already expanded). Keys are the config's own ([config](../../concepts/config.md#the-config)), with defaults filled in: `deletion_grace` `30d`, `reserved_slugs` `[]`, and `cors` `{ "allowed_origins": [] }` when the config has none. Identity reads `services` to find the labels of its own read routes ([`reference/lists.md`](../lists.md#filtered-lists)).
+The gateway's `services` are expanded: each service's `url`, `timeouts` and `max_body_bytes` with `defaults` filled in, and its `routes` as the gateway matches them, one per method:
+
+```json
+{ "path": "/orgs/{organization}/projects/{project}/plans/{plan_id}/versions", "method": "POST",
+  "scope": "project", "upstream": "/projects/{project.id}/plans/{plan_id}/versions",
+  "required_permissions": ["catalog:write"], "rate_limit": ["default"], "audit": true, "allow_deleted": false }
+```
+
+Identity's and audit's resources are expanded the same way. `rate_limit` is resolved (`[]` for none), `audit` is the method default filled in, and `required_permissions` is a list or `"any_member"` (`null` outside a kind scope). Roles are served as written, with `includes`; identity resolves them. Other keys are the config's own ([config](../../concepts/config.md#the-config)), with defaults filled in: `deletion_grace` `30d`, `reserved_slugs` `[]`, `users` `{ "name_claim": "name" }`, `rate_limits` `{}`, and `cors` `{ "allowed_origins": [], "allowed_headers": [] }` when the config has none.
 
 Without `after`, the answer is immediate. With `?after={revision}`, the control plane waits until the head is past `after`, for up to 25 seconds. Nothing newer in that time is **204**, and the reader asks again. A cursor ahead of the head (the store was reset) is answered at once.
+
+The gateway reports where it stands on each poll:
+
+```
+GET /internal/gateway?after=42&replica=gw-1&loaded=42&refused=43&reason=…
+```
+
+`replica` is the replica's id (`OTEL_SERVICE_INSTANCE_ID`, else the hostname), `loaded` the revision it serves (`0` before its first), and `refused` and `reason`, sent while the newest revision it was served is one it refused, why. The control plane keeps the latest report per replica for [`GET /status`](control-plane.md#reader-status).
 
 Feed reads stay off traces and request metrics, like health checks. A 5xx is still logged. Each control-plane process polls the head in Postgres every second, so an apply through any replica reaches readers of every replica within about a second.
 
@@ -87,8 +94,8 @@ How readers boot and keep state: [config](../../concepts/config.md#how-a-change-
 ```
 PUT /internal/events/{request_id}
 {
-  "occurred_at": "…", "root_id": "…", "nodes": [ … ],
-  "actor": { "member_id": "…", "principal": "…", "auth_type": "…", "key_prefix": "…" },
+  "occurred_at": "…", "nodes": [ … ],
+  "actor": { "member_id": "…", "user_id": null, "principal": "…", "auth_type": "…", "key_id": "…" },
   "service": "…", "method": "…", "route": "…", "params": { … },
   "ip": "…", "user_agent": "…"
 }
@@ -98,25 +105,27 @@ PUT /internal/events/{request_id}
 |--------|----------|
 | Written | **201** |
 | An event for this `request_id` exists | **200**, unchanged |
-| Malformed, or `occurred_at` more than 24h from audit's clock | **422** |
+| A field it can't store: a missing `request_id`, `occurred_at` or `service`, or a value of the wrong type | **422** |
 | Postgres unavailable | **503**. The gateway retries |
 
-`root_id` is `nodes[0].id` on a kind route. It's `null`, and `nodes` is `[]`, exactly on a sign-in route; `actor.member_id` is then the person's directory member, and the principal a `person`. `key_prefix` is set for `apikey` and `null` for `jwt`, and only a `person` has a `jwt`. Anything else is malformed.
-
-Unknown fields are ignored, so a newer gateway can send more.
+Audit stores what it's sent and doesn't repeat the gateway's or identity's rules. Unknown fields are ignored, so a newer gateway can send more.
 
 ### Outcome
 
 ```
 PATCH /internal/events/{request_id}
-{ "outcome": "responded", "status": 200, "details": { … }, "created_id": "…", "root_id": "…", "member_id": "…" }
+{ "outcome": "responded", "status": 200, "details": { … }, "created_id": "…", "named_nodes": ["…"], "named_member_id": "…" }
 ```
 
-`root_id` and `member_id` only for a sign-in-route event, from the service's pair: both or neither, and only with `responded`. Sent for a kind route's event, they're ignored; its log is its chain's root.
+`named_nodes` and `named_member_id` only for a user-route event, from the service's [named nodes](../../concepts/audit.md#named-nodes), and only with `responded`. Sent for a tree route's event, they're ignored.
 
 | Result | Response |
 |--------|----------|
 | Applied, or the event is already final | **204** |
 | No event for this `request_id` | **404**. The gateway stops retrying |
-| Malformed, or `outcome: pending` | **422** |
+| A field it can't store, or `outcome: pending` | **422** |
 | Postgres unavailable | **503**. The gateway retries |
+
+### Rejected
+
+The gateway's own refusals after admit (a permission **403**, a **400** on a param, a **500**) are one write, in the background: an intent that also carries `"outcome": "rejected"` and its `status`, written final. It answers as an intent does.
