@@ -30,7 +30,9 @@
             "required_permissions": [
               "billing:read"
             ],
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": false,
             "allow_deleted": false
           }
@@ -66,7 +68,9 @@
             "scope": "public",
             "upstream": "/health",
             "required_permissions": null,
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": false,
             "allow_deleted": false
           }
@@ -81,7 +85,9 @@
             "required_permissions": [
               "catalog:write"
             ],
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": false,
             "allow_deleted": false
           }
@@ -96,7 +102,9 @@
             "required_permissions": [
               "catalog:write"
             ],
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": true,
             "allow_deleted": false
           }
@@ -140,7 +148,9 @@
             "scope": "user",
             "upstream": "/users/{user.id}/notifications",
             "required_permissions": null,
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": false,
             "allow_deleted": false
           }
@@ -153,7 +163,9 @@
             "scope": "user",
             "upstream": "/users/{user.id}/notifications",
             "required_permissions": null,
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": true,
             "allow_deleted": false
           }

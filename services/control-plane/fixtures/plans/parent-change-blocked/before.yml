@@ -18,6 +18,8 @@ roles:
     permissions: [organization:read]
     bindable_at: [organization]
 creator_role: admin
+rate_limits:
+  default: { requests: 60, window_seconds: 60 }
 services:
   e10s:
     url: http://e10s:3000

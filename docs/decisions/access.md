@@ -81,7 +81,8 @@ Why access is the union of bindings on a node and its ancestors, decided once at
 
 | Decision | Why |
 |----------|-----|
-| Policies live in `plat5.yml` and are shared by name: every route naming a policy shares its bucket. A `default` policy is every unnamed route's | One model instead of five, and changing a limit is an apply, not a restart |
+| Policies live in `plat5.yml` and are shared by name: every route naming a policy shares its bucket | One model instead of five, and changing a limit is an apply, not a restart |
+| Every config has a `default` policy, without `count_at`, and it's every route's that names none. An unlimited route says `rate_limit: false` | No route is unlimited by omission. `default` reaches user and public routes, which have no node to count at |
 | A policy with no `count_at` counts each caller at the route's node; `count_at` names the kind whose node everyone shares | Google Cloud quotas are per user per project, so one busy script can't throttle a whole org. A tenant-wide cap is the explicit choice. Kubernetes ResourceQuota counts per namespace ([quotas](https://kubernetes.io/docs/concepts/policy/resource-quotas/)) |
 | All of a route's policies are checked at once and counted only if all pass, in one Valkey round trip | A request one bucket refuses spends nothing from the others |
 | The headers show the policy with the fewest requests remaining; a **429** carries the longest `Retry-After` among those exceeded | The longest wait is the one after which every policy passes again |

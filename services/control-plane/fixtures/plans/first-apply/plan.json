@@ -1,7 +1,7 @@
 {
   "revision": 0,
   "summary": {
-    "add": 6,
+    "add": 7,
     "change": 0,
     "remove": 0,
     "blocked": 0
@@ -61,6 +61,15 @@
     },
     {
       "op": "add",
+      "what": "rate_limit",
+      "name": "default",
+      "after": {
+        "requests": 60,
+        "window_seconds": 60
+      }
+    },
+    {
+      "op": "add",
       "what": "service",
       "name": "e10s",
       "after": {
@@ -80,7 +89,9 @@
             "scope": "public",
             "upstream": "/health",
             "required_permissions": null,
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": false,
             "allow_deleted": false
           }
@@ -95,7 +106,9 @@
             "required_permissions": [
               "organization:read"
             ],
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": false,
             "allow_deleted": false
           }
@@ -110,7 +123,9 @@
             "required_permissions": [
               "project:read"
             ],
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": false,
             "allow_deleted": false
           }
@@ -125,7 +140,9 @@
             "required_permissions": [
               "catalog:write"
             ],
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": true,
             "allow_deleted": false
           }

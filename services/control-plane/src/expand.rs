@@ -65,7 +65,6 @@ fn at<T>(value: T, at: impl Into<String>) -> At<T> {
 #[derive(Clone, Debug)]
 pub struct Spec {
     pub service: String,
-    pub at: String,
     pub scope: String,
     /// As written: relative to the node in a kind scope.
     pub path: String,
@@ -143,7 +142,6 @@ fn route_specs(name: &str, service: &Service) -> Vec<Spec> {
             verbs.sort_by_key(|v| verb_order(&v.method));
             out.push(Spec {
                 service: name.to_string(),
-                at: route_at.clone(),
                 scope: scope_name.clone(),
                 path: route.path.clone(),
                 path_at: format!("{route_at}.path"),
@@ -364,7 +362,6 @@ fn resource_spec(
     }
     Some(Spec {
         service: service.to_string(),
-        at: spec_at.clone(),
         scope: d.scope.clone(),
         keeps: Some(params_of(&d.path)),
         path: path.value,
@@ -449,10 +446,7 @@ pub fn expand_spec(config: &Config, spec: &Spec) -> Vec<ExpandedRoute> {
             rate_limit: match v.rate_limit.as_ref().map(|r| &r.value) {
                 Some(RateLimit::Policies(p)) => p.clone(),
                 Some(RateLimit::Off(_)) => Vec::new(),
-                None if config.rate_limits.contains_key(DEFAULT_POLICY) => {
-                    vec![DEFAULT_POLICY.to_string()]
-                }
-                None => Vec::new(),
+                None => vec![DEFAULT_POLICY.to_string()],
             },
             audit: spec.scope != PUBLIC_SCOPE
                 && v.audit

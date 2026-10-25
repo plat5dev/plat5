@@ -35,7 +35,9 @@
             "scope": "organization",
             "upstream": "/nodes/{organization.id}/children/project",
             "required_permissions": "any_member",
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": false,
             "allow_deleted": false
           }
@@ -50,7 +52,9 @@
             "required_permissions": [
               "project:create"
             ],
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": true,
             "allow_deleted": false
           }
@@ -65,7 +69,9 @@
             "required_permissions": [
               "organization:bindings:write"
             ],
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": false,
             "allow_deleted": false
           }
@@ -80,7 +86,9 @@
             "required_permissions": [
               "organization:bindings:write"
             ],
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": true,
             "allow_deleted": false
           }
@@ -93,7 +101,9 @@
             "scope": "organization",
             "upstream": "/nodes/{organization.id}/children/project",
             "required_permissions": "any_member",
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": false,
             "allow_deleted": false
           }
@@ -108,7 +118,9 @@
             "required_permissions": [
               "project:create"
             ],
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": true,
             "allow_deleted": false
           }
@@ -138,7 +150,9 @@
             "required_permissions": [
               "guests:write"
             ],
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": false,
             "allow_deleted": false
           }
@@ -153,7 +167,9 @@
             "required_permissions": [
               "guests:write"
             ],
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": true,
             "allow_deleted": false
           }

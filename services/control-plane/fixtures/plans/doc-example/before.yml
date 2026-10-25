@@ -22,6 +22,8 @@ roles:
     permissions: [project:read]
     bindable_at: [organization, project]
 creator_role: admin
+rate_limits:
+  default: { requests: 60, window_seconds: 60 }
 services:
   identity:
     url: http://identity:3000

@@ -79,7 +79,7 @@
   },
   "rate_limits": {
     "default": {
-      "requests": 60,
+      "requests": 120,
       "window_seconds": 60
     },
     "evals-org": {

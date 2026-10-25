@@ -26,7 +26,9 @@
           "scope": "public",
           "upstream": "/health",
           "required_permissions": null,
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -38,7 +40,9 @@
           "required_permissions": [
             "organization:read"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -50,7 +54,9 @@
           "required_permissions": [
             "project:read"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -62,14 +68,21 @@
           "required_permissions": [
             "catalog:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         }
       ]
     }
   },
-  "rate_limits": {},
+  "rate_limits": {
+    "default": {
+      "requests": 60,
+      "window_seconds": 60
+    }
+  },
   "cors": {
     "allowed_origins": [],
     "allowed_headers": []

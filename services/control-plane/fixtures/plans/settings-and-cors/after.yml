@@ -6,7 +6,7 @@ defaults:
   timeouts: { connect: 5s, read: 20s }
   max_body_bytes: 2097152
 rate_limits:
-  default: { requests: 60, window_seconds: 60 }
+  default: { requests: 120, window_seconds: 60 }
   evals-org: { requests: 300, window_seconds: 1, count_at: organization }
 cors:
   allowed_origins: ["https://app.example.com"]

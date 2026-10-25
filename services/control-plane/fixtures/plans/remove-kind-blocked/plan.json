@@ -63,7 +63,9 @@
             "required_permissions": [
               "folder:read"
             ],
-            "rate_limit": [],
+            "rate_limit": [
+              "default"
+            ],
             "audit": false,
             "allow_deleted": false
           }

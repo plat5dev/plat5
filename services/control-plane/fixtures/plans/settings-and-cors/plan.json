@@ -1,8 +1,8 @@
 {
   "revision": 7,
   "summary": {
-    "add": 2,
-    "change": 6,
+    "add": 1,
+    "change": 7,
     "remove": 0,
     "blocked": 0
   },
@@ -55,12 +55,14 @@
       }
     },
     {
-      "op": "add",
+      "op": "change",
       "what": "rate_limit",
       "name": "default",
+      "before": {
+        "requests": 60
+      },
       "after": {
-        "requests": 60,
-        "window_seconds": 60
+        "requests": 120
       }
     },
     {
@@ -112,52 +114,15 @@
         {
           "op": "change",
           "method": "GET",
-          "path": "/health",
+          "path": "/orgs/{organization}/plans",
           "before": {
-            "rate_limit": []
-          },
-          "after": {
             "rate_limit": [
               "default"
             ]
-          }
-        },
-        {
-          "op": "change",
-          "method": "GET",
-          "path": "/orgs/{organization}/plans",
-          "before": {
-            "rate_limit": []
           },
           "after": {
             "rate_limit": [
               "evals-org"
-            ]
-          }
-        },
-        {
-          "op": "change",
-          "method": "GET",
-          "path": "/orgs/{organization}/projects/{project}/plans",
-          "before": {
-            "rate_limit": []
-          },
-          "after": {
-            "rate_limit": [
-              "default"
-            ]
-          }
-        },
-        {
-          "op": "change",
-          "method": "POST",
-          "path": "/orgs/{organization}/projects/{project}/plans",
-          "before": {
-            "rate_limit": []
-          },
-          "after": {
-            "rate_limit": [
-              "default"
             ]
           }
         }

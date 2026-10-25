@@ -26,7 +26,9 @@
           "scope": "public",
           "upstream": "/health",
           "required_permissions": null,
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -38,7 +40,9 @@
           "required_permissions": [
             "organization:read"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -50,7 +54,9 @@
           "required_permissions": [
             "project:read"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -62,7 +68,9 @@
           "required_permissions": [
             "catalog:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         }
@@ -82,7 +90,9 @@
           "scope": "user",
           "upstream": "/roots/organization",
           "required_permissions": null,
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -94,7 +104,9 @@
           "required_permissions": [
             "organization:read"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -106,7 +118,9 @@
           "required_permissions": [
             "organization:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -118,7 +132,9 @@
           "required_permissions": [
             "organization:admin"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -128,7 +144,9 @@
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/children/project",
           "required_permissions": "any_member",
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -140,7 +158,9 @@
           "required_permissions": [
             "project:create"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -152,7 +172,9 @@
           "required_permissions": [
             "organization:bindings:read"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -164,7 +186,9 @@
           "required_permissions": [
             "organization:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -176,7 +200,9 @@
           "required_permissions": [
             "organization:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -188,7 +214,9 @@
           "required_permissions": [
             "organization:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -200,7 +228,9 @@
           "required_permissions": [
             "organization:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -212,7 +242,9 @@
           "required_permissions": [
             "organization:bindings:read"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -224,7 +256,9 @@
           "required_permissions": [
             "organization:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -234,7 +268,9 @@
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/members/{member_id}",
           "required_permissions": "any_member",
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -246,7 +282,9 @@
           "required_permissions": [
             "organization:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -256,7 +294,9 @@
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/memberships/{member.id}",
           "required_permissions": "any_member",
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -266,7 +306,9 @@
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/members/{member.id}",
           "required_permissions": "any_member",
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -278,7 +320,9 @@
           "required_permissions": [
             "project:read"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -290,7 +334,9 @@
           "required_permissions": [
             "project:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -302,7 +348,9 @@
           "required_permissions": [
             "project:admin"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -314,7 +362,9 @@
           "required_permissions": [
             "project:bindings:read"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -326,7 +376,9 @@
           "required_permissions": [
             "project:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -338,7 +390,9 @@
           "required_permissions": [
             "project:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -350,7 +404,9 @@
           "required_permissions": [
             "project:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -362,7 +418,9 @@
           "required_permissions": [
             "guests:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -372,7 +430,9 @@
           "scope": "project",
           "upstream": "/nodes/{project.id}/memberships/{member.id}",
           "required_permissions": "any_member",
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -384,7 +444,9 @@
           "required_permissions": [
             "project:delete"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": true
         },
@@ -394,7 +456,9 @@
           "scope": "project",
           "upstream": "/nodes/{project.id}/roles",
           "required_permissions": "any_member",
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -406,7 +470,9 @@
           "required_permissions": [
             "project:bindings:read"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -418,7 +484,9 @@
           "required_permissions": [
             "project:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -430,7 +498,9 @@
           "required_permissions": [
             "project:bindings:read"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -442,7 +512,9 @@
           "required_permissions": [
             "project:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -454,7 +526,9 @@
           "required_permissions": [
             "project:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -466,7 +540,9 @@
           "required_permissions": [
             "project:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -478,7 +554,9 @@
           "required_permissions": [
             "project:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -490,7 +568,9 @@
           "required_permissions": [
             "project:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -502,7 +582,9 @@
           "required_permissions": [
             "organization:delete"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": true
         },
@@ -512,7 +594,9 @@
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/roles",
           "required_permissions": "any_member",
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -524,7 +608,9 @@
           "required_permissions": [
             "organization:bindings:read"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -536,7 +622,9 @@
           "required_permissions": [
             "organization:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -548,7 +636,9 @@
           "required_permissions": [
             "organization:bindings:read"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -560,7 +650,9 @@
           "required_permissions": [
             "organization:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -572,7 +664,9 @@
           "required_permissions": [
             "organization:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -584,7 +678,9 @@
           "required_permissions": [
             "organization:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -596,7 +692,9 @@
           "required_permissions": [
             "organization:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -608,7 +706,9 @@
           "required_permissions": [
             "organization:bindings:write"
           ],
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -618,7 +718,9 @@
           "scope": "user",
           "upstream": "/users/{user.id}",
           "required_permissions": null,
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -628,7 +730,9 @@
           "scope": "user",
           "upstream": "/users/{user.id}",
           "required_permissions": null,
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -638,7 +742,9 @@
           "scope": "user",
           "upstream": "/users/{user.id}/invites/redeem",
           "required_permissions": null,
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -648,7 +754,9 @@
           "scope": "user",
           "upstream": "/users/{user.id}/keys",
           "required_permissions": null,
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         },
@@ -658,7 +766,9 @@
           "scope": "user",
           "upstream": "/users/{user.id}/keys",
           "required_permissions": null,
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -668,7 +778,9 @@
           "scope": "user",
           "upstream": "/users/{user.id}/keys/{key_id}",
           "required_permissions": null,
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": true,
           "allow_deleted": false
         },
@@ -678,14 +790,21 @@
           "scope": "user",
           "upstream": "/users/{user.id}/nodes",
           "required_permissions": null,
-          "rate_limit": [],
+          "rate_limit": [
+            "default"
+          ],
           "audit": false,
           "allow_deleted": false
         }
       ]
     }
   },
-  "rate_limits": {},
+  "rate_limits": {
+    "default": {
+      "requests": 60,
+      "window_seconds": 60
+    }
+  },
   "cors": {
     "allowed_origins": [],
     "allowed_headers": []

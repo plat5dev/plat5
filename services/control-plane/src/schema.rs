@@ -191,7 +191,8 @@ mod tests {
                 }
             },
             "roles": { "admin": { "permissions": ["*"], "bindable_at": ["organization", "project"] } },
-            "creator_role": "admin"
+            "creator_role": "admin",
+            "rate_limits": { "default": { "requests": 60, "window_seconds": 60 } }
         })
     }
 
@@ -388,21 +389,34 @@ mod tests {
             ),
             ("", Box::new(|c| c["default_role"] = json!("admin"))),
             (
+                "",
+                Box::new(|c| {
+                    c.as_object_mut().unwrap().remove("rate_limits");
+                }),
+            ),
+            ("rate_limits", Box::new(|c| c["rate_limits"] = json!({}))),
+            (
+                "rate_limits.default.count_at",
+                Box::new(|c| c["rate_limits"]["default"]["count_at"] = json!("organization")),
+            ),
+            (
+                "rate_limits.default",
+                Box::new(|c| c["rate_limits"]["default"] = json!({ "requests": 1 })),
+            ),
+            (
                 "rate_limits.p",
-                Box::new(|c| c["rate_limits"] = json!({ "p": { "requests": 1 } })),
+                Box::new(|c| c["rate_limits"]["p"] = json!({ "requests": 1 })),
             ),
             (
                 "rate_limits.p",
                 Box::new(|c| {
-                    c["rate_limits"] =
-                        json!({ "p": { "requests": 1, "window_seconds": 1, "shared": true } })
+                    c["rate_limits"]["p"] =
+                        json!({ "requests": 1, "window_seconds": 1, "shared": true })
                 }),
             ),
             (
                 "rate_limits.p.requests",
-                Box::new(|c| {
-                    c["rate_limits"] = json!({ "p": { "requests": 0, "window_seconds": 1 } })
-                }),
+                Box::new(|c| c["rate_limits"]["p"] = json!({ "requests": 0, "window_seconds": 1 })),
             ),
             (
                 "cors.allowed_origins",

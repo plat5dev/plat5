@@ -21,7 +21,7 @@ rate_limits:
 | Field | Rule |
 |-------|------|
 | `rate_limits` | Map of policy name → policy |
-| policy name | `[a-z0-9:._-]+`, max 64. `default` is the policy of every route that doesn't name its own |
+| policy name | `[a-z0-9:._-]+`, max 64. `default` is required, without `count_at`, and is every route's that names none |
 | `requests` | Required. Greater than 0 |
 | `window_seconds` | Required. Greater than 0 |
 | `count_at` | Optional. A kind: everyone at that kind's node shares one budget. Omitted: each caller has their own budget at the route's node |
@@ -29,7 +29,9 @@ rate_limits:
 
 ## On a route
 
-A route's `rate_limit` is a list of policy names, or `false` for none. Omitted, the route uses `default` when the config has one, and no limit when it doesn't. Changing `default` is an apply like any other.
+Every config has a `default` policy, without `count_at`: it applies to routes in every scope, and a `user` or `public` route has no node to count at (**422** otherwise).
+
+A route's `rate_limit` is a list of policy names. Omitted, the route uses `default`. A route that should be unlimited says `rate_limit: false`. Changing `default` is an apply like any other.
 
 Every route that names a policy shares its bucket: two routes, in one service or two, share a limit by naming the same policy. Separate budgets with the same numbers are two policies.
 

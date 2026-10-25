@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::config::{Config, RateLimit, DEFAULT_POLICY, PUBLIC_SCOPE, USER_SCOPE};
+use crate::config::{Config, RateLimit, PUBLIC_SCOPE, USER_SCOPE};
 use crate::expand::{self, ExpandedRoute, Spec};
 use crate::schema::FieldError;
 
@@ -342,10 +342,7 @@ fn check_spec(config: &Config, spec: &Spec, errs: &mut Vec<FieldError>) -> bool 
                 RateLimit::Policies(p) => (p.clone(), r.at.clone()),
                 RateLimit::Off(_) => (Vec::new(), r.at.clone()),
             },
-            None if config.rate_limits.contains_key(DEFAULT_POLICY) => (
-                vec![DEFAULT_POLICY.to_string()],
-                format!("{}.rate_limit", spec.at),
-            ),
+            // Omitted is `default`, which has no count_at to check.
             None => (Vec::new(), String::new()),
         };
         for name in names {
@@ -558,6 +555,7 @@ fn check_shapes(routes: &[ExpandedRoute], errs: &mut Vec<FieldError>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::DEFAULT_POLICY;
     use serde_json::{json, Value};
 
     fn base() -> Value {
@@ -572,6 +570,7 @@ mod tests {
             },
             "creator_role": "admin",
             "rate_limits": {
+                "default": { "requests": 60, "window_seconds": 60 },
                 "per-project": { "requests": 100, "window_seconds": 1, "count_at": "project" },
                 "per-org": { "requests": 300, "window_seconds": 1, "count_at": "organization" }
             }
@@ -831,14 +830,22 @@ mod tests {
         );
         errors_at(r("public", json!(["per-org"])), &at("public"));
         let mut c = base();
-        c["rate_limits"]["default"] =
+        c["rate_limits"]["per-team"] =
             json!({ "requests": 1, "window_seconds": 1, "count_at": "team" });
-        errors_at(c, "rate_limits.default.count_at");
-        // An omitted rate_limit is the default policy's.
-        let mut c = route("public", json!({ "path": "/a", "methods": ["GET"] }));
-        c["rate_limits"]["default"] =
-            json!({ "requests": 1, "window_seconds": 1, "count_at": "organization" });
-        errors_at(c, &at("public"));
+        errors_at(c, "rate_limits.per-team.count_at");
+        // Omitted is `default`, in every scope; `false` is none.
+        let c = with_routes(
+            "public",
+            json!([
+                { "path": "/a", "methods": ["GET"] },
+                { "path": "/b", "methods": ["GET"], "rate_limit": false }
+            ]),
+        );
+        run(c.clone()).unwrap();
+        let config: Config = serde_json::from_value(c).unwrap();
+        let routes = &expand::expand(&config)["e10s"].routes;
+        assert_eq!(routes[0].rate_limit, vec![DEFAULT_POLICY]);
+        assert!(routes[1].rate_limit.is_empty());
     }
 
     #[test]

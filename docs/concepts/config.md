@@ -77,7 +77,7 @@ The control plane is the one validator: it checks the schema, then these rules, 
 3. Every permission a role grants is required by some route, identity's and audit's included, or is a kind's `list_permission`. `*` is always allowed.
 4. Every route's scope is a kind, `user` or `public`, and its path, methods, permissions and upstream follow the [route rules](../reference/config/services.md#validation).
 5. No two routes, in one service or across services, have the same method and shape ([route matching](../reference/config/services.md#matching)).
-6. Every `rate_limit` names a policy in `rate_limits`, and a policy's `count_at` is the route's kind or an ancestor.
+6. `rate_limits` has a `default` policy without `count_at`. Every `rate_limit` names a policy in `rate_limits`, and a policy's `count_at` is the route's kind or an ancestor.
 7. `identity` and `audit` name only their own resources and verbs, and kinds that exist ([resources](../reference/config/resources.md)).
 
 A kind with nodes can't be removed or change parent: those are [blocked](#blocked-changes) at plan time. Shape errors (a malformed duration, a reserved slug that isn't a slug, an unknown key) are reported by the [schema](#schema) before these run.

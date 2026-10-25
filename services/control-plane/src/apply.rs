@@ -234,7 +234,10 @@ mod tests {
             gateway["cors"],
             json!({ "allowed_origins": [], "allowed_headers": [] })
         );
-        assert_eq!(gateway["rate_limits"], json!({}));
+        assert_eq!(
+            gateway["rate_limits"],
+            json!({ "default": { "requests": 60, "window_seconds": 60 } })
+        );
         assert_eq!(gateway["users"], json!({ "name_claim": "name" }));
         let e10s = &gateway["services"]["e10s"];
         assert_eq!(e10s["timeouts"], json!({ "connect": "10s", "read": "30s" }));
@@ -244,7 +247,7 @@ mod tests {
             json!({
                 "path": "/orgs/{organization}/projects/{project}/plans", "method": "GET",
                 "scope": "project", "upstream": "/projects/{project.id}/plans",
-                "required_permissions": ["project:read"], "rate_limit": [], "audit": false,
+                "required_permissions": ["project:read"], "rate_limit": ["default"], "audit": false,
                 "allow_deleted": false
             })
         );

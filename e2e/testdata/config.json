@@ -16,6 +16,7 @@
     }
   },
   "creator_role": "admin",
+  "rate_limits": { "default": { "requests": 100, "window_seconds": 1 } },
   "services": {
     "identity": { "url": "http://identity:3000" },
     "audit": { "url": "http://audit:3002" }

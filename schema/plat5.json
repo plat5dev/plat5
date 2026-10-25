@@ -5,7 +5,7 @@
   "description": "The deployment's shape: settings, kinds, roles, rate limits and CORS, and the list of service files.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["kinds", "roles", "creator_role"],
+  "required": ["kinds", "roles", "creator_role", "rate_limits"],
   "properties": {
     "deletion_grace": { "$ref": "settings.json#/properties/deletion_grace" },
     "reserved_slugs": { "$ref": "settings.json#/properties/reserved_slugs" },

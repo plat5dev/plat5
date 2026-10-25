@@ -25,6 +25,6 @@ defaults:
 | `max_body_bytes` | The largest request body the gateway forwards, in bytes. Default `10485760` (10 MiB) |
 <!-- end generated -->
 
-A service's own `timeouts` and `max_body_bytes` override these ([services](services.md#service-fields)). The default rate limit is the `default` policy ([rate limits](rate-limits.md)).
+A service's own `timeouts` and `max_body_bytes` override these ([services](services.md#service-fields)). The default rate limit is the `default` policy, which every config has ([rate limits](rate-limits.md#on-a-route)).
 
 The issuer, the JWKS, the accepted audiences and the subject claim are trust anchors, kept in the gateway's environment ([`reference/env.md`](../env.md#gateway)).

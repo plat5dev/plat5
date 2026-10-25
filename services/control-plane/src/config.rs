@@ -35,7 +35,6 @@ pub struct Config {
     pub kinds: BTreeMap<String, Kind>,
     pub roles: BTreeMap<String, Role>,
     pub creator_role: String,
-    #[serde(default)]
     pub rate_limits: BTreeMap<String, Policy>,
     #[serde(default)]
     pub cors: Cors,
