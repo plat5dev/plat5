@@ -2,11 +2,14 @@
 //! rules, plan against the head, and write if the precondition holds. Also what
 //! the feeds serve.
 
+use std::collections::BTreeMap;
+
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 
 use crate::config::{Config, APPLY_ONLY_KEYS};
 use crate::counts::Counts;
-use crate::expand;
+use crate::expand::{self, ExpandedService};
 use crate::plan::{self, Expect, Plan, Refused, Summary};
 use crate::rules;
 use crate::schema::{self, FieldError};
@@ -100,17 +103,30 @@ fn stored(config: &Value) -> Result<Config, Failure> {
         .map_err(|e| Failure::Store(StoreError(format!("stored config doesn't parse: {e}"))))
 }
 
+/// A dry run's answer: the plan, and every service of the planned config as
+/// the gateway feed would serve it.
+#[derive(Serialize)]
+pub struct DryRun {
+    #[serde(flatten)]
+    pub plan: Plan,
+    pub services: BTreeMap<String, ExpandedService>,
+}
+
 pub async fn dry_run(
     store: &Store,
     counts: &dyn Counts,
     prepared: &Prepared,
-) -> Result<Plan, Failure> {
+) -> Result<DryRun, Failure> {
     let current = store.current().await?;
     let (revision, config) = match &current {
         Some(r) => (r.revision, Some(stored(&r.config)?)),
         None => (store.head().await?, None),
     };
-    Ok(plan::dry_run(revision, config.as_ref(), &prepared.config, counts).await?)
+    let plan = plan::dry_run(revision, config.as_ref(), &prepared.config, counts).await?;
+    Ok(DryRun {
+        plan,
+        services: expand::expand(&prepared.config),
+    })
 }
 
 pub struct Applied {

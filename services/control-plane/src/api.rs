@@ -270,7 +270,8 @@ struct ApplyQuery {
     dry_run: bool,
 }
 
-/// `POST /apply?dry_run=true` answers the plan; `POST /apply` applies it if its
+/// `POST /apply?dry_run=true` answers the plan, with every service expanded as
+/// the gateway feed would serve it; `POST /apply` applies it if its
 /// preconditions hold (docs/concepts/config.md#plan-and-apply).
 async fn apply_config(
     State(state): State<AppState>,
@@ -282,10 +283,10 @@ async fn apply_config(
     let body = parse_body(&headers, &body, &request_id)?;
     let prepared = apply::prepare(body).map_err(|f| failure(&request_id, f))?;
     if query.dry_run {
-        let plan = apply::dry_run(&state.store, state.counts.as_ref(), &prepared)
+        let dry_run = apply::dry_run(&state.store, state.counts.as_ref(), &prepared)
             .await
             .map_err(|f| failure(&request_id, f))?;
-        return Ok((with_request_id(request_id), Json(plan)).into_response());
+        return Ok((with_request_id(request_id), Json(dry_run)).into_response());
     }
     let applied = apply::apply(&state.store, state.counts.as_ref(), &prepared, &request_id)
         .await

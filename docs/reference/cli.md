@@ -14,7 +14,7 @@ Every command takes the path to `plat5.yml`, default `./plat5.yml`, and follows 
 | `plat5 apply [plat5.yml]` | Dry run, show the diff, ask to confirm, apply, then report where the gateway's replicas stand |
 | `plat5 apply plan.json` | Apply a saved plan as it is. No prompt: the saved plan shows every change |
 | `plat5 apply [plat5.yml] --auto-approve` | Apply without the prompt |
-| `plat5 routes list [plat5.yml]` | Every service's expanded routes, identity's and audit's included: method, public path, scope, upstream and permissions, sorted by path. Offline |
+| `plat5 routes list [plat5.yml]` | Every service's expanded routes, identity's and audit's included: method, public path, scope, upstream and permissions, sorted by path. It sends the config as a dry run and prints the routes the control plane expanded ([dry run](api/control-plane.md#dry-run)), so it needs a control plane, local or deployed |
 | `plat5 config pull [--revision n] [dir]` | Write an applied revision out as `plat5.yml` plus `services/<service>.yml`, into a directory with no `.yml` files. Revisions are stored as sent, so it gives back what was applied |
 
 The diff is Terraform's: `+` add, `~` change, `-` remove, each line with its changed fields, `before → after`. A service line lists its expanded routes the same way. Blocked lines print with what's in the way. Then the summary: `Plan: 2 to add, 1 to change, 0 to remove.`

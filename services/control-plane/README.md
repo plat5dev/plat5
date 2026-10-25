@@ -1,6 +1,6 @@
 # Control plane
 
-The deployment's config: settings, kinds, roles, rate limits, CORS and services, applied as one whole config. A dry run answers the plan; an apply recomputes it and writes one revision if its precondition holds. Serves the current config to the gateway and identity over long-poll, with every service's routes expanded.
+The deployment's config: settings, kinds, roles, rate limits, CORS and services, applied as one whole config. A dry run answers the plan, and every service expanded as the gateway would be served it; an apply recomputes the plan and writes one revision if its precondition holds. Serves the current config to the gateway and identity over long-poll, with every service's routes expanded.
 
 Contract: [`../../docs/concepts/config.md`](../../docs/concepts/config.md), [`../../docs/reference/api/control-plane.md`](../../docs/reference/api/control-plane.md), the feeds in [`../../docs/reference/api/internal.md`](../../docs/reference/api/internal.md#control-plane-feeds). The config's JSON Schema is [`../../schema/`](../../schema/), compiled in (`build.rs`).
 

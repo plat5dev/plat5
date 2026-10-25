@@ -50,6 +50,7 @@ Why the deployment's config is one document applied whole, through a plan, valid
 | Identity's and audit's routes come from resources with documented defaults, overridden per deployment, for every kind or one; nothing is generated | Generated files get edited, and the next generation overwrites the edits. Defaults plus overrides keep them and need nothing per kind |
 | The control plane expands them, with every other service's routes, before serving the gateway; identity's feed carries no routes | One expansion, in the one validator. Identity learns list visibility from `list_permission`, not from routes |
 | `plat5 routes list` prints every expanded route, and the plan shows route changes expanded | With defaults, the expanded routes are what a reader needs to see |
+| `plat5 routes list` is a dry run: it prints the routes the control plane expanded | A second copy of the expansion in the CLI drifts from the one the gateway is served |
 
 ## Plan and apply
 
@@ -88,7 +89,7 @@ Why the deployment's config is one document applied whole, through a plan, valid
 |----------|-----|
 | The CLI owns the saved plan and the diff, with `--detailed-exitcode` for drift checks in CI | Terraform's workflow ([detailed-exitcode](https://developer.hashicorp.com/terraform/cli/commands/plan#detailed-exitcode)) |
 | The saved plan file is exactly the apply body: the config and `expect` | Nothing to translate; the file is the request |
-| The CLI embeds a copy of the schema for offline `validate` and `routes list` | Editors and CI catch shape errors without a deployment |
+| The CLI embeds a copy of the schema for offline `validate` | Editors and CI catch shape errors without a deployment |
 | The CLI finds the control plane through its flags and env vars, defaulting to the local stack | Nothing to learn for local work |
 
 ## The local stack

@@ -37,13 +37,22 @@ Validation, auth and empty-body failures use the Plat5 envelope ([`reference/err
 
 | Case | Status |
 |------|--------|
-| Dry run | **200**, the plan |
+| Dry run | **200**, the plan, with `services` ([below](#dry-run)) |
 | Applied | **200** `{ "revision": 42, "summary": {…} }`. Readers see it on their next poll |
 | Schema or rule broken, unknown key, two routes of one shape, blocked change | **422** `VALIDATION_ERROR`, naming each field path, such as `services.e10s.scopes.project.routes[2].path`. The CLI adds the file |
 | The precondition failed | **409** `PLAN_STALE` |
 | `expect` missing | **422** |
 | Identity unreachable while computing a plan that removes a kind or changes a parent | **503**: that plan needs its counts |
 | Postgres failure | **503**. Nothing written |
+
+## Dry run
+
+A dry run answers the plan ([config](../../concepts/config.md#the-plan)) plus `services`: every service in the planned config, identity and audit included, expanded exactly as the gateway feed serves them ([feeds](internal.md#control-plane-feeds)), each with its `url`, `timeouts`, `max_body_bytes` and `routes`. It's the config as it would be after the apply, not the change. `plat5 routes list` prints its routes.
+
+```json
+{ "revision": 41, "summary": { … }, "changes": [ … ],
+  "services": { "e10s": { "url": "http://e10s:8080", "timeouts": { … }, "max_body_bytes": 1048576, "routes": [ … ] } } }
+```
 
 ## Reader status
 

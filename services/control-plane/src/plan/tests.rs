@@ -7,6 +7,9 @@
 //!   for `after.yml`; or `refused.json`: the rule errors `after.yml` is refused
 //!   with
 //!
+//! A dry run answers the plan with the feed's `services` beside it; `plan.json`
+//! holds the plan alone, and `gateway-feed.json` the services.
+//!
 //! `plan.json`, `gateway-feed.json` and `refused.json` are derived:
 //! `UPDATE_FIXTURES=1 cargo test plan` rewrites them.
 

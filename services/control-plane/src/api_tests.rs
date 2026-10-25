@@ -13,6 +13,7 @@ use tower::ServiceExt;
 
 use crate::counts::{CountsResponse, FixedCounts, KindCounts};
 use crate::feed::Feed;
+use crate::fixtures;
 use crate::store::Store;
 use crate::AppState;
 
@@ -193,6 +194,7 @@ async fn plan_and_apply_against_postgres() {
     assert_eq!(status, StatusCode::OK, "{applied}");
     assert_eq!(applied["revision"], json!(1));
     assert_eq!(applied["summary"], plan["summary"]);
+    assert!(applied.get("services").is_none());
 
     // Stored as sent; served shaped for each reader.
     let (_, config) = api.admin("GET", "/config", None).await;
@@ -201,6 +203,8 @@ async fn plan_and_apply_against_postgres() {
     let (status, gateway) = api.feed("/internal/gateway?after=0").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(gateway["revision"], json!(1));
+    // The dry run's services are what the feed serves once it's applied.
+    assert_eq!(plan["services"], gateway["services"]);
     assert_eq!(
         gateway["cors"],
         json!({ "allowed_origins": [], "allowed_headers": [] })
@@ -304,6 +308,9 @@ async fn plan_and_apply_against_postgres() {
         applied["summary"],
         json!({ "add": 0, "change": 2, "remove": 1, "blocked": 0 })
     );
+    let (_, gateway) = api.feed("/internal/gateway?after=1").await;
+    assert_eq!(gateway["revision"], json!(2));
+    assert_eq!(plan["services"], gateway["services"]);
 
     let (_, revisions) = api.admin("GET", "/revisions", None).await;
     let revs: Vec<&Value> = revisions["revisions"]
@@ -379,4 +386,24 @@ async fn plan_and_apply_against_postgres() {
         json!({ "revision": 2, "reason": "route /x: bad" })
     );
     assert!(gateway[1]["seen_at"].is_string());
+
+    // Identity's and audit's routes too: expanded from their resources.
+    let catalog = fixtures::yaml(&fixtures::dir().join("catalog/plat5.yml"));
+    let (status, plan) = api
+        .admin("POST", "/apply?dry_run=true", Some(catalog.clone()))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{plan}");
+    let routes = |s: &str| plan["services"][s]["routes"].as_array().unwrap().len();
+    assert!(routes("identity") > 0 && routes("audit") > 0);
+    let (status, applied) = api
+        .admin(
+            "POST",
+            "/apply",
+            Some(with(catalog, json!({ "expect": { "revision": 2 } }))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let (_, gateway) = api.feed("/internal/gateway?after=2").await;
+    assert_eq!(gateway["revision"], json!(3));
+    assert_eq!(plan["services"], gateway["services"]);
 }
