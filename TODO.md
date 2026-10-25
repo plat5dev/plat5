@@ -3,13 +3,9 @@
 ## Next
 
 - **Siblings follow the contracts.** Each moves to the shapes in `docs/`:
-  - `template-*` API starters: `plat5.yml` with kind `path`s and `list_permission`s, one `parent` per kind, roles with `permissions` and `includes`, rate limits as policies with a `default`; `services/<service>.yml` in the scopes layout with `{project.id}`, `{member.id}` and `{user.id}` and bare params; `required_permissions`, with `any_member` for any member; per-person data on `user` routes reading `X-Plat5-User-Id`; lifecycle consumers on `node.*` with `kind`; bare lowercase ids.
-  - `template-*` consoles: the customer console calls `/user`, `/user/nodes` (with `ancestors`), `…/membership`, `…/bindings` and `?status=`, shows `display_name`, sends invites with `expires_in` and a `role`, keys on `Authorization: Bearer`, and reads `required_permissions` from a 403; the operator console follows `operator`.
-  - `operator`: identity's service API for people (`/users/{user_id}`, `PATCH …/status`, `GET /members/{member_id}/user`, `GET /users?issuer&subject`), slug release for purged roots only, no internal token, bare ids, `node.*` events.
   - `toolbox`: its e2e and helpers use user routes, bare ids and `Bearer` keys, apply a config first since nothing is seeded, and read `node.*` events.
   - The docs site: syncs `reference/config/services.md`, `resources.md`, `settings.md` and `rate-limits.md`, which replace `reference/config/routes.md` and `reference/api/edge-catalog.md`.
-- **Starters in `init`.** With the starters on the contracts and each shipping an app compose file to the contract in the CLI README, `plat5 init` offers them beside `--template none`.
-- **An operator module.** With `operator` on identity's service API, `plat5 start` runs an operator module.
+- **An operator module.** `plat5 start` runs an operator module. Ready once `operator` has a release on Plat5 0.8 for the CLI to pin.
 - **CI for the CLI.** Its schema-copy and init-files tests (`internal/schema`, `internal/cmd`) skip unless a `plat5` checkout sits next to the CLI, so CI must check one out there.
 - **A name in dev tokens.** Plat5 Auth's `POST /dev/token` takes a `name` and puts it in the token as the `name` claim, so `plat5 start`'s dev person gets a name. The CLI already sends it.
 
