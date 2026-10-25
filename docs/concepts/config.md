@@ -85,7 +85,7 @@ One JSON Schema per document, and one for the whole config, in the repo at `sche
 
 - The CLI validates locally with it (`plat5 validate`), so editors and CI catch shape errors without a deployment.
 - The control plane validates every apply with it before the cross-document rules.
-- The gateway and identity check each feed snapshot against it, and keep the current one if it fails.
+- The gateway checks each feed snapshot against it, and keeps the current one if it fails. Identity doesn't: it refuses only a snapshot it can't work with ([readers](#how-a-change-reaches-readers)).
 
 The schema covers shape only. The seven rules above, and route ownership, are code in the control plane.
 
@@ -102,7 +102,7 @@ POST /apply
 { "deletion_grace": "30d", "kinds": {…}, "roles": {…}, "default_role": "member", …, "services": {…},
   "expect":  { "revision": 41 },
   "confirm": { "folder": { "nodes": 14 } } }
-→ 200 { "revision": 42 }
+→ 200 { "revision": 42, "summary": {…} }
 ```
 
 The body is the flat config [above](#the-config). A dry run ignores `expect` and `confirm`.
@@ -183,6 +183,6 @@ The gateway and identity long-poll the control plane's feeds ([`reference/api/in
 | Boot | Waits for the first snapshot; retries while the control plane is down. Does not listen until it has one | Waits for the first snapshot; retries. Does not listen until it has one, then creates the sign-in node if it doesn't exist |
 | Running | Long-polls; swaps routes, kinds and CORS whole on each change | Long-polls; swaps kinds, roles and services whole on each change |
 | Control plane down | Keeps serving the last snapshot | Keeps the last snapshot |
-| A snapshot that fails the schema | Keeps the current one, logs, and moves its cursor past it | Same |
+| A snapshot it refuses | One that fails the schema, or that it can't build ([gateway](../reference/gateway.md#control-plane)). Keeps the current one, logs, and moves its cursor past it | Only one it can't work with, such as one it can't parse; it doesn't check the schema. Keeps the current one, logs, and moves its cursor past it |
 
 A reader never treats "nothing loaded" as an empty state: no routes would answer **404** for everything, and no roles would grant nothing to everyone.

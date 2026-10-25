@@ -43,7 +43,7 @@ Every delete is soft for `deletion_grace`, 30 days by default, restorable, then 
 | Decision | Why |
 |----------|-----|
 | A member is created when a principal first joins a tree, and kept after removal | Records authored by a member resolve to a name for as long as they exist |
-| A person's member left with no bindings when one expires is removed | Their last way into the tree is gone |
+| A person's member left with no bindings, by a binding delete, expiry or purge, is removed, a guest included. A soft delete removes nobody | Their last way into the tree is gone. A soft-deleted node keeps its bindings until purge, so a restore brings back who had access |
 | A service account's member stays until the service account is deleted, even with no bindings | Otherwise its principal and keys are orphaned |
 | Deleting a service account deletes its principal and keys and removes its member, as at purge. Removing its member through the members route is **422** | One way for a service account to end |
 | Lifecycle events are `<kind>.created/.deleted/.restored/.purged` and `member.created/.removed` | Services follow nodes and members without polling, and one shape fits every kind |

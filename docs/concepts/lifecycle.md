@@ -20,7 +20,7 @@ A service never creates a node in its own tables first: it creates it through th
 
 - **What a delete revokes.** Keys of service accounts born at the node or below, and invites on the node or below.
 
-- **What a deleted node grants.** A node with `status = 'deleted'` grants nothing on it or below, except on a `resolve_deleted` route (restore, listing deleted). Once its `purge_after` has passed, the purge sweeper sets `status = 'purged'` on it and the deleted nodes below it, deletes bindings on them, deletes service accounts born at them (principal and keys; the member is removed with `member.removed`), removes members of a purged root, and keeps the rows.
+- **What a deleted node grants.** A node with `status = 'deleted'` grants nothing on it or below, except on a `resolve_deleted` route (restore, listing deleted). Once its `purge_after` has passed, the purge sweeper sets `status = 'purged'` on it and the deleted nodes below it, deletes bindings on them, deletes service accounts born at them (principal and keys; the member is removed with `member.removed`), removes members of a purged root, and keeps the rows. Purging deletes bindings, so a person's member it leaves with none, a guest included, is removed with `member.removed`. A soft delete removes nobody: bindings stay until purge.
 
 - **Restore.** Before `purge_after`, by anyone who could delete the node: the node and the descendants its delete cascaded to come back. Keys and invites revoked by the delete stay revoked, so a key or token that leaked near the deletion stays dead. A node whose parent is deleted can't be restored until the parent is (**409**); parents are never restored for it. Restoring a live node succeeds and changes nothing. A node whose kind isn't in the config can't be restored (**409**): apply the kind again.
 
@@ -38,7 +38,7 @@ Identity checks every config it reads against its nodes, so a removal it missed 
 
 - **Removed is final.** Re-adding someone to a tree makes a new member id. The old member stays, and a lookup returns its name and `status: removed`.
 
-- **Members.** One active member per principal per tree. In an org's tree it's created with its first binding; in the directory, with the person: at first sign-in, or when an admin adds someone who hasn't signed in yet. Removal sets `removed_at`, deletes its bindings and emits `member.removed`; it's never undone, and re-adding makes a new member. A person's member outside the directory left with no bindings, by delete or expiry, is removed. A service account's member is removed only with the service account (deleted directly, or with its born node: either way its principal and keys are deleted); with no bindings its keys still authenticate and are refused everywhere, so a team can re-bind it.
+- **Members.** One active member per principal per tree. In an org's tree it's created with its first binding; in the directory, with the person: at first sign-in, or when an admin adds someone who hasn't signed in yet. Removal sets `removed_at`, deletes its bindings and emits `member.removed`; it's never undone, and re-adding makes a new member. A person's member outside the directory left with no bindings, by a binding delete, expiry or purge, is removed. A service account's member is removed only with the service account (deleted directly, or with its born node: either way its principal and keys are deleted); with no bindings its keys still authenticate and are refused everywhere, so a team can re-bind it.
 
 - **Expiry.** A binding past `expires_at` grants nothing; a sweeper deletes it.
 

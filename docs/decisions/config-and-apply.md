@@ -51,6 +51,7 @@ Config is data that can delete data: removing a kind removes its nodes. Plat5 al
 |----------|-----|
 | The gateway and identity long-poll the control plane and keep their last config while it's down | The control plane isn't on the request path |
 | The gateway checks each snapshot against the schema, compiled in, and refuses a snapshot it can't build (a scope or `count_at` that isn't a kind, chain params that aren't the scope's chain) whole | A partial route table is a state nobody applied |
+| Identity doesn't check snapshots against the schema; it refuses only one it can't work with | The control plane validated the config at apply. Identity needs only what it reads to be well formed |
 | Upgrade the gateway with or before the control plane | The gateway refuses a snapshot it can't build, and keeps the last one until it's upgraded |
 | Identity checks every config it reads against its nodes ([lifecycle](lifecycle.md#removing-a-kind)) | The Kubernetes controller pattern: compare desired with actual each time, so a revision identity missed still takes effect |
 

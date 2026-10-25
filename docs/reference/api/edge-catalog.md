@@ -19,7 +19,7 @@ Identity's edge routes are generated from the kinds (`plat5 routes generate`, or
 | `<kind>:bindings:read` / `:write` | The node | Listing or changing who has access here. On a root, also adding members and invites to join |
 | `<kind>:service-accounts:write` | The node | Creating service accounts here and their keys |
 | `<kind>:audit:read` | The node | Reading audit for this node and below |
-| `<root kind>:guests:write` | The root | Invites on nodes below the root, which can admit people outside the tree. Granted to no role (counting `*`), guests are off |
+| `<root kind>:guests:write` | The invite's node | Invites on nodes below the root, which can admit people outside the tree. Granted to no role (counting `*`), guests are off. Granted, or `*`, by a role bindable below the root, whoever holds it there can invite guests there |
 
 **These are defaults, not rules.** They're the labels written into the generated catalog; the team can rename them, change them or drop routes. Identity's code depends on no label name ([filtered lists](../lists.md#filtered-lists)). Roles grant them like any label; `*` grants all.
 

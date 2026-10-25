@@ -28,3 +28,7 @@ A thin platform runtime for multi-tenant APIs: a gateway, identity (the tree of 
 3. A change that touches a principle in `concepts/model.md` or an item under "Not in Plat5" in `concepts/boundaries.md` needs explicit sign-off. Say which one, and why, before writing code.
 4. A rule belongs in exactly one concept doc, a shape in exactly one reference doc. Guides link to both and restate neither. Don't restate anything here.
 5. Don't commit unless asked.
+
+### Siblings
+
+Wire or boot changes aren't done in this repo alone. They also update the `cli` (its embedded compose and control-plane client track HEAD), the `template-*` repos (the API starters and the two consoles), `toolbox`, and the `operator` repo. Run HEAD with `plat5 init --source plat5=../plat5`.

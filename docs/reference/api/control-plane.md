@@ -39,7 +39,7 @@ Validation, auth and empty-body failures use the Plat5 envelope ([`reference/err
 |------|--------|
 | Dry run | **200**, the plan |
 | Applied | **200** `{ "revision": 42, "summary": {…} }`. Readers see it on their next poll |
-| Schema or cross-document rule broken, unknown key, blocked change | **422** `VALIDATION_ERROR`, naming the file and field |
+| Schema or cross-document rule broken, unknown key, blocked change | **422** `VALIDATION_ERROR`, naming the field path, such as `services.e10s.routes[2].scope`. The CLI adds the file |
 | A method + path shape owned by two services | **409** `ROUTE_CONFLICT` ([`reference/config/routes.md`](../config/routes.md#route-ownership)) |
 | A precondition failed | **409** `PLAN_STALE` |
 | `expect` missing | **422** |

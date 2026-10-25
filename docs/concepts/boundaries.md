@@ -22,6 +22,7 @@ Do not add these because they would be convenient:
 - Operator headers, roles or rules in base Plat5. Each other front door owns its own, in its own repo
 - Hard deletes of nodes, reusing an id, or reusing a slug automatically
 - An org settings bag, or limits stored as per-org data
+- Cost weights, multiple windows, burst or calendar quotas, or billing fields on rate limits
 - Credentials narrower than their principal. A narrower machine is a service account with fewer bindings
 - A second writer of the tree. A service that needs nodes creates them through the node API
 - Per-tree sessions. The IdP token works everywhere
@@ -29,9 +30,12 @@ Do not add these because they would be convenient:
 - Comparing the caller to the role it grants (a grant cap), or to the member it acts on
 - More than one binding per member per node
 - Roles in the gateway. The control plane stores the roles document; only identity reads it
+- A projection store between the control plane and its readers. Postgres is the one store
 - Login UI, passwords or JWKS. That's the IdP
+- HSTS at the gateway. TLS is the edge's
 - Last-owner guards. An org without an admin is recovered by an operator plane
 - Display-name overrides per tree. A person's name comes from the IdP
+- Lifecycle events derived from audit
 
 ## Extension points
 

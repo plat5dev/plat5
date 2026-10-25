@@ -21,7 +21,7 @@ Who can do what, in one place: the ancestor rule, who can be in a tree, roles an
 
 - **Joining.** People join the directory at first sign-in. A root is joined by invite or by an admin adding someone. Nodes below a root bind people already in the tree, or guests who redeem an invite below the root.
 
-- **Guests.** A member with no binding at its root, only on nodes below it, made by redeeming an invite below the root. Invites below a root need the root's `<root kind>:guests:write`, so a deployment turns guests on by granting that label. Guests are listed on the root's access list as guests, as GitHub lists outside collaborators.
+- **Guests.** A member with no binding at its root, only on nodes below it, made by redeeming an invite below the root. Invites below a root need `<root kind>:guests:write`, checked like any label: on the invite's node or an ancestor. A deployment turns guests on by granting it, and keeps guest invites in the root's hands by not granting it, or `*`, through any role bindable below the root. Guests are listed on the root's access list as guests, as GitHub lists outside collaborators.
 
 - **Closed world.** A tree's data refers only to its own nodes and members. Plat5 guarantees half of this by never sending a person's principal id; the other half is a convention services follow. People cross trees; data doesn't.
 

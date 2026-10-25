@@ -2,7 +2,7 @@
 
 How Plat5 **identity** public lists work. Business services behind the gateway may copy it.
 
-Control-plane admin lists (`GET /services`, revisions) return the full set. So does identity's `GET /nodes/{node_id}/roles`: it reads the roles document, not a table ([`reference/api/identity.md`](api/identity.md#roles)).
+Control-plane admin lists (`GET /revisions`) return the full set. So does identity's `GET /nodes/{node_id}/roles`: it reads the roles document, not a table ([`reference/api/identity.md`](api/identity.md#roles)).
 
 ## Query
 
