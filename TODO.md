@@ -5,7 +5,6 @@
 - **Siblings follow the contracts.** Each moves to the shapes in `docs/`:
   - `toolbox`: its e2e and helpers use user routes, bare ids and `Bearer` keys, apply a config first since nothing is seeded, and read `node.*` events.
   - The docs site: syncs `reference/config/services.md`, `resources.md`, `settings.md` and `rate-limits.md`, which replace `reference/config/routes.md` and `reference/api/edge-catalog.md`.
-- **An operator module.** `plat5 start` runs an operator module. Ready once `operator` has a release on Plat5 0.8 for the CLI to pin.
 - **CI for the CLI.** Its schema-copy and init-files tests (`internal/schema`, `internal/cmd`) skip unless a `plat5` checkout sits next to the CLI, so CI must check one out there.
 - **A name in dev tokens.** Plat5 Auth's `POST /dev/token` takes a `name` and puts it in the token as the `name` claim, so `plat5 start`'s dev person gets a name. The CLI already sends it.
 
