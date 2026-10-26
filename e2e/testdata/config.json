@@ -4,8 +4,8 @@
   "users": { "name_claim": "name" },
   "kinds": {
     "organization": { "path": "/orgs/{organization}", "list_permission": "organization:read" },
-    "project": { "parent": "organization", "path": "/projects/{project}", "list_permission": "project:read" },
-    "environment": { "parent": "project", "path": "/envs/{environment}", "list_permission": "environment:read" }
+    "project": { "parent": "organization", "path": "/projects/{project}", "list_permission": "project:read", "bind_creator": false },
+    "environment": { "parent": "project", "path": "/envs/{environment}", "list_permission": "environment:read", "bind_creator": false }
   },
   "roles": {
     "admin": { "permissions": ["*"], "bindable_at": ["organization", "project", "environment"] },
@@ -25,9 +25,8 @@
     "identity": {
       "url": "http://identity:3000",
       "kinds": {
-        "project": {
-          "resources": { "service_accounts": false, "service_account": false, "keys": false, "key": false }
-        }
+        "project": { "resources": { "service_accounts": false } },
+        "environment": { "resources": { "invites": false } }
       }
     },
     "audit": { "url": "http://audit:3002" }

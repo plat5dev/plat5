@@ -114,6 +114,18 @@ pub struct Kind {
     pub parent: Option<String>,
     pub path: String,
     pub list_permission: String,
+    /// Whether creating a node of this kind binds its creator with `creator_role`.
+    /// Sent only when off, so a reader takes a missing value as on.
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub bind_creator: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_yes(b: &bool) -> bool {
+    *b
 }
 
 impl Kind {

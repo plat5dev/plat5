@@ -15,7 +15,7 @@
     },
     "creator_role": {
       "title": "creator_role",
-      "description": "Required. What the creator of a node gets on it. Bindable at every kind.",
+      "description": "Required. What the creator of a node gets on it, where its kind binds its creator (`bind_creator`). Bindable at every kind.",
       "$ref": "#/$defs/role_slug"
     }
   },

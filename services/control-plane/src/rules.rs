@@ -899,6 +899,93 @@ mod tests {
         .unwrap();
     }
 
+    /// Identity's expanded public paths for one override set, method and path.
+    fn identity_paths(identity: Value) -> Vec<String> {
+        let mut s = json!({ "url": "http://identity:3000" });
+        s.as_object_mut()
+            .unwrap()
+            .extend(identity.as_object().unwrap().clone());
+        let c = with_identity(s);
+        crate::schema::check_config(&c).unwrap_or_else(|e| panic!("schema: {e:?}"));
+        let config: Config = serde_json::from_value(c).unwrap();
+        check(&config).unwrap();
+        crate::expand::expand(&config)["identity"]
+            .routes
+            .iter()
+            .map(|r| format!("{} {}", r.method, r.path))
+            .collect()
+    }
+
+    // `false` on a collection removes the routes below it; turning it back on
+    // for one kind brings them back; an item's own entry at a layer wins.
+    #[test]
+    fn collection_false_removes_its_items() {
+        let has = |paths: &[String], p: &str| paths.iter().any(|x| x == p);
+        let org_sa = "/orgs/{organization}/service-accounts";
+        let proj_sa = "/orgs/{organization}/projects/{project}/service-accounts";
+
+        let paths = identity_paths(json!({
+            "kinds": { "project": { "resources": { "service_accounts": false, "invites": false } } }
+        }));
+        for p in [
+            format!("GET {proj_sa}"),
+            format!("DELETE {proj_sa}/{{service_account_id}}"),
+            format!("POST {proj_sa}/{{service_account_id}}/keys"),
+            format!("DELETE {proj_sa}/{{service_account_id}}/keys/{{key_id}}"),
+            "DELETE /orgs/{organization}/projects/{project}/invites/{invite_id}".to_string(),
+        ] {
+            assert!(!has(&paths, &p), "{p} kept: {paths:?}");
+        }
+        assert!(has(
+            &paths,
+            &format!("DELETE {org_sa}/{{service_account_id}}/keys/{{key_id}}")
+        ));
+        assert!(has(
+            &paths,
+            "DELETE /orgs/{organization}/invites/{invite_id}"
+        ));
+
+        // Off for every kind, back on for the org: the org's items come back.
+        let paths = identity_paths(json!({
+            "resources": { "service_accounts": false },
+            "kinds": { "organization": { "resources": { "service_accounts": {} } } }
+        }));
+        assert!(has(
+            &paths,
+            &format!("POST {org_sa}/{{service_account_id}}/keys")
+        ));
+        assert!(!has(
+            &paths,
+            &format!("POST {proj_sa}/{{service_account_id}}/keys")
+        ));
+
+        // keys off removes key too; the service accounts stay.
+        let paths = identity_paths(json!({ "resources": { "keys": false } }));
+        assert!(has(&paths, &format!("GET {org_sa}/{{service_account_id}}")));
+        assert!(!has(
+            &paths,
+            &format!("DELETE {org_sa}/{{service_account_id}}/keys/{{key_id}}")
+        ));
+
+        // The user scope: my_keys off removes my_key.
+        let paths = identity_paths(json!({ "resources": { "my_keys": false } }));
+        assert!(!has(&paths, "DELETE /user/keys/{key_id}"), "{paths:?}");
+    }
+
+    // bind_creator is on unless a kind turns it off, and is sent only when off.
+    #[test]
+    fn bind_creator_defaults_on() {
+        let mut c = base();
+        c["kinds"]["project"]["bind_creator"] = json!(false);
+        run(c.clone()).unwrap();
+        let config: Config = serde_json::from_value(c).unwrap();
+        assert!(config.kinds["organization"].bind_creator);
+        assert!(!config.kinds["project"].bind_creator);
+        let sent = serde_json::to_value(&config.kinds).unwrap();
+        assert_eq!(sent["organization"].get("bind_creator"), None);
+        assert_eq!(sent["project"]["bind_creator"], json!(false));
+    }
+
     fn with_identity(identity: Value) -> Value {
         let mut c = base();
         c["roles"]["member"]["permissions"] = json!(["organization:read"]);

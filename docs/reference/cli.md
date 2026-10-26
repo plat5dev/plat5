@@ -32,7 +32,7 @@ After an apply, the CLI waits up to 10 seconds for every gateway replica to repo
 | Command | Does |
 |---------|------|
 | `plat5 init [dir]` | Ask for a starter and the modules. `-y` takes `--template none` and every module. `--no-auth`, `--no-observability` and `--no-operator` turn a module off |
-| `plat5 init [dir] --template none` | Write a project: a `plat5.yml` with `organization`, `project` and `environment` kinds and the example roles, `services/identity.yml` (service accounts off at projects) and `services/audit.yml`, `operator.routes.yml` from operator's shipped route list, and `plat5.dev.yml` |
+| `plat5 init [dir] --template none` | Write a project: a `plat5.yml` with `organization`, `project` and `environment` kinds and the example roles, `services/identity.yml` (service accounts off at projects, invites off at environments) and `services/audit.yml`, `operator.routes.yml` from operator's shipped route list, and `plat5.dev.yml` |
 | `plat5 init [dir] --template <starter>` | The same, plus an API from a starter, a customer console and an operator console ([starters](#starters)) |
 | `plat5 start` | Run the stack, apply `plat5.yml`, seed the dev person, print links and keys. Running it again updates the stack in place |
 | `plat5 stop` | Stop the stack and your app. Data is kept |

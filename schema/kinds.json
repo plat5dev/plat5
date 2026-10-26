@@ -43,6 +43,12 @@
           "title": "list_permission",
           "description": "Required. The permission that shows a node of this kind in a list, live or deleted ([lists](../../concepts/access.md#lists)).",
           "$ref": "roles.json#/$defs/permission"
+        },
+        "bind_creator": {
+          "title": "bind_creator",
+          "description": "Whether creating a node of this kind gives its creator `creator_role` on it ([assigning](../../concepts/access.md#assigning)). Default `true`. Off, the creator reaches the node through bindings above it; on a root kind, a new root has no member until a front door such as an operator plane adds one.",
+          "type": "boolean",
+          "default": true
         }
       }
     }

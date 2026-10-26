@@ -95,6 +95,23 @@
         },
         {
           "op": "remove",
+          "method": "DELETE",
+          "path": "/orgs/{organization}/invites/{invite_id}",
+          "before": {
+            "scope": "organization",
+            "upstream": "/nodes/{organization.id}/invites/{invite_id}",
+            "required_permissions": [
+              "organization:bindings:write"
+            ],
+            "rate_limit": [
+              "default"
+            ],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
           "method": "GET",
           "path": "/orgs/{organization}/projects",
           "before": {
@@ -164,6 +181,23 @@
           "before": {
             "scope": "project",
             "upstream": "/nodes/{project.id}/invites",
+            "required_permissions": [
+              "guests:write"
+            ],
+            "rate_limit": [
+              "default"
+            ],
+            "audit": true,
+            "allow_deleted": false
+          }
+        },
+        {
+          "op": "remove",
+          "method": "DELETE",
+          "path": "/orgs/{organization}/projects/{project}/invites/{invite_id}",
+          "before": {
+            "scope": "project",
+            "upstream": "/nodes/{project.id}/invites/{invite_id}",
             "required_permissions": [
               "guests:write"
             ],

@@ -341,9 +341,12 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 	byID := "/orgs/" + org.ID + "/projects/" + project.ID + "/envs/" + env.ID
 
 	// Service accounts belong to an org or an environment: the config turns
-	// them off at projects, so that route matches nothing.
+	// them off at projects, items included, so those routes match nothing.
+	// Likewise invites at environments.
 	s.call(owner, "POST", projectPath+"/service-accounts",
 		map[string]string{"name": "ci", "role": "developer"}, 404, nil)
+	s.call(owner, "GET", projectPath+"/service-accounts/"+org.ID, nil, 404, nil)
+	s.call(owner, "GET", envPath+"/invites", nil, 404, nil)
 
 	// A service account at the environment, with a key.
 	var sa struct {
@@ -405,14 +408,16 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 		!slices.Equal(held.Permissions, want) {
 		t.Fatalf("service account's membership: %+v", held)
 	}
-	// The creator holds admin on the org, and on the project and environment it made.
+	// The creator holds admin on the org. Projects and environments don't bind
+	// their creator in this config: the org's admin reaches them.
 	var mine membership
 	s.call(owner, "GET", orgPath+"/membership", nil, 200, &mine)
 	if !isID(mine.MemberID) || !slices.Equal(mine.Permissions, []string{"*"}) {
 		t.Fatalf("owner's membership: %+v", mine)
 	}
 
-	// The environment's access list: its own bindings, and the org's and project's inherited.
+	// The environment's access list: its own binding, the service account's, and
+	// the owner's admin, inherited from the org.
 	var access struct {
 		Bindings []binding `json:"bindings"`
 	}
@@ -425,20 +430,16 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 			own = append(own, b)
 		}
 	}
-	if len(inherited) != 2 || !slices.ContainsFunc(inherited, func(b binding) bool {
-		return b.NodeID == org.ID && b.MemberID == mine.MemberID && b.Role == "admin" && b.Principal == "person"
-	}) || !slices.ContainsFunc(inherited, func(b binding) bool {
-		return b.NodeID == project.ID && b.MemberID == mine.MemberID && b.Role == "admin"
-	}) {
+	if len(inherited) != 1 || inherited[0].NodeID != org.ID || inherited[0].MemberID != mine.MemberID ||
+		inherited[0].Role != "admin" || inherited[0].Principal != "person" {
 		t.Fatalf("inherited bindings: %+v", access)
 	}
-	if len(own) != 2 || !slices.ContainsFunc(own, func(b binding) bool {
-		return b.MemberID == sa.ID && b.Role == "developer" && b.NodeID == env.ID && b.Principal == "service_account"
-	}) {
+	if len(own) != 1 || own[0].MemberID != sa.ID || own[0].Role != "developer" || own[0].NodeID != env.ID ||
+		own[0].Principal != "service_account" {
 		t.Fatalf("the environment's own bindings: %+v", access)
 	}
 	s.call(owner, "GET", envPath+"/bindings?inherited=false", nil, 200, &access)
-	if len(access.Bindings) != 2 {
+	if len(access.Bindings) != 1 {
 		t.Fatalf("?inherited=false: %+v", access)
 	}
 

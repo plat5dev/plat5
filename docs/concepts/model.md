@@ -53,6 +53,7 @@ A path segment that starts with a digit is read as a node id, anything else as a
 6. **Services do no auth, so any front door can call them.** A service's API is its paths and documented headers, reachable only on the private network. Plat5's gateway is one front door; others (an operator plane, an internal job, a custom gateway) bring their own rules and docs.
 7. **The deployment's data, not Plat5's names.** Kinds, roles, permissions and routes are all config.
 8. **Config changes are planned before they apply; deletes are soft.**
+9. **Defaults, not limits.** Where reasonable teams would choose differently, Plat5 picks a default and the deployment can change it. Plat5 fixes only what isolation, security, or the shared contract needs.
 
 ## Where each decision lives
 

@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use crate::config::{
     audited_by_default, Config, FilledTimeouts, MethodConfig, RateLimit, Required, Resource,
-    Service, VerbOverride, AUDIT, DEFAULT_POLICY, IDENTITY, PUBLIC_SCOPE, VERBS,
+    ResourceOverride, Service, VerbOverride, AUDIT, DEFAULT_POLICY, IDENTITY, PUBLIC_SCOPE, VERBS,
 };
 use crate::resources::{self, ResourceDefault};
 use crate::schema::FieldError;
@@ -240,13 +240,23 @@ fn resource_specs(
     for d in &defaults {
         let mut layers: Vec<(String, &Resource, bool)> = Vec::new();
         if d.shared {
-            if let Some(r) = service.resources.get(d.name) {
-                layers.push((format!("{base}.resources.{}", d.name), r, true));
-            }
+            push_layer(
+                &mut layers,
+                &service.resources,
+                d.name,
+                format!("{base}.resources"),
+                true,
+            );
         }
         if let Some(k) = &d.kind {
-            if let Some(r) = service.kinds.get(k).and_then(|o| o.resources.get(d.name)) {
-                layers.push((format!("{base}.kinds.{k}.resources.{}", d.name), r, false));
+            if let Some(o) = service.kinds.get(k) {
+                push_layer(
+                    &mut layers,
+                    &o.resources,
+                    d.name,
+                    format!("{base}.kinds.{k}.resources"),
+                    false,
+                );
             }
         }
         let spec_at = match (layers.last(), &d.kind) {
@@ -259,6 +269,42 @@ fn resource_specs(
         }
     }
     out
+}
+
+/// A resource whose collection was turned back on at a layer: present, and
+/// otherwise unchanged.
+static PRESENT: Resource = Resource::Override(ResourceOverride {
+    path: None,
+    methods: BTreeMap::new(),
+    required_permissions: None,
+    rate_limit: None,
+    audit: None,
+});
+
+/// One layer's override of `name`: its own entry, else what its collections say
+/// there. A collection's `false` removes its items too, and turning it back on
+/// brings them back; an item's own entry at the same layer wins.
+fn push_layer<'a>(
+    layers: &mut Vec<(String, &'a Resource, bool)>,
+    overrides: &'a BTreeMap<String, Resource>,
+    name: &str,
+    at: String,
+    shared: bool,
+) {
+    if let Some(r) = overrides.get(name) {
+        layers.push((format!("{at}.{name}"), r, shared));
+        return;
+    }
+    for c in resources::collections_of(name) {
+        match overrides.get(*c) {
+            Some(off @ Resource::Off(_)) => {
+                layers.push((format!("{at}.{c}"), off, shared));
+                return;
+            }
+            Some(Resource::Override(_)) => layers.push((format!("{at}.{c}"), &PRESENT, shared)),
+            None => {}
+        }
+    }
 }
 
 fn resource_spec(

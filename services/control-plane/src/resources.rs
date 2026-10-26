@@ -27,6 +27,21 @@ pub struct DefaultVerb {
     pub upstream: String,
 }
 
+/// The collections whose `false` also removes this resource, outermost first
+/// (docs/reference/config/resources.md): an item route has no use without its
+/// collection.
+pub fn collections_of(name: &str) -> &'static [&'static str] {
+    match name {
+        "service_account" | "keys" => &["service_accounts"],
+        "key" => &["service_accounts", "keys"],
+        "invite" => &["invites"],
+        "binding" => &["bindings"],
+        "member" => &["members"],
+        "my_key" => &["my_keys"],
+        _ => &[],
+    }
+}
+
 fn perm(p: &str) -> Option<Required> {
     Some(Required::Permissions(vec![p.to_string()]))
 }

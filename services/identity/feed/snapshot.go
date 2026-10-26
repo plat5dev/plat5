@@ -66,6 +66,9 @@ type Kind struct {
 	// ListPermission is what shows a node of this kind in a filtered list
 	// (docs/concepts/access.md#lists).
 	ListPermission string
+	// BindCreator is whether creating a node of this kind gives its creator
+	// creator_role on it (docs/concepts/access.md#assigning).
+	BindCreator bool
 }
 
 // Kind looks a kind up by name.
@@ -97,6 +100,8 @@ var (
 type wireKind struct {
 	Parent         string `json:"parent"`
 	ListPermission string `json:"list_permission"`
+	// BindCreator is sent only when off: missing is on.
+	BindCreator *bool `json:"bind_creator"`
 }
 
 type wireRole struct {
@@ -146,7 +151,12 @@ func Parse(body []byte) (*Snapshot, error) {
 		if wk.ListPermission == "" {
 			return nil, fmt.Errorf("kinds.%s.list_permission: missing", name)
 		}
-		s.Kinds[name] = Kind{Name: name, Parent: wk.Parent, ListPermission: wk.ListPermission}
+		s.Kinds[name] = Kind{
+			Name:           name,
+			Parent:         wk.Parent,
+			ListPermission: wk.ListPermission,
+			BindCreator:    wk.BindCreator == nil || *wk.BindCreator,
+		}
 	}
 	for name, k := range s.Kinds {
 		if _, ok := s.Kinds[k.Parent]; !k.IsRoot() && !ok {

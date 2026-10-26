@@ -58,8 +58,8 @@ Identity resolves permissions at admit, for one member on one node chain ([`refe
 
 | Write | Role |
 |-------|------|
-| Create a node | The creator gets `creator_role` on it, always. A node created with no member behind the request gets no binding |
-| Create a root | The user creating it gets a member in the new tree, with `creator_role` on the root |
+| Create a node | If its kind binds its creator (`bind_creator`, on unless the kind turns it off), the creator gets `creator_role` on it. Off, the creator reaches it only through bindings above it. A node created with no member behind the request gets no binding |
+| Create a root | If its kind binds its creator, the user creating it gets a member in the new tree, with `creator_role` on the root. Off, the new tree has no member until a front door such as an operator plane adds one |
 | Add a member to a root | `role` in the body, required |
 | Redeem an invite at a root | The invite's `role` at the root, plus each of its `grants` |
 | Redeem an invite below a root | The invite's `role` at that node. For someone not in the tree, that makes them a guest |

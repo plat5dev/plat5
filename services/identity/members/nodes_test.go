@@ -2,6 +2,7 @@ package members
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/plat5dev/plat5/identity/internal/auditx"
@@ -63,12 +64,56 @@ func TestCreateRoot(t *testing.T) {
 	e.expect(e.callUser("POST", "/roots/organization", dana, `{"label": "Old field"}`), 422, "display_name required")
 }
 
+// A kind with bind_creator off: its creator gets no binding, and reaches the
+// node through bindings above it. On a root kind, the new root has no member.
+func TestBindCreatorOff(t *testing.T) {
+	config := strings.Replace(testConfig,
+		`"folder": { "parent": "organization", "path": "/folders/{folder}", "list_permission": "folder:read" }`,
+		`"folder": { "parent": "organization", "path": "/folders/{folder}", "list_permission": "folder:read", "bind_creator": false }`, 1)
+	e := setupWith(t, config)
+	org, admin := e.org(e.person("dana"), "Gruow")
+	dev := e.join(org, "dev", "developer")
+
+	for _, who := range []string{admin, dev} {
+		r := e.call("POST", "/nodes/"+org.ID+"/children/folder", who, `{"display_name": "F `+who[len(who)-4:]+`"}`)
+		e.expect(r, 201, "create folder")
+		if n := e.count(`SELECT count(*) FROM bindings WHERE node_id = $1`, r.str("id")); n != 0 {
+			t.Fatalf("bindings on the folder: %d", n)
+		}
+		if _, ok := r.headers[auditx.CreatedHeader]; !ok {
+			t.Fatal("created header")
+		}
+	}
+	// The caller is still checked: one from another tree is malformed.
+	_, otherAdmin := e.org(e.person("erin"), "Other")
+	e.expect(e.call("POST", "/nodes/"+org.ID+"/children/folder", otherAdmin, `{"display_name": "X"}`), 400, "caller from another tree")
+	// Kinds that don't turn it off still bind.
+	r := e.call("POST", "/nodes/"+org.ID+"/children/folder", admin, `{"display_name": "Holder"}`)
+	e.expect(r, 201, "folder")
+	r = e.call("POST", "/nodes/"+r.str("id")+"/children/project", admin, `{"display_name": "P"}`)
+	e.expect(r, 201, "project")
+	if n := e.count(`SELECT count(*) FROM bindings WHERE node_id = $1 AND member_id = $2`, r.str("id"), admin); n != 1 {
+		t.Fatalf("project bindings %d", n)
+	}
+
+	// Off on the root kind: no member, no binding.
+	rootOff := strings.Replace(testConfig,
+		`"organization": { "path": "/orgs/{organization}", "list_permission": "organization:read" }`,
+		`"organization": { "path": "/orgs/{organization}", "list_permission": "organization:read", "bind_creator": false }`, 1)
+	e = setupWith(t, rootOff)
+	r = e.callUser("POST", "/roots/organization", e.person("fay"), `{"display_name": "Nobody's"}`)
+	e.expect(r, 201, "create org")
+	if n := e.count(`SELECT count(*) FROM members WHERE root_id = $1`, r.str("id")); n != 0 {
+		t.Fatalf("members %d", n)
+	}
+}
+
 func TestCreateChildBindsTheCreator(t *testing.T) {
 	e := setup(t)
 	org, admin := e.org(e.person("dana"), "Gruow")
 	dev := e.join(org, "dev", "developer")
 
-	// The creator always gets creator_role, even holding it above.
+	// The kind binds its creator (the default): creator_role, even holding it above.
 	r := e.call("POST", "/nodes/"+org.ID+"/children/folder", admin, `{"display_name": "Alpha"}`)
 	e.expect(r, 201, "admin creates")
 	alpha := r.str("id")

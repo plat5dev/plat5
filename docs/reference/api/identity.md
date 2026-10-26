@@ -8,9 +8,9 @@ Who may call is the front door. Identity doesn't know which front door called, a
 
 | Route | Reads | For |
 |-------|-------|-----|
-| `POST /nodes/{node_id}/children/{kind}` | `X-Plat5-Member-Id` | That member gets `creator_role` on the new node |
+| `POST /nodes/{node_id}/children/{kind}` | `X-Plat5-Member-Id` | That member gets `creator_role` on the new node, if the kind binds its creator |
 | `GET /nodes/{node_id}/children/{kind}` | `X-Plat5-Member-Id` | The list is filtered to what that member can read |
-| `POST /roots/{kind}` | `X-Plat5-User-Id` | That user gets a member in the new tree, with `creator_role` on the root |
+| `POST /roots/{kind}` | `X-Plat5-User-Id` | That user gets a member in the new tree, with `creator_role` on the root, if the kind binds its creator |
 
 Each is optional: without it, nobody is bound and the list is the full list. When sent, `X-Plat5-Member-Id` must name an active member of the node's tree, and `X-Plat5-User-Id` an active user, or the request is **400**. Every other route ignores both.
 

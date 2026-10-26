@@ -14,7 +14,7 @@ import (
 
 // CreateChild creates a node under parentID. The caller's member, if any,
 // must be active in the parent's tree; it gets creator_role on the new node
-// (docs/concepts/access.md#assigning).
+// when the kind binds its creator (docs/concepts/access.md#assigning).
 func (s *Store) CreateChild(ctx context.Context, snap *feed.Snapshot, parentID string, in nodes.CreateInput, callerID string) (*nodes.Node, *Binding, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_child_node", dbx.DefaultTimeout)
 	defer cancel()
@@ -41,8 +41,10 @@ func (s *Store) CreateChild(ctx context.Context, snap *feed.Snapshot, parentID s
 		if err != nil {
 			return nil, nil, op.Fail(err)
 		}
-		if b, err = s.insertBinding(ctx, w, m.id, n.ID, snap.CreatorRole); err != nil {
-			return nil, nil, op.Fail(err)
+		if k, _ := snap.Kind(n.Kind); k.BindCreator {
+			if b, err = s.insertBinding(ctx, w, m.id, n.ID, snap.CreatorRole); err != nil {
+				return nil, nil, op.Fail(err)
+			}
 		}
 	}
 	if err := w.commit(ctx); err != nil {
@@ -52,9 +54,9 @@ func (s *Store) CreateChild(ctx context.Context, snap *feed.Snapshot, parentID s
 	return n, b, nil
 }
 
-// CreateRoot creates a root. The user, if any, must be an active person; they
-// get a member in the new tree with creator_role at its root. It returns that
-// member's id, or "".
+// CreateRoot creates a root. The user, if any, must be an active person; when
+// the kind binds its creator, they get a member in the new tree with
+// creator_role at its root. It returns that member's id, or "".
 func (s *Store) CreateRoot(ctx context.Context, snap *feed.Snapshot, in nodes.CreateInput, userID string) (*nodes.Node, string, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_root_node", dbx.DefaultTimeout)
 	defer cancel()
@@ -83,7 +85,7 @@ func (s *Store) CreateRoot(ctx context.Context, snap *feed.Snapshot, in nodes.Cr
 	w.event(lifecycle.NodeEvent(lifecycle.TypeNodeCreated, n.Kind, n.ID, n.RootID))
 
 	var memberID string
-	if u != nil {
+	if k, _ := snap.Kind(n.Kind); u != nil && k.BindCreator {
 		if memberID, err = s.insertMember(ctx, w, u.principalID, PrincipalPerson, n.ID); err != nil {
 			return nil, "", op.Fail(err)
 		}

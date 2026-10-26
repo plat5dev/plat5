@@ -21,6 +21,7 @@ kinds:
 | `parent` | The one kind a node sits under. Omitted for a root |
 | `path` | Required. The kind's piece of every public path: `/<collection>/{<kind name>}`, such as `/projects/{project}`. The collection has the slug shape. Plat5 joins the pieces root first, so a project's routes sit under `/orgs/{organization}/projects/{project}` |
 | `list_permission` | Required. The permission that shows a node of this kind in a list, live or deleted ([lists](../../concepts/access.md#lists)) |
+| `bind_creator` | Whether creating a node of this kind gives its creator `creator_role` on it ([assigning](../../concepts/access.md#assigning)). Default `true`. Off, the creator reaches the node through bindings above it; on a root kind, a new root has no member until a front door such as an operator plane adds one |
 <!-- end generated -->
 
 Each kind has one chain of kinds, so each node has one public path. Slugs are unique only within their parent, which is why the pieces nest in parent order. The kind's param, `{project}`, takes a slug or an id; it never reaches a service.

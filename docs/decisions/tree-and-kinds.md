@@ -47,7 +47,7 @@ Identity's and audit's routes come from resources with documented defaults ([res
 | Decision | Why |
 |----------|-----|
 | Plat5 fixes identity's operations and their upstream paths; the deployment decides where each one sits publicly and what it requires | Identity's API is identity's own, and the public shape and permissions are the deployment's. Adding a kind gives it an API with nothing to regenerate or merge by hand |
-| `services/identity.yml` and `services/audit.yml` hold only overrides, for every kind or for one; each key replaces its default one level down, and `false` removes a resource or a verb | A deployment writes only what differs, so the defaults can improve without a merge |
+| `services/identity.yml` and `services/audit.yml` hold only overrides, for every kind or for one; each key replaces its default one level down, and `false` removes a resource or a verb. `false` on a collection also removes the resources below it | A deployment writes only what differs, so the defaults can improve without a merge. An item route without its collection has no use, and per-verb `false` keeps the item while turning off a collection's create |
 | `identity` and `audit` are reserved service names | Plat5 knows their API; any other name is an ordinary service |
 | Identity's own API addresses everything by id: `/nodes/{id}/…`, `/roots/{kind}`, `/users/{id}/…`. A service account is addressed by its member id | Any front door can call it without slugs. Slugs exist only at the gateway |
 | `plat5 routes list` prints every service's expanded routes | Defaults are only safe to rely on when the result is easy to read |

@@ -4,7 +4,7 @@ How nodes and members are created, deleted, restored and purged, and the events 
 
 ## Creating nodes
 
-Nodes are created through identity's routes ([resources](../reference/config/resources.md)), or identity's service API by another front door. The creator gets `creator_role` on the new node ([access](access.md#assigning)). A slug is fixed at creation ([ids and slugs](model.md#ids-and-slugs)). Identity writes `node.created`. Nothing is created under a deleted or purged parent (**409**).
+Nodes are created through identity's routes ([resources](../reference/config/resources.md)), or identity's service API by another front door. The creator gets `creator_role` on the new node when its kind binds its creator ([access](access.md#assigning)). A slug is fixed at creation ([ids and slugs](model.md#ids-and-slugs)). Identity writes `node.created`. Nothing is created under a deleted or purged parent (**409**).
 
 A service never creates a node in its own tables first: it creates it through the node API, so the gateway's check never runs ahead of Plat5.
 
