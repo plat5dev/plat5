@@ -17,7 +17,7 @@ Who can do what, in one place: the ancestor rule, who can be in a tree, roles an
 
 - **People.** A person's credential (IdP token or personal API key) reaches every tree they're in; the gateway picks the member for the tree in the path, per request. A personal key acts as the person everywhere. Anything narrower is a service account. A person also has user routes, for their own data, where they're a user, not a member.
 
-- **Service accounts.** Born at a node of an org's tree and deleted with it. They can hold bindings anywhere in their own tree, never outside it. They can't call user routes.
+- **Service accounts.** Belong to a node of an org's tree and are deleted with it. They can hold bindings anywhere in their own tree, never outside it. They can't call user routes.
 
 - **Joining.** A person exists from first sign-in, or from an admin adding them. A root is joined by invite or by an admin adding someone. Nodes below a root bind people already in the tree, or guests who redeem an invite below the root.
 
@@ -63,7 +63,7 @@ Identity resolves permissions at admit, for one member on one node chain ([`refe
 | Add a member to a root | `role` in the body, required |
 | Redeem an invite at a root | The invite's `role` at the root, plus each of its `grants` |
 | Redeem an invite below a root | The invite's `role` at that node. For someone not in the tree, that makes them a guest |
-| Create a service account | `role` in the body, required. Bound at the node it's born at |
+| Create a service account | `role` in the body, required. Bound at the node it belongs to |
 | Create or change a binding | `role` in the body, required |
 
 A role not in the document, or not bindable at the node's kind, is **422**. A direct binding for someone who isn't in the tree is **422**: guests come through invites.
@@ -74,7 +74,7 @@ One binding per member per node. Changing a member's role on a node is a `PATCH`
 
 There is no grant cap. Identity doesn't compare the caller to the role it assigns, or to the member it acts on. Whoever may call a binding route may bind any role bindable there, including one with more permissions than its own. The route's permissions decide who may call; that's the gateway's check.
 
-Service accounts are created and their keys made under the same permission as bindings, `<kind>:bindings:write` by default: creating a service account binds a role, so it's a binding write. A service account belongs to its tree, not to whoever created it. Its bindings are its own, and its keys carry them.
+Service accounts are created and their keys made under the same permission as bindings, `<kind>:bindings:write` by default: creating a service account binds a role, so it's a binding write. A service account is the tree's, not its creator's. Its bindings are its own, and its keys carry them.
 
 So the permissions that reach binding routes are as strong as the strongest role. Give `<kind>:bindings:write` only to members you'd trust with every role bindable at that kind.
 

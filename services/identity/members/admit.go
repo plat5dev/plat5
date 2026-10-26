@@ -130,7 +130,7 @@ func checkAdmit(in AdmitInput) error {
 
 // admitPrincipal finds the principal, or nil when the credential is invalid:
 // a key identity can't read, an unknown or revoked key, a suspended person,
-// or a service account whose born node is deleted. A new IdP subject becomes
+// or a service account whose node is deleted. A new IdP subject becomes
 // a person.
 func (s *Store) admitPrincipal(ctx context.Context, in AdmitInput) (*admitPrincipal, error) {
 	if in.Credential != nil {
@@ -147,21 +147,21 @@ func (s *Store) keyPrincipalFor(ctx context.Context, key string) (*admitPrincipa
 	var userID *string
 	var status string
 	var revoked bool
-	var bornStatus *string
+	var nodeStatus *string
 	err := s.pool.QueryRow(ctx, `
 		SELECT p.id, p.kind, p.user_id, k.id, p.status, k.revoked_at IS NOT NULL, bn.status
 		FROM api_keys k
 		JOIN principals p ON p.id = k.principal_id
-		LEFT JOIN nodes bn ON bn.id = p.born_node_id
+		LEFT JOIN nodes bn ON bn.id = p.node_id
 		WHERE k.key_hash = $1
-	`, apikey.Hash(key)).Scan(&p.id, &p.kind, &userID, &p.keyID, &status, &revoked, &bornStatus)
+	`, apikey.Hash(key)).Scan(&p.id, &p.kind, &userID, &p.keyID, &status, &revoked, &nodeStatus)
 	if dbx.IsNoRows(err) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if revoked || status != StatusActive || (bornStatus != nil && *bornStatus != nodes.StatusActive) {
+	if revoked || status != StatusActive || (nodeStatus != nil && *nodeStatus != nodes.StatusActive) {
 		return nil, nil
 	}
 	if userID != nil {

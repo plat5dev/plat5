@@ -14,7 +14,7 @@ On every request the gateway answers three questions: who is calling (the creden
 | **Node** | One instance of a kind: `id`, `kind`, `parent_id`, `root_id`, `slug`, `display_name`, `status`. Nothing else. Everything else about a node is service data keyed by its id |
 | **Root** | A node with no parent. Each root and the nodes under it are one **tree**: the isolation boundary. Organizations are roots |
 | **Chain** | A node and its ancestors, root first. Each kind has one chain of kinds, so each node has one path |
-| **Principal** | A person (born at first sign-in, or when an admin adds them) or a service account (born at a node of an org's tree). Its id never leaves identity |
+| **Principal** | A person (created at first sign-in, or when an admin adds them) or a service account (belongs to a node of an org's tree). Its id never leaves identity |
 | **User** | A person as their own routes see them. A person's user id is sent only on user routes (`X-Plat5-User-Id`) |
 | **Member** | A principal's presence in one tree: one per principal per tree, kept after removal. The id services see as the caller on tree routes (`X-Plat5-Member-Id`) |
 | **Binding** | A role for a member on one node of the member's tree. A member can have many |
@@ -25,7 +25,7 @@ On every request the gateway answers three questions: who is calling (the creden
 | **Credential** | An IdP token or a personal API key (people), or a service account key. Belongs to the principal, not to a tree |
 | **Front door** | Anything on the private network that calls services. Plat5's gateway is one; an operator plane is another |
 | **Audit log** | Per root, and per person for their user routes. Who did what, for reporting and compliance ([`concepts/audit.md`](audit.md)) |
-| **Lifecycle event** | A birth, delete, restore or purge of a node, or a member joining or leaving a tree ([`concepts/lifecycle.md`](lifecycle.md#lifecycle-events)) |
+| **Lifecycle event** | A create, delete, restore or purge of a node, or a member joining or leaving a tree ([`concepts/lifecycle.md`](lifecycle.md#lifecycle-events)) |
 
 ## Ids and slugs
 
@@ -86,7 +86,7 @@ Data about the person themselves, the same in every tree (a profile, a setting),
 | To understand | Read |
 |---|---|
 | Who can do what, and how a request is decided | [`concepts/access.md`](access.md) |
-| How nodes and members are born, deleted, restored and purged | [`concepts/lifecycle.md`](lifecycle.md) |
+| How nodes and members are created, deleted, restored and purged | [`concepts/lifecycle.md`](lifecycle.md) |
 | How the deployment's config is applied | [`concepts/config.md`](config.md) |
 | What gets audited | [`concepts/audit.md`](audit.md) |
 | What Plat5 won't do, and how it can grow | [`concepts/boundaries.md`](boundaries.md) |

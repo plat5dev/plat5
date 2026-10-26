@@ -35,10 +35,10 @@ CREATE TABLE principals (
     user_id       TEXT UNIQUE,                         -- persons only: the id user routes carry
     status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
     name          TEXT,                                -- a service account's name; a person's from name_claim
-    born_node_id  TEXT REFERENCES nodes (id),          -- service accounts only
+    node_id       TEXT REFERENCES nodes (id),          -- service accounts only
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CHECK ((kind = 'service_account') = (born_node_id IS NOT NULL)),
+    CHECK ((kind = 'service_account') = (node_id IS NOT NULL)),
     CHECK ((kind = 'person') = (user_id IS NOT NULL))
 );
 
@@ -114,7 +114,7 @@ The rules themselves are in the concept docs ([access](../concepts/access.md), [
 
 - **Members.** At most one active member per principal per tree (`members_active_uidx`). `removed_at` is set once and never cleared.
 - **Guests.** Not stored; read from the bindings.
-- **Closed world.** A binding's node is under its member's root. A service account's member is in the tree of its `born_node_id`.
+- **Closed world.** A binding's node is under its member's root. A service account's member is in the tree of its `node_id`.
 - **Roles.** A binding's `role` is kept as written. A role that's missing, or not bindable at the binding's kind, grants nothing.
 - **Deletions.** Each delete stamps one `deletion_id` on every node it soft-deletes; restore matches on it. A node already deleted keeps its own id.
 - **Purge.** Purge sets `status = 'purged'` and keeps the row. Below a root it sets `slug` to `NULL`, freeing it; a purged root keeps its slug until an operator releases it.

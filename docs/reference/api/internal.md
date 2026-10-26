@@ -27,7 +27,7 @@ POST /internal/admit
 }
 ```
 
-1. **Principal.** Hash the key, or look up the IdP link. A new IdP subject creates the person; `name` (from `users.name_claim`) sets or updates the person's name. A suspended person, a revoked key, a key identity can't read, or a service account whose born node is deleted is `valid: false`. So is a service account on a user route.
+1. **Principal.** Hash the key, or look up the IdP link. A new IdP subject creates the person; `name` (from `users.name_claim`) sets or updates the person's name. A suspended person, a revoked key, a key identity can't read, or a service account whose node is deleted is `valid: false`. So is a service account on a user route.
 2. **Nodes.** Resolve each `ref` (slug or id) under the previous node, by kind. A missing, purged or deleted node ends here. With `allow_deleted`, the last node may be deleted (not purged), and its own bindings still count. Nothing else ever counts a deleted node's bindings.
 3. **Member.** The principal's active member in the chain's tree.
 4. **Permissions.** The union of the roles of that member's bindings on any node in the chain, includes resolved ([`concepts/access.md`](../../concepts/access.md#resolution)).

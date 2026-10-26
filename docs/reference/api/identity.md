@@ -69,9 +69,9 @@ People, by user id. Not behind any default public route except the caller's own 
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `GET` | `/nodes/{node_id}/service-accounts` | [Service accounts](#service-account) born at this node |
+| `GET` | `/nodes/{node_id}/service-accounts` | [Service accounts](#service-account) that belong to this node |
 | `POST` | `/nodes/{node_id}/service-accounts` | `{ name, role }`, both required. One transaction: principal, member in the node's tree, binding at the node, `member.created`. Returns the service account, **201** |
-| `GET`, `PATCH`, `DELETE` | `/nodes/{node_id}/service-accounts/{service_account_id}` | Addressed by its member id. **404** if not born at this node. `PATCH { name }`. Delete, **204**: the principal and its keys are deleted and the member removed with `member.removed`; a lookup shows the removed member with no name. Already deleted: **204** |
+| `GET`, `PATCH`, `DELETE` | `/nodes/{node_id}/service-accounts/{service_account_id}` | Addressed by its member id. **404** if it doesn't belong to this node. `PATCH { name }`. Delete, **204**: the principal and its keys are deleted and the member removed with `member.removed`; a lookup shows the removed member with no name. Already deleted: **204** |
 | `GET`, `POST` | `/nodes/{node_id}/service-accounts/{service_account_id}/keys` | [Keys](#key), revoked ones included. `POST { name? }` returns the key once, **201** |
 | `DELETE` | `/nodes/{node_id}/service-accounts/{service_account_id}/keys/{key_id}` | Revoke. **204**, again **204** |
 
@@ -134,7 +134,7 @@ Lists are [paginated](../lists.md) under the plural key. Times are RFC 3339, UTC
 
 #### Service account
 
-`{ id, name, node_id, created_at, updated_at }`. `id` is its member id; `node_id` is where it was born. Collection key `service_accounts`.
+`{ id, name, node_id, created_at, updated_at }`. `id` is its member id; `node_id` is the node it belongs to. Collection key `service_accounts`.
 
 #### Key
 

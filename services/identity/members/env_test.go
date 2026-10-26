@@ -193,7 +193,7 @@ func (e *env) key(owner KeyOwner) string {
 	return k.Secret
 }
 
-// serviceAccount makes one born at n with role there. It returns its member
+// serviceAccount makes one that belongs to n, with role there. It returns its member
 // id and a key.
 func (e *env) serviceAccount(n *nodes.Node, role string) (string, string) {
 	e.t.Helper()

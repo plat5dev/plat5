@@ -19,7 +19,7 @@ Every delete is soft for `deletion_grace`, 30 days by default, restorable, then 
 | Restoring a live node succeeds and changes nothing. Restoring under a deleted parent is **409**; parents are never restored for it | A live node already is what the restore asks for. Restoring the parent is a separate decision with its own `deletion_id`, and a child's restore mustn't bring back what someone else deleted |
 | Nothing is created under a deleted or purged parent (**409**). `PATCH`, bindings, service accounts and invites on a deleted node have no rule in the service API | The gateway already refuses deleted nodes; other front doors are trusted |
 | Purge takes the deleted nodes below it, even if their own `purge_after` is later | A child under a purged parent can never be restored, so keeping it loses nothing but storage |
-| A service account born at a purged node goes with it: principal and keys deleted, member removed with `member.removed` | It belongs to the part of the tree it was born in. Left behind, its keys would authenticate a machine with nothing left to work on |
+| A service account that belongs to a purged node goes with it: principal and keys deleted, member removed with `member.removed` | It belongs to that part of the tree. Left behind, its keys would authenticate a machine with nothing left to work on |
 | Delete answers **204**, restore **200** with the node, and releasing the slug of a node that isn't a purged root is **409** | Plain, and consistent with the rest of the API |
 | The purge sweeper runs every minute, and marks invites past `expires_at` `expired`. No settings | One background loop; no setting until someone needs one |
 

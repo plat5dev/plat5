@@ -603,7 +603,7 @@ func (s *Store) purgeBatch(ctx context.Context) (int, error) {
 
 // purgeTree purges one tree's due nodes in one transaction: the nodes and the
 // deleted nodes under them are marked purged, a purged node below the root
-// frees its slug, their bindings and invites go, service accounts born at
+// frees its slug, their bindings and invites go, service accounts that belong to
 // them go (principal, keys, member), and a purged root's members are removed.
 // A person left with no bindings in the tree is removed.
 func (s *Store) purgeTree(ctx context.Context, rootID string, now time.Time) (int, error) {
@@ -661,11 +661,11 @@ func (s *Store) purgeTree(ctx context.Context, rootID string, now time.Time) (in
 		return nil
 	}
 
-	// Service accounts born at a purged node go with it.
+	// Service accounts that belong to a purged node go with it.
 	if err := removeMembers(`
 		UPDATE members m SET removed_at = $2
 		FROM principals p
-		WHERE p.id = m.principal_id AND p.born_node_id = ANY($1) AND m.removed_at IS NULL
+		WHERE p.id = m.principal_id AND p.node_id = ANY($1) AND m.removed_at IS NULL
 		RETURNING m.id, m.principal
 	`, ids, now); err != nil {
 		return 0, err
@@ -706,7 +706,7 @@ func (s *Store) purgeTree(ctx context.Context, rootID string, now time.Time) (in
 	if _, err := tx.Exec(ctx, `DELETE FROM invites WHERE node_id = ANY($1)`, ids); err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM principals WHERE kind = 'service_account' AND born_node_id = ANY($1)`, ids); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM principals WHERE kind = 'service_account' AND node_id = ANY($1)`, ids); err != nil {
 		return 0, err
 	}
 

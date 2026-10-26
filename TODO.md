@@ -72,3 +72,9 @@ Ready: a deploy or a test that must know a roles change is live in identity ever
 ## Binding end times
 
 Bindings don't expire. An optional `expires_at` on a binding can be added later without breaking anything. Ready: a customer who needs access that ends by itself, with no one to remove it.
+
+## Service accounts across a subtree
+
+`GET /nodes/{node_id}/service-accounts` lists those that belong to that node only. A filter (`?descendants=true`) would list those that belong to the node or any live node below it, each with its node's `chain`, filtered per node by `{kind}:bindings:read` like node lists. One place for an admin to see every machine in an org.
+
+Ready: an org that needs to review every machine at once, for an access review or to find a leaked key's owner.

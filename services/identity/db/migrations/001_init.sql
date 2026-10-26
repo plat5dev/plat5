@@ -34,13 +34,13 @@ CREATE TABLE principals (
     user_id       TEXT UNIQUE,
     status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
     name          TEXT,
-    born_node_id  TEXT REFERENCES nodes (id),
+    node_id       TEXT REFERENCES nodes (id),
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CHECK ((kind = 'service_account') = (born_node_id IS NOT NULL)),
+    CHECK ((kind = 'service_account') = (node_id IS NOT NULL)),
     CHECK ((kind = 'person') = (user_id IS NOT NULL))
 );
-CREATE INDEX principals_born_node_idx ON principals (born_node_id) WHERE born_node_id IS NOT NULL;
+CREATE INDEX principals_node_idx ON principals (node_id) WHERE node_id IS NOT NULL;
 
 CREATE TABLE idp_links (
     issuer TEXT NOT NULL, subject TEXT NOT NULL,

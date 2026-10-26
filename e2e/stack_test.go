@@ -446,7 +446,7 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 	if len(list.Nodes) != 0 {
 		t.Fatalf("live projects after the delete: %+v", list)
 	}
-	// The service account's born node is deleted, so its key is refused: 401.
+	// The service account's node is deleted, so its key is refused: 401.
 	s.call(bot, "GET", projectPath, nil, 401, nil)
 
 	// Restore it.

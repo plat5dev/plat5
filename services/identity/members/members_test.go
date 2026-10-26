@@ -78,7 +78,7 @@ func TestMembersAndGuests(t *testing.T) {
 	guest := e.join(org, "guest", "member")
 	e.bind(p, guest, "viewer")
 	e.expect(e.call("DELETE", "/nodes/"+org.ID+"/bindings/"+e.bindingOf(guest, org.ID), "", ""), 204, "drop root binding")
-	// A service account born below the root is never a guest.
+	// A service account that belongs below the root is never a guest.
 	sa, _ := e.serviceAccount(p, "viewer")
 
 	r := e.call("GET", "/nodes/"+org.ID+"/members", "", "")
@@ -278,7 +278,7 @@ func TestServiceAccountsAndKeys(t *testing.T) {
 		t.Fatalf("events %v", got)
 	}
 	if e.bindingOf(sa, p.ID) == "" {
-		t.Fatal("not bound where born")
+		t.Fatal("not bound where it belongs")
 	}
 	for _, c := range []struct{ body, msg string }{
 		{`{"name": "x"}`, "Choose a role."},
@@ -296,7 +296,7 @@ func TestServiceAccountsAndKeys(t *testing.T) {
 	if got := ids(r.list("service_accounts")); !slices.Equal(got, []string{sa}) {
 		t.Fatalf("list %v", got)
 	}
-	e.expect(e.call("GET", "/nodes/"+org.ID+"/service-accounts/"+sa, "", ""), 404, "not born here")
+	e.expect(e.call("GET", "/nodes/"+org.ID+"/service-accounts/"+sa, "", ""), 404, "doesn't belong here")
 	r = e.call("PATCH", "/nodes/"+p.ID+"/service-accounts/"+sa, "", `{"name": "deploy"}`)
 	if r.status != 200 || r.str("name") != "deploy" {
 		t.Fatalf("rename %d %v", r.status, r.body)
@@ -341,7 +341,7 @@ func TestServiceAccountsAndKeys(t *testing.T) {
 	if got := e.eventsAfter(before); !slices.Equal(got, []string{"member.removed " + sa + " " + org.ID + " service_account"}) {
 		t.Fatalf("events %v", got)
 	}
-	if e.count(`SELECT count(*) FROM principals WHERE kind = 'service_account' AND born_node_id = $1`, p.ID) != 0 ||
+	if e.count(`SELECT count(*) FROM principals WHERE kind = 'service_account' AND node_id = $1`, p.ID) != 0 ||
 		e.count(`SELECT count(*) FROM api_keys a JOIN members m ON m.principal_id = a.principal_id WHERE m.id = $1`, sa) != 0 {
 		t.Fatal("principal or keys left behind")
 	}

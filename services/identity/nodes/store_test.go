@@ -161,17 +161,17 @@ func wantAPIError(t *testing.T, err error, status int, code string) *errors.ApiE
 
 // principal makes a person or a service account with an active member in
 // root's tree, bound at each of nodes. It returns the member id.
-func (e *env) principal(kind string, born, root *Node, nodes ...*Node) (principalID, memberID string) {
+func (e *env) principal(kind string, node, root *Node, nodes ...*Node) (principalID, memberID string) {
 	e.t.Helper()
 	principalID = id.New()
-	var bornID, userID *string
-	if born != nil {
-		bornID = &born.ID
+	var nodeID, userID *string
+	if node != nil {
+		nodeID = &node.ID
 	} else {
 		u := id.New()
 		userID = &u
 	}
-	e.exec(`INSERT INTO principals (id, kind, user_id, born_node_id) VALUES ($1, $2, $3, $4)`, principalID, kind, userID, bornID)
+	e.exec(`INSERT INTO principals (id, kind, user_id, node_id) VALUES ($1, $2, $3, $4)`, principalID, kind, userID, nodeID)
 	memberID = id.New()
 	e.exec(`INSERT INTO members (id, principal_id, principal, root_id) VALUES ($1, $2, $3, $4)`, memberID, principalID, kind, root.ID)
 	for _, n := range nodes {
@@ -582,7 +582,7 @@ func TestPurgeAfterTheGrace(t *testing.T) {
 		t.Fatal("invites on the purged node remain")
 	}
 	if e.count(`SELECT count(*) FROM principals WHERE id = $1`, sa) != 0 || e.count(`SELECT count(*) FROM api_keys WHERE principal_id = $1`, sa) != 0 {
-		t.Fatal("the service account born there remains")
+		t.Fatal("the service account that belongs there remains")
 	}
 	if e.count(`SELECT count(*) FROM bindings WHERE member_id = $1`, saMember) != 0 {
 		t.Fatal("the service account's other bindings remain")

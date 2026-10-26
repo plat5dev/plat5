@@ -16,7 +16,7 @@ import (
 	"github.com/plat5dev/plat5/identity/nodes"
 )
 
-// ServiceAccount is a principal born at a node, addressed by its member id.
+// ServiceAccount is a principal that belongs to a node, addressed by its member id.
 type ServiceAccount struct {
 	ID        string // its member id
 	Name      string
@@ -25,13 +25,13 @@ type ServiceAccount struct {
 	UpdatedAt time.Time
 }
 
-// serviceAccountSelect reads active service accounts born at $1; where may
+// serviceAccountSelect reads active service accounts that belong to $1; where may
 // use $2 on.
 func serviceAccountSelect(where string) string {
 	return `
-		SELECT m.id, p.name, p.born_node_id, p.created_at, p.updated_at, p.id
+		SELECT m.id, p.name, p.node_id, p.created_at, p.updated_at, p.id
 		FROM principals p JOIN members m ON m.principal_id = p.id AND m.removed_at IS NULL
-		WHERE p.kind = 'service_account' AND p.born_node_id = $1 AND ` + where
+		WHERE p.kind = 'service_account' AND p.node_id = $1 AND ` + where
 }
 
 func scanServiceAccount(row dbx.Scannable, principalID *string) (*ServiceAccount, error) {
@@ -61,7 +61,7 @@ func normalizeName(raw string) (string, error) {
 	return name, nil
 }
 
-// CreateServiceAccount makes a service account born at nodeID, in one
+// CreateServiceAccount makes a service account that belongs to nodeID, in one
 // transaction: principal, member in the node's tree, binding at the node.
 func (s *Store) CreateServiceAccount(ctx context.Context, snap *feed.Snapshot, nodeID, name, role string) (*ServiceAccount, *Binding, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_service_account", dbx.DefaultTimeout)
@@ -87,7 +87,7 @@ func (s *Store) CreateServiceAccount(ctx context.Context, snap *feed.Snapshot, n
 	now := s.now().UTC()
 	principalID := id.New()
 	if _, err := w.tx.Exec(ctx, `
-		INSERT INTO principals (id, kind, name, born_node_id, created_at, updated_at)
+		INSERT INTO principals (id, kind, name, node_id, created_at, updated_at)
 		VALUES ($1, 'service_account', $2, $3, $4, $4)
 	`, principalID, name, n.ID, now); err != nil {
 		return nil, nil, op.Fail(err)
@@ -107,7 +107,7 @@ func (s *Store) CreateServiceAccount(ctx context.Context, snap *feed.Snapshot, n
 	return &ServiceAccount{ID: memberID, Name: name, NodeID: n.ID, CreatedAt: now, UpdatedAt: now}, b, nil
 }
 
-// ListServiceAccounts is the live service accounts born at a node, by member id.
+// ListServiceAccounts is the live service accounts that belong to a node, by member id.
 func (s *Store) ListServiceAccounts(ctx context.Context, nodeID string, limit int, startingAfter string) ([]*ServiceAccount, bool, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_service_accounts", dbx.DefaultTimeout)
 	defer cancel()
@@ -128,7 +128,7 @@ func (s *Store) ListServiceAccounts(ctx context.Context, nodeID string, limit in
 	return out, hasMore, nil
 }
 
-// serviceAccount reads a live service account born at nodeID, and its principal.
+// serviceAccount reads a live service account that belongs to nodeID, and its principal.
 func (s *Store) serviceAccount(ctx context.Context, q dbx.Querier, nodeID, memberID string) (*ServiceAccount, string, error) {
 	if !id.Valid(nodeID) || !id.Valid(memberID) {
 		return nil, "", ErrNotFound
@@ -261,7 +261,7 @@ func scanKey(row dbx.Scannable) (*Key, error) {
 	return &k, nil
 }
 
-// KeyOwner is whose keys a request addresses: a service account born at a
+// KeyOwner is whose keys a request addresses: a service account that belongs to a
 // node, by its member id, or a person, by their user id.
 type KeyOwner struct {
 	NodeID   string

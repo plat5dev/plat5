@@ -30,7 +30,7 @@ Plat5 owns the tree of nodes (kinds from config), the principals who can reach t
 | What a binding holds | **Role** | Deployment-defined slug; its permissions come from the roles document ([`concepts/access.md`](../concepts/access.md)). Plat5 names no roles |
 | Route requirement | **Permission** | Opaque `[a-z0-9:._-]+`. Routes require them (`required_permissions`); roles grant them |
 | What a route addresses | **Scope** | A kind name, `user`, or `public` |
-| Non-human principal | **Service account** | Born at a node of an org's tree |
+| Non-human principal | **Service account** | Belongs to a node of an org's tree |
 | Credential | **API key** | A person's personal key, or a service account's key. No sessions |
 
 **Rejected service names:** `org-service`, `orgs`, `tenants`, `tenancy`, `rbac`, `authz`, `accounts`, `api-keys` (as a standalone platform service).

@@ -1,6 +1,6 @@
 # Lifecycle
 
-How nodes and members are born, deleted, restored and purged, and the events services read to follow along.
+How nodes and members are created, deleted, restored and purged, and the events services read to follow along.
 
 ## Creating nodes
 
@@ -16,13 +16,13 @@ A service never creates a node in its own tables first: it creates it through th
 
 - **Deleting again.** Deleting a node that's already deleted or purged succeeds and changes nothing: it keeps its first `deletion_id` and `purge_after`, so a second delete doesn't extend the grace.
 
-- **A delete revokes nothing.** While a node is deleted, nothing works on it or below: the gateway refuses it, the keys of service accounts born there are refused, and its invites can't be redeemed. Bindings, service accounts, keys and invites are all kept. To kill a key you think leaked, revoke it or delete its service account.
+- **A delete revokes nothing.** While a node is deleted, nothing works on it or below: the gateway refuses it, the keys of service accounts that belong there are refused, and its invites can't be redeemed. Bindings, service accounts, keys and invites are all kept. To kill a key you think leaked, revoke it or delete its service account.
 
 - **What a deleted node grants.** Nothing on it or below, except on an `allow_deleted` route (restore). Listing deleted nodes counts its own bindings ([lists](access.md#lists)).
 
 - **Restore.** Before `purge_after`, by anyone who could delete the node: a full undo. The node and the descendants its delete cascaded to come back, with their bindings, service accounts, keys and unexpired invites. A node whose parent is deleted can't be restored until the parent is (**409**); parents are never restored for it. Restoring a live node succeeds and changes nothing.
 
-- **Purge.** Once `purge_after` has passed, the purge sweeper sets `status = 'purged'` on the node and the deleted nodes below it, even those whose own `purge_after` is later, and deletes everything that hung off them: bindings, invites, and service accounts born there (principal and keys; the member removed with `member.removed`). A person's member it leaves with no bindings, a guest included, is removed with `member.removed`, and a purged root removes all its members. The node rows are kept. A purged node below a root frees its slug; a purged root keeps its slug as a tombstone ([ids and slugs](model.md#ids-and-slugs)).
+- **Purge.** Once `purge_after` has passed, the purge sweeper sets `status = 'purged'` on the node and the deleted nodes below it, even those whose own `purge_after` is later, and deletes everything that hung off them: bindings, invites, and service accounts that belong there (principal and keys; the member removed with `member.removed`). A person's member it leaves with no bindings, a guest included, is removed with `member.removed`, and a purged root removes all its members. The node rows are kept. A purged node below a root frees its slug; a purged root keeps its slug as a tombstone ([ids and slugs](model.md#ids-and-slugs)).
 
 - **Background work** checks node state itself; the gateway only guards requests.
 
@@ -34,7 +34,7 @@ A kind is removed, or changes parent, only while it has no nodes, deleted ones i
 
 - **Removed is final.** Re-adding someone to a tree makes a new member id. The old member stays, and a lookup returns its name and `status: removed`.
 
-- **Members.** One active member per principal per tree, created with its first binding. Removal sets `removed_at`, deletes its bindings and emits `member.removed`; it's never undone, and re-adding makes a new member. A person's member left with no bindings, by a binding delete or a purge, is removed. A service account's member is removed only with the service account (deleted directly, or with its born node at purge: either way its principal and keys are deleted); with no bindings its keys still authenticate and are refused everywhere, so a team can re-bind it.
+- **Members.** One active member per principal per tree, created with its first binding. Removal sets `removed_at`, deletes its bindings and emits `member.removed`; it's never undone, and re-adding makes a new member. A person's member left with no bindings, by a binding delete or a purge, is removed. A service account's member is removed only with the service account (deleted directly, or at purge of the node it belongs to: either way its principal and keys are deleted); with no bindings its keys still authenticate and are refused everywhere, so a team can re-bind it.
 
 - **Suspension.** A suspended person's credentials are all invalid. There's no per-member suspension: remove the member instead.
 
@@ -44,7 +44,7 @@ A kind is removed, or changes parent, only while it has no nodes, deleted ones i
 
 ## Lifecycle events
 
-A feed of births and ends other services may act on. Written in the same transaction as the change; a cascade writes one event per node, parents before children. Reading is opt-in. Plat5 names no queue or broker; anyone who wants push delivery runs a relay that reads this feed.
+A feed of what's created and what ends, for other services to act on. Written in the same transaction as the change; a cascade writes one event per node, parents before children. Reading is opt-in. Plat5 names no queue or broker; anyone who wants push delivery runs a relay that reads this feed.
 
 ```
 GET /internal/lifecycle-events?starting_after=<id>&limit=<n>

@@ -126,8 +126,8 @@ func TestAdmit(t *testing.T) {
 	if _, _, err := e.store.RevokeKey(e.ctx, KeyOwner{UserID: alice}, revoked.ID); err != nil {
 		t.Fatal(err)
 	}
-	// A service account born at web with developer there, and one born at
-	// old, which is then deleted: its key isn't revoked, and is refused.
+	// A service account that belongs to web with developer there, and one that
+	// belongs to old, which is then deleted: its key isn't revoked, and is refused.
 	saM, saKey := e.serviceAccount(web, "developer")
 	_, oldSAKey := e.serviceAccount(old, "developer")
 	if _, err := e.nodes.Delete(e.ctx, e.snap(), old.ID); err != nil {
@@ -173,7 +173,7 @@ func TestAdmit(t *testing.T) {
 		{"revoked key", keyBody(revoked.Secret, webChain...), read, want{status: 401}},
 		{"suspended person's key", keyBody(frankKey, org("gruow")...), "any_member", want{status: 401}},
 		{"suspended person's token", idpBody("frank"), nil, want{status: 401}},
-		{"service account born at a deleted node", keyBody(oldSAKey, org("gruow")...), "any_member", want{status: 401}},
+		{"service account that belongs to a deleted node", keyBody(oldSAKey, org("gruow")...), "any_member", want{status: 401}},
 		{"service account on a user route", keyBody(saKey), nil, want{status: 401}},
 
 		// member_id: null, nodes empty → 403
