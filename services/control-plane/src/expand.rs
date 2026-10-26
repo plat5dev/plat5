@@ -264,7 +264,13 @@ fn resource_specs(
             (None, Some(k)) => format!("{base}.kinds.{k}.resources.{}", d.name),
             (None, None) => format!("{base}.resources.{}", d.name),
         };
-        if let Some(spec) = resource_spec(name, d, &defaults, &layers, spec_at, errs) {
+        let permission_name = d
+            .kind
+            .as_deref()
+            .and_then(|k| config.kinds.get(k).map(|kind| kind.permission_name(k)));
+        if let Some(spec) =
+            resource_spec(name, d, permission_name, &defaults, &layers, spec_at, errs)
+        {
             out.push(spec);
         }
     }
@@ -310,6 +316,7 @@ fn push_layer<'a>(
 fn resource_spec(
     service: &str,
     d: &ResourceDefault,
+    permission_name: Option<&str>,
     defaults: &[ResourceDefault],
     layers: &[(String, &Resource, bool)],
     spec_at: String,
@@ -393,10 +400,10 @@ fn resource_spec(
         .into_iter()
         .filter(|(_, present)| *present)
         .map(|(mut v, _)| {
-            if let (Some(kind), Some(r)) = (&d.kind, v.required.as_mut()) {
+            if let (Some(name), Some(r)) = (permission_name, v.required.as_mut()) {
                 if let Required::Permissions(perms) = &mut r.value {
                     for p in perms.iter_mut() {
-                        *p = p.replace("{kind}", kind);
+                        *p = p.replace("{kind}", name);
                     }
                 }
             }

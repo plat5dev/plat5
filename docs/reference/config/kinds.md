@@ -7,11 +7,13 @@ The tree's levels, in `plat5.yml`. Every node in identity is one of these kinds.
 kinds:
   organization:
     path: /orgs/{organization}
-    list_permission: organization:read
   project:
     parent: organization
     path: /projects/{project}
-    list_permission: project:read
+  environment:
+    parent: project
+    path: /envs/{environment}
+    permission_name: project   # an environment's routes require project:read, project:write, …
 ```
 
 <!-- generated from schema: kinds.json#/$defs/kind_name kinds.json#/$defs/kind/properties -->
@@ -20,7 +22,8 @@ kinds:
 | kind name | Lowercase identifier, `[a-z][a-z0-9_]*`, max 32. Not `public`, `member` or `user`. Names the kind in route scopes, path params, placeholders (`{project.id}`), headers (`X-Plat5-Project-Id`), events (`kind: project`) and audit. Fixed once nodes exist: a rename reads as a remove plus an add |
 | `parent` | The one kind a node sits under. Omitted for a root |
 | `path` | Required. The kind's piece of every public path: `/<collection>/{<kind name>}`, such as `/projects/{project}`. The collection has the slug shape. Plat5 joins the pieces root first, so a project's routes sit under `/orgs/{organization}/projects/{project}` |
-| `list_permission` | Required. The permission that shows a node of this kind in a list, live or deleted ([lists](../../concepts/access.md#lists)) |
+| `permission_name` | The kind's name in permissions: what `{kind}` reads as in identity's resources ([the defaults](resources.md#identitys-defaults)), and the start of the default `list_permission`. Default: the kind's name. Kinds can share one: an `environment` with `permission_name: project` is reached through `project:read`, `project:write` and the rest |
+| `list_permission` | The permission that shows a node of this kind in a list, live or deleted ([lists](../../concepts/access.md#lists)). Default: `<permission_name>:read` |
 | `bind_creator` | Whether creating a node of this kind gives its creator `creator_role` on it ([assigning](../../concepts/access.md#assigning)). Default `true`. Off, the creator reaches the node through bindings above it; on a root kind, a new root has no member until a front door such as an operator plane adds one |
 <!-- end generated -->
 

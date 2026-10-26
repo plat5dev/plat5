@@ -93,7 +93,7 @@ Why access is the union of bindings on a node and its ancestors, decided once at
 
 | Decision | Why |
 |----------|-----|
-| Each kind names its `list_permission` in `plat5.yml`, required; child lists require `any_member` and filter by it | Said directly, a missing one is an apply error, not a silently empty list. A project-only member has no `project:read` at the org, so a permission on the list route would hide projects they can open. Filtering by the kind's own permission lists exactly the nodes the caller can open |
+| Each kind has a `list_permission`, by default `<permission_name>:read`; child lists require `any_member` and filter by it | A project-only member has no `project:read` at the org, so a permission on the list route would hide projects they can open. Filtering by the kind's own read permission lists exactly the nodes the caller can open, which is why it's the default. A kind names another to list nodes people can't open |
 | `list_permission` also filters `?status=deleted`, counting the deleted node's own bindings | A deleted node's bindings are kept until purge, so whoever could see it can find it to restore. Restoring still needs the restore route's permission |
 | A deleted node is listed only when every node above it is live | Admit counts a deleted node's own bindings only as the last of a live chain, and such a node can't be restored before its ancestor anyway |
 | Child lists filter by `X-Plat5-Member-Id` when it's sent and return the full list when it isn't | Any front door can list |

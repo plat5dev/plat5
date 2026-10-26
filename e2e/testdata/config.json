@@ -3,19 +3,21 @@
   "reserved_slugs": ["new", "settings", "api", "admin"],
   "users": { "name_claim": "name" },
   "kinds": {
-    "organization": { "path": "/orgs/{organization}", "list_permission": "organization:read" },
-    "project": { "parent": "organization", "path": "/projects/{project}", "list_permission": "project:read", "bind_creator": false },
-    "environment": { "parent": "project", "path": "/envs/{environment}", "list_permission": "environment:read", "bind_creator": false }
+    "organization": { "path": "/orgs/{organization}" },
+    "project": { "parent": "organization", "path": "/projects/{project}", "bind_creator": false },
+    "environment": { "parent": "project", "path": "/envs/{environment}", "permission_name": "project", "bind_creator": false }
   },
   "roles": {
     "admin": { "permissions": ["*"], "bindable_at": ["organization", "project", "environment"] },
     "member": { "permissions": ["organization:read"], "bindable_at": ["organization"] },
     "developer": {
       "includes": ["member"],
-      "permissions": [
-        "project:create", "project:read", "project:write", "project:bindings:read",
-        "environment:create", "environment:read", "environment:write", "environment:bindings:read"
-      ],
+      "permissions": ["project:read", "project:write", "project:bindings:read"],
+      "bindable_at": ["organization", "project", "environment"]
+    },
+    "viewer": {
+      "includes": ["member"],
+      "permissions": ["project:read"],
       "bindable_at": ["organization", "project", "environment"]
     }
   },
@@ -26,7 +28,7 @@
       "url": "http://identity:3000",
       "kinds": {
         "project": { "resources": { "service_accounts": false } },
-        "environment": { "resources": { "invites": false } }
+        "environment": { "resources": { "invites": false, "bindings": { "methods": { "POST": false } } } }
       }
     },
     "audit": { "url": "http://audit:3002" }

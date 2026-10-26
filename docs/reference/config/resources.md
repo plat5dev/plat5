@@ -34,7 +34,7 @@ audit:
 | `resources` | Overrides for every kind, and for the user-scope resources |
 | `kinds.<kind>.resources` | Overrides for one kind. They apply after `resources` |
 
-Each key replaces its default one level down: a resource's `path`, or one verb under `methods`. `false` removes a resource, or a verb. `false` on a collection also removes the resources below it: `service_accounts` takes `service_account`, `keys` and `key`; `keys` takes `key`; `invites` takes `invite`; `bindings` takes `binding`; `members` takes `member`; `my_keys` takes `my_key`. An overridden path keeps the resource's params (`/grants/{binding_id}` for `binding`). Permissions can use `{kind}`, the name of the kind the route is for. A resource also takes the route-level `required_permissions`, `rate_limit` and `audit` of any [route](services.md#route-fields); `upstream` and `allow_deleted` are fixed.
+Each key replaces its default one level down: a resource's `path`, or one verb under `methods`. `false` removes a resource, or a verb. `false` on a collection also removes the resources below it: `service_accounts` takes `service_account`, `keys` and `key`; `keys` takes `key`; `invites` takes `invite`; `bindings` takes `binding`; `members` takes `member`; `my_keys` takes `my_key`. An overridden path keeps the resource's params (`/grants/{binding_id}` for `binding`). Permissions can use `{kind}`: the [`permission_name`](kinds.md) of the kind the route is for, by default its name. A resource also takes the route-level `required_permissions`, `rate_limit` and `audit` of any [route](services.md#route-fields); `upstream` and `allow_deleted` are fixed.
 
 A resource name or verb that isn't below, or a kind that isn't in `kinds`, is **422**. The expanded routes follow every route rule ([matching](services.md#matching) included), and their permissions count as required for roles. `plat5 routes list` prints them.
 
@@ -42,7 +42,7 @@ With audit off for the deployment, leave `services/audit.yml` out of `services`.
 
 ## Identity's defaults
 
-For a kind `K` with parent `P`. Paths are relative to `K`'s node unless the scope says otherwise; `{kind}` is `K`. `<collection>` is the literal in `K`'s `path` (`/projects` for `/projects/{project}`).
+For a kind `K` with parent `P`. Paths are relative to `K`'s node unless the scope says otherwise; `{kind}` is `K`'s `permission_name`, by default `K`. `<collection>` is the literal in `K`'s `path` (`/projects` for `/projects/{project}`).
 
 | Resource | Scope | Path | Methods and permissions | Upstream on identity |
 |---|---|---|---|---|
@@ -97,9 +97,11 @@ A node's events include everything below it ([`reference/api/audit.md`](../api/a
 
 ## The default permissions
 
+`<kind>` is the kind's `permission_name`, by default its name.
+
 | Permission | Checked at | Allows |
 |------------|------------|--------|
-| `<kind>:read` | The node | Getting the node; the usual `list_permission` |
+| `<kind>:read` | The node | Getting the node; the default `list_permission` |
 | `<kind>:create` | The parent | Creating one under the parent |
 | `<kind>:write` | The node | Changing the display name |
 | `<kind>:delete` | The node | Deleting and restoring |

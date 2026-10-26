@@ -1,7 +1,7 @@
 //! Identity's and audit's resources at their defaults
 //! (docs/reference/config/resources.md). Plat5 fixes each one's operations and
 //! upstreams; the deployment's overrides move or gate them. Permissions hold
-//! `{kind}`, filled in with the kind each route is for.
+//! `{kind}`, filled in with the permission name of the kind each route is for.
 
 use crate::config::{Config, Required, ANY_MEMBER, AUDIT, IDENTITY, USER_SCOPE};
 

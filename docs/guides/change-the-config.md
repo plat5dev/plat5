@@ -4,7 +4,7 @@ Keep `plat5.yml` and the service files in a repo, and change it only through `pl
 
 ## Add a kind at the bottom
 
-Add it to `kinds` in `plat5.yml` with its `parent`, `path` and `list_permission`, grant its permissions in `roles`, add any service routes for it, and apply. Identity and audit give it their routes ([resources](../reference/config/resources.md)); the plan lists them. `plat5 routes list` shows the result.
+Add it to `kinds` in `plat5.yml` with its `parent` and `path`, grant its permissions in `roles`, add any service routes for it, and apply. Identity and audit give it their routes ([resources](../reference/config/resources.md)); the plan lists them. `plat5 routes list` shows the result.
 
 ## Remove a kind
 

@@ -328,13 +328,8 @@ mod tests {
                 Box::new(|c| c["kinds"]["project"]["segment"] = json!("projects")),
             ),
             (
-                "kinds.project",
-                Box::new(|c| {
-                    c["kinds"]["project"]
-                        .as_object_mut()
-                        .unwrap()
-                        .remove("list_permission");
-                }),
+                "kinds.project.permission_name",
+                Box::new(|c| c["kinds"]["project"]["permission_name"] = json!("project:x")),
             ),
             (
                 "kinds.project",

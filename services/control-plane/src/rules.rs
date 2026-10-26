@@ -986,6 +986,58 @@ mod tests {
         assert_eq!(sent["project"]["bind_creator"], json!(false));
     }
 
+    // A kind's permission_name is what {kind} reads as in identity's
+    // resources, and starts its default list_permission.
+    #[test]
+    fn permission_name_shared_with_the_parent() {
+        let mut c = with_identity(json!({ "url": "http://identity:3000" }));
+        c["kinds"]["environment"] = json!({
+            "parent": "project", "path": "/envs/{environment}", "permission_name": "project"
+        });
+        c["kinds"]["project"]
+            .as_object_mut()
+            .unwrap()
+            .remove("list_permission");
+        c["roles"]["admin"]["bindable_at"] = json!(["organization", "project", "environment"]);
+        c["roles"]["developer"] = json!({ "permissions": ["project:read", "project:write"], "bindable_at": ["environment"] });
+        run(c.clone()).unwrap();
+        let config: Config = serde_json::from_value(c.clone()).unwrap();
+        assert_eq!(config.kinds["project"].list_permission, "project:read");
+        assert_eq!(config.kinds["environment"].list_permission, "project:read");
+        assert_eq!(
+            config.kinds["organization"].list_permission,
+            "organization:read"
+        );
+
+        let env = "/orgs/{organization}/projects/{project}/envs/{environment}";
+        let required = |method: &str, path: &str| {
+            let r = crate::expand::expand(&config)["identity"]
+                .routes
+                .iter()
+                .find(|r| r.method == method && r.path == path)
+                .unwrap_or_else(|| panic!("no {method} {path}"))
+                .clone();
+            r.required_permissions.unwrap().permissions().to_vec()
+        };
+        assert_eq!(required("PATCH", env), ["project:write"]);
+        assert_eq!(
+            required("POST", "/orgs/{organization}/projects/{project}/envs"),
+            ["project:create"]
+        );
+        assert_eq!(
+            required("GET", &format!("{env}/bindings")),
+            ["project:bindings:read"]
+        );
+        assert_eq!(
+            required("PATCH", "/orgs/{organization}/projects/{project}"),
+            ["project:write"]
+        );
+
+        // Nothing requires the kind's own name any more.
+        c["roles"]["developer"]["permissions"] = json!(["environment:read"]);
+        errors_at(c, "roles.developer.permissions[0]");
+    }
+
     fn with_identity(identity: Value) -> Value {
         let mut c = base();
         c["roles"]["member"]["permissions"] = json!(["organization:read"]);

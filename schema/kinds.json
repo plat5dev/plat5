@@ -26,7 +26,7 @@
       "title": "kind",
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "list_permission"],
+      "required": ["path"],
       "properties": {
         "parent": {
           "title": "parent",
@@ -39,9 +39,15 @@
           "type": "string",
           "pattern": "^/[a-z][a-z0-9-]{1,61}[a-z0-9]/\\{[a-z][a-z0-9_]{0,31}\\}$"
         },
+        "permission_name": {
+          "title": "permission_name",
+          "description": "The kind's name in permissions: what `{kind}` reads as in identity's resources ([the defaults](resources.md#identitys-defaults)), and the start of the default `list_permission`. Default: the kind's name. Kinds can share one: an `environment` with `permission_name: project` is reached through `project:read`, `project:write` and the rest.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,31}$"
+        },
         "list_permission": {
           "title": "list_permission",
-          "description": "Required. The permission that shows a node of this kind in a list, live or deleted ([lists](../../concepts/access.md#lists)).",
+          "description": "The permission that shows a node of this kind in a list, live or deleted ([lists](../../concepts/access.md#lists)). Default: `<permission_name>:read`.",
           "$ref": "roles.json#/$defs/permission"
         },
         "bind_creator": {

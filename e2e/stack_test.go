@@ -342,11 +342,15 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 
 	// Service accounts belong to an org or an environment: the config turns
 	// them off at projects, items included, so those routes match nothing.
-	// Likewise invites at environments.
+	// Likewise invites at environments, and new bindings there: people aren't
+	// bound at an environment; a service account gets its binding when it's
+	// created.
 	s.call(owner, "POST", projectPath+"/service-accounts",
 		map[string]string{"name": "ci", "role": "developer"}, 404, nil)
 	s.call(owner, "GET", projectPath+"/service-accounts/"+org.ID, nil, 404, nil)
 	s.call(owner, "GET", envPath+"/invites", nil, 404, nil)
+	s.call(owner, "POST", envPath+"/bindings",
+		map[string]string{"member_id": org.ID, "role": "developer"}, 404, nil)
 
 	// A service account at the environment, with a key.
 	var sa struct {
@@ -373,13 +377,14 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 	}
 	s.call(bot, "GET", byID, nil, 200, &got)
 
-	// …refused by permission: developer holds no environment:delete.
+	// …refused by permission: an environment's routes require project's
+	// permissions (permission_name), and developer holds no project:delete.
 	var denied apiError
 	s.call(bot, "DELETE", envPath, nil, 403, &denied)
 	if denied.Error.Message != "Permission denied, or it may not exist." {
 		t.Fatalf("permission 403: %+v", denied)
 	}
-	if fmt.Sprint(denied.Error.Details["required_permissions"]) != "[environment:delete]" {
+	if fmt.Sprint(denied.Error.Details["required_permissions"]) != "[project:delete]" {
 		t.Fatalf("permission 403 details: %+v", denied.Error.Details)
 	}
 	// …and above its bindings: nothing at the project.
@@ -402,8 +407,7 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 	// What the service account holds at the environment: developer, member included.
 	var held membership
 	s.call(bot, "GET", envPath+"/membership", nil, 200, &held)
-	want := []string{"environment:bindings:read", "environment:create", "environment:read", "environment:write",
-		"organization:read", "project:bindings:read", "project:create", "project:read", "project:write"}
+	want := []string{"organization:read", "project:bindings:read", "project:read", "project:write"}
 	if held.MemberID != sa.ID || len(held.Bindings) != 1 || held.Bindings[0].Role != "developer" ||
 		!slices.Equal(held.Permissions, want) {
 		t.Fatalf("service account's membership: %+v", held)

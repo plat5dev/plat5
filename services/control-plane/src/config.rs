@@ -32,6 +32,7 @@ pub struct Config {
     pub users: Users,
     #[serde(default)]
     pub defaults: Defaults,
+    #[serde(deserialize_with = "kinds_filled")]
     pub kinds: BTreeMap<String, Kind>,
     pub roles: BTreeMap<String, Role>,
     pub creator_role: String,
@@ -113,11 +114,31 @@ pub struct Kind {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     pub path: String,
+    /// The kind's name in permissions: `{kind}` in identity's resources. The
+    /// kind's own name when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_name: Option<String>,
+    /// `<permission name>:read` when unset: filled in as the config is parsed,
+    /// so readers always get one.
+    #[serde(default)]
     pub list_permission: String,
     /// Whether creating a node of this kind binds its creator with `creator_role`.
     /// Sent only when off, so a reader takes a missing value as on.
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub bind_creator: bool,
+}
+
+/// The kinds, each `list_permission` filled in where the config leaves it out.
+fn kinds_filled<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<BTreeMap<String, Kind>, D::Error> {
+    let mut kinds = BTreeMap::<String, Kind>::deserialize(d)?;
+    for (name, kind) in kinds.iter_mut() {
+        if kind.list_permission.is_empty() {
+            kind.list_permission = format!("{}:read", kind.permission_name(name));
+        }
+    }
+    Ok(kinds)
 }
 
 fn yes() -> bool {
@@ -131,6 +152,11 @@ fn is_yes(b: &bool) -> bool {
 impl Kind {
     pub fn is_root(&self) -> bool {
         self.parent.is_none()
+    }
+
+    /// The kind's name in permissions, given the kind's own name.
+    pub fn permission_name<'a>(&'a self, name: &'a str) -> &'a str {
+        self.permission_name.as_deref().unwrap_or(name)
     }
 
     /// The literal of the kind's path piece: `/projects` for `/projects/{project}`.

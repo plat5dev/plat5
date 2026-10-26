@@ -9,18 +9,22 @@ In `plat5.yml`, applied with the rest of the config ([`concepts/config.md`](../.
 roles:
   admin:
     permissions: ["*"]
-    bindable_at: [organization, project]
+    bindable_at: [organization, project, environment]
   member:
     permissions: [organization:read]
     bindable_at: [organization]
   developer:
     includes: [member]
-    permissions: [project:create, project:read, project:write, project:bindings:read]
-    bindable_at: [organization, project]
+    permissions: [project:read, project:write, project:bindings:read]
+    bindable_at: [organization, project, environment]
+  viewer:
+    includes: [member]
+    permissions: [project:read]
+    bindable_at: [organization, project, environment]
 creator_role: admin
 ```
 
-This is the example role set the CLI's templates ship ([`plat5 init`](../cli.md#the-local-stack)). It's honest about grants: whoever holds `bindings:write` can grant any role, so the one role that holds it is `admin`, with `*`.
+This is the example role set the CLI's templates ship ([`plat5 init`](../cli.md#the-local-stack)), for organization > project > environment, where an environment's `permission_name` is `project` ([kinds](kinds.md)). It's honest about grants: whoever holds `bindings:write` can grant any role, so the one role that holds it is `admin`, with `*`. `admin` also shapes the tree, creating and deleting projects and environments; `developer` and `viewer` work inside it.
 
 <!-- generated from schema: roles.json#/properties/roles roles.json#/$defs/role_slug roles.json#/$defs/role/properties roles.json#/properties/creator_role -->
 | Field | Rule |
