@@ -4,7 +4,7 @@ What Plat5 is for, what it won't do, and the ways it can grow without changing t
 
 ## What Plat5 is for
 
-Hierarchical B2B products whose tenancy boundary is a small, stable set of kinds (org, project, maybe environment). Nodes come and go freely by API; kinds rarely change.
+Products where people work together in shared spaces, whose tenancy boundary is a small, stable set of kinds (org, project, maybe environment): B2B SaaS, developer platforms and APIs, team workspaces in consumer apps, internal platforms. Nodes come and go freely by API; kinds rarely change.
 
 Not for permissions on individual records inside a node, or hierarchies end users invent and reshape. For those, a flat tree plus the product's own tables is lighter, or the policy hook below nodes once it ships.
 

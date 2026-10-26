@@ -8,7 +8,7 @@ Plat5 is for a stable tenancy boundary enforced outside every handler: the tree 
 
 | Decision | Why |
 |----------|-----|
-| For hierarchical B2B products whose tenancy boundary is a small, stable set of kinds (org, project, maybe environment). Nodes come and go freely by API; the kinds rarely change | That's where one tree, checked once at the gateway, saves every service from writing its own |
+| For products where people work together in shared spaces, whose tenancy boundary is a small, stable set of kinds (org, project, maybe environment): B2B SaaS, developer platforms and APIs, team workspaces in consumer apps, internal platforms. Nodes come and go freely by API; the kinds rarely change | That's where one tree, checked once at the gateway, saves every service from writing its own |
 | Not for permissions on individual records inside a node, or hierarchies end users invent and reshape | A flat org plus the product's own tables is lighter there, or the deferred policy hook below nodes ([`TODO.md`](../../TODO.md)) |
 | One writer of the tree. A service that needs nodes creates them through the node API | Two writers would let the gateway's check run ahead of Plat5's own records |
 
