@@ -5,7 +5,8 @@ skip unless `PLAT5_E2E=1`.
 
 A fresh stack has no config, so the tests apply theirs first:
 [`testdata/config.json`](testdata/config.json), the flat config the CLI sends
-(`services` as a map), with kinds organization → project and the example roles.
+(`services` as a map), with kinds organization → project → environment, the example
+roles, and service accounts turned off at projects.
 They dry-run it through the control plane's admin API and apply it with the
 plan's revision as `expect`; a plan with no changes applies nothing, so a rerun
 leaves the stack as it is. With `AUDIT_ENABLED=false` the config leaves the

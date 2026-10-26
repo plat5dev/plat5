@@ -110,11 +110,13 @@ func TestAuditLogs(t *testing.T) {
 		ID string `json:"id"`
 	}
 	s.call(owner, "GET", "/user", nil, 200, &user)
-	var org, project node
+	var org, project, env node
 	s.call(owner, "POST", "/orgs", map[string]string{"display_name": "Audit " + run}, 201, &org)
 	orgPath := "/orgs/" + org.Slug
 	s.call(owner, "POST", orgPath+"/projects", map[string]string{"display_name": "Web"}, 201, &project)
 	projectPath := orgPath + "/projects/" + project.Slug
+	s.call(owner, "POST", projectPath+"/envs", map[string]string{"display_name": "Development"}, 201, &env)
+	envPath := projectPath + "/envs/" + env.Slug
 	var held membership
 	s.call(owner, "GET", orgPath+"/membership", nil, 200, &held)
 	ownerMember := held.MemberID
@@ -122,20 +124,22 @@ func TestAuditLogs(t *testing.T) {
 	var sa struct {
 		ID string `json:"id"`
 	}
-	s.call(owner, "POST", projectPath+"/service-accounts", map[string]string{"name": "ci", "role": "developer"}, 201, &sa)
+	s.call(owner, "POST", envPath+"/service-accounts", map[string]string{"name": "ci", "role": "developer"}, 201, &sa)
 	var saKey key
-	s.call(owner, "POST", projectPath+"/service-accounts/"+sa.ID+"/keys", map[string]string{}, 201, &saKey)
+	s.call(owner, "POST", envPath+"/service-accounts/"+sa.ID+"/keys", map[string]string{}, 201, &saKey)
 	bot := caller(saKey.Key)
-	s.call(bot, "GET", projectPath, nil, 200, nil)
+	s.call(bot, "GET", envPath, nil, 200, nil)
 	s.call(bot, "DELETE", projectPath, nil, 403, nil)
 
 	orgChain := "/organization:" + org.ID
 	projectChain := orgChain + "/project:" + project.ID
+	envChain := projectChain + "/environment:" + env.ID
 	const (
 		projects = "/orgs/{organization}/projects"
 		theProj  = "/orgs/{organization}/projects/{project}"
-		accounts = "/orgs/{organization}/projects/{project}/service-accounts"
-		keys     = "/orgs/{organization}/projects/{project}/service-accounts/{service_account_id}/keys"
+		theEnv   = "/orgs/{organization}/projects/{project}/envs/{environment}"
+		accounts = "/orgs/{organization}/projects/{project}/envs/{environment}/service-accounts"
+		keys     = "/orgs/{organization}/projects/{project}/envs/{environment}/service-accounts/{service_account_id}/keys"
 	)
 
 	// The org's log.
@@ -156,14 +160,15 @@ func TestAuditLogs(t *testing.T) {
 		t.Fatalf("project create: %+v", projectCreate)
 	}
 	saCreate := find(t, orgLog, "POST", accounts)
-	if chain(saCreate) != projectChain || *saCreate.Status != 201 || len(saCreate.Params) != 0 {
+	if chain(saCreate) != envChain || *saCreate.Status != 201 || len(saCreate.Params) != 0 {
 		t.Fatalf("service account create: %+v", saCreate)
 	}
 	keyCreate := find(t, orgLog, "POST", keys)
 	if keyCreate.Params["service_account_id"] != sa.ID {
 		t.Fatalf("key create's params: %+v", keyCreate)
 	}
-	// Refused by permission: rejected, as the service account and its key.
+	// Refused by permission, above its bindings: rejected, as the service
+	// account and its key.
 	refused := find(t, orgLog, "DELETE", theProj)
 	if refused.Outcome != "rejected" || *refused.Status != 403 || chain(refused) != projectChain ||
 		!is(refused.Actor.MemberID, sa.ID) || refused.Actor.Principal != "service_account" ||
@@ -171,7 +176,7 @@ func TestAuditLogs(t *testing.T) {
 		t.Fatalf("permission 403: %+v", refused)
 	}
 	// Reads aren't audited.
-	if has(orgLog, "GET", theProj) {
+	if has(orgLog, "GET", theEnv) {
 		t.Fatalf("a GET was audited: %+v", orgLog)
 	}
 
@@ -216,14 +221,14 @@ func TestAuditLogs(t *testing.T) {
 		t.Fatalf("filtered: %+v", page)
 	}
 	s.call(owner, "GET", orgPath+"/audit-events?actor_member_id="+ownerMember+"&method=POST", nil, 200, &page)
-	if len(page.AuditEvents) != 4 {
+	if len(page.AuditEvents) != 5 {
 		t.Fatalf("the owner's writes, the named create included: %+v", page)
 	}
 	s.call(owner, "GET", orgPath+"/audit-events?nope=1", nil, 422, nil)
 
 	// Permissions: developer holds no audit:read, and someone outside the org
 	// holds nothing there.
-	s.call(bot, "GET", projectPath+"/audit-events", nil, 403, nil)
+	s.call(bot, "GET", envPath+"/audit-events", nil, 403, nil)
 	s.call(outsider, "GET", orgPath+"/audit-events", nil, 403, nil)
 	if len(s.events(outsider, "/user/audit-events")) != 0 {
 		t.Fatal("the outsider's own log isn't empty")

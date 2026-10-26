@@ -308,17 +308,18 @@ type apiError struct {
 	} `json:"error"`
 }
 
-// The flow e10s needs: an org and a project, a service account at the project,
-// a route called through the gateway as it, who holds what there, and the
-// project deleted and restored: a restore undoes the delete, keys included.
+// The flow e10s needs: an org, a project and an environment, a service account
+// at the environment, a route called through the gateway as it, who holds what
+// there, and the project deleted and restored: a restore undoes the delete,
+// keys included.
 func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 	s := newStack(t)
 	run := fmt.Sprintf("%d", time.Now().UnixNano())
 	owner := s.person("e2e-owner-" + run)
 	outsider := s.person("e2e-outsider-" + run)
 
-	// A person creates an org, and a project in it.
-	var org, project node
+	// A person creates an org, a project in it, and an environment in that.
+	var org, project, env node
 	s.call(owner, "POST", "/orgs", map[string]string{"display_name": "E2E " + run}, 201, &org)
 	if org.Kind != "organization" || !isID(org.ID) || org.Slug == "" || org.DisplayName != "E2E "+run ||
 		org.RootID != org.ID || org.ParentID != nil || len(org.Ancestors) != 0 {
@@ -331,20 +332,31 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 		t.Fatalf("project: %+v", project)
 	}
 	projectPath := orgPath + "/projects/" + project.Slug
-	byID := "/orgs/" + org.ID + "/projects/" + project.ID
+	s.call(owner, "POST", projectPath+"/envs", map[string]string{"display_name": "Development"}, 201, &env)
+	if env.Kind != "environment" || env.Slug != "development" || env.ParentID == nil || *env.ParentID != project.ID ||
+		env.RootID != org.ID || len(env.Ancestors) != 2 || env.Ancestors[1].ID != project.ID {
+		t.Fatalf("environment: %+v", env)
+	}
+	envPath := projectPath + "/envs/" + env.Slug
+	byID := "/orgs/" + org.ID + "/projects/" + project.ID + "/envs/" + env.ID
 
-	// A service account at the project, with a key.
+	// Service accounts belong to an org or an environment: the config turns
+	// them off at projects, so that route matches nothing.
+	s.call(owner, "POST", projectPath+"/service-accounts",
+		map[string]string{"name": "ci", "role": "developer"}, 404, nil)
+
+	// A service account at the environment, with a key.
 	var sa struct {
 		ID     string `json:"id"`
 		NodeID string `json:"node_id"`
 	}
-	s.call(owner, "POST", projectPath+"/service-accounts",
+	s.call(owner, "POST", envPath+"/service-accounts",
 		map[string]string{"name": "ci", "role": "developer"}, 201, &sa)
-	if sa.NodeID != project.ID || !isID(sa.ID) {
+	if sa.NodeID != env.ID || !isID(sa.ID) {
 		t.Fatalf("service account: %+v", sa)
 	}
 	var saKey key
-	s.call(owner, "POST", projectPath+"/service-accounts/"+sa.ID+"/keys", map[string]string{}, 201, &saKey)
+	s.call(owner, "POST", envPath+"/service-accounts/"+sa.ID+"/keys", map[string]string{}, 201, &saKey)
 	if !isID(saKey.ID) || !strings.HasPrefix(saKey.Key, "plat5-k-2-") {
 		t.Fatalf("key: %+v", saKey)
 	}
@@ -352,26 +364,28 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 
 	// Through the gateway as the service account: allowed by slug and by id…
 	var got node
-	s.call(bot, "GET", projectPath, nil, 200, &got)
-	if got.ID != project.ID {
-		t.Fatalf("project by slug: %+v", got)
+	s.call(bot, "GET", envPath, nil, 200, &got)
+	if got.ID != env.ID {
+		t.Fatalf("environment by slug: %+v", got)
 	}
 	s.call(bot, "GET", byID, nil, 200, &got)
 
-	// …refused by permission: developer holds no project:delete.
+	// …refused by permission: developer holds no environment:delete.
 	var denied apiError
-	s.call(bot, "DELETE", projectPath, nil, 403, &denied)
+	s.call(bot, "DELETE", envPath, nil, 403, &denied)
 	if denied.Error.Message != "Permission denied, or it may not exist." {
 		t.Fatalf("permission 403: %+v", denied)
 	}
-	if fmt.Sprint(denied.Error.Details["required_permissions"]) != "[project:delete]" {
+	if fmt.Sprint(denied.Error.Details["required_permissions"]) != "[environment:delete]" {
 		t.Fatalf("permission 403 details: %+v", denied.Error.Details)
 	}
+	// …and above its bindings: nothing at the project.
+	s.call(bot, "GET", projectPath, nil, 403, nil)
 
-	// Someone outside the org gets the same 403, and so does a project that isn't there.
+	// Someone outside the org gets the same 403, and so does an environment that isn't there.
 	var outside, missing apiError
-	s.call(outsider, "GET", projectPath, nil, 403, &outside)
-	s.call(owner, "GET", orgPath+"/projects/no-such-project", nil, 403, &missing)
+	s.call(outsider, "GET", envPath, nil, 403, &outside)
+	s.call(owner, "GET", projectPath+"/envs/no-such-env", nil, 403, &missing)
 	if outside.Error.Message != denied.Error.Message || missing.Error.Message != denied.Error.Message {
 		t.Fatalf("403s differ: %+v / %+v / %+v", outside, missing, denied)
 	}
@@ -382,26 +396,27 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 		t.Fatalf("any_member 403: %+v", notMember)
 	}
 
-	// What the service account holds at the project: developer, member included.
+	// What the service account holds at the environment: developer, member included.
 	var held membership
-	s.call(bot, "GET", projectPath+"/membership", nil, 200, &held)
-	want := []string{"organization:read", "project:bindings:read", "project:create", "project:read", "project:write"}
+	s.call(bot, "GET", envPath+"/membership", nil, 200, &held)
+	want := []string{"environment:bindings:read", "environment:create", "environment:read", "environment:write",
+		"organization:read", "project:bindings:read", "project:create", "project:read", "project:write"}
 	if held.MemberID != sa.ID || len(held.Bindings) != 1 || held.Bindings[0].Role != "developer" ||
 		!slices.Equal(held.Permissions, want) {
 		t.Fatalf("service account's membership: %+v", held)
 	}
-	// The creator holds admin on the org and on the project it made.
+	// The creator holds admin on the org, and on the project and environment it made.
 	var mine membership
 	s.call(owner, "GET", orgPath+"/membership", nil, 200, &mine)
 	if !isID(mine.MemberID) || !slices.Equal(mine.Permissions, []string{"*"}) {
 		t.Fatalf("owner's membership: %+v", mine)
 	}
 
-	// The project's access list: its own bindings, and the org's inherited.
+	// The environment's access list: its own bindings, and the org's and project's inherited.
 	var access struct {
 		Bindings []binding `json:"bindings"`
 	}
-	s.call(owner, "GET", projectPath+"/bindings", nil, 200, &access)
+	s.call(owner, "GET", envPath+"/bindings", nil, 200, &access)
 	var own, inherited []binding
 	for _, b := range access.Bindings {
 		if b.Inherited {
@@ -410,16 +425,19 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 			own = append(own, b)
 		}
 	}
-	if len(inherited) != 1 || inherited[0].NodeID != org.ID || inherited[0].MemberID != mine.MemberID ||
-		inherited[0].Role != "admin" || inherited[0].Principal != "person" {
+	if len(inherited) != 2 || !slices.ContainsFunc(inherited, func(b binding) bool {
+		return b.NodeID == org.ID && b.MemberID == mine.MemberID && b.Role == "admin" && b.Principal == "person"
+	}) || !slices.ContainsFunc(inherited, func(b binding) bool {
+		return b.NodeID == project.ID && b.MemberID == mine.MemberID && b.Role == "admin"
+	}) {
 		t.Fatalf("inherited bindings: %+v", access)
 	}
 	if len(own) != 2 || !slices.ContainsFunc(own, func(b binding) bool {
-		return b.MemberID == sa.ID && b.Role == "developer" && b.NodeID == project.ID && b.Principal == "service_account"
+		return b.MemberID == sa.ID && b.Role == "developer" && b.NodeID == env.ID && b.Principal == "service_account"
 	}) {
-		t.Fatalf("the project's own bindings: %+v", access)
+		t.Fatalf("the environment's own bindings: %+v", access)
 	}
-	s.call(owner, "GET", projectPath+"/bindings?inherited=false", nil, 200, &access)
+	s.call(owner, "GET", envPath+"/bindings?inherited=false", nil, 200, &access)
 	if len(access.Bindings) != 2 {
 		t.Fatalf("?inherited=false: %+v", access)
 	}
@@ -431,7 +449,7 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 		t.Fatalf("projects: %+v", list)
 	}
 
-	// Delete the project.
+	// Delete the project: its environment is deleted with it.
 	s.call(owner, "DELETE", projectPath, nil, 204, nil)
 	settle()
 
@@ -447,21 +465,20 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 		t.Fatalf("live projects after the delete: %+v", list)
 	}
 	// The service account's node is deleted, so its key is refused: 401.
-	s.call(bot, "GET", projectPath, nil, 401, nil)
+	s.call(bot, "GET", envPath, nil, 401, nil)
 
-	// Restore it.
+	// Restore the project, and its environment with it.
 	var restored node
 	s.call(owner, "POST", projectPath+"/restore", nil, 200, &restored)
 	if restored.ID != project.ID || restored.Status != "active" || restored.PurgeAfter != nil {
 		t.Fatalf("restored: %+v", restored)
 	}
 	settle()
-	s.call(owner, "GET", projectPath, nil, 200, &got)
-
+	s.call(owner, "GET", envPath, nil, 200, &got)
 	// The same key works again: the delete revoked nothing.
-	s.call(bot, "GET", projectPath, nil, 200, &got)
-	if got.ID != project.ID {
-		t.Fatalf("project after restore: %+v", got)
+	s.call(bot, "GET", envPath, nil, 200, &got)
+	if got.ID != env.ID {
+		t.Fatalf("environment after restore: %+v", got)
 	}
 }
 

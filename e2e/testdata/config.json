@@ -4,21 +4,32 @@
   "users": { "name_claim": "name" },
   "kinds": {
     "organization": { "path": "/orgs/{organization}", "list_permission": "organization:read" },
-    "project": { "parent": "organization", "path": "/projects/{project}", "list_permission": "project:read" }
+    "project": { "parent": "organization", "path": "/projects/{project}", "list_permission": "project:read" },
+    "environment": { "parent": "project", "path": "/envs/{environment}", "list_permission": "environment:read" }
   },
   "roles": {
-    "admin": { "permissions": ["*"], "bindable_at": ["organization", "project"] },
+    "admin": { "permissions": ["*"], "bindable_at": ["organization", "project", "environment"] },
     "member": { "permissions": ["organization:read"], "bindable_at": ["organization"] },
     "developer": {
       "includes": ["member"],
-      "permissions": ["project:create", "project:read", "project:write", "project:bindings:read"],
-      "bindable_at": ["organization", "project"]
+      "permissions": [
+        "project:create", "project:read", "project:write", "project:bindings:read",
+        "environment:create", "environment:read", "environment:write", "environment:bindings:read"
+      ],
+      "bindable_at": ["organization", "project", "environment"]
     }
   },
   "creator_role": "admin",
   "rate_limits": { "default": { "requests": 100, "window_seconds": 1 } },
   "services": {
-    "identity": { "url": "http://identity:3000" },
+    "identity": {
+      "url": "http://identity:3000",
+      "kinds": {
+        "project": {
+          "resources": { "service_accounts": false, "service_account": false, "keys": false, "key": false }
+        }
+      }
+    },
     "audit": { "url": "http://audit:3002" }
   }
 }
