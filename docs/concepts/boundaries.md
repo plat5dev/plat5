@@ -48,7 +48,7 @@ None of these touches nodes, the ancestor rule, slugs, or what services see; the
 | Anyone with a link, or any signed-in user | Not possible | Public principals, like `allUsers` and `allAuthenticatedUsers` |
 | Moving a project to another org | Refused | Cross-org move with a `node.moved` event |
 | A kind optional in the middle (a project under an org or a folder) | One parent per kind | A list of parents, additive |
-| Folders inside folders | Not possible | A kind allowed as its own parent, with a depth cap |
+| Access per folder, with folders inside folders | Folders are service data inside a node, nested as deep as the service likes; access is decided at the node | A kind allowed as its own parent, with a depth cap |
 | Permissions on one record inside a node | Service state rules | The policy hook ([`TODO.md`](../../TODO.md)) |
 
 ## Costs accepted knowingly

@@ -47,7 +47,7 @@ Every tree gets the deployment's roles. `GET /nodes/{node_id}/roles` already has
 
 ## Group principals, public principals, cross-org moves, self-nesting kinds
 
-The extension points in [`docs/concepts/boundaries.md`](docs/concepts/boundaries.md#extension-points). Ready: in order of likelihood, a customer who needs to share a project with a whole other org (group principals); a public link or "any signed-in user" grant (public principals); a project that must move to another org (cross-org move); user-built folder trees (self-nesting kinds).
+The extension points in [`docs/concepts/boundaries.md`](docs/concepts/boundaries.md#extension-points). Ready: in order of likelihood, a customer who needs to share a project with a whole other org (group principals); a public link or "any signed-in user" grant (public principals); a project that must move to another org (cross-org move); access per folder in user-built folder trees (self-nesting kinds); the folders themselves are service data today.
 
 ## Moving a node within its tree
 
