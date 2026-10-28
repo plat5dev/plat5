@@ -18,7 +18,7 @@
 |-----|-----------------|
 | [model](concepts/model.md) | Kinds, nodes, principals, users, members, bindings; ids and slugs; the principles |
 | [access](concepts/access.md) | The ancestor rule, who can be in a tree, roles and bindings, credentials, how a request is decided, access outside a request, lists |
-| [lifecycle](concepts/lifecycle.md) | Creating, deleting, restoring and purging; members; lifecycle events |
+| [lifecycle](concepts/lifecycle.md) | Creating, deleting, restoring and purging; members; tree and user events |
 | [config](concepts/config.md) | `plat5.yml` and service files, validation, plan and apply, revisions, readers |
 | [audit](concepts/audit.md) | What's recorded, in which log, and the delivery guarantee |
 | [boundaries](concepts/boundaries.md) | What Plat5 is for, what it won't do, extension points |

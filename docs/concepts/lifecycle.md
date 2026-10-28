@@ -1,6 +1,6 @@
 # Lifecycle
 
-How nodes and members are created, deleted, restored and purged, and the events services read to follow along.
+How nodes and members are created, deleted, restored and purged, how a person's account ends, and the events services read to follow along.
 
 ## Creating nodes
 
@@ -40,21 +40,22 @@ A kind is removed, or changes parent, only while it has no nodes, deleted ones i
 
 ### Deleting an account
 
-`DELETE /users/{user_id}`, in one transaction: every member of the person in every tree is removed (bindings deleted, `member.removed` per tree), personal keys and IdP links are deleted, and the principal is deleted. Removed member rows stay, with no name. Nothing blocks it: an org left with no admin is recovered through an operator plane.
+`DELETE /users/{user_id}`, in one transaction: every member of the person in every tree is removed (bindings deleted, `member.removed` per tree), personal keys and IdP links are deleted, and the principal is deleted, with `user.deleted`. Removed member rows stay, with no name. Nothing blocks it: an org left with no admin is recovered through an operator plane.
 
 ## Lifecycle events
 
-A feed of what's created and what ends, for other services to act on. Written in the same transaction as the change; a cascade writes one event per node, parents before children. Reading is opt-in. Plat5 names no queue or broker; anyone who wants push delivery runs a relay that reads this feed.
+What's created and what ends, for other services to act on, in two feeds on identity's internal port. Each event is written in the same transaction as the change. Reading is opt-in. Plat5 names no queue or broker; anyone who wants push delivery runs a relay that reads the feeds.
 
-```
-GET /internal/lifecycle-events?starting_after=<id>&limit=<n>
-{ "lifecycle_events": [
-  { "id": "812", "type": "node.deleted", "kind": "project", "node_id": "01jbx…", "root_id": "01jbw…", "occurred_at": "…" },
-  { "id": "813", "type": "member.removed", "member_id": "01jby…", "root_id": "01jbw…", "principal": "person", "occurred_at": "…" }
-], "has_more": false }
-```
+| Feed | Events | Read by a service that keeps |
+|------|--------|------------------------------|
+| Tree events, `GET /internal/tree-events` | `node.*`, `member.*` | Tree data, keyed by node and member ids |
+| User events, `GET /internal/user-events` | `user.*` | User-route data, keyed by user id |
 
-The set of types is fixed, whatever kinds a deployment declares. Node events carry the node's `kind`.
+The feeds hold the same line as `X-Plat5-Member-Id` and `X-Plat5-User-Id`: a tree event never carries a user id, and a user event carries no tree, no member and no name. A service that keeps both kinds of data reads both. Shapes and paging: [internal APIs](../reference/api/internal.md#tree-events).
+
+### Tree events
+
+A cascade writes one event per node, parents before children. The set of types is fixed, whatever kinds a deployment declares. Node events carry the node's `kind`.
 
 | Event | When | A service should |
 |-------|------|------------------|
@@ -67,4 +68,15 @@ The set of types is fixed, whatever kinds a deployment declares. Node events car
 
 `principal` is `person` or `service_account`. No principal id, user id, name or role. Binding changes aren't events: access is asked for, not pushed. A service asks identity when its work runs ([access](access.md#outside-a-request)).
 
-`id` is a decimal string from a sequence; event writes are serialized, so `id` order is commit order. Pass it back as `starting_after`; don't do arithmetic on it. Delivery is at least once from the consumer's side, so acting on an event must be idempotent. Events are kept ([`TODO.md`](../../TODO.md)).
+### User events
+
+| Event | When | A service should |
+|-------|------|------------------|
+| `user.created` | A person comes to exist: first sign-in, or an admin adding someone who has never signed in | Nothing usually; create user-route data lazily |
+| `user.deleted` | The account is deleted ([deleting an account](#deleting-an-account)) | Delete the person's user-route data |
+
+Each carries the person's user id and nothing else about them. Suspension isn't an event: it's access, which a service asks about through identity's evaluation API ([access](access.md#outside-a-request)).
+
+### Reading the feeds
+
+Each feed has its own sequence, and event writes to a feed are serialized, so a feed's order is its commit order. A consumer keeps one cursor per feed. The events of one transaction share `occurred_at`, in both feeds: an account deletion's `member.removed` events and its `user.deleted` carry the same one. Delivery is at least once from the consumer's side, so acting on an event must be idempotent. Events are kept ([`TODO.md`](../../TODO.md)).

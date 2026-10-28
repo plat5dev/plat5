@@ -23,7 +23,7 @@ Plat5 owns the tree of nodes (kinds from config), the principals who can reach t
 | One instance of a kind | **Node** | Has an id, a slug, a display name and a status |
 | A node with no parent | **Root** | Its tree is the isolation boundary. An organization is a root. Do not call it tenant |
 | A person or a service account | **Principal** | Its id never leaves identity |
-| A person on their own routes | **User** | The user id is sent only on user routes. Private: customers can't list or search people |
+| A person on their own routes | **User** | The user id is sent only on user routes and in user events. Private: customers can't list or search people |
 | A principal in one tree | **Member** | The id services see as the caller on tree routes |
 | A role on a member at a node | **Binding** | Access is the union of bindings on the node and its ancestors |
 | A person's member with no binding at its root | **Guest** | Derived, not stored. Never a service account |
@@ -80,7 +80,7 @@ Services address everything by id. Identity:
 | A node | `/nodes/{node_id}/...` |
 | A new root | `/roots/{kind}` |
 | A person | `/users/{user_id}/...` |
-| Internal (not on the gateway) | `/internal/admit`, `/internal/plan`, `/internal/lifecycle-events`; AuthZEN's paths for access evaluation, `/access/v1/evaluation` and `/access/v1/evaluations` |
+| Internal (not on the gateway) | `/internal/admit`, `/internal/plan`, `/internal/tree-events`, `/internal/user-events`; AuthZEN's paths for access evaluation, `/access/v1/evaluation` and `/access/v1/evaluations` |
 
 Audit follows the same pattern: `/nodes/{node_id}/audit-events` and `/users/{user_id}/audit-events` public, `/internal/events/{request_id}` internal ([`concepts/audit.md`](../concepts/audit.md)).
 

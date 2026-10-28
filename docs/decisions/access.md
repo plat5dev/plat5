@@ -26,8 +26,8 @@ Why access is the union of bindings on a node and its ancestors, decided only by
 | A project-scoped key is a service account bound only to that project | A key is exactly as wide as its service account's bindings, and the gateway's check is the ancestor rule: no outside call and no new failure mode |
 | Suspension is per person. A member is removed instead | Suspending someone in one org is removing them there |
 | A person's name comes only from the IdP's name claim, `users.name_claim`. An empty claim leaves the name as it is | The IdP is the source of truth for who someone is. An IdP that sends `""` hasn't told us a name; blanking it on every request would be worse |
-| A person has a user id, sent only on user routes, and one member per tree. Their principal id never leaves identity | Per-person data (a profile, a setting) needs a key; tree data is keyed by members, so the user id can't join two trees' data |
-| People are users in identity's service API (`/users/{user_id}`, its status, account deletion, `GET /members/{member_id}/user`, and an exact lookup by IdP issuer and subject), never in a default public route | An operator plane must reach a person's status and account from an org member id. Services still see user ids only on user routes |
+| A person has a user id, sent only on user routes and in user events, and one member per tree. Their principal id never leaves identity | Per-person data (a profile, a setting) needs a key; tree data is keyed by members, so the user id can't join two trees' data |
+| People are users in identity's service API (`/users/{user_id}`, its status, account deletion, `GET /members/{member_id}/user`, and an exact lookup by IdP issuer and subject), never in a default public route | An operator plane must reach a person's status and account from an org member id. Services still see user ids only on user routes and in user events |
 
 ## Assigning access
 
@@ -123,7 +123,7 @@ Why access is the union of bindings on a node and its ancestors, decided only by
 | Decision | Why |
 |----------|-----|
 | Every tree route the gateway admits carries the node ids, the caller's member id (`X-Plat5-Member-Id`) and `X-Plat5-Principal`. Never a principal id | Authorship needs the caller, and operators need to act as someone. A principal id is the same in every tree, so passing it would let two trees' data be joined on one person |
-| The member id is per tree; the user id is sent only on user routes, as `X-Plat5-User-Id` | Two orgs can't join their data on a shared person ([boundaries](boundaries.md#each-tree-is-a-closed-world)) |
+| The member id is per tree; the user id is sent only on user routes, as `X-Plat5-User-Id`, and in user events, which carry no tree | Two orgs can't join their data on a shared person ([boundaries](boundaries.md#each-tree-is-a-closed-world)) |
 | Records store `X-Plat5-Member-Id` as their author when logic needs it ("published by", "you can't approve your own change") | Separation of duties is a service comparing two member ids on two records: a state rule, not an access check |
 | Removed is final: re-adding someone makes a new member id; the old member stays, and its lookup returns its name and `status: removed` | A changelog can show "Dana (former member)", and two stints in an org stay distinct |
 | A member stores its principal kind (`members.principal`) | The member shape names `person` or `service_account`, and a removed service account or deleted account has no principal row left |

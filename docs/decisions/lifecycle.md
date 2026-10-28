@@ -1,6 +1,6 @@
 # Lifecycle
 
-Why deletes are soft, restorable and then purged, and how nodes, members and stored data begin and end. The rules: [`concepts/lifecycle.md`](../concepts/lifecycle.md), [`internals/identity-schema.md`](../internals/identity-schema.md).
+Why deletes are soft, restorable and then purged, how nodes, members and stored data begin and end, and why services follow them in two feeds. The rules: [`concepts/lifecycle.md`](../concepts/lifecycle.md), [`internals/identity-schema.md`](../internals/identity-schema.md).
 
 ## Deleting, restoring and purging
 
@@ -45,6 +45,15 @@ Every delete is soft for `deletion_grace`, 30 days by default, restorable, then 
 | A person's member left with no bindings, by a binding delete or a purge, is removed, a guest included, and re-adding makes a new member. A soft delete removes nobody | Their last way into the tree is gone. A soft-deleted node keeps its bindings, so a restore brings back who had access. Changing a role is a `PATCH`, so a member keeps its id while it holds any binding |
 | A service account's member stays until the service account is deleted, even with no bindings | Otherwise its principal and keys are orphaned |
 | Deleting a service account deletes its principal and keys and removes its member, as at purge. Removing its member through the members route is **422** | One way for a service account to end |
+
+## Lifecycle events
+
+| Decision | Why |
+|----------|-----|
+| Two feeds, each with its own sequence: tree events (`node.*`, `member.*`) for tree data, user events (`user.*`) for user-route data | The same line as `X-Plat5-Member-Id` and `X-Plat5-User-Id`. A service that keeps only user-route data reads user events and never sees the tree. No sequence is shared, so no event's position links a user to a member, as one sequence would for an admin add's `user.created` beside its `member.created` |
+| A user event carries only `id`, `type`, `user_id` and `occurred_at`. A tree event never carries a user id | A service deletes a person's user-route data with the user id alone, and nothing in either feed joins a person's data to a tree |
+| `user.created` and `user.deleted` only. Suspension isn't an event | Suspension is access. A service asks about access through the evaluation API when its work runs, as it does for every other change in access, instead of following it |
+| The events of one transaction share `occurred_at`, so a service reading both feeds can match them: an account deletion's `member.removed` events and its `user.deleted`, or an admin add's `user.created` and `member.created` | A service can already match an account deletion's `member.removed` events across trees that way, and services are trusted with it. The feeds are on identity's internal port, read only by the deployment's own services |
 
 ## Stored data
 

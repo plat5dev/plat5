@@ -26,9 +26,15 @@ The headers and rewritten path are authentic only if the service is on a private
 3. **Do not implement CORS.** The gateway handles preflight and headers.
 4. **Do not generate `X-Request-ID`.** Propagate it. Missing is a gateway bug.
 
-## Following the tree
+## Following the tree and people
 
-Read identity's lifecycle feed to allocate state on `node.created`, stop work on `node.deleted`, resume on `node.restored`, and delete data on `node.purged`, matching on the event's `kind`. Remove member-owned records on `member.removed`. Events, and how to read them: [lifecycle](../concepts/lifecycle.md#lifecycle-events).
+Identity writes two feeds ([lifecycle](../concepts/lifecycle.md#lifecycle-events)). Read the one for the data you keep; a service that keeps both reads both, with a cursor for each.
+
+**Tree data**, keyed by node and member ids, follows `GET /internal/tree-events`. Allocate state on `node.created` if you want it before the first request. Stop background work on `node.deleted` and keep the data; resume on `node.restored`. Delete the node's data on `node.purged`, matching on the event's `kind`. On `member.removed`, delete the records that member owned; authored records stay ([where a field goes](../concepts/model.md#where-a-field-goes)). `member.created` needs nothing.
+
+**User-route data**, keyed by user id, follows `GET /internal/user-events`. On `user.deleted`, delete everything keyed by that user id. `user.created` usually needs nothing: create a person's data the first time they call a user route.
+
+An event can arrive more than once, so handling it twice must be harmless. Shapes and paging: [internal APIs](../reference/api/internal.md#tree-events).
 
 ## Checking access outside a request
 

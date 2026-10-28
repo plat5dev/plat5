@@ -93,7 +93,7 @@ CREATE TABLE invites (
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE lifecycle_events (                       -- append-only; outlives what it names
+CREATE TABLE tree_events (                            -- append-only; outlives what it names
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     type        TEXT NOT NULL CHECK (type IN ('node.created', 'node.deleted', 'node.restored', 'node.purged',
                                               'member.created', 'member.removed')),
@@ -102,11 +102,18 @@ CREATE TABLE lifecycle_events (                       -- append-only; outlives w
     member_id   TEXT,
     root_id     TEXT NOT NULL,
     principal   TEXT CHECK (principal IN ('person', 'service_account')),
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()     -- the transaction's time
+);
+
+CREATE TABLE user_events (                            -- append-only; its own sequence, never joined to tree_events
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    type        TEXT NOT NULL CHECK (type IN ('user.created', 'user.deleted')),
+    user_id     TEXT NOT NULL,
     occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
-Ids are lowercase ULIDs with no prefix ([ids](../concepts/model.md#ids-and-slugs)). Principal ids never leave identity; a person's `user_id` is a separate id, sent only on user routes.
+Ids are lowercase ULIDs with no prefix ([ids](../concepts/model.md#ids-and-slugs)). Principal ids never leave identity; a person's `user_id` is a separate id, sent only on user routes and in user events.
 
 ### Invariants the code enforces
 
@@ -119,3 +126,4 @@ The rules themselves are in the concept docs ([access](../concepts/access.md), [
 - **Deletions.** Each delete stamps one `deletion_id` on every node it soft-deletes; restore matches on it. A node already deleted keeps its own id.
 - **Purge.** Purge sets `status = 'purged'` and keeps the row. Below a root it sets `slug` to `NULL`, freeing it; a purged root keeps its slug until an operator releases it.
 - **Writes that touch members** take the tree's lock, so "one active member" and "removed when left with no bindings" can't race.
+- **Events.** Each feed's writes take that feed's lock, held to commit, so a reader never sees a later id before an earlier one commits. A transaction that writes both takes the tree events' lock first. A person's row and its `user.created` are written together, as are the principal's deletion and its `user.deleted`.

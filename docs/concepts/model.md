@@ -15,7 +15,7 @@ On every request the gateway answers three questions: who is calling (the creden
 | **Root** | A node with no parent. Each root and the nodes under it are one **tree**: the isolation boundary. Organizations are roots |
 | **Chain** | A node and its ancestors, root first. Each kind has one chain of kinds, so each node has one path |
 | **Principal** | A person (created at first sign-in, or when an admin adds them) or a service account (belongs to a node of an org's tree). Its id never leaves identity |
-| **User** | A person as their own routes see them. A person's user id is sent only on user routes (`X-Plat5-User-Id`) |
+| **User** | A person as their own routes see them. A person's user id is sent only on user routes (`X-Plat5-User-Id`) and in user events, never with a tree |
 | **Member** | A principal's presence in one tree: one per principal per tree, kept after removal. The id services see as the caller on tree routes (`X-Plat5-Member-Id`) |
 | **Binding** | A role for a member on one node of the member's tree. A member can have many |
 | **Guest** | A person's member with no binding on its tree's root, only on nodes below it. Created by redeeming an invite below the root. Derived, not stored. A service account is never a guest |
@@ -25,7 +25,7 @@ On every request the gateway answers three questions: who is calling (the creden
 | **Credential** | An IdP token or a personal API key (people), or a service account key. Belongs to the principal, not to a tree |
 | **Front door** | Anything on the private network that calls services. Plat5's gateway is one; an operator plane is another |
 | **Audit log** | Per root, and per person for their user routes. Who did what, for reporting and compliance ([`concepts/audit.md`](audit.md)) |
-| **Lifecycle event** | A create, delete, restore or purge of a node, or a member joining or leaving a tree ([`concepts/lifecycle.md`](lifecycle.md#lifecycle-events)) |
+| **Lifecycle event** | What's created and what ends, in two feeds: tree events (a node created, deleted, restored or purged; a member joining or leaving a tree) and user events (a person coming to exist; an account deleted) ([`concepts/lifecycle.md`](lifecycle.md#lifecycle-events)) |
 
 ## Ids and slugs
 
@@ -49,7 +49,7 @@ A path segment that starts with a digit is read as a node id, anything else as a
 2. **Plat5 owns the tree and who can reach each node; services own what's inside a node.**
 3. **Access is decided only by Plat5,** from the union of a member's bindings on the node and its ancestors. Front doors enforce it during requests; services enforce it outside them, by asking identity.
 4. **The path names the node; the credential names the principal.**
-5. **Services see node ids and the caller's member id on tree routes, and a user id only on user routes. Never a principal id.**
+5. **Services see node ids and the caller's member id on tree routes, and a user id only on user routes and in user events. Never a principal id.**
 6. **Services do no auth, so any front door can call them.** A service's API is its paths and documented headers, reachable only on the private network. Plat5's gateway is one front door; others (an operator plane, an internal job, a custom gateway) bring their own rules and docs.
 7. **The deployment's data, not Plat5's names.** Kinds, roles, permissions and routes are all config.
 8. **Config changes are planned before they apply; deletes are soft.**

@@ -55,4 +55,4 @@ None of these touches nodes, the ancestor rule, slugs, or what services see; the
 
 - Adopting Plat5 means putting the tree under it: routes, path params and "whose data is this" line up with the `kinds` document.
 - Moving off Plat5 is a migration of nodes and bindings, not an auth-provider swap.
-- Services see a per-tree member id on tree routes, and a user id only on user routes, so a person can't be correlated across orgs from tree data. That's the one property that's hard to reverse, and it's intended.
+- Services see a per-tree member id on tree routes, and a user id only on user routes and in user events, so a person can't be correlated across orgs from tree data. That's the one property that's hard to reverse, and it's intended.

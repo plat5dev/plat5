@@ -25,7 +25,7 @@ Who can do what, in one place: the ancestor rule, who can be in a tree, roles an
 
 - **Guests.** A person's member with no binding at its root, only on nodes below it, made by redeeming an invite below the root. Service accounts are never guests. Invites below a root need `guests:write`, checked like any permission: on the invite's node or an ancestor. A deployment turns guests on by granting it, and keeps guest invites in the root's hands by not granting it, or `*`, through any role bindable below the root. Guests are listed on the root's members list, marked, so an admin sees everyone who can reach the tree.
 
-- **Closed world.** A tree's data refers only to its own nodes and members. Plat5 guarantees half of this by never sending a principal id, and sending a user id only on user routes; the other half is a convention services follow. People cross trees; data doesn't.
+- **Closed world.** A tree's data refers only to its own nodes and members. Plat5 guarantees half of this by never sending a principal id, and sending a user id only on user routes and in user events, which carry no tree; the other half is a convention services follow. People cross trees; data doesn't.
 
 
 ## Roles and bindings

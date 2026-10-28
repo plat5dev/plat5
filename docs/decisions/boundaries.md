@@ -15,7 +15,7 @@ Plat5 is for a stable tenancy boundary enforced outside every handler: the tree 
 
 ## Each tree is a closed world
 
-**Data inside a tree refers only to things inside it: its nodes and its members. People cross between trees; data doesn't.** No tree's data names another tree, a principal id or a user id. Plat5 guarantees the second part by never sending principal ids, and sending user ids only on user routes; the first is a documented convention for services.
+**Data inside a tree refers only to things inside it: its nodes and its members. People cross between trees; data doesn't.** No tree's data names another tree, a principal id or a user id. Plat5 guarantees the second part by never sending principal ids, and sending user ids only on user routes and in user events, which carry no tree; the first is a documented convention for services.
 
 | Decision | Why |
 |----------|-----|
@@ -68,4 +68,4 @@ None of these touches nodes, the ancestor rule, slugs or what services see; they
 |------|-------------------|
 | Adopting Plat5 means putting the tree under it: routes, path params and "whose data is this" line up with the kinds. It isn't an SDK drop-in | That alignment is what lets Plat5 decide access in one place |
 | Moving off Plat5 is a migration of nodes and bindings, not an auth-provider swap | The tree is data Plat5 owns |
-| Services see a per-tree member id on tree routes, and a user id only on user routes | Keeping person ids out of tree data is the one property that's hard to reverse, and it's intended: a person can't be correlated across orgs from what an org's routes see |
+| Services see a per-tree member id on tree routes, and a user id only on user routes and in user events | Keeping person ids out of tree data is the one property that's hard to reverse, and it's intended: a person can't be correlated across orgs from what an org's routes see |
