@@ -79,10 +79,12 @@ func (s *Store) WithClock(now func() time.Time) *Store {
 }
 
 // write is one transaction whose lifecycle events are recorded last, after
-// every other write, since recording holds the events lock until commit.
+// every other write, since recording holds each feed's lock until commit:
+// tree events first, then user events.
 type write struct {
-	tx     pgx.Tx
-	events []lifecycle.Event
+	tx         pgx.Tx
+	events     []lifecycle.TreeEvent
+	userEvents []lifecycle.UserEvent
 }
 
 func (s *Store) begin(ctx context.Context) (*write, error) {
@@ -93,13 +95,22 @@ func (s *Store) begin(ctx context.Context) (*write, error) {
 	return &write{tx: tx}, nil
 }
 
-func (w *write) event(e lifecycle.Event) {
+func (w *write) event(e lifecycle.TreeEvent) {
 	w.events = append(w.events, e)
+}
+
+func (w *write) userEvent(e lifecycle.UserEvent) {
+	w.userEvents = append(w.userEvents, e)
 }
 
 func (w *write) commit(ctx context.Context) error {
 	for _, e := range w.events {
-		if err := lifecycle.Record(ctx, w.tx, e); err != nil {
+		if err := lifecycle.RecordTree(ctx, w.tx, e); err != nil {
+			return err
+		}
+	}
+	for _, e := range w.userEvents {
+		if err := lifecycle.RecordUser(ctx, w.tx, e); err != nil {
 			return err
 		}
 	}

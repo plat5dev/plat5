@@ -110,11 +110,11 @@ func (e *env) count(sql string, args ...any) int {
 	return n
 }
 
-// lastEventID marks the feed, so a test reads only the events after it.
+// lastEventID marks the tree events feed, so a test reads only the events after it.
 func (e *env) lastEventID() int64 {
 	e.t.Helper()
 	var n int64
-	if err := e.pool.QueryRow(e.ctx, `SELECT COALESCE(max(id), 0) FROM lifecycle_events`).Scan(&n); err != nil {
+	if err := e.pool.QueryRow(e.ctx, `SELECT COALESCE(max(id), 0) FROM tree_events`).Scan(&n); err != nil {
 		e.t.Fatal(err)
 	}
 	return n
@@ -125,7 +125,7 @@ func (e *env) events(after int64) []string {
 	e.t.Helper()
 	rows, err := e.pool.Query(e.ctx, `
 		SELECT type || COALESCE(' ' || kind, ''), COALESCE(node_id, member_id), COALESCE(principal, '')
-		FROM lifecycle_events WHERE id > $1 ORDER BY id`, after)
+		FROM tree_events WHERE id > $1 ORDER BY id`, after)
 	if err != nil {
 		e.t.Fatal(err)
 	}

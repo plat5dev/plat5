@@ -11,6 +11,7 @@ import (
 	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 	"github.com/plat5dev/plat5/identity/internal/id"
+	"github.com/plat5dev/plat5/identity/lifecycle"
 	"github.com/plat5dev/plat5/identity/nodes"
 )
 
@@ -68,8 +69,8 @@ func (s *Store) getMember(ctx context.Context, q dbx.Querier, memberID string) (
 }
 
 // ensurePerson finds the person behind an IdP subject, or creates them with
-// a user id. It holds that subject's lock, so two first sign-ins make one
-// person.
+// a user id and user.created. It holds that subject's lock, so two first
+// sign-ins make one person.
 func (s *Store) ensurePerson(ctx context.Context, w *write, issuer, subject string) (string, error) {
 	if _, err := w.tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2 || ' ' || $3))`, personLockSpace, issuer, subject); err != nil {
 		return "", err
@@ -83,10 +84,10 @@ func (s *Store) ensurePerson(ctx context.Context, w *write, issuer, subject stri
 		return "", err
 	}
 	now := s.now().UTC()
-	principalID = id.New()
+	principalID, userID := id.New(), id.New()
 	if _, err := w.tx.Exec(ctx, `
 		INSERT INTO principals (id, kind, user_id, created_at, updated_at) VALUES ($1, 'person', $2, $3, $3)
-	`, principalID, id.New(), now); err != nil {
+	`, principalID, userID, now); err != nil {
 		return "", err
 	}
 	if _, err := w.tx.Exec(ctx, `
@@ -94,6 +95,7 @@ func (s *Store) ensurePerson(ctx context.Context, w *write, issuer, subject stri
 	`, issuer, subject, principalID, now); err != nil {
 		return "", err
 	}
+	w.userEvent(lifecycle.UserCreated(userID))
 	return principalID, nil
 }
 

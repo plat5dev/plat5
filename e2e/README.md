@@ -16,8 +16,9 @@ The tests serve their own JWKS on host port `5401` (compose's default
 `AUTH_JWKS_URI`) and mint tokens with `testdata/jwt-signing-key.pem`, a key
 made for these tests and trusted nowhere else. Nothing else may listen on `5401`.
 
-`TestEvaluations` calls identity's internal port directly, as a service on
-the private network would. [`compose.yml`](compose.yml) publishes it for the
+`TestEvaluations` (the evaluation API) and `TestUserRoutesKeysInvites` (the
+tree and user event feeds) call identity's internal port directly, as a service
+on the private network would. [`compose.yml`](compose.yml) publishes it for the
 e2e, on loopback port `5404`; a deployment never publishes it.
 
 ```bash
@@ -34,7 +35,7 @@ cd e2e && PLAT5_E2E=1 go test ./... -count=1 -v
 | `AUDIT_ENABLED` | unset | `false` skips the audit test and leaves audit out of the config, for a stack run with audit off |
 | `GATEWAY_URL` | `http://localhost:5400` | The gateway, as clients see it |
 | `CONTROL_PLANE_URL` | `http://localhost:5402` | The control plane's admin API |
-| `IDENTITY_INTERNAL_URL` | `http://localhost:5404` | Identity's internal port, for `TestEvaluations` |
+| `IDENTITY_INTERNAL_URL` | `http://localhost:5404` | Identity's internal port, for the evaluation API and the event feeds |
 | `ADMIN_TOKEN` | `dev-admin-token` | Its token |
 | `AUTH_ISSUER` | `http://localhost:5401` | Must equal the gateway's `AUTH_ISSUER` |
 | `JWKS_ADDR` | `:5401` | Where the tests serve JWKS; the gateway's `AUTH_JWKS_URI` must reach it |

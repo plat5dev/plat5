@@ -13,9 +13,10 @@ import (
 func TestAddMember(t *testing.T) {
 	e := setup(t)
 	org, _ := e.org(e.person("dana"), "Gruow")
-	before := e.lastEvent()
+	before, beforeUsers := e.lastEvent(), e.lastUserEvent()
 
-	// A new IdP subject: the person is made too, with a user id and no other member.
+	// A new IdP subject: the person is made too, with a user id, user.created
+	// and no other member, in the add's transaction.
 	r := e.call("POST", "/nodes/"+org.ID+"/members", "", `{"idp": {"issuer": "https://idp.test", "subject": "new"}, "role": "member"}`)
 	e.expect(r, 201, "add")
 	memberID := r.str("id")
@@ -34,18 +35,35 @@ func TestAddMember(t *testing.T) {
 	if e.userOf("new") == memberID {
 		t.Fatal("a user id is not a member id")
 	}
+	if got := e.userEventsAfter(beforeUsers); !slices.Equal(got, []string{"user.created " + e.userOf("new")}) {
+		t.Fatalf("user events %v", got)
+	}
+	if at := e.occurredAt(before, beforeUsers); len(at) != 1 {
+		t.Fatalf("user.created and member.created in one transaction: %v", at)
+	}
 
 	r = e.call("POST", "/nodes/"+org.ID+"/members", "", `{"idp": {"issuer": "https://idp.test", "subject": "new"}, "role": "member"}`)
 	if r.status != 409 || r.message() != "This person is already a member." {
 		t.Fatalf("already a member: %d %v", r.status, r.body)
 	}
 
-	// A known subject reuses the person.
+	// A known subject reuses the person, with no user event.
 	people := e.count(`SELECT count(*) FROM principals`)
 	other, _ := e.org(e.person("erin"), "Acme")
+	beforeUsers = e.lastUserEvent()
 	e.expect(e.call("POST", "/nodes/"+other.ID+"/members", "", `{"idp": {"issuer": "https://idp.test", "subject": "new"}, "role": "developer"}`), 201, "same person, other org")
 	if n := e.count(`SELECT count(*) FROM principals`); n != people+1 { // erin only
 		t.Fatalf("principals %d, want %d", n, people+1)
+	}
+	if got := e.userEventsAfter(beforeUsers); len(got) != 0 {
+		t.Fatalf("user events for a known person: %v", got)
+	}
+
+	// A refused add makes no one: no person, no user event.
+	beforeUsers = e.lastUserEvent()
+	e.expect(e.call("POST", "/nodes/"+other.ID+"/members", "", `{"idp": {"issuer": "https://idp.test", "subject": "refused"}, "role": "viewer"}`), 422, "role not bindable")
+	if got := e.userEventsAfter(beforeUsers); len(got) != 0 || e.count(`SELECT count(*) FROM idp_links WHERE subject = 'refused'`) != 0 {
+		t.Fatalf("a refused add wrote %v", got)
 	}
 
 	for _, c := range []struct{ body, msg string }{
@@ -412,8 +430,9 @@ func TestUsers(t *testing.T) {
 	e.expect(e.call("DELETE", "/users/"+dana+"/keys/"+k, "", ""), 204, "revoke again")
 	e.expect(e.call("POST", "/users/"+danaAcme+"/keys", "", `{}`), 404, "keys on a member id")
 
-	// Deleting the account removes every member, deletes keys and links, keeps the rows.
-	before := e.lastEvent()
+	// Deleting the account removes every member, deletes keys and links, keeps
+	// the rows, and writes user.deleted, all in one transaction.
+	before, beforeUsers := e.lastEvent(), e.lastUserEvent()
 	e.expect(e.call("DELETE", "/users/"+dana, "", ""), 204, "delete account")
 	got := e.eventsAfter(before)
 	want := sorted(
@@ -422,6 +441,12 @@ func TestUsers(t *testing.T) {
 	)
 	if !slices.Equal(sorted(got...), want) {
 		t.Fatalf("events %v, want %v", got, want)
+	}
+	if got := e.userEventsAfter(beforeUsers); !slices.Equal(got, []string{"user.deleted " + dana}) {
+		t.Fatalf("user events %v", got)
+	}
+	if at := e.occurredAt(before, beforeUsers); len(at) != 1 {
+		t.Fatalf("member.removed and user.deleted in one transaction: %v", at)
 	}
 	if e.count(`SELECT count(*) FROM idp_links WHERE subject = 'dana'`) != 0 ||
 		e.count(`SELECT count(*) FROM members WHERE id = ANY($1) AND removed_at IS NOT NULL AND principal_id IS NULL`, []string{danaGruow, danaAcme}) != 2 {
@@ -434,8 +459,39 @@ func TestUsers(t *testing.T) {
 	e.expect(e.call("GET", "/users/"+dana, "", ""), 404, "deleted account")
 	e.expect(e.call("GET", "/members/"+danaGruow+"/user", "", ""), 404, "user of a deleted account")
 	e.expect(e.call("DELETE", "/users/"+dana, "", ""), 204, "delete again")
-	if len(e.eventsAfter(before)) != 2 {
+	if len(e.eventsAfter(before)) != 2 || len(e.userEventsAfter(beforeUsers)) != 1 {
 		t.Fatal("a second delete changed something")
 	}
 	e.expect(e.call("GET", "/users/"+dana+"/keys", "", ""), 404, "keys of a deleted account")
+}
+
+// Concurrent deletes of one account write its events once, whether or not
+// the person has members (and so tree locks) to serialize them.
+func TestDeleteAccountRace(t *testing.T) {
+	e := setup(t)
+	member := e.person("member")
+	org, m := e.org(member, "Gruow")
+	loner := e.person("loner")
+	for _, userID := range []string{member, loner} {
+		before, beforeUsers := e.lastEvent(), e.lastUserEvent()
+		done := make(chan response, 8)
+		for range 8 {
+			go func() { done <- e.call("DELETE", "/users/"+userID, "", "") }()
+		}
+		for range 8 {
+			if r := <-done; r.status != 204 {
+				t.Fatalf("delete %s: %d %v", userID, r.status, r.body)
+			}
+		}
+		if got := e.userEventsAfter(beforeUsers); !slices.Equal(got, []string{"user.deleted " + userID}) {
+			t.Fatalf("user events %v", got)
+		}
+		want := []string{}
+		if userID == member {
+			want = []string{"member.removed " + m + " " + org.ID + " person"}
+		}
+		if got := e.eventsAfter(before); !slices.Equal(got, want) {
+			t.Fatalf("tree events %v, want %v", got, want)
+		}
+	}
 }

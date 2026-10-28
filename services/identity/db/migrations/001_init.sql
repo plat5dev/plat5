@@ -101,7 +101,7 @@ CREATE TABLE invites (
 CREATE INDEX invites_node_idx ON invites (node_id);
 CREATE INDEX invites_expiry_idx ON invites (expires_at) WHERE status = 'active';
 
-CREATE TABLE lifecycle_events (
+CREATE TABLE tree_events (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     type        TEXT NOT NULL CHECK (type IN ('node.created', 'node.deleted', 'node.restored', 'node.purged',
                                               'member.created', 'member.removed')),
@@ -110,5 +110,13 @@ CREATE TABLE lifecycle_events (
     member_id   TEXT,
     root_id     TEXT NOT NULL,
     principal   TEXT CHECK (principal IN ('person', 'service_account')),
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Its own sequence: nothing joins a user event to a tree event.
+CREATE TABLE user_events (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    type        TEXT NOT NULL CHECK (type IN ('user.created', 'user.deleted')),
+    user_id     TEXT NOT NULL,
     occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

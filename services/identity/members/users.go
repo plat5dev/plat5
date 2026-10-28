@@ -8,6 +8,7 @@ import (
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 	"github.com/plat5dev/plat5/identity/internal/id"
+	"github.com/plat5dev/plat5/identity/lifecycle"
 	"github.com/plat5dev/plat5/identity/nodes"
 )
 
@@ -132,9 +133,9 @@ func (s *Store) SetStatus(ctx context.Context, userID, status string) (string, *
 
 // DeleteAccount deletes a person (docs/concepts/lifecycle.md#deleting-an-account):
 // every member they have is removed, with member.removed per tree, and the
-// principal goes with its IdP links and personal keys. Removed member rows
-// stay, with no name. An account already deleted is left as it is: changed
-// is false.
+// principal goes with its IdP links and personal keys, with user.deleted.
+// Removed member rows stay, with no name. An account already deleted is left
+// as it is: changed is false.
 func (s *Store) DeleteAccount(ctx context.Context, userID string) (bool, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "delete_account", dbx.DefaultTimeout)
 	defer cancel()
@@ -183,9 +184,16 @@ func (s *Store) DeleteAccount(ctx context.Context, userID string) (bool, error) 
 			return false, op.Fail(err)
 		}
 	}
-	if _, err := w.tx.Exec(ctx, `DELETE FROM principals WHERE id = $1`, u.principalID); err != nil {
+	tag, err := w.tx.Exec(ctx, `DELETE FROM principals WHERE id = $1`, u.principalID)
+	if err != nil {
 		return false, op.Fail(err)
 	}
+	if tag.RowsAffected() == 0 {
+		// A concurrent delete got there first and wrote the events.
+		op.OK("unchanged")
+		return false, nil
+	}
+	w.userEvent(lifecycle.UserDeleted(u.ID))
 	if err := w.commit(ctx); err != nil {
 		return false, op.Fail(err)
 	}

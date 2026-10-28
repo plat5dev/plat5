@@ -1,5 +1,6 @@
-# For the e2e only: publishes identity's internal port on loopback, so
-# TestEvaluations can call it as a service on the private network would.
+# For the e2e only: publishes identity's internal port on loopback, so the
+# tests can call its evaluation API and event feeds as a service on the
+# private network would.
 # Internal ports are never published in a deployment
 # (docs/reference/api/internal.md).
 services:

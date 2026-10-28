@@ -489,14 +489,18 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 	}
 }
 
-// A person's own routes: their account, their trees, a personal key, and an
-// invite redeemed by someone else, who then leaves.
+// A person's own routes: their first sign-in, their trees, a personal key, an
+// invite redeemed by someone else, who then leaves, and their account deleted.
+// Identity's feeds, read as a service would, follow along: user events for
+// the person, tree events for their member, never one in the other.
 func TestUserRoutesKeysInvites(t *testing.T) {
 	s := newStack(t)
 	run := fmt.Sprintf("%d", time.Now().UnixNano())
 	owner := s.person("e2e-user-owner-" + run)
 	friend := s.person("e2e-user-friend-" + run)
+	treeAt, usersAt := s.head("tree-events"), s.head("user-events")
 
+	// First sign-in: the person exists, with user.created.
 	var me struct {
 		ID     string `json:"id"`
 		Name   string `json:"name"`
@@ -506,10 +510,24 @@ func TestUserRoutesKeysInvites(t *testing.T) {
 	if !isID(me.ID) || me.Name != "E2E e2e-user-owner-"+run || me.Status != "active" {
 		t.Fatalf("user: %+v", me)
 	}
+	users, usersAt := s.feed("user-events", usersAt)
+	created := about(users, "user_id", me.ID)
+	if len(created) != 1 || created[0]["type"] != "user.created" || !slices.Equal(created[0].fields(), userEventFields) {
+		t.Fatalf("user.created: %v", created)
+	}
 
 	var org node
 	s.call(owner, "POST", "/orgs", map[string]string{"display_name": "People " + run}, 201, &org)
 	orgPath := "/orgs/" + org.Slug
+	var ownerHeld membership
+	s.call(owner, "GET", orgPath+"/membership", nil, 200, &ownerHeld)
+	tree, treeAt := s.feed("tree-events", treeAt)
+	if n := about(tree, "node_id", org.ID); len(n) != 1 || n[0]["type"] != "node.created" || n[0]["kind"] != "organization" || !slices.Equal(n[0].fields(), nodeEventFields) {
+		t.Fatalf("node.created: %v", n)
+	}
+	if m := about(tree, "member_id", ownerHeld.MemberID); len(m) != 1 || m[0]["type"] != "member.created" || m[0]["root_id"] != org.ID || m[0]["principal"] != "person" || !slices.Equal(m[0].fields(), memberEventFields) {
+		t.Fatalf("member.created: %v", m)
+	}
 
 	// The org switcher.
 	var trees nodeList
@@ -577,4 +595,30 @@ func TestUserRoutesKeysInvites(t *testing.T) {
 	settle()
 	s.call(friend, "GET", orgPath, nil, 403, nil)
 	s.call(laptop, "GET", orgPath, nil, 401, nil)
+
+	// The owner deletes their account: their member is removed with
+	// member.removed in tree events, and user.deleted follows in user events,
+	// written in the same transaction, so both carry its occurred_at.
+	_, treeAt = s.feed("tree-events", treeAt)
+	_, usersAt = s.feed("user-events", usersAt)
+	s.call(owner, "DELETE", "/user", nil, 204, nil)
+	tree, _ = s.feed("tree-events", treeAt)
+	users, _ = s.feed("user-events", usersAt)
+	removed := about(tree, "member_id", ownerHeld.MemberID)
+	if len(removed) != 1 || removed[0]["type"] != "member.removed" || removed[0]["root_id"] != org.ID || removed[0]["principal"] != "person" || !slices.Equal(removed[0].fields(), memberEventFields) {
+		t.Fatalf("member.removed: %v", removed)
+	}
+	deleted := about(users, "user_id", me.ID)
+	if len(deleted) != 1 || deleted[0]["type"] != "user.deleted" || !slices.Equal(deleted[0].fields(), userEventFields) {
+		t.Fatalf("user.deleted: %v", deleted)
+	}
+	if deleted[0]["occurred_at"] != removed[0]["occurred_at"] {
+		t.Fatalf("user.deleted at %v, its member.removed at %v", deleted[0]["occurred_at"], removed[0]["occurred_at"])
+	}
+	all, _ := s.feed("tree-events", "")
+	for _, e := range all {
+		if _, ok := e["user_id"]; ok {
+			t.Fatalf("a tree event with a user id: %v", e)
+		}
+	}
 }
