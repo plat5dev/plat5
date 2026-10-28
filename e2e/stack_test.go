@@ -30,6 +30,7 @@ type stack struct {
 	t            *testing.T
 	gateway      string
 	controlPlane string
+	identity     string // identity's internal port, as a service reaches it
 	adminToken   string
 	issuer       string
 	key          *rsa.PrivateKey
@@ -68,6 +69,7 @@ func newStack(t *testing.T) *stack {
 		t:            t,
 		gateway:      strings.TrimRight(env("GATEWAY_URL", "http://localhost:5400"), "/"),
 		controlPlane: strings.TrimRight(env("CONTROL_PLANE_URL", "http://localhost:5402"), "/"),
+		identity:     strings.TrimRight(env("IDENTITY_INTERNAL_URL", "http://localhost:5404"), "/"),
 		adminToken:   env("ADMIN_TOKEN", "dev-admin-token"),
 		issuer:       env("AUTH_ISSUER", "http://localhost:5401"),
 		key:          parsed.(*rsa.PrivateKey),

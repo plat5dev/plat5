@@ -168,17 +168,23 @@ func newInternalApp(
 	// Health and /metrics stay off traces and HTTP RED (docs/reference/health.md).
 	// No token: internal ports are reachable only inside the deployment's
 	// network (docs/reference/api/internal.md).
-	internalAPI := app.Group("/internal",
-		otel.Middleware(
-			otel.WithTracerProvider(telem.TracerProvider()),
-			otel.WithPropagators(telem.Propagator()),
-			otel.WithoutMetrics(true),
-			otel.WithSpanNameFormatter(middleware.HTTPSpanName),
-		),
-		middleware.RequestLogger(telem),
-	)
+	traced := func(prefix string) fiber.Router {
+		return app.Group(prefix,
+			otel.Middleware(
+				otel.WithTracerProvider(telem.TracerProvider()),
+				otel.WithPropagators(telem.Propagator()),
+				otel.WithoutMetrics(true),
+				otel.WithSpanNameFormatter(middleware.HTTPSpanName),
+			),
+			middleware.RequestLogger(telem),
+		)
+	}
+	internalAPI := traced("/internal")
 	lifecycleHandler.MountInternal(internalAPI)
 	memberHandler.MountInternal(internalAPI)
 	nodeHandler.MountInternal(internalAPI)
+	// AuthZEN's access evaluation API, for services, at AuthZEN's paths
+	// (docs/reference/api/internal.md#access-evaluation).
+	memberHandler.MountAccess(traced("/access/v1"))
 	return app
 }

@@ -70,6 +70,16 @@ func InvalidRequestError() *ApiError {
 	}
 }
 
+// InvalidRequestMessage is INVALID_REQUEST with a message saying what's
+// wrong, for a body identity can't read where the API calls for a 400.
+func InvalidRequestMessage(message string) *ApiError {
+	e := InvalidRequestError()
+	if message != "" {
+		e.Message = message
+	}
+	return e
+}
+
 func FieldError(path, message string) *ApiError {
 	if message == "" {
 		message = FallbackValidation

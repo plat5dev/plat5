@@ -70,7 +70,8 @@ type env struct {
 	src   *feed.Source
 	clock *clock
 	app   *fiber.App
-	// internal is the internal port's /internal routes: admit and plan counts.
+	// internal is the internal port's /internal routes (admit and plan
+	// counts) and its /access/v1 routes (access evaluation).
 	internal *fiber.App
 }
 
@@ -94,6 +95,7 @@ func setupWith(t *testing.T, config string) *env {
 	e.internal = fiber.New(fiber.Config{ErrorHandler: apierrors.FiberErrorHandler})
 	NewHandler(e.store, e.src).MountInternal(e.internal.Group("/internal"))
 	nodes.NewHandler(nodeStore, e.src).MountInternal(e.internal.Group("/internal"))
+	NewHandler(e.store, e.src).MountAccess(e.internal.Group("/access/v1"))
 	return e
 }
 

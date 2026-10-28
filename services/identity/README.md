@@ -10,7 +10,7 @@ Contracts: [identity API](../../docs/reference/api/identity.md), [internal APIs]
 |---------|------|
 | `feed/` | The config from the control plane's `GET /internal/identity`: kinds with their `list_permission`, roles with their includes resolved, `creator_role`, `deletion_grace`, `reserved_slugs`. Identity doesn't listen until it has one, and long-polls for changes |
 | `nodes/` | Nodes, the closure table, ancestors on the node shape, slugs and root tombstones, soft delete, restore, purge, and the sweeper that runs purge. `POST /internal/plan` on the internal port: the control plane's counts for a plan that removes a kind or changes its parent |
-| `members/` | People and their user ids and IdP links, members of each tree, bindings and the access list, memberships, service accounts, API keys, invites and redeem; creating nodes with the creator's binding, and filtered node lists. `POST /internal/admit` on the internal port: the member and permissions for a credential on a node chain |
+| `members/` | People and their user ids and IdP links, members of each tree, bindings and the access list, memberships, service accounts, API keys, invites and redeem; creating nodes with the creator's binding, and filtered node lists. `POST /internal/admit` on the internal port: the member and permissions for a credential on a node chain. `POST /access/v1/evaluation` and `/access/v1/evaluations` there too: AuthZEN access evaluation for services, decided by admit's resolution |
 | `lifecycle/` | The lifecycle-events feed on the internal port. Written in the change's transaction |
 | `db/` | The schema, one migration. Boot refuses a database that records migrations this build doesn't know |
 

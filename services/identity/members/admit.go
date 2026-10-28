@@ -161,7 +161,7 @@ func (s *Store) keyPrincipalFor(ctx context.Context, key string) (*admitPrincipa
 	if err != nil {
 		return nil, err
 	}
-	if revoked || status != StatusActive || (nodeStatus != nil && *nodeStatus != nodes.StatusActive) {
+	if revoked || !admissible(status, nodeStatus) {
 		return nil, nil
 	}
 	if userID != nil {
@@ -196,10 +196,17 @@ func (s *Store) idpPrincipal(ctx context.Context, c IdPClaims) (*admitPrincipal,
 			return nil, err
 		}
 	}
-	if status != StatusActive {
+	if !admissible(status, nil) {
 		return nil, nil
 	}
 	return &admitPrincipal{id: principalID, kind: PrincipalPerson, userID: userID}, nil
+}
+
+// admissible is whether admit accepts a principal, whatever its credential: a
+// person who isn't suspended, or a service account whose node (saNodeStatus,
+// nil for a person) is live.
+func admissible(status string, saNodeStatus *string) bool {
+	return status == StatusActive && (saNodeStatus == nil || *saNodeStatus == nodes.StatusActive)
 }
 
 // firstSignIn creates the person behind a new IdP subject. A concurrent
@@ -251,8 +258,7 @@ func (s *Store) resolveChain(ctx context.Context, chain []ChainRef, allowDeleted
 		if err != nil {
 			return nil, err
 		}
-		last := i == len(chain)-1
-		if status != nodes.StatusActive && !(last && allowDeleted && status == nodes.StatusDeleted) {
+		if !liveInChain(status, i == len(chain)-1, allowDeleted) {
 			return nil, nil
 		}
 		out = append(out, ChainNode{Kind: c.Kind, ID: nodeID})
@@ -261,26 +267,70 @@ func (s *Store) resolveChain(ctx context.Context, chain []ChainRef, allowDeleted
 	return out, nil
 }
 
+// liveInChain is whether a node lets its chain resolve: live, or, with
+// allowDeleted, a deleted last node.
+func liveInChain(status string, last, allowDeleted bool) bool {
+	return status == nodes.StatusActive || (last && allowDeleted && status == nodes.StatusDeleted)
+}
+
 // chainPermissions is the union of the roles of the member's bindings that
 // count on the chain's nodes (docs/concepts/access.md#resolution). The chain
 // is live but for an allow_deleted last node, whose own bindings count.
 func (s *Store) chainPermissions(ctx context.Context, snap *feed.Snapshot, out *Admitted) ([]string, error) {
-	nodeIDs := make([]string, len(out.Nodes))
-	for i, n := range out.Nodes {
-		nodeIDs[i] = n.ID
+	held, err := heldOnChains(ctx, s.pool, snap, []memberChain{{memberID: out.MemberID, nodes: out.Nodes}})
+	if err != nil {
+		return nil, err
+	}
+	return Resolve(snap, held[0]).List(), nil
+}
+
+// memberChain is one member on one resolved chain.
+type memberChain struct {
+	memberID string
+	nodes    []ChainNode
+}
+
+// queryer is a pool or a transaction.
+type queryer interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// heldOnChains is, for each pair, the roles of the member's bindings on the
+// chain's nodes that count there (bindable at the node's kind): what
+// Resolve unions. Admit asks for one pair, an evaluation for each pair it
+// decides.
+func heldOnChains(ctx context.Context, q queryer, snap *feed.Snapshot, pairs []memberChain) ([][]string, error) {
+	var idx []int32
+	var memberIDs, nodeIDs []string
+	for i, p := range pairs {
+		for _, n := range p.nodes {
+			idx = append(idx, int32(i))
+			memberIDs = append(memberIDs, p.memberID)
+			nodeIDs = append(nodeIDs, n.ID)
+		}
+	}
+	out := make([][]string, len(pairs))
+	if len(idx) == 0 {
+		return out, nil
 	}
 	kinds, roles := bindablePairs(snap)
-	rows, err := s.pool.Query(ctx, `
-		SELECT b.role
-		FROM bindings b JOIN nodes bn ON bn.id = b.node_id
-		WHERE b.member_id = $1 AND b.node_id = ANY($2) AND `+counts("$3", "$4"),
-		out.MemberID, nodeIDs, kinds, roles)
+	rows, err := q.Query(ctx, `
+		SELECT c.i, b.role
+		FROM unnest($1::int[], $2::text[], $3::text[]) AS c (i, member_id, node_id)
+		JOIN bindings b ON b.member_id = c.member_id AND b.node_id = c.node_id
+		JOIN nodes bn ON bn.id = b.node_id
+		WHERE `+counts("$4", "$5"),
+		idx, memberIDs, nodeIDs, kinds, roles)
 	if err != nil {
 		return nil, err
 	}
-	held, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
+	var i int32
+	var role string
+	if _, err := pgx.ForEachRow(rows, []any{&i, &role}, func() error {
+		out[i] = append(out[i], role)
+		return nil
+	}); err != nil {
 		return nil, err
 	}
-	return Resolve(snap, held).List(), nil
+	return out, nil
 }

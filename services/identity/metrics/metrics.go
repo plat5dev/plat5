@@ -3,6 +3,7 @@ package metrics
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ var (
 	requestDuration *prometheus.HistogramVec
 	requestsTotal   *prometheus.CounterVec
 	nodeOps         *prometheus.CounterVec
+	evaluations     *prometheus.CounterVec
 	dbOpsTotal      *prometheus.CounterVec
 	dbOpsErrors     *prometheus.CounterVec
 	dbOpsDuration   *prometheus.HistogramVec
@@ -45,6 +47,11 @@ func Init() {
 			Help: "Node lifecycle changes by operation, one per node",
 		}, []string{"operation"})
 
+		evaluations = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "access_evaluations_total",
+			Help: "Access evaluations answered, by decision",
+		}, []string{"decision"})
+
 		dbLabels := []string{"db_system_name", "db_operation_name", "db_namespace"}
 
 		dbOpsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -67,6 +74,7 @@ func Init() {
 			requestDuration,
 			requestsTotal,
 			nodeOps,
+			evaluations,
 			dbOpsTotal,
 			dbOpsErrors,
 			dbOpsDuration,
@@ -96,6 +104,15 @@ func ObserveRequest(route, method string, status int, duration time.Duration) {
 func RecordNodeOps(operation string, n int) {
 	Init()
 	nodeOps.WithLabelValues(operation).Add(float64(n))
+}
+
+// RecordEvaluations counts answered access evaluations by decision: true,
+// false.
+func RecordEvaluations(decisions []bool) {
+	Init()
+	for _, d := range decisions {
+		evaluations.WithLabelValues(strconv.FormatBool(d)).Inc()
+	}
 }
 
 func RecordDBOperation(operation string, duration time.Duration, err error) {

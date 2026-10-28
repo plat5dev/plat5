@@ -1,0 +1,8 @@
+# For the e2e only: publishes identity's internal port on loopback, so
+# TestEvaluations can call it as a service on the private network would.
+# Internal ports are never published in a deployment
+# (docs/reference/api/internal.md).
+services:
+  identity:
+    ports:
+      - "127.0.0.1:5404:3001"
