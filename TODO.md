@@ -4,20 +4,28 @@
 
 - **Siblings follow the contracts.** Each moves to the shapes in `docs/`:
   - `toolbox`: its e2e and helpers use user routes, bare ids and `Bearer` keys, apply a config first since nothing is seeded, and read `node.*` events.
-  - The docs site: syncs `reference/config/services.md`, `resources.md`, `settings.md` and `rate-limits.md`, which replace `reference/config/routes.md` and `reference/api/edge-catalog.md`.
+  - The docs site: syncs `reference/config/services.md`, `resources.md`, `settings.md` and `rate-limits.md`, which replace `reference/config/routes.md` and `reference/api/edge-catalog.md`; and the new sections on access outside a request (`guides/write-a-service.md`, `concepts/access.md`, `reference/api/internal.md`), at the release that ships them.
+  - The API starters (`template-*`): could show checking access outside a request, for example a task notification that asks identity's evaluation API before it sends.
 - **CI for the CLI.** Its schema-copy and init-files tests (`internal/schema`, `internal/cmd`) skip unless a `plat5` checkout sits next to the CLI, so CI must check one out there.
 - **A name in dev tokens.** Plat5 Auth's `POST /dev/token` takes a `name` and puts it in the token as the `name` claim, so `plat5 start`'s dev person gets a name. The CLI already sends it.
 
 # Deferred
 
-## Policy hook below nodes (AuthZEN)
+## Record-level access (AuthZEN below nodes)
 
-Permissions on individual records inside a node ("may this member edit document D in this project?"). Who can reach a node is already Plat5's: the ancestor rule over bindings ([`docs/concepts/access.md`](docs/concepts/access.md#the-rule)). The hook is only for what's below that.
+Permissions on individual records inside a node ("may this member edit document D in this project?"). Who can reach a node is already Plat5's, and services already ask it: identity's evaluation API ([`docs/reference/api/internal.md`](docs/reference/api/internal.md#access-evaluation)). Record level is that API extended downward.
 
-- **One record, from the gateway.** An AuthZEN 1.0 evaluation after the permission check. Subject is the member (`member_id` and the node chain, never a principal id). Action is the route's permission. Resource is the service, the route, and its own path params. Cached on the admission TTL. Engine unreachable → **503**.
-- **A list, from a service.** The service asks which records the caller's member can reach (an AuthZEN search). Without an engine, the answer is everything in the node.
+- **From a service.** The same endpoints, `POST /access/v1/evaluation` and `/access/v1/evaluations`, with a record as the resource (its type, its id, and the node it's in). Identity decides the node as it does now; an engine answers for the record after that. Without an engine, a record's answer is its node's.
+- **A list, from a service.** The service asks which records a member can reach (AuthZEN's resource search). Without an engine, the answer is everything in the node.
+- **One record, from the gateway.** Still deferred. An evaluation after the permission check: subject the member (never a principal id), action the route's permission, resource the service, the route and its own path params. Cached on the admission TTL. Engine unreachable → **503**.
 
 Ready: a deployment that needs a record-level decision its service can't make as a state rule. No policy engine in the default stack.
+
+## Subject search
+
+Which members hold permission P on node N: AuthZEN's subject search (`POST /access/v1/search/subject`), on identity's internal port beside the evaluation API. For fan-out sends, such as notifying everyone who can read a project, without the service holding the list of members first. AuthZEN's resource and action searches stay out until record-level access needs them.
+
+Ready: a service that needs it.
 
 ## Audit retention
 
@@ -30,12 +38,6 @@ Ready: storage growth that hurts, or an org whose events must be erased on purge
 Identity's lifecycle events are kept. A consumer can always read from the first event.
 
 Ready: storage growth that hurts. Then prune by age, and answer a `starting_after` older than the oldest kept event with **410**, so the consumer knows to reconcile.
-
-## Node existence check
-
-A batch internal lookup (node ids in, the deleted or missing ones out) for work a service does outside a request, such as a digest or an outbound webhook. It answers whether the node is still live when the work runs, without waiting on the feed. `GET /nodes/{node_id}` answers one at a time today.
-
-Ready: a service whose background work fans out over many nodes.
 
 ## Linking a second IdP subject
 

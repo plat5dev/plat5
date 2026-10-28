@@ -1,6 +1,6 @@
 # Internal APIs
 
-Calls between Plat5's own services, on each service's `INTERNAL_PORT`, never on the gateway. They take no token: internal ports are reachable only inside the deployment's network, never exposed outside it. Publishing one is giving away the deployment.
+Calls on each service's `INTERNAL_PORT`, never on the gateway: between Plat5's own services, and from the deployment's services to identity's lifecycle feed and access evaluation. They take no token: internal ports are reachable only inside the deployment's network, never exposed outside it. Publishing one is giving away the deployment.
 
 ## Identity
 
@@ -61,6 +61,80 @@ The control plane calls it on a dry run and again on the apply, only when the pl
 ### Lifecycle events
 
 The feed, its event types and how to read it: [lifecycle](../../concepts/lifecycle.md#lifecycle-events).
+
+### Access evaluation
+
+Whether a member holds a permission on a node, for a service checking access outside a request, or about a member other than the caller ([access](../../concepts/access.md#outside-a-request)). The paths and shapes of the [AuthZEN Authorization API 1.0](https://openid.net/specs/authorization-api-1_0-final.html), on identity's `INTERNAL_PORT` only, at `/access/v1/…`. Never a gateway route.
+
+```
+POST /access/v1/evaluation
+{
+  "subject": { "type": "member", "id": "01jby…" },
+  "resource": { "type": "project", "id": "01jbx…" },
+  "action": { "name": "project:read" },
+  "context": { … }
+}
+→ 200
+{ "decision": true }
+```
+
+| Field | |
+|-------|--|
+| `subject` | `type` is `member`, `id` a member id. Never a user or principal id |
+| `resource` | `type` is a kind name, `id` a node id |
+| `action` | `name` is a permission, as roles grant it |
+| `context` | Optional. Accepted and ignored |
+
+`properties` on `subject`, `resource` or `action`, and any other field, are ignored.
+
+`decision` is `true` only when every step holds. Admit's resolution decides each one ([admit](#admit)):
+
+1. **Node.** The node exists, its kind is `resource.type`, and it and every node above it are live.
+2. **Member.** The member is active in the node's tree, and admit would accept its principal: a person who isn't suspended, or a service account whose node is live.
+3. **Permission.** The union of the roles of the member's bindings on the node and its ancestors grants `action.name`: `includes` resolved, `*` granting every permission ([resolution](../../concepts/access.md#resolution)).
+
+Anything else is `false`, never an error: a deleted, purged or unknown node, a `resource.type` that isn't the node's kind, a removed or unknown member, a member of another tree, or no binding that grants the permission. Identity keeps no cache for these answers: each one reads the bindings as they are, and roles as identity has them ([config](../../concepts/config.md#how-a-change-reaches-readers)).
+
+#### Batch
+
+```
+POST /access/v1/evaluations
+{
+  "subject": { "type": "member", "id": "01jby…" },
+  "action": { "name": "project:read" },
+  "options": { "evaluations_semantic": "execute_all" },
+  "evaluations": [
+    { "resource": { "type": "project", "id": "01jbx…" } },
+    { "resource": { "type": "project", "id": "01jbz…" }, "action": { "name": "project:write" } }
+  ]
+}
+→ 200
+{ "evaluations": [ { "decision": true }, { "decision": false } ] }
+```
+
+- **Defaults.** The top-level `subject`, `action`, `resource` and `context` are defaults. A key in an item replaces the default whole. Every item must end up with a `subject`, an `action` and a `resource`.
+- **Order.** `evaluations` in the answer are in request order, one per item answered.
+- **No items.** Without `evaluations`, or with an empty list, the call is one evaluation of the top-level keys, and the answer is `{ "decision": … }`.
+- **Size.** At most 100 items.
+- **Semantics.** `options.evaluations_semantic`; other options are ignored.
+
+| `evaluations_semantic` | Answers |
+|------------------------|---------|
+| `execute_all` (the default) | Every item |
+| `deny_on_first_deny` | Items up to and including the first `false` |
+| `permit_on_first_permit` | Items up to and including the first `true` |
+
+Each item is decided as a single evaluation would decide it. A call resolves each distinct node's chain once.
+
+#### Errors
+
+| Result | Response |
+|--------|----------|
+| Answered | **200**, whatever the decisions |
+| A body identity can't read: not a JSON object; a `subject`, `resource` or `action` missing, after defaults; a `subject.type` other than `member`; an id that isn't a lowercase ULID; an empty `resource.type` or `action.name`; a field of the wrong type; an unknown `evaluations_semantic`; more than 100 items | **400** `INVALID_REQUEST`, in the [error envelope](../errors.md). `message` says which field, with its path (`evaluations[2].subject.id`) |
+| Postgres unavailable | **500** `INTERNAL_ERROR`. No decision: the caller acts as if it were `false`, and retries later |
+
+AuthZEN gives an error status and a message string, with no shape for the body; the message is the envelope's `message`. An `X-Request-ID` on the request comes back on the response, as AuthZEN asks.
 
 ## Control plane feeds
 

@@ -6,13 +6,13 @@ What Plat5 is for, what it won't do, and the ways it can grow without changing t
 
 Products where people work together in shared spaces, whose tenancy boundary is a small, stable set of kinds (org, project, maybe environment): B2B SaaS, developer platforms and APIs, team workspaces in consumer apps, internal platforms. Nodes come and go freely by API; kinds rarely change.
 
-Not for permissions on individual records inside a node, or hierarchies end users invent and reshape. For those, a flat tree plus the product's own tables is lighter, or the policy hook below nodes once it ships.
+Not for permissions on individual records inside a node, or hierarchies end users invent and reshape. For those, a flat tree plus the product's own tables is lighter, or identity's evaluation API extended below nodes once it ships.
 
 ## Not in Plat5
 
 Do not add these because they would be convenient:
 
-- Per-record permissions inside a node in the gateway, or a policy engine (Topaz, OPA, …) in the default stack. The hook is deferred and is for permissions below a node only
+- Per-record permissions inside a node in the gateway, or a policy engine (Topaz, OPA, …) in the default stack. Record-level answers are deferred, and are for permissions below a node only
 - Deny rules, or any check other than the ancestor rule and route permissions
 - Role or permission names or meanings in Plat5 code. Identity's and audit's default permissions are defaults the deployment overrides
 - Telling services a principal id, a user id on a tree route, or the caller's permissions or role
@@ -49,7 +49,7 @@ None of these touches nodes, the ancestor rule, slugs, or what services see; the
 | Moving a project to another org | Refused | Cross-org move with a `node.moved` event |
 | A kind optional in the middle (a project under an org or a folder) | One parent per kind | A list of parents, additive |
 | Access per folder, with folders inside folders | Folders are service data inside a node, nested as deep as the service likes; access is decided at the node | A kind allowed as its own parent, with a depth cap |
-| Permissions on one record inside a node | Service state rules | The policy hook ([`TODO.md`](../../TODO.md)) |
+| Permissions on one record inside a node | Service state rules | Identity's evaluation API, answered below nodes by an engine ([`TODO.md`](../../TODO.md)) |
 
 ## Costs accepted knowingly
 

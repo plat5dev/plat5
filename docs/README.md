@@ -17,7 +17,7 @@
 | Doc | What it decides |
 |-----|-----------------|
 | [model](concepts/model.md) | Kinds, nodes, principals, users, members, bindings; ids and slugs; the principles |
-| [access](concepts/access.md) | The ancestor rule, who can be in a tree, roles and bindings, credentials, how a request is decided, lists |
+| [access](concepts/access.md) | The ancestor rule, who can be in a tree, roles and bindings, credentials, how a request is decided, access outside a request, lists |
 | [lifecycle](concepts/lifecycle.md) | Creating, deleting, restoring and purging; members; lifecycle events |
 | [config](concepts/config.md) | `plat5.yml` and service files, validation, plan and apply, revisions, readers |
 | [audit](concepts/audit.md) | What's recorded, in which log, and the delivery guarantee |
@@ -29,7 +29,7 @@
 |-----|--|
 | [deploy](guides/deploy.md) | Images, compose, TLS, attaching an app |
 | [change the config](guides/change-the-config.md) | Add or remove kinds, change roles and identity's routes, roll back, CI drift checks |
-| [write a service](guides/write-a-service.md) | What a service receives, stores, and must not do |
+| [write a service](guides/write-a-service.md) | What a service receives, stores, and must not do; checking access outside a request |
 | [build a console](guides/build-a-console.md) | Signing in, navigating, access, invites, restore |
 
 ## Reference
@@ -41,7 +41,7 @@
 | [api/identity](reference/api/identity.md) | Identity's service API |
 | [api/control-plane](reference/api/control-plane.md) | The admin API |
 | [api/audit](reference/api/audit.md) | Audit events and reads |
-| [api/internal](reference/api/internal.md) | Admit, plan counts, feeds and reader reports, audit writes |
+| [api/internal](reference/api/internal.md) | Admit, plan counts, access evaluation, feeds and reader reports, audit writes |
 | [cli](reference/cli.md) | The `plat5` CLI |
 | [gateway](reference/gateway.md) | Gateway behavior: admit, cache, rate limits, CORS, client IP, boot |
 | [headers](reference/headers.md) | Every `X-Plat5-*` header |

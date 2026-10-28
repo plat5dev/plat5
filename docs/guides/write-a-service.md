@@ -1,6 +1,6 @@
 # Write a service
 
-What a service behind Plat5 receives, what it should store, and what it must not do.
+What a service behind Plat5 receives, what it should store, what it must not do, and how it checks access outside a request.
 
 ## What you receive
 
@@ -14,7 +14,7 @@ The headers and rewritten path are authentic only if the service is on a private
 
 1. **Trust the path and headers the front door wrote.** Read node ids from the path or `X-Plat5-<Kind>-Id`, the caller from `X-Plat5-Member-Id`.
 2. **Document which headers you require.** A service that records authors says it needs `X-Plat5-Member-Id`, and answers **400** without it. Any front door that calls it supplies one.
-3. **Never decide access by the caller.** Scope every lookup by the node id; enforce state rules. The front door already decided who may call.
+3. **Never decide access by the caller.** Scope every lookup by the node id; enforce state rules. The front door already decided who may call. For anyone else, or outside a request, ask identity ([below](#checking-access-outside-a-request)).
 4. **Propagate `traceparent`** on downstream calls.
 5. **Log with `request_id`** from `X-Request-ID`. Don't set `X-Request-ID` on responses.
 6. **Say what changed** with `X-Plat5-Audit-Details` on audited routes, and `X-Plat5-Audit-Created` on a create. No secrets ([`concepts/audit.md`](../concepts/audit.md#what-a-service-adds)).
@@ -29,6 +29,49 @@ The headers and rewritten path are authentic only if the service is on a private
 ## Following the tree
 
 Read identity's lifecycle feed to allocate state on `node.created`, stop work on `node.deleted`, resume on `node.restored`, and delete data on `node.purged`, matching on the event's `kind`. Remove member-owned records on `member.removed`. Events, and how to read them: [lifecycle](../concepts/lifecycle.md#lifecycle-events).
+
+## Checking access outside a request
+
+The front door decides for the caller, during the request. When your service acts for a member at another time (a notification, a digest, a scheduled report, an outbound webhook, a queued job), or on behalf of a member who isn't the caller (an assignee, a mention, a share), ask identity whether that member holds the permission on the node. A member can lose a node while staying in the tree, and no event says so ([access](../concepts/access.md#outside-a-request)).
+
+Ask identity's internal port, from your own config's identity internal URL ([evaluation](../reference/api/internal.md#access-evaluation)). Ask when the work runs, not when it's queued.
+
+**Before a send.** One batch for everyone you'd notify about a node; send only to the `true`s:
+
+```
+POST {identity internal URL}/access/v1/evaluations
+{
+  "resource": { "type": "project", "id": "<project id>" },
+  "action": { "name": "<permission from your config>" },
+  "evaluations": [
+    { "subject": { "type": "member", "id": "<member id>" } },
+    { "subject": { "type": "member", "id": "<another member id>" } }
+  ]
+}
+→ { "evaluations": [ { "decision": true }, { "decision": false } ] }
+```
+
+Up to 100 items a call; split a longer list.
+
+**Before accepting an assignment.** The caller is allowed to assign; ask whether the assignee may work on the node:
+
+```
+POST {identity internal URL}/access/v1/evaluation
+{
+  "subject": { "type": "member", "id": "<assignee's member id>" },
+  "resource": { "type": "project", "id": "<project id>" },
+  "action": { "name": "<permission from your config>" }
+}
+→ { "decision": false }
+```
+
+`false` is your own refusal, such as a **422** naming the assignee.
+
+**Permission names come from your config.** The permissions belong to the deployment: its roles grant them ([roles](../reference/config/roles.md)). Read the names you check from your service's own config, not from code, so the deployment can set them. A permission the deployment renames without your config following answers `false` for everyone: the check fails closed.
+
+**No answer is no.** On anything but a **200**, don't send; retry later.
+
+**Checking is your job.** Plat5 can't enforce it: it never sees what a service sends, or to whom. A service that skips the check gets no error, only a leak.
 
 ## Saying what changed
 

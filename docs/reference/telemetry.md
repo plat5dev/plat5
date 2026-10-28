@@ -268,6 +268,8 @@ Gateway audit writes ([`concepts/audit.md`](../concepts/audit.md)):
 
 Audit service: `audit_intents_total` (result `created`, `existing`) and `audit_outcomes_total` (result `applied`, `already_final`, `not_found`).
 
+Identity: `node_operations_total` (operation `created`, `deleted`, `restored`, `purged`; one per node changed) and `access_evaluations_total` (decision `true`, `false`; one per evaluation answered, so a batch that stops early counts only what it answered) ([access evaluation](api/internal.md#access-evaluation)).
+
 An outcome `dropped` or `failed` leaves its event `pending`.
 
 **Histogram buckets** (same across all services):

@@ -20,7 +20,7 @@ On every request the gateway answers three questions: who is calling (the creden
 | **Binding** | A role for a member on one node of the member's tree. A member can have many |
 | **Guest** | A person's member with no binding on its tree's root, only on nodes below it. Created by redeeming an invite below the root. Derived, not stored. A service account is never a guest |
 | **Role** | The deployment's name for a set of permissions, bindable at some kinds ([`concepts/access.md`](access.md)). Plat5 names no roles |
-| **Permission** | What a route can require. Only the gateway checks permissions |
+| **Permission** | What a route can require, and what a service asks identity about outside a request. Only Plat5 decides who holds one |
 | **Route scope** | `scope: <kind>` addresses a node of that kind; `scope: user` is the caller as a person, with no node; `scope: public` has no caller ([`reference/config/services.md`](../reference/config/services.md)) |
 | **Credential** | An IdP token or a personal API key (people), or a service account key. Belongs to the principal, not to a tree |
 | **Front door** | Anything on the private network that calls services. Plat5's gateway is one; an operator plane is another |
@@ -47,7 +47,7 @@ A path segment that starts with a digit is read as a node id, anything else as a
 
 1. **The tree is config; nodes are data; no scope is special.**
 2. **Plat5 owns the tree and who can reach each node; services own what's inside a node.**
-3. **Access is decided only at the gateway,** from the union of a member's bindings on the node and its ancestors.
+3. **Access is decided only by Plat5,** from the union of a member's bindings on the node and its ancestors. Front doors enforce it during requests; services enforce it outside them, by asking identity.
 4. **The path names the node; the credential names the principal.**
 5. **Services see node ids and the caller's member id on tree routes, and a user id only on user routes. Never a principal id.**
 6. **Services do no auth, so any front door can call them.** A service's API is its paths and documented headers, reachable only on the private network. Plat5's gateway is one front door; others (an operator plane, an internal job, a custom gateway) bring their own rules and docs.
@@ -62,8 +62,9 @@ A path segment that starts with a digit is read as a node id, anything else as a
 | Who is this? | The IdP or identity, from the credential |
 | Which node? | The path, resolved by the gateway from slugs or ids |
 | May they call this route on this node? | The gateway: the route's permissions against the union of the member's bindings on the node and its ancestors |
+| Does this member hold this permission on this node, outside a request or for someone other than the caller? | Identity, asked by the service, from the same bindings ([access](access.md#outside-a-request)) |
 | Which nodes can they see? | Plat5, filtering node lists by each kind's `list_permission` |
-| May they touch this record inside a node? | The service's state rules today; the deferred policy hook later ([`TODO.md`](../../TODO.md)) |
+| May they touch this record inside a node? | The service's state rules today; identity's evaluation API extended below nodes later ([`TODO.md`](../../TODO.md)) |
 | Is this valid for the resource's current state? | The service |
 | Who did it? | The record, when logic needs it (the member id as author or owner); audit otherwise |
 
@@ -80,7 +81,7 @@ When a service is tempted to store a member id, ask what should happen to it if 
 
 Data about the person themselves, the same in every tree (a profile, a setting), is keyed by the user id and served on user routes. Tree data is keyed by member ids, never a user id.
 
-**Record the member id when logic depends on who did it; never decide access from it.** The gateway already decided. Separation of duties ("you can't approve your own change") is a service comparing two member ids on two records: a state rule, not an access check. Product features never read audit.
+**Record the member id when logic depends on who did it; never decide access from it yourself.** The gateway decided for the caller; for anyone else, or outside a request, ask identity ([access](access.md#outside-a-request)). Separation of duties ("you can't approve your own change") is a service comparing two member ids on two records: a state rule, not an access check. Product features never read audit.
 
 ## Next
 

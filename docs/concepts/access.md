@@ -1,6 +1,6 @@
 # Access
 
-Who can do what, in one place: the ancestor rule, who can be in a tree, roles and bindings, credentials, how the gateway decides a request, and what lists show. The shapes these rules act on are in [reference](../README.md#reference).
+Who can do what, in one place: the ancestor rule, who can be in a tree, roles and bindings, credentials, how the gateway decides a request, how a service checks access outside one, and what lists show. The shapes these rules act on are in [reference](../README.md#reference).
 
 ## The rule
 
@@ -11,6 +11,8 @@ Who can do what, in one place: the ancestor rule, who can be in a tree, roles an
 - **Denied or missing.** A node you can't use and a node that doesn't exist get the same **403** "permission denied, or it may not exist", so the answer never says whether a node exists. There's no separate visibility rule.
 
 - **Node lists.** Plat5 filters node lists to what the caller can see, so `GET /orgs/{organization}/projects` returns only the projects the caller holds `project`'s `list_permission` on ([lists](#lists)). Services never filter by caller.
+
+- **Outside a request.** The same rule, for a member the service names: work that runs outside a request, and checks about a member other than the caller, ask identity ([outside a request](#outside-a-request)). A service never rebuilds the rule from bindings.
 
 
 ## Who can be in a tree
@@ -108,6 +110,23 @@ On a `public` route, authenticate and admit is skipped and there is no caller. O
 ## How fast changes reach the edge
 
 The gateway caches each admit ([`reference/gateway.md`](../reference/gateway.md#cache)). A removed binding, a role change, a deleted node, a suspended person or a revoked key reaches the edge within `ADMIT_CACHE_TTL`. A refusal is cached only for `ADMIT_NEGATIVE_CACHE_TTL`, so a fresh invitee or a new node works within seconds.
+
+## Outside a request
+
+The gateway decides for the caller of a request. Two kinds of service code need the answer for someone else, or later:
+
+- work outside a request: notifications, digests, scheduled reports, outbound webhooks, queued jobs;
+- checks about another member inside a request: an assignee, a mention, a share.
+
+A member can lose a node while staying in its tree (a binding removed, a role edited), and no event says so. So the service asks identity, when the work runs, whether member M holds permission P on node N ([evaluation](../reference/api/internal.md#access-evaluation)). Identity answers yes only when the gateway would admit M to a route requiring P on N:
+
+- the node exists, is of the kind asked about, and it and its ancestors are live;
+- M is an active member of the node's tree, and admit would accept its principal: a person who isn't suspended, or a service account whose node is live;
+- a binding of M's on the node or an ancestor grants P ([resolution](#resolution)).
+
+Anything else is no, never an error: a deleted, purged or unknown node, a removed or unknown member, a member of another tree, a kind that isn't the node's. Identity keeps no cache for these answers, so a removed binding is no at once.
+
+Checking is the service's job. Plat5 can't see what a service sends or to whom, so a service that skips the check gets no error, only a leak.
 
 ## Lists
 

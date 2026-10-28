@@ -41,7 +41,7 @@ Ready is **503** unless Postgres answers. A fresh control plane has no config un
 | Directory | `services/identity/` |
 | `service.name` / `service.namespace` | `identity` / `identity` |
 | Public port | `3000` (the service API) |
-| Internal port | `3001` (`/health/*`, `/metrics`, admit, plan counts, lifecycle events) |
+| Internal port | `3001` (`/health/*`, `/metrics`, admit, plan counts, lifecycle events, access evaluation) |
 | Database | Plat5 Postgres via `DATABASE_URL`, schema **`identity`** |
 | `APIKEY_BRAND` | Default `plat5` ([credentials](api/identity.md#credentials)) |
 | `CONTROL_PLANE_URL` | Required. Identity doesn't listen until it has its first config ([`reference/api/internal.md`](api/internal.md#control-plane-feeds)) |

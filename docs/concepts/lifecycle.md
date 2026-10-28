@@ -24,7 +24,7 @@ A service never creates a node in its own tables first: it creates it through th
 
 - **Purge.** Once `purge_after` has passed, the purge sweeper sets `status = 'purged'` on the node and the deleted nodes below it, even those whose own `purge_after` is later, and deletes everything that hung off them: bindings, invites, and service accounts that belong there (principal and keys; the member removed with `member.removed`). A person's member it leaves with no bindings, a guest included, is removed with `member.removed`, and a purged root removes all its members. The node rows are kept. A purged node below a root frees its slug; a purged root keeps its slug as a tombstone ([ids and slugs](model.md#ids-and-slugs)).
 
-- **Background work** checks node state itself; the gateway only guards requests.
+- **Background work** checks node state and access itself, through identity's evaluation API ([access](access.md#outside-a-request)); the gateway only guards requests.
 
 ## Kinds
 
@@ -65,6 +65,6 @@ The set of types is fixed, whatever kinds a deployment declares. Node events car
 | `member.created` | A principal joins a tree: a redeemed invite, an admin add, a service account create, a root create | Nothing usually |
 | `member.removed` | Removed, left, account deleted, a person left with no bindings, a service account deleted, or its root purged | Remove records owned by that member that should go with it |
 
-`principal` is `person` or `service_account`. No principal id, user id, name or role. Binding changes aren't events: they change access, which is the gateway's concern, not service data.
+`principal` is `person` or `service_account`. No principal id, user id, name or role. Binding changes aren't events: access is asked for, not pushed. A service asks identity when its work runs ([access](access.md#outside-a-request)).
 
 `id` is a decimal string from a sequence; event writes are serialized, so `id` order is commit order. Pass it back as `starting_after`; don't do arithmetic on it. Delivery is at least once from the consumer's side, so acting on an event must be idempotent. Events are kept ([`TODO.md`](../../TODO.md)).

@@ -8,8 +8,8 @@ Plat5 is for a stable tenancy boundary enforced outside every handler: the tree 
 
 | Decision | Why |
 |----------|-----|
-| For products where people work together in shared spaces, whose tenancy boundary is a small, stable set of kinds (org, project, maybe environment): B2B SaaS, developer platforms and APIs, team workspaces in consumer apps, internal platforms. Nodes come and go freely by API; the kinds rarely change | That's where one tree, checked once at the gateway, saves every service from writing its own |
-| Not for permissions on individual records inside a node, or hierarchies end users invent and reshape | A flat org plus the product's own tables is lighter there, or the deferred policy hook below nodes ([`TODO.md`](../../TODO.md)) |
+| For products where people work together in shared spaces, whose tenancy boundary is a small, stable set of kinds (org, project, maybe environment): B2B SaaS, developer platforms and APIs, team workspaces in consumer apps, internal platforms. Nodes come and go freely by API; the kinds rarely change | That's where one tree, decided by Plat5 alone, saves every service from writing its own |
+| Not for permissions on individual records inside a node, or hierarchies end users invent and reshape | A flat org plus the product's own tables is lighter there, or identity's evaluation API once it's extended below nodes ([`TODO.md`](../../TODO.md)) |
 | Where reasonable teams would choose differently, Plat5 picks a default the deployment can change. It fixes only what isolation, security, or the shared contract needs | Plat5 runs under many products, and a fixed choice where teams differ limits them for nothing. Each option is docs and tests too, so an option comes where real teams differ, not everywhere |
 | One writer of the tree. A service that needs nodes creates them through the node API | Two writers would let the gateway's check run ahead of Plat5's own records |
 
@@ -56,7 +56,7 @@ None of these touches nodes, the ancestor rule, slugs or what services see; they
 
 | Extension | Shape |
 |-----------|-------|
-| Permissions below a node | The deferred policy hook ([`TODO.md`](../../TODO.md)) |
+| Permissions below a node | Identity's evaluation API, with record-level answers from an engine ([`TODO.md`](../../TODO.md)) |
 | A kind nested under itself (user folders) | A kind allowed as its own parent with a depth cap, nodes past the first level addressed by id |
 | Per-tree custom roles | `GET /nodes/{node_id}/roles` already has the node in the path |
 | A request-and-approve flow for support access | Support asks, the customer approves, and the approval adds a binding the customer can remove. Built on bindings, with no new kind of access |
@@ -66,6 +66,6 @@ None of these touches nodes, the ancestor rule, slugs or what services see; they
 
 | Cost | Why it's accepted |
 |------|-------------------|
-| Adopting Plat5 means putting the tree under it: routes, path params and "whose data is this" line up with the kinds. It isn't an SDK drop-in | That alignment is what lets the gateway decide access once |
+| Adopting Plat5 means putting the tree under it: routes, path params and "whose data is this" line up with the kinds. It isn't an SDK drop-in | That alignment is what lets Plat5 decide access in one place |
 | Moving off Plat5 is a migration of nodes and bindings, not an auth-provider swap | The tree is data Plat5 owns |
 | Services see a per-tree member id on tree routes, and a user id only on user routes | Keeping person ids out of tree data is the one property that's hard to reverse, and it's intended: a person can't be correlated across orgs from what an org's routes see |

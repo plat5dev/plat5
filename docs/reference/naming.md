@@ -80,7 +80,7 @@ Services address everything by id. Identity:
 | A node | `/nodes/{node_id}/...` |
 | A new root | `/roots/{kind}` |
 | A person | `/users/{user_id}/...` |
-| Internal (not on the gateway) | `/internal/admit`, `/internal/plan`, `/internal/lifecycle-events` |
+| Internal (not on the gateway) | `/internal/admit`, `/internal/plan`, `/internal/lifecycle-events`; AuthZEN's paths for access evaluation, `/access/v1/evaluation` and `/access/v1/evaluations` |
 
 Audit follows the same pattern: `/nodes/{node_id}/audit-events` and `/users/{user_id}/audit-events` public, `/internal/events/{request_id}` internal ([`concepts/audit.md`](../concepts/audit.md)).
 

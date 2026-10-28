@@ -1,6 +1,6 @@
 # Access
 
-Why access is the union of bindings on a node and its ancestors, decided once at the gateway, and why services see member ids. The rules: [`concepts/access.md`](../concepts/access.md), [`reference/gateway.md`](../reference/gateway.md), [`reference/api/internal.md`](../reference/api/internal.md#admit), [`reference/headers.md`](../reference/headers.md).
+Why access is the union of bindings on a node and its ancestors, decided only by Plat5, how services ask for it outside a request, and why services see member ids. The rules: [`concepts/access.md`](../concepts/access.md), [`reference/gateway.md`](../reference/gateway.md), [`reference/api/internal.md`](../reference/api/internal.md#admit), [`reference/headers.md`](../reference/headers.md).
 
 ## The ancestor rule
 
@@ -13,7 +13,7 @@ Why access is the union of bindings on a node and its ancestors, decided once at
 | Roles are always on, and a role names the kinds it's bindable at | A tree where every member holds every permission isn't a tree. `bindable_at` keeps an org-admin role off a project, where its org permissions would read as if they meant something |
 | Removing a role, or a kind from its `bindable_at`, is safe: bindings keep the role's name, grant nothing, and grant again if a role with that name returns | Bindings are the tree's data, and the roles document is the deployment's. A removed role's name shouldn't be reused for something else, since its old bindings would grant the new role |
 | Bindings don't expire. Support access is a binding the customer adds and removes | One kind of binding, nothing that ends by itself, and no cap to check on every grant. An optional end time can be added later without breaking anything |
-| Access is decided only at the gateway; services enforce only what holds whoever asks | Every service would otherwise reimplement the tree, and each copy can drift |
+| Access is decided only by Plat5. Front doors enforce it during requests; services enforce it outside them, by asking identity | Every service would otherwise reimplement the tree, and each copy can drift |
 
 ## Credentials and principals
 
@@ -63,6 +63,22 @@ Why access is the union of bindings on a node and its ancestors, decided once at
 | The admit cache key includes `allow_deleted` | Otherwise a refusal cached by a read of a deleted node answers the restore route too |
 | On the restore route (`allow_deleted`), a deleted node's own bindings, kept until purge, still count | A delete revokes nothing, so the people who managed the node can still undo it. A deleted root has nothing above it to grant the restore |
 | `GET …/membership` returns the caller's member id, the bindings that count at the node, and the permissions they grant | A console shows "Admin" or "Guest", marks "you", and hides buttons the caller can't use, without guessing from role names |
+
+## Outside a request
+
+| Decision | Why |
+|----------|-----|
+| Identity answers "does member M hold permission P on node N?" for services | A member can lose reach to a node while staying in the tree, and no event says so. Work outside a request (notifications, digests, scheduled reports, outbound webhooks, queued jobs) and checks about another member inside one (an assignee, a mention, a share) need that answer, and only Plat5 has it |
+| Asked for, not pushed: binding changes aren't events | From binding events a service would have to rebuild the ancestor rule, and a role edit changes access without any binding changing. Asking when the work runs gets the answer that holds then |
+| The paths and shapes of AuthZEN 1.0's evaluation API | One standard decision API, and the one record-level answers extend downward later with the same endpoints ([`TODO.md`](../../TODO.md)) |
+| Only on identity's internal port, never a gateway route | It answers for any member of any tree with no caller to check. On the gateway it would tell anyone who can reach a route who holds what. Internal ports are reachable only inside the deployment's network, where services already are |
+| The subject is a member id, never a user or principal id | Services hold member ids in tree data. A user or principal id would let two trees' data be joined on one person |
+| Admit's resolution decides it, including the principal: a suspended person or a service account whose node is deleted is `false` | One rule in one place. An answer the gateway would give differently for that member's own request is a bug |
+| A node or member that doesn't exist, a node of another kind, or a member of another tree is `false`, not an error. Only a body identity can't read is a **400** | Background work holds ids that go stale, and a stale id is a no. It's the same at the gateway, where a missing node and a denied one are one **403** |
+| A **400** carries Plat5's error envelope | AuthZEN asks for a **400** with an error message string and gives the body no shape; the envelope's `message` is that string |
+| At most 100 items a batch | Bounded work per call, like a list page. A larger fan-out is a few calls |
+| No cache in identity for these answers | They're for work that acts now, after access may have changed. The gateway caches admit because it's on every request |
+| No subject search ("which members hold P on N") yet | A fan-out send batches the members it already holds. Search comes when a service needs it ([`TODO.md`](../../TODO.md)) |
 
 ## At the edge
 
