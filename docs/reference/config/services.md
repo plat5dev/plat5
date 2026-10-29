@@ -132,6 +132,8 @@ The gateway matches the expanded public paths of every service. Two routes with 
 
 `OPTIONS` isn't a route method (**422**): the gateway answers every `OPTIONS` as a CORS preflight.
 
+No route may match `route_checks.path` ([settings](settings.md)), in any method: the gateway answers [route checks](../gateway.md#route-checks) there. A route that does is **422** at apply, naming it.
+
 ## Validation
 
 The [schema](../../concepts/config.md#schema) defines the shape, and the control plane checks it on every apply, with the [rules](../../concepts/config.md#validation-at-apply) that tie the documents together. Route rules:

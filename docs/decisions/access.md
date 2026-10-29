@@ -1,6 +1,6 @@
 # Access
 
-Why access is the union of bindings on a node and its ancestors, decided only by Plat5, how services ask for it outside a request, and why services see member ids. The rules: [`concepts/access.md`](../concepts/access.md), [`reference/gateway.md`](../reference/gateway.md), [`reference/api/internal.md`](../reference/api/internal.md#admit), [`reference/headers.md`](../reference/headers.md).
+Why access is the union of bindings on a node and its ancestors, decided only by Plat5, how services ask for it outside a request, how a UI asks it for the caller, and why services see member ids. The rules: [`concepts/access.md`](../concepts/access.md), [`reference/gateway.md`](../reference/gateway.md), [`reference/api/internal.md`](../reference/api/internal.md#admit), [`reference/headers.md`](../reference/headers.md).
 
 ## The ancestor rule
 
@@ -63,7 +63,7 @@ Why access is the union of bindings on a node and its ancestors, decided only by
 | The admit cache keeps a refusal only briefly (`ADMIT_NEGATIVE_CACHE_TTL`, about `10s`), and keys a verified JWT by issuer and subject | A fresh invitee or a new node works within seconds, and a refreshed token is the same entry |
 | The admit cache key includes `allow_deleted` | Otherwise a refusal cached by a read of a deleted node answers the restore route too |
 | On the restore route (`allow_deleted`), a deleted node's own bindings, kept until purge, still count | A delete revokes nothing, so the people who managed the node can still undo it. A deleted root has nothing above it to grant the restore |
-| `GET …/membership` returns the caller's member id, the bindings that count at the node, and the permissions they grant | A console shows "Admin" or "Guest", marks "you", and hides buttons the caller can't use, without guessing from role names |
+| `GET …/membership` returns the caller's member id, the bindings that count at the node, and the permissions they grant | A console shows "Admin" or "Guest" and marks "you" without guessing from role names. It hides what the caller can't use with [route checks](#what-a-ui-shows) |
 
 ## Outside a request
 
@@ -80,6 +80,22 @@ Why access is the union of bindings on a node and its ancestors, decided only by
 | At most 100 items a batch | Bounded work per call, like a list page. A larger fan-out is a few calls |
 | No cache in identity for these answers | They're for work that acts now, after access may have changed. The gateway caches admit because it's on every request |
 | No subject search ("which members hold P on N") yet | A fan-out send batches the members it already holds. Search comes when a service needs it ([`TODO.md`](../../TODO.md)) |
+
+## What a UI shows
+
+| Decision | Why |
+|----------|-----|
+| The gateway answers, for the caller, whether each of a batch of requests would be allowed: route checks, advisory, for a UI that hides what the caller can't use. Kubernetes' `SelfSubjectAccessReview` (`kubectl auth can-i`) and GCP's `testIamPermissions` answer the same question for their callers | A console that shows every button and lets the **403** explain is a worse console. Asking the gateway keeps the decision in one place instead of copying it into every UI |
+| A check names a method and a public path, never a permission | Permission names are the deployment's: roles grant them, routes require them, and an apply can rename either. A console that hid pages by permission name would break on a rename it can't see. The request it's about to make is something it already knows |
+| Each answer is the pipeline's own route match, admit (with its cache) and permission check, not a second decision | One rule in one place. An answer the gateway would give differently on the request is a bug, and a second implementation would drift |
+| Only for the caller | Asking about anyone else would tell a caller who holds what. Services ask identity about other members, on its internal port ([outside a request](#outside-a-request)) |
+| A node the caller can't reach and a node that doesn't exist are both `false` | A check tells no more than the request's **403** would |
+| Rate limits, body limits and the upstream aren't evaluated | Those are about one request at one moment, not whether the caller may make it. A UI hides what the caller isn't allowed, not what might fail |
+| Advisory: the request is still decided | Bindings, roles and the admit cache change between the check and the request. The check hides a button; it never grants anything |
+| 1 to 100 a call; the call counts once against `default`, per credential | One page's checks in one round trip, bounded like an evaluation batch. Counting each check would make a page with many links spend a caller's budget |
+| A `false` isn't counted by the failed-auth limiter | It's an answer, not a refusal: a guest checking the org's pages isn't failing to authenticate |
+| Not audited | It changes nothing, like a read |
+| Served by the gateway at `route_checks.path` in `plat5.yml`, `/access/routes` by default. A route matching it is **422** at apply | The public path space is the deployment's. A route the gateway answered first would be unreachable without anyone being told |
 
 ## At the edge
 

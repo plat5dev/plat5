@@ -1,6 +1,6 @@
 # Access
 
-Who can do what, in one place: the ancestor rule, who can be in a tree, roles and bindings, credentials, how the gateway decides a request, how a service checks access outside one, and what lists show. The shapes these rules act on are in [reference](../README.md#reference).
+Who can do what, in one place: the ancestor rule, who can be in a tree, roles and bindings, credentials, how the gateway decides a request, how a service checks access outside one, what lists show, and what a UI shows. The shapes these rules act on are in [reference](../README.md#reference).
 
 ## The rule
 
@@ -138,6 +138,15 @@ Checking is the service's job. Plat5 can't see what a service sends or to whom, 
 - **Deleted.** `?status=deleted` uses the same permission, counting the deleted node's own bindings too: they're kept until purge. That includes a deleted org, which has nothing above it: `GET /user/nodes?kind=organization&status=deleted` is how a person finds one. As at admit, only the deleted node's own bindings count beside live ones: a node whose ancestor is deleted too isn't listed, since it can't be restored before that ancestor. Restoring still needs the restore route's permission.
 
 This is why child list routes require `any_member`: anyone in the tree may ask, and the answer is what they can see. A project-only member gets their projects from `GET /orgs/{organization}/projects`, not a 403.
+
+## What a UI shows
+
+A UI hides what the caller can't use, and shows who the caller is on a node. Two answers, both for the caller only:
+
+- **Route checks**, for hiding. The UI sends the gateway a batch of requests it might make, by method and public path, and the gateway answers whether each would be allowed: the route match, admit and the permission check, the same steps as a request ([route checks](../reference/gateway.md#route-checks)). The UI asks by route, never by permission name: permissions are the deployment's, and roles can change them with an apply. A node the caller can't reach answers `false`, so a check tells no more than a **403** would.
+- **`GET …/membership`**, for who the caller is: their member id on the node, the bindings that count there, and the permissions they grant. A UI shows "Admin" or "Guest" from it, and marks "you".
+
+Both are advisory. The gateway decides every request when it's made, so a page shown on a stale answer gets the usual **403**, and a check can't grant anything.
 
 ## Other front doors
 

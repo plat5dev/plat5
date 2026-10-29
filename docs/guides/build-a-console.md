@@ -10,9 +10,27 @@ The console gets an IdP token and sends it as `Authorization: Bearer`. There are
 
 Paths carry slugs: `/orgs/acme/projects/web/…`. Lists show only what the caller can see, so a project-only member sees their projects, not a 403 ([lists](../concepts/access.md#lists)). A filtered page can be short with `has_more: true`; keep walking ([`reference/lists.md`](../reference/lists.md)).
 
-## What the caller can do here
+## What to show
 
-`GET …/membership` on any node returns the caller's member id, the bindings that count there, and the permissions they grant. A console shows "Admin" or "Guest", marks "you" in member lists, and hides buttons the caller can't use.
+Each page names its main call: the one request it can't work without, such as `GET /orgs/{organization}/bindings` for an org's access page. A page is hidden, with its links, when its main call isn't allowed; a button is hidden when its request isn't.
+
+Ask the gateway once per page or navigation, in one batch: every main call the page links to and every button's request, by method and path, sent to the deployment's `route_checks.path` (`POST /access/routes` by default). The answers come back in order ([route checks](../reference/gateway.md#route-checks)):
+
+```
+POST /access/routes
+{ "checks": [
+  { "method": "GET", "path": "/orgs/acme/bindings" },
+  { "method": "POST", "path": "/orgs/acme/projects" },
+  { "method": "DELETE", "path": "/orgs/acme/projects/web" }
+] }
+→ { "checks": [ { "allowed": false }, { "allowed": true }, { "allowed": false } ] }
+```
+
+Ask by route, not by permission name: the deployment names permissions and can rename them. Up to 100 checks a call.
+
+`GET …/membership` on a node says who the caller is there: their member id, the bindings that count, and the permissions they grant. A console shows "Admin" or "Guest" from it, and marks "you" in member lists.
+
+Both answers are advisory ([what a UI shows](../concepts/access.md#what-a-ui-shows)). The request is still decided when it's made, so a page shown on a stale answer gets a **403**, shown like any other.
 
 ## Errors
 

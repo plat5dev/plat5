@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://plat5.com/schema/settings.json",
   "title": "Settings",
-  "description": "The deployment-wide settings: deletion_grace, reserved_slugs, users and defaults in plat5.yml.",
+  "description": "The deployment-wide settings: deletion_grace, reserved_slugs, users, route_checks and defaults in plat5.yml.",
   "type": "object",
   "properties": {
     "deletion_grace": {
@@ -21,6 +21,11 @@
       "title": "users",
       "description": "How Plat5 reads a person from the IdP's token.",
       "$ref": "#/$defs/users"
+    },
+    "route_checks": {
+      "title": "route_checks",
+      "description": "The gateway's route checks: whether the caller may call each of a batch of routes, for a UI that hides what the caller can't use ([gateway](../gateway.md#route-checks)).",
+      "$ref": "#/$defs/route_checks"
     },
     "defaults": {
       "title": "defaults",
@@ -67,6 +72,19 @@
       "minLength": 1,
       "maxLength": 128,
       "pattern": "^[^.\\s]+(\\.[^.\\s]+)*$"
+    },
+    "route_checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "path",
+          "description": "Where the gateway answers them, for `POST`. Literal segments of lowercase letters, digits, `-`, `_` and `.`, none starting with `.`; at most 256 characters. No route may match it, in any method (**422**, naming the route). Default `/access/routes`.",
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^(/[a-z0-9_-][a-z0-9._-]*)+$"
+        }
+      }
     },
     "defaults": {
       "type": "object",

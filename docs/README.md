@@ -17,7 +17,7 @@
 | Doc | What it decides |
 |-----|-----------------|
 | [model](concepts/model.md) | Kinds, nodes, principals, users, members, bindings; ids and slugs; the principles |
-| [access](concepts/access.md) | The ancestor rule, who can be in a tree, roles and bindings, credentials, how a request is decided, access outside a request, lists |
+| [access](concepts/access.md) | The ancestor rule, who can be in a tree, roles and bindings, credentials, how a request is decided, access outside a request, lists, what a UI shows |
 | [lifecycle](concepts/lifecycle.md) | Creating, deleting, restoring and purging; members; tree and user events |
 | [config](concepts/config.md) | `plat5.yml` and service files, validation, plan and apply, revisions, readers |
 | [audit](concepts/audit.md) | What's recorded, in which log, and the delivery guarantee |
@@ -30,7 +30,7 @@
 | [deploy](guides/deploy.md) | Images, compose, TLS, attaching an app |
 | [change the config](guides/change-the-config.md) | Add or remove kinds, change roles and identity's routes, roll back, CI drift checks |
 | [write a service](guides/write-a-service.md) | What a service receives, stores, and must not do; checking access outside a request |
-| [build a console](guides/build-a-console.md) | Signing in, navigating, access, invites, restore |
+| [build a console](guides/build-a-console.md) | Signing in, navigating, what to show, access, invites, restore |
 
 ## Reference
 
@@ -43,7 +43,7 @@
 | [api/audit](reference/api/audit.md) | Audit events and reads |
 | [api/internal](reference/api/internal.md) | Admit, plan counts, access evaluation, feeds and reader reports, audit writes |
 | [cli](reference/cli.md) | The `plat5` CLI |
-| [gateway](reference/gateway.md) | Gateway behavior: admit, cache, rate limits, CORS, client IP, boot |
+| [gateway](reference/gateway.md) | Gateway behavior: admit, cache, rate limits, route checks, CORS, client IP, boot |
 | [headers](reference/headers.md) | Every `X-Plat5-*` header |
 | [env](reference/env.md) | Every service's environment |
 | [idp](reference/idp.md), [errors](reference/errors.md), [error copy](reference/error-copy.md), [lists](reference/lists.md), [naming](reference/naming.md), [telemetry](reference/telemetry.md), [health](reference/health.md), [container labels](reference/container-labels.md) | Conventions |

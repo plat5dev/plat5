@@ -6,7 +6,7 @@ The Plat5 gateway (`services/gateway/`). How it decides a request: [access](../c
 
 | Layer | Responsibility |
 |-------|---------------|
-| **Gateway** | Routing, authentication (JWT, API key), resolving the path's slugs to nodes, admission, rate limits, the permission check, upstream fill, audit intent and outcome, CORS, security headers, body limits, trace propagation |
+| **Gateway** | Routing, authentication (JWT, API key), resolving the path's slugs to nodes, admission, rate limits, the permission check, upstream fill, audit intent and outcome, route checks, CORS, security headers, body limits, trace propagation |
 | **Edge / load balancer** | TLS termination |
 | **Identity** | Admit: the member and permissions for a credential on a node chain |
 | **Services** | Business logic, data access, and state rules over the node ids they're given |
@@ -45,10 +45,10 @@ A refreshed JWT has the same issuer and subject, so it's no miss. What the TTL b
 
 ## Control plane
 
-Routes, kinds, rate limits and CORS come from the control plane: `CONTROL_PLANE_URL` (e.g. `http://control-plane:5003`), required to boot. The gateway reads `GET {CONTROL_PLANE_URL}/internal/gateway`.
+Routes, kinds, rate limits, CORS, the name claims and the route checks path come from the control plane: `CONTROL_PLANE_URL` (e.g. `http://control-plane:5003`), required to boot. The gateway reads `GET {CONTROL_PLANE_URL}/internal/gateway`.
 
 - **Boot.** Waits for its first snapshot, retrying while the control plane is down, and doesn't listen until it has one.
-- **Running.** Long-polls with `?after={revision}` and swaps routes, kinds, rate limits and CORS whole on each change.
+- **Running.** Long-polls with `?after={revision}` and swaps them whole on each change.
 - **Control plane down.** Keeps serving the last snapshot.
 - **A snapshot it can't build.** The control plane validated it; the gateway only parses it and builds its route table. A snapshot it can't parse or build is refused whole: it keeps the current one, logs an error, counts it, and reports the revision and the reason on its next poll.
 - **Reporting.** Every long poll carries the replica's id and the revision it loaded ([feeds](api/internal.md#control-plane-feeds)).
@@ -89,6 +89,53 @@ A param value of `.` or `..`, or one holding `/`, `?` or `#` once decoded, is **
 ## Request bodies
 
 A body larger than the service's `max_body_bytes` (or `defaults.max_body_bytes`, [settings](config/settings.md)) is **413** `PAYLOAD_TOO_LARGE`, checked on `Content-Length` and while streaming.
+
+## Route checks
+
+Whether the caller may call each of a batch of routes, for a UI that hides what the caller can't use ([access](../concepts/access.md#what-a-ui-shows)). The gateway answers it itself; it isn't a service route. It's served at `route_checks.path` in `plat5.yml`, `/access/routes` by default ([settings](config/settings.md)), and no route may match that path.
+
+```
+POST /access/routes
+Authorization: Bearer …
+{
+  "checks": [
+    { "method": "GET", "path": "/orgs/acme/projects/web/bindings" },
+    { "method": "DELETE", "path": "/orgs/acme" }
+  ]
+}
+→ 200
+{ "checks": [ { "allowed": true }, { "allowed": false } ] }
+```
+
+| Field | Rule |
+|-------|------|
+| `checks` | 1 to 100. Answered in request order, one each |
+| `method` | `GET`, `POST`, `PUT`, `PATCH`, `DELETE` or `HEAD`: the verbs a route takes, uppercase |
+| `path` | A public path, as a request would send it: starts with `/`, visible ASCII, no `?` or `#` (no query string or fragment), at most 2048 characters |
+
+Other fields are ignored. Each `allowed` is what the gateway would decide for this caller, this method and this path, up to the permission check ([how a request is decided](../concepts/access.md#how-a-request-is-decided)):
+
+| The route | `allowed` |
+|-----------|-----------|
+| None matches the path and method | `false` |
+| `public` | `true` |
+| `user` | `true` for a person, `false` for a service account |
+| A kind | `true` when admit finds the caller's member on the chain (a deleted node only on an `allow_deleted` route) and the caller's permissions there meet `required_permissions`, or the route is `any_member` |
+
+A node that doesn't exist and a node the caller can't reach are both `false`, as both are the same **403** on the request. Rate limits, body limits, the param check of the fill and the upstream aren't evaluated, so `true` doesn't promise the request succeeds. Each admit comes from the [cache](#cache), as a request's would.
+
+- **Credential.** Any credential a route takes. Missing, malformed, or a JWT refused locally: **401**. When admit refuses the credential itself on a check (a revoked key, a suspended person, a service account whose node is deleted), the whole call is **401**, counted once by the failed-auth limiter. A key refused on a `user` check is that check's `false` instead: identity answers a service account's key there the same way. A `false` is never counted by the failed-auth limiter.
+- **Rate limit.** One count of the `default` policy per call, per credential (a key, or a JWT's issuer and subject), before any check. `X-RateLimit-*` on the **200** and the **429**, as on a route.
+- **Not audited**, and nothing is forwarded.
+- **CORS** as on any response; its preflight is any `OPTIONS`.
+- **Other methods** on the path match no route: **404**.
+
+| Case | Code |
+|------|------|
+| A body that isn't JSON, `checks` missing or outside 1 to 100, a check that isn't an object, a bad `method` or `path` | `VALIDATION_ERROR` (422). `details.fields` names each, as `checks[2].path` |
+| A body over 256 KiB | `PAYLOAD_TOO_LARGE` (413) |
+
+The other errors are the [gateway's](#errors).
 
 ## TLS termination
 
@@ -133,6 +180,7 @@ The gateway listens only once it has a control-plane snapshot. `/health/ready` i
 | Node not found, not in the tree, or no route permission held | `FORBIDDEN` (403), "permission denied, or it may not exist" |
 | Route not registered | `NOT_FOUND` (404) |
 | Request body too large | `PAYLOAD_TOO_LARGE` (413) |
+| A [route checks](#route-checks) body that doesn't follow its rules | `VALIDATION_ERROR` (422) |
 | Rate limit (admitted route or failed-auth IP) | `RATE_LIMITED` (429) |
 | JWKS, Valkey or identity down | `SERVICE_UNAVAILABLE` (503) |
 | Audit intent not written | `SERVICE_UNAVAILABLE` (503) |

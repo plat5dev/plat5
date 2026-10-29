@@ -76,7 +76,7 @@ The control plane is the one validator: it checks the schema, then these rules, 
 2. Every `bindable_at` kind exists. Every role in `includes` exists, and includes don't cycle. `creator_role` is a role bindable at every kind.
 3. Every permission a role grants is required by some route, identity's and audit's included, or is a kind's `list_permission`. `*` is always allowed.
 4. Every route's scope is a kind, `user` or `public`, and its path, methods, permissions and upstream follow the [route rules](../reference/config/services.md#validation).
-5. No two routes, in one service or across services, have the same method and shape ([route matching](../reference/config/services.md#matching)).
+5. No two routes, in one service or across services, have the same method and shape ([route matching](../reference/config/services.md#matching)). No route matches `route_checks.path`, where the gateway answers [route checks](../reference/gateway.md#route-checks), in any method.
 6. `rate_limits` has a `default` policy without `count_at`. Every `rate_limit` names a policy in `rate_limits`, and a policy's `count_at` is the route's kind or an ancestor.
 7. `identity` and `audit` name only their own resources and verbs, and kinds that exist ([resources](../reference/config/resources.md)).
 
