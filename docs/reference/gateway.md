@@ -68,7 +68,7 @@ Counters live in **Valkey**; replicas share one budget. `VALKEY_URL` is required
 | Exceed | **429** `RATE_LIMITED`, `details.retry_after_seconds`, `Retry-After` |
 | Admitted headers | On limited routes (2xx and 429): `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, for the tightest policy |
 | Keys | Under a fixed `plat5:rl:` prefix |
-| Failed-auth IP | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60; `0` = off). Counts only what identity refused: `valid: false` and `member_id: null`. A JWT refused locally and an unmatched route don't count. **429** sets `Retry-After`; no `X-RateLimit-*` |
+| Failed-auth IP | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60; `0` = off). Counts only what identity refused: `valid: false` and `member_id: null`. A JWT refused locally, an unmatched route and a service account on a user route don't count. **429** sets `Retry-After`; no `X-RateLimit-*` |
 
 ## Audit
 
@@ -124,7 +124,7 @@ Other fields are ignored. Each `allowed` is what the gateway would decide for th
 
 A node that doesn't exist and a node the caller can't reach are both `false`, as both are the same **403** on the request. Rate limits, body limits, the param check of the fill and the upstream aren't evaluated, so `true` doesn't promise the request succeeds. Each admit comes from the [cache](#cache), as a request's would.
 
-- **Credential.** Any credential a route takes. Missing, malformed, or a JWT refused locally: **401**. A credential admit refuses (an unknown or revoked key, a suspended person, a service account whose node is deleted) makes the whole call **401**, whatever the checks, counted once by the failed-auth limiter. When no check's admit accepts the credential, the gateway admits it once more: a JWT as on a `user` route, a key with a chain that names no node, since identity refuses a service account's key on a `user` route as it refuses a revoked one. A service account's `user` checks are `false`. A `false` is never counted by the failed-auth limiter.
+- **Credential.** Any credential a route takes. Missing, malformed, or a JWT refused locally: **401**. Each check admits as its request would: a kind check with its chain, a `user` check with an empty chain; a `public` or unmatched check doesn't admit. Any admit answering `valid: false` (an unknown or revoked key, a suspended person, a service account whose node is deleted) makes the whole call **401**, counted once by the failed-auth limiter. A call that needs no admit never calls identity: it answers whatever the credential, even with identity down. A `false` is never counted by the failed-auth limiter.
 - **Rate limit.** One count of the `default` policy per call, per credential (a key, or a JWT's issuer and subject), before any check. `X-RateLimit-*` on the **200** and the **429**, as on a route.
 - **Not audited**, and nothing is forwarded.
 - **CORS** as on any response; its preflight is any `OPTIONS`.
@@ -178,6 +178,7 @@ The gateway listens only once it has a control-plane snapshot. `/health/ready` i
 |------|------|
 | Bad or missing credential | `UNAUTHORIZED` (401) |
 | Node not found, not in the tree, or no route permission held | `FORBIDDEN` (403), "permission denied, or it may not exist" |
+| A service account on a user route | `FORBIDDEN` (403), "Service accounts can't use this route." |
 | Route not registered | `NOT_FOUND` (404) |
 | Request body too large | `PAYLOAD_TOO_LARGE` (413) |
 | A [route checks](#route-checks) body that doesn't follow its rules | `VALIDATION_ERROR` (422) |

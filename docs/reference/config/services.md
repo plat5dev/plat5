@@ -85,7 +85,7 @@ Unknown fields are **422**.
 - **The route's own params** are free: letters, digits and `_`, not starting with a digit, at most 64 characters. They can't be a kind name. Each param is a whole segment: `/files/{name}.json` is **422**.
 - **A child kind's collection.** A route in a kind's scope may be exactly a child kind's collection (`/projects` in `organization`), but nothing under it (`/projects/archived` is **422**): a project named `archived` would be shadowed by the literal. Use `/archived-projects`, or `/projects?status=archived`.
 
-A user route is for the person's own data, keyed by the user id. Service accounts can't call user routes: their keys are **401** there.
+A user route is for the person's own data, keyed by the user id. Service accounts can't call user routes: their keys are **403** there ([how a request is decided](../../concepts/access.md#how-a-request-is-decided)).
 
 ## `upstream`
 

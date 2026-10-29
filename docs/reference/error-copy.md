@@ -141,7 +141,14 @@ A 401 on a matched route says what the route takes. The same sentence for no cre
 
 ### Gateway 403
 
-Always the fallback sentence, `Permission denied, or it may not exist.`, with `details` as [`FORBIDDEN`](errors.md#forbidden) gives it.
+The fallback sentence, `Permission denied, or it may not exist.`, with `details` as [`FORBIDDEN`](errors.md#forbidden) gives it, except for a service account on a user route.
+
+| When | `message` |
+|------|-----------|
+| A node not found, not in the tree, or no route permission held | Permission denied, or it may not exist. |
+| A service account on a user route | Service accounts can't use this route. |
+
+The second names no node, so it tells nothing about one; `details` is `null`.
 
 ### Route checks 422
 

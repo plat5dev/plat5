@@ -27,12 +27,12 @@ POST /internal/admit
 }
 ```
 
-1. **Principal.** Hash the key, or look up the IdP link. A new IdP subject creates the person. `name`, the first non-empty claim of `users.name.claims`, sets the person's name as `users.name.sync` says ([a person's name](../idp.md#a-persons-name)). A suspended person, a revoked key, a key identity can't read, or a service account whose node is deleted is `valid: false`. So is a service account on a user route.
+1. **Principal.** Hash the key, or look up the IdP link. A new IdP subject creates the person. `name`, the first non-empty claim of `users.name.claims`, sets the person's name as `users.name.sync` says ([a person's name](../idp.md#a-persons-name)). `valid` means only that the credential is good: a known, unrevoked key, or an IdP subject, of an active principal. A suspended person, an unknown or revoked key, a key identity can't read, or a service account whose node is deleted is `valid: false`, on any chain.
 2. **Nodes.** Resolve each `ref` (slug or id) under the previous node, by kind. A missing, purged or deleted node ends here. With `allow_deleted`, the last node may be deleted (not purged), and its own bindings still count. Nothing else ever counts a deleted node's bindings.
 3. **Member.** The principal's active member in the chain's tree.
 4. **Permissions.** The union of the roles of that member's bindings on any node in the chain, includes resolved ([`concepts/access.md`](../../concepts/access.md#resolution)).
 
-An empty `chain` is a user route: `user_id` is the person's, and `nodes`, `member_id` and `permissions` are empty. On a tree route `user_id` is `null`.
+An empty `chain` is a user route: `nodes`, `member_id` and `permissions` are empty. For a person, `user_id` is the person's. A valid service account answers `valid: true` and `principal: "service_account"` with `user_id: null`: it has no user, and the gateway refuses it there. On a tree route `user_id` is `null`.
 
 Every field is in every answer, so the gateway never sees a missing one. With `valid: false`, `principal`, `key_id`, `member_id` and `user_id` are `null`, and `nodes` and `permissions` are empty. A missing node and a caller outside the tree both answer `member_id: null` with empty `nodes` and `permissions`. `key_id` is the key's id for a key, `null` for a JWT. `permissions` is sorted, with `*` as the role wrote it.
 
@@ -43,6 +43,7 @@ Identity resolves `chain` by kind name only and doesn't check it against its kin
 | Admit result | Status |
 |--------------|--------|
 | `valid: false` | **401**, counted by the failed-auth limiter |
+| `principal: "service_account"` on a user route | **403**, before the rate limit, not counted |
 | `member_id: null` on a kind route | **403**, before the rate limit, counted by the failed-auth limiter |
 | `permissions` share none with the route, and the route isn't `any_member` | **403**, after the rate limit |
 | Otherwise | Forwarded |

@@ -43,7 +43,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `INVALID_REQUEST` | 400 | `invalid_request_error` | Malformed request. | — |
 | `VALIDATION_ERROR` | 422 | `invalid_request_error` | That doesn't look right. | `{ fields: [{ path, message }] }` |
 | `UNAUTHORIZED` | 401 | `invalid_request_error` | Authentication required. | `{ reason }` |
-| `FORBIDDEN` | 403 | `invalid_request_error` | Permission denied, or it may not exist. | `{ required_permissions }`, or `null` on an `any_member` route |
+| `FORBIDDEN` | 403 | `invalid_request_error` | Permission denied, or it may not exist. | `{ required_permissions }`, or `null` on an `any_member` or user route |
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
 | `PLAN_STALE` | 409 | `invalid_request_error` | The deployment changed since this plan was made. Plan again. | `{ precondition, expected, actual }` |
@@ -56,13 +56,15 @@ The **Fallback message** column is used only when nothing more specific applies.
 
 Returned by the **gateway** when the route's node doesn't exist, the caller isn't in its tree, or the caller's permissions on the node share none with the route's `required_permissions`. One body for all three, so a 403 never says whether a node exists. `details.required_permissions` is the route's list: any one of them would have admitted the request. On an `any_member` route, `details` is `null`: there a 403 only means the caller isn't in the tree. The caller's own permissions are never in the body; the gateway logs them on a `required_permissions denied` line ([`reference/telemetry.md`](telemetry.md#gateway-permission-denied-line)).
 
+Also returned by the **gateway** for a service account on a user route, with `details: null` and its own sentence ([error copy](error-copy.md#gateway-403)).
+
 ### `NOT_FOUND`
 
 From the gateway: no route matches. From a service's own API, called by id: the id isn't under the address given. Through the gateway, a missing node is a **403**, never a **404**.
 
 ### `UNAUTHORIZED`
 
-Returned by the **gateway**, not downstream services: a bad, missing, revoked or suspended credential, or a service account key on a user route. Identity unavailable is **503**. See [admit](api/internal.md#what-the-gateway-answers).
+Returned by the **gateway**, not downstream services: a missing, malformed, unknown or revoked credential, a suspended person's, or the key of a service account whose node is deleted. A **401** always means the credential itself is bad; a known caller who may not make the request is a **403**. Identity unavailable is **503**. See [admit](api/internal.md#what-the-gateway-answers).
 
 ### `PLAN_STALE`
 
@@ -75,7 +77,7 @@ Returned by the **gateway**. `Retry-After` (seconds) is the same value as `detai
 | Limiter | When | Key |
 |---------|------|-----|
 | Admitted route | After admission, before the permission check | The policy and its bucket ([rate limits](config/rate-limits.md#buckets)) |
-| Failed-auth IP | What identity refused: **401** for an invalid key or `valid: false`, and not-found **403**s. Not per-route | Client IP. `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). `0` = off |
+| Failed-auth IP | What identity refused: **401** for an invalid key or `valid: false`, and not-found **403**s. Not a service account's **403** on a user route. Not per-route | Client IP. `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). `0` = off |
 
 ## Principles
 
