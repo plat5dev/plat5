@@ -1,6 +1,6 @@
 # Write a service
 
-What a service behind Plat5 receives, what it should store, what it must not do, and how it checks access outside a request.
+What a service behind Plat5 receives, what it should store, what it must not do, how it keeps tenants apart, how it adds its own fields to a node, and how it checks access outside a request.
 
 ## What you receive
 
@@ -26,6 +26,22 @@ The headers and rewritten path are authentic only if the service is on a private
 3. **Do not implement CORS.** The gateway handles preflight and headers.
 4. **Do not generate `X-Request-ID`.** Propagate it. Missing is a gateway bug.
 
+## Keep tenants apart
+
+Every read and write inside a node is scoped by the node id from the request, never by a record id alone. The record id comes from the client; the node id comes from the front door, which decided the caller may act on that node. A query by record id alone serves another tenant's record to anyone who has its id.
+
+```sql
+-- Wrong: any tenant's task, for whoever sends its id
+SELECT * FROM tasks WHERE id = $2;
+
+-- Right: the task only if it's in the environment the request is about
+SELECT * FROM tasks WHERE env_id = $1 AND id = $2;
+```
+
+`$1` is the node id from the path or `X-Plat5-Environment-Id`, `$2` the record id the client sent. A record in another node is the same **404** as one that doesn't exist. Updates and deletes take the same `WHERE`, and an insert takes the node id from the request, never from the body.
+
+Optionally, store ancestor ids beside the node id, from `X-Plat5-<Kind>-Id` (an `org_id` from `X-Plat5-Organization-Id`): for roll-ups across a level, such as every task in an org, or as a second layer with Postgres row-level security keyed on them. They never go stale, because a node keeps its parent for life. They add to the scope from the request; they never replace it.
+
 ## Following the tree and people
 
 Identity writes two feeds ([lifecycle](../concepts/lifecycle.md#lifecycle-events)). Read the one for the data you keep; a service that keeps both reads both, with a cursor for each.
@@ -35,6 +51,37 @@ Identity writes two feeds ([lifecycle](../concepts/lifecycle.md#lifecycle-events
 **User-route data**, keyed by user id, follows `GET /internal/user-events`. On `user.deleted`, delete everything keyed by that user id. `user.created` usually needs nothing: create a person's data the first time they call a user route.
 
 An event can arrive more than once, so handling it twice must be harmless. Shapes and paging: [internal APIs](../reference/api/internal.md#tree-events).
+
+## Nodes with service fields
+
+A node is identity's: its id, kind, parent, slug, display name and status. Anything else about it, such as a project's region or plan, is the service's, keyed by the node id ([where a field goes](../concepts/model.md#where-a-field-goes)).
+
+**The default is two requests.** Identity creates the node through its own route. Then the console sends the service's fields to the service's route for that node with `PUT`, which is safe to repeat. The service treats a node with no settings yet as having the defaults, creating its row lazily on the first request or on `node.created`. The console sends both from one form ([build a console](build-a-console.md#nodes-with-service-fields)).
+
+**When a field must exist from the start**, the service owns the create:
+
+1. The deployment turns identity's create off for that kind, and gives the collection path to the service's route:
+
+   ```yaml
+   # services/identity.yml
+   identity:
+     url: http://identity:3000
+     kinds:
+       project:
+         resources:
+           children:
+             methods:
+               POST: false
+   ```
+
+   The service's route is `POST /projects` in its `organization` scope (`POST /orgs/{organization}/projects`), requiring what identity's did, `project:create` by default ([resources](../reference/config/resources.md)). `GET` on the collection stays identity's.
+2. The service validates its fields first. Then it creates the node through identity's service API, `POST /nodes/{parent id}/children/project` with `{ display_name, slug? }`, passing the caller's `X-Plat5-Member-Id`, so the creator is bound when the kind binds its creator ([identity's API](../reference/api/identity.md)).
+3. It inserts its own row. If that fails, it deletes the node through identity (`DELETE /nodes/{node id}`) and answers with its error.
+4. It sets `X-Plat5-Audit-Created` to the new node's id ([audit](../concepts/audit.md#what-a-service-adds)).
+
+A node deleted in step 3 is a deleted node like any other until its purge, after `deletion_grace`: it holds its slug, so a retry with the same slug is a **409**, and it's listed with `?status=deleted`. Take an idempotency key from the client, such as an `Idempotency-Key` header (listed in `cors.allowed_headers` for browsers), so a retry after a timeout answers the node already made instead of making a second.
+
+For a root kind, the resource is `roots` (`kinds.<kind>.resources.roots`), the service's route is a `user` route, and identity's create is `POST /roots/{kind}`, passing the caller's `X-Plat5-User-Id`. A user route names the tree it changed with `X-Plat5-Audit-Nodes` and `X-Plat5-Audit-Member`.
 
 ## Checking access outside a request
 

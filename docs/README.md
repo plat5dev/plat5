@@ -29,8 +29,8 @@
 |-----|--|
 | [deploy](guides/deploy.md) | Images, compose, TLS, attaching an app |
 | [change the config](guides/change-the-config.md) | Add or remove kinds, change roles and identity's routes, roll back, CI drift checks |
-| [write a service](guides/write-a-service.md) | What a service receives, stores, and must not do; checking access outside a request |
-| [build a console](guides/build-a-console.md) | Signing in, navigating, what to show, access, invites, restore |
+| [write a service](guides/write-a-service.md) | What a service receives, stores, and must not do; keeping tenants apart; nodes with service fields; checking access outside a request |
+| [build a console](guides/build-a-console.md) | Signing in, navigating, what to show, nodes with service fields, access, invites, restore |
 
 ## Reference
 

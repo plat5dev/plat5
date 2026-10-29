@@ -36,6 +36,14 @@ Both answers are advisory ([what a UI shows](../concepts/access.md#what-a-ui-sho
 
 Show `error.message` ([`reference/errors.md`](../reference/errors.md)). A 403 never says whether a node exists, so the console shouldn't either: "Permission denied, or it may not exist." On a route that needs permissions, `details.required_permissions` says which would have worked, for an "ask an admin for…" hint ([`FORBIDDEN`](../reference/errors.md#forbidden)).
 
+## Nodes with service fields
+
+A form that creates a node can hold fields that belong to a service, such as a project's region ([write a service](write-a-service.md#nodes-with-service-fields)).
+
+**Usually, two requests from one form.** Create the node through identity's route (`POST /orgs/acme/projects { display_name }`), then send the service's fields to its route for the new node with `PUT`, built from the node the create returned. If the second fails, the node exists with the service's defaults: show one error, keep the form, and retry the `PUT`, which is safe to repeat, never the create.
+
+**When the service owns the create**, the deployment gives it the same path: one `POST` with identity's fields and the service's together. Send an idempotency key, such as `Idempotency-Key`, so a retry after a timeout doesn't make a second node.
+
 ## Who has access
 
 - `GET …/bindings` lists every binding that counts at the node, each with where it sits and whether it's inherited; guests are marked.
