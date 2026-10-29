@@ -81,6 +81,8 @@ A node is identity's: its id, kind, parent, slug, display name and status. Anyth
 
 A node deleted in step 3 is a deleted node like any other until its purge, after `deletion_grace`: it holds its slug, so a retry with the same slug is a **409**, and it's listed with `?status=deleted`. Take an idempotency key from the client, such as an `Idempotency-Key` header (listed in `cors.allowed_headers` for browsers), so a retry after a timeout answers the node already made instead of making a second.
 
+If that node is restored, it still has no row. The service treats the missing row as not set up: its other routes for the node answer **409** until the console sends the fields with `PUT`.
+
 For a root kind, the resource is `roots` (`kinds.<kind>.resources.roots`), the service's route is a `user` route, and identity's create is `POST /roots/{kind}`, passing the caller's `X-Plat5-User-Id`. A user route names the tree it changed with `X-Plat5-Audit-Nodes` and `X-Plat5-Audit-Member`.
 
 ## Checking access outside a request
