@@ -789,3 +789,370 @@ async fn a_param_that_would_change_the_upstream_path_is_400() {
     );
     assert_eq!(Rejection::BadPathParam.status(), 400);
 }
+
+// Route checks (docs/reference/gateway.md#route-checks): the same match, admit
+// and permission steps, per check.
+
+/// Identity answering by request: the chain refs joined by `/` (empty on a user
+/// route), with `+deleted` for `allow_deleted`. Anything else is not in the tree.
+#[derive(Default)]
+struct ByChain {
+    answers: HashMap<String, AdmitAnswer>,
+    down: bool,
+    calls: std::sync::atomic::AtomicUsize,
+    requests: Mutex<Vec<AdmitRequest>>,
+}
+
+impl ByChain {
+    fn with(answers: &[(&str, AdmitAnswer)]) -> Arc<Self> {
+        Arc::new(Self {
+            answers: answers
+                .iter()
+                .map(|(k, a)| (k.to_string(), a.clone()))
+                .collect(),
+            ..Default::default()
+        })
+    }
+}
+
+impl crate::auth::admit::Admit for Arc<ByChain> {
+    async fn admit(
+        &self,
+        req: &AdmitRequest,
+    ) -> Result<AdmitAnswer, crate::auth::admit::AdmitUnavailable> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.requests.lock().unwrap().push(req.clone());
+        if self.down {
+            return Err(crate::auth::admit::AdmitUnavailable("down".into()));
+        }
+        let mut key = req
+            .chain
+            .iter()
+            .map(|c| c.reference.as_str())
+            .collect::<Vec<_>>()
+            .join("/");
+        if req.allow_deleted {
+            key.push_str("+deleted");
+        }
+        Ok(self.answers.get(&key).cloned().unwrap_or_else(not_in_tree))
+    }
+}
+
+fn checks_pipeline(
+    admit: Arc<ByChain>,
+    auth_failure: Limit,
+) -> (Pipeline<Arc<ByChain>, Arc<MemCounter>>, Arc<MemCounter>) {
+    let counter = Arc::new(MemCounter::default());
+    let pipeline = Pipeline::new(
+        AdmitCache::new(admit, Duration::from_secs(300), Duration::from_secs(10)),
+        counter.clone(),
+        auth_failure,
+    );
+    (pipeline, counter)
+}
+
+const AUTH_FAILURE: Limit = Limit {
+    requests: 60,
+    window_seconds: 60,
+};
+
+fn checks(list: &[(&str, &str)]) -> Vec<Check> {
+    list.iter()
+        .map(|(method, path)| Check {
+            method: method.to_string(),
+            path: path.to_string(),
+        })
+        .collect()
+}
+
+fn key_credential() -> AdmitCredential {
+    AdmitCredential::Credential("plat5-k-2-AAAA".into())
+}
+
+fn jwt_credential() -> AdmitCredential {
+    jwt().into_admit().0
+}
+
+fn org(permissions: &[&str]) -> AdmitAnswer {
+    admitted(&[("organization", "01norg")], permissions)
+}
+
+fn project(permissions: &[&str]) -> AdmitAnswer {
+    admitted(
+        &[("organization", "01norg"), ("project", "01nproject")],
+        permissions,
+    )
+}
+
+fn service_account(mut answer: AdmitAnswer) -> AdmitAnswer {
+    answer.principal = Some("service_account".into());
+    answer
+}
+
+async fn run_checks(
+    pipeline: &Pipeline<Arc<ByChain>, Arc<MemCounter>>,
+    snapshot: &Snapshot,
+    credential: &AdmitCredential,
+    list: &[(&str, &str)],
+) -> Result<Vec<bool>, Rejection> {
+    pipeline
+        .check_routes(
+            &snapshot.routes,
+            &snapshot.route_checks.default,
+            credential,
+            &checks(list),
+            IP,
+        )
+        .await
+        .map(|c| c.allowed)
+}
+
+#[tokio::test]
+async fn route_checks_answer_what_the_pipeline_would_decide() {
+    let snapshot = snapshot_with(e10s(), e10s_limits());
+    // A project-only member: in acme's tree with nothing at the org, project:read at web.
+    let identity = ByChain::with(&[
+        ("acme", org(&[])),
+        ("acme/web", project(&["project:read"])),
+        ("", user()),
+    ]);
+    let (p, _) = checks_pipeline(identity.clone(), AUTH_FAILURE);
+    let got = run_checks(
+        &p,
+        &snapshot,
+        &jwt_credential(),
+        &[
+            ("GET", "/orgs/acme/projects/web"),           // project:read
+            ("GET", "/orgs/acme/projects/web/bindings"),  // project:bindings:read
+            ("GET", "/orgs/acme/bindings"),               // organization:bindings:read
+            ("GET", "/orgs/acme"),                        // organization:read
+            ("GET", "/orgs/acme/projects"),               // any_member
+            ("GET", "/orgs/acme/membership"),             // any_member
+            ("GET", "/orgs/acme/projects/web/free"),      // any_member
+            ("GET", "/orgs/acme/projects/web/plans/pro"), // project:read, own param
+            ("GET", "/orgs/acme/projects/gone"),          // no such node
+            ("GET", "/orgs/other"),                       // another tree
+            ("GET", "/health"),                           // public
+            ("GET", "/user"),                             // a person on a user route
+            ("GET", "/nowhere"),                          // no route
+            ("PUT", "/orgs/acme"),                        // a method the route doesn't take
+            ("GET", "/orgs/acme/"),                       // not the route's path
+        ],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        got,
+        vec![
+            true, false, false, false, true, true, true, true, false, false, true, true, false,
+            false, false
+        ]
+    );
+    // One admit per chain: acme, acme/web, acme/gone, other and the user route.
+    assert_eq!(identity.calls.load(Ordering::SeqCst), 5);
+    // The credential is the JWT's issuer and subject, as on a route.
+    let requests = identity.requests.lock().unwrap();
+    assert!(requests.iter().all(|r| r.credential == jwt_credential()));
+    assert!(requests.iter().all(|r| !r.allow_deleted));
+}
+
+#[tokio::test]
+async fn a_route_check_takes_every_permission_rule() {
+    let snapshot = catalog();
+    let identity = ByChain::with(&[
+        ("acme", org(&["*"])),
+        (
+            "acme/web",
+            project(&["project:write", "project:bindings:read"]),
+        ),
+    ]);
+    let (p, _) = checks_pipeline(identity, AUTH_FAILURE);
+    let got = run_checks(
+        &p,
+        &snapshot,
+        &key_credential(),
+        &[
+            ("DELETE", "/orgs/acme"), // * meets any permission
+            ("GET", "/orgs/acme/projects/web/bindings"),
+            ("PATCH", "/orgs/acme/projects/web"),
+            ("DELETE", "/orgs/acme/projects/web"), // project:delete: not held
+        ],
+    )
+    .await
+    .unwrap();
+    assert_eq!(got, vec![true, true, true, false]);
+}
+
+#[tokio::test]
+async fn a_restore_check_admits_the_deleted_node_as_the_route_does() {
+    let snapshot = catalog();
+    // web is deleted: only an allow_deleted admit finds it.
+    let identity = ByChain::with(&[("acme/web+deleted", project(&["project:delete"]))]);
+    let (p, _) = checks_pipeline(identity.clone(), AUTH_FAILURE);
+    let got = run_checks(
+        &p,
+        &snapshot,
+        &key_credential(),
+        &[
+            ("GET", "/orgs/acme/projects/web"),
+            ("POST", "/orgs/acme/projects/web/restore"),
+        ],
+    )
+    .await
+    .unwrap();
+    assert_eq!(got, vec![false, true]);
+    let requests = identity.requests.lock().unwrap();
+    assert_eq!(
+        requests.iter().map(|r| r.allow_deleted).collect::<Vec<_>>(),
+        vec![false, true]
+    );
+}
+
+#[tokio::test]
+async fn a_service_account_is_false_on_user_checks() {
+    let snapshot = catalog();
+    // Identity answers a service account on a user route valid: false.
+    let identity = ByChain::with(&[("acme", service_account(org(&["*"]))), ("", invalid())]);
+    let (p, counter) = checks_pipeline(identity, AUTH_FAILURE);
+    let got = run_checks(
+        &p,
+        &snapshot,
+        &key_credential(),
+        &[("GET", "/user"), ("GET", "/orgs/acme"), ("POST", "/orgs")],
+    )
+    .await
+    .unwrap();
+    assert_eq!(got, vec![false, true, false]);
+    assert_eq!(counter.count(IP_BUCKET), 0, "a false is no failed auth");
+}
+
+#[tokio::test]
+async fn a_credential_admit_refuses_is_401_counted_once() {
+    let snapshot = catalog();
+    let identity = ByChain::with(&[
+        ("acme", invalid()),
+        ("acme/web", invalid()),
+        ("", invalid()),
+    ]);
+    let (p, counter) = checks_pipeline(identity.clone(), AUTH_FAILURE);
+    let tree_checks = [("GET", "/orgs/acme"), ("GET", "/orgs/acme/projects/web")];
+    assert_eq!(
+        run_checks(&p, &snapshot, &key_credential(), &tree_checks).await,
+        Err(Rejection::Unauthorized(AuthError::InvalidCredential))
+    );
+    assert_eq!(counter.count(IP_BUCKET), 1);
+    // The first refusal ends the call.
+    assert_eq!(identity.calls.load(Ordering::SeqCst), 1);
+
+    // A JWT refused on a user check: a suspended person, 401.
+    assert_eq!(
+        run_checks(&p, &snapshot, &jwt_credential(), &[("GET", "/user")]).await,
+        Err(Rejection::Unauthorized(AuthError::InvalidCredential))
+    );
+    // A key refused on a user check alone is that check's false: identity
+    // answers a service account's key there the same way.
+    assert_eq!(
+        run_checks(&p, &snapshot, &key_credential(), &[("GET", "/user")]).await,
+        Ok(vec![false])
+    );
+    assert_eq!(counter.count(IP_BUCKET), 2);
+
+    // The failed-auth limiter answers once it's full.
+    let (p, _) = checks_pipeline(
+        identity,
+        Limit {
+            requests: 1,
+            window_seconds: 60,
+        },
+    );
+    run_checks(&p, &snapshot, &key_credential(), &tree_checks)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        run_checks(&p, &snapshot, &key_credential(), &tree_checks).await,
+        Err(Rejection::RateLimited { info: None, .. })
+    ));
+}
+
+#[tokio::test]
+async fn route_checks_count_default_once_a_call_per_credential() {
+    let snapshot = snapshot_with(
+        json!({}),
+        json!({ "default": { "requests": 2, "window_seconds": 60 } }),
+    );
+    let identity = ByChain::with(&[("acme", org(&["*"]))]);
+    let (p, counter) = checks_pipeline(identity, AUTH_FAILURE);
+    let three = [("GET", "/orgs/acme"); 3];
+    let call = |credential: AdmitCredential| {
+        let p = &p;
+        let snapshot = &snapshot;
+        async move {
+            p.check_routes(
+                &snapshot.routes,
+                &snapshot.route_checks.default,
+                &credential,
+                &checks(&three),
+                IP,
+            )
+            .await
+        }
+    };
+    let first = call(key_credential()).await.unwrap();
+    assert_eq!(first.allowed, vec![true; 3]);
+    assert_eq!(
+        first.rate_limit.as_ref().map(|i| (i.limit, i.remaining)),
+        Some((2, 1))
+    );
+    let bucket = format!(
+        "default:credential:{}",
+        crate::auth::admit::credential_hash(&key_credential())
+    );
+    assert_eq!(counter.buckets(), vec![bucket.clone()]);
+    assert!(!bucket.contains("AAAA"), "never the key itself");
+
+    call(key_credential()).await.unwrap();
+    match call(key_credential()).await {
+        Err(Rejection::RateLimited {
+            retry_after: 60,
+            info: Some(info),
+        }) => assert_eq!((info.limit, info.remaining), (2, 0)),
+        other => panic!("{other:?}"),
+    }
+    // Another credential has its own budget; a JWT's is its issuer and subject.
+    call(jwt_credential()).await.unwrap();
+    assert_eq!(counter.count(&bucket), 2);
+}
+
+#[tokio::test]
+async fn route_checks_without_identity_are_503() {
+    let snapshot = catalog();
+    let identity = Arc::new(ByChain {
+        down: true,
+        ..Default::default()
+    });
+    let (p, _) = checks_pipeline(identity, AUTH_FAILURE);
+    assert_eq!(
+        run_checks(&p, &snapshot, &key_credential(), &[("GET", "/orgs/acme")]).await,
+        Err(Rejection::Unavailable)
+    );
+    // Nothing that needs identity still answers.
+    assert_eq!(
+        run_checks(&p, &snapshot, &key_credential(), &[("GET", "/nowhere")]).await,
+        Ok(vec![false])
+    );
+}
+
+#[test]
+fn the_route_checks_credential_is_any_a_route_takes() {
+    type P = Pipeline<Arc<ByChain>, Arc<MemCounter>>;
+    assert_eq!(P::check_credential(Ok(key())), Ok(key_credential()));
+    assert_eq!(P::check_credential(Ok(jwt())), Ok(jwt_credential()));
+    assert_eq!(
+        P::check_credential(Err(AuthError::MissingAuthorization)),
+        Err(Rejection::Unauthorized(AuthError::MissingAuthorization))
+    );
+    assert_eq!(
+        P::check_credential(Err(AuthError::JwtValidationUnavailable)),
+        Err(Rejection::Unavailable)
+    );
+}

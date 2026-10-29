@@ -201,31 +201,46 @@ fn check_admitted(answer: &AdmitAnswer, req: &AdmitRequest) -> Result<(), &'stat
     Ok(())
 }
 
-/// A hash of the credential, `allow_deleted` and the chain refs as written.
-fn cache_key(req: &AdmitRequest) -> String {
-    let mut h = blake3::Hasher::new();
-    // Each part is length-prefixed so no two requests share a key by concatenation.
-    let mut part = |s: &str| {
-        h.update(&(s.len() as u64).to_le_bytes());
-        h.update(s.as_bytes());
-    };
-    match &req.credential {
+/// Each part is length-prefixed so no two inputs share a hash by concatenation.
+fn hash_part(h: &mut blake3::Hasher, s: &str) {
+    h.update(&(s.len() as u64).to_le_bytes());
+    h.update(s.as_bytes());
+}
+
+/// The credential as the cache keys it: a key as presented, or a JWT's issuer
+/// and subject.
+fn hash_credential(h: &mut blake3::Hasher, credential: &AdmitCredential) {
+    match credential {
         AdmitCredential::Credential(key) => {
-            part("key");
-            part(key);
+            hash_part(h, "key");
+            hash_part(h, key);
         }
         AdmitCredential::Idp {
             issuer, subject, ..
         } => {
-            part("idp");
-            part(issuer);
-            part(subject);
+            hash_part(h, "idp");
+            hash_part(h, issuer);
+            hash_part(h, subject);
         }
     }
-    part(if req.allow_deleted { "1" } else { "0" });
+}
+
+/// A hash of the credential alone, as the cache keys it: one per key, one per
+/// JWT issuer and subject. Never the secret itself.
+pub fn credential_hash(credential: &AdmitCredential) -> String {
+    let mut h = blake3::Hasher::new();
+    hash_credential(&mut h, credential);
+    h.finalize().to_hex().to_string()
+}
+
+/// A hash of the credential, `allow_deleted` and the chain refs as written.
+fn cache_key(req: &AdmitRequest) -> String {
+    let mut h = blake3::Hasher::new();
+    hash_credential(&mut h, &req.credential);
+    hash_part(&mut h, if req.allow_deleted { "1" } else { "0" });
     for link in &req.chain {
-        part(&link.kind);
-        part(&link.reference);
+        hash_part(&mut h, &link.kind);
+        hash_part(&mut h, &link.reference);
     }
     h.finalize().to_hex().to_string()
 }

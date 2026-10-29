@@ -229,6 +229,7 @@ mod tests {
         c["deletion_grace"] = json!("30d");
         c["reserved_slugs"] = json!(["new", "settings", "api", "admin"]);
         c["users"] = json!({ "name": { "claims": ["name", "preferred_username"], "sync": "first_sign_in" } });
+        c["route_checks"] = json!({ "path": "/access/routes" });
         c["defaults"] =
             json!({ "timeouts": { "connect": "10s", "read": "30s" }, "max_body_bytes": 10485760 });
         c["roles"]["member"] =
@@ -342,6 +343,60 @@ mod tests {
             (
                 "users.name.sync",
                 Box::new(|c| c["users"] = json!({ "name": { "sync": "always" } })),
+            ),
+            (
+                "route_checks.path",
+                Box::new(|c| c["route_checks"] = json!({ "path": "access/routes" })),
+            ),
+            (
+                "route_checks.path",
+                Box::new(|c| c["route_checks"] = json!({ "path": "/access/routes/" })),
+            ),
+            (
+                "route_checks.path",
+                Box::new(|c| c["route_checks"] = json!({ "path": "/Access/routes" })),
+            ),
+            (
+                "route_checks.path",
+                Box::new(|c| c["route_checks"] = json!({ "path": "/access?x=1" })),
+            ),
+            (
+                "route_checks.path",
+                Box::new(|c| c["route_checks"] = json!({ "path": "/access#x" })),
+            ),
+            (
+                "route_checks.path",
+                Box::new(|c| c["route_checks"] = json!({ "path": "/access//routes" })),
+            ),
+            (
+                "route_checks.path",
+                Box::new(|c| c["route_checks"] = json!({ "path": "/access/{id}" })),
+            ),
+            (
+                "route_checks.path",
+                Box::new(|c| c["route_checks"] = json!({ "path": "/.hidden" })),
+            ),
+            (
+                "route_checks.path",
+                Box::new(|c| c["route_checks"] = json!({ "path": "/a b" })),
+            ),
+            (
+                "route_checks.path",
+                Box::new(|c| c["route_checks"] = json!({ "path": "/" })),
+            ),
+            (
+                "route_checks.path",
+                Box::new(|c| {
+                    c["route_checks"] = json!({ "path": format!("/{}", "a".repeat(256)) })
+                }),
+            ),
+            (
+                "route_checks.path",
+                Box::new(|c| c["route_checks"] = json!({ "path": json!(42) })),
+            ),
+            (
+                "route_checks",
+                Box::new(|c| c["route_checks"] = json!({ "path": "/x", "method": "POST" })),
             ),
             (
                 "defaults.timeouts.connect",
@@ -485,6 +540,18 @@ mod tests {
             let errs = errors(c);
             assert!(errs.iter().any(|e| e.path == path), "{path}: {errs:?}");
         }
+    }
+
+    #[test]
+    fn route_checks_path_is_literal_segments() {
+        for path in ["/access/routes", "/v1/route-checks", "/a", "/a.b/_c"] {
+            let mut c = base();
+            c["route_checks"] = json!({ "path": path });
+            check_config(&c).unwrap_or_else(|e| panic!("{path}: {e:?}"));
+        }
+        let mut c = base();
+        c["route_checks"] = json!({});
+        check_config(&c).unwrap();
     }
 
     #[test]

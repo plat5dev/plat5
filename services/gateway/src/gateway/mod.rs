@@ -29,8 +29,8 @@ use crate::error::{ApiError, ErrorKind};
 use crate::internal_http::InternalHttpClient;
 use crate::metrics;
 use crate::pipeline::{
-    authorize, forward, Admitted, Caller, GatewayPipeline, Limit, Pipeline, Rejection,
-    RequestCredential,
+    authorize, forward, parse_checks, Admitted, Caller, GatewayPipeline, Limit, Pipeline,
+    Rejection, RequestCredential, MAX_CHECKS_BODY,
 };
 use crate::rate_limit::RateLimiter;
 use crate::route_map::{Matched, Required, Route, Scope};
@@ -252,6 +252,150 @@ impl Gateway {
     }
 }
 
+impl Gateway {
+    /// Route checks (docs/reference/gateway.md#route-checks): the credential as
+    /// a route takes it, the body, one count of `default`, then each check
+    /// through the pipeline's own match, admit and permission steps. Never
+    /// forwarded, never audited.
+    async fn handle_route_checks(
+        &self,
+        session: &mut Session,
+        ctx: &mut GatewayContext,
+        snapshot: &Snapshot,
+    ) -> Result<bool> {
+        let route = snapshot.route_checks.path.clone();
+        if let Some(ref span) = ctx.root_span {
+            span.record("http.route", route.as_str());
+            span.context().span().update_name(format!("POST {route}"));
+        }
+        ctx.route = Some(route);
+        ctx.max_body_bytes = MAX_CHECKS_BODY;
+        let cors = snapshot.cors.clone();
+
+        let presented = self
+            .authenticator
+            .present(session.req_header(), &snapshot.name_claims)
+            .await;
+        if let Ok(p) = &presented {
+            ctx.credential.auth_type = Some(p.auth_type());
+        }
+        let credential = match GatewayPipeline::check_credential(presented) {
+            Ok(c) => c,
+            Err(rejection) => return write_check_rejection(&cors, session, ctx, rejection).await,
+        };
+
+        if let Some(done) = self.reject_oversized_content_length(session, ctx).await? {
+            return Ok(done);
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = session.read_request_body().await? {
+            if body.len() as u64 + chunk.len() as u64 > MAX_CHECKS_BODY {
+                warn!(
+                    max_body_size = MAX_CHECKS_BODY,
+                    "route checks body too large"
+                );
+                return response::write_json_error(
+                    &cors,
+                    session,
+                    ctx,
+                    413,
+                    ApiError::payload_too_large(MAX_CHECKS_BODY),
+                )
+                .await;
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let checks = match parse_checks(&body) {
+            Ok(checks) => checks,
+            Err(fields) => {
+                let fields: Vec<(String, String)> =
+                    fields.into_iter().map(|f| (f.path, f.message)).collect();
+                return response::write_json_error(
+                    &cors,
+                    session,
+                    ctx,
+                    422,
+                    ApiError::validation(&fields),
+                )
+                .await;
+            }
+        };
+
+        let ip = client_ip(session, &self.trusted_proxies);
+        let checked = self
+            .pipeline
+            .check_routes(
+                &snapshot.routes,
+                &snapshot.route_checks.default,
+                &credential,
+                &checks,
+                &ip,
+            )
+            .await;
+        let checked = match checked {
+            Ok(c) => c,
+            Err(rejection) => return write_check_rejection(&cors, session, ctx, rejection).await,
+        };
+        let answer = serde_json::json!({
+            "checks": checked
+                .allowed
+                .iter()
+                .map(|allowed| serde_json::json!({ "allowed": allowed }))
+                .collect::<Vec<_>>()
+        });
+        let mut extras = Vec::new();
+        if let Some(info) = &checked.rate_limit {
+            extras.push(("X-RateLimit-Limit", info.limit.to_string()));
+            extras.push(("X-RateLimit-Remaining", info.remaining.to_string()));
+            extras.push(("X-RateLimit-Reset", info.reset_epoch.to_string()));
+        }
+        response::send_json(
+            &cors,
+            session,
+            ctx,
+            200,
+            answer.to_string().into_bytes(),
+            &extras,
+        )
+        .await?;
+        Ok(true)
+    }
+}
+
+/// A route checks call refused whole: its 401, 429 or 503.
+async fn write_check_rejection(
+    cors: &CorsPolicy,
+    session: &mut Session,
+    ctx: &GatewayContext,
+    rejection: Rejection,
+) -> Result<bool> {
+    match rejection {
+        Rejection::RateLimited { retry_after, info } => {
+            response::write_rate_limited(cors, session, ctx, retry_after, info.as_ref()).await
+        }
+        Rejection::Unauthorized(err) => {
+            response::write_json_error(
+                cors,
+                session,
+                ctx,
+                401,
+                ApiError::unauthorized_any(err.details()),
+            )
+            .await
+        }
+        other => {
+            response::write_json_error(
+                cors,
+                session,
+                ctx,
+                other.status(),
+                ApiError::service_unavailable(),
+            )
+            .await
+        }
+    }
+}
+
 /// The request's trace, for a write that lands after the response.
 fn request_context(ctx: &GatewayContext) -> opentelemetry::Context {
     ctx.root_span()
@@ -470,6 +614,12 @@ impl ProxyHttp for Gateway {
 
         if session.req_header().method == http::Method::OPTIONS {
             return self.handle_preflight(session, ctx).await;
+        }
+
+        // Route checks: the gateway's own answer. No route matches the path.
+        let snapshot = self.snapshot.load_full();
+        if session.req_header().method == http::Method::POST && path == snapshot.route_checks.path {
+            return self.handle_route_checks(session, ctx, &snapshot).await;
         }
 
         // Unmatched: 404, not counted by the failed-auth limiter.

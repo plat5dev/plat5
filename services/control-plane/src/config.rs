@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_DELETION_GRACE: &str = "30d";
 /// `users.name.claims` when the config names none.
 pub const DEFAULT_NAME_CLAIMS: [&str; 2] = ["name", "preferred_username"];
+/// `route_checks.path` when the config names none.
+pub const DEFAULT_ROUTE_CHECKS_PATH: &str = "/access/routes";
 pub const DEFAULT_CONNECT_TIMEOUT: &str = "10s";
 pub const DEFAULT_READ_TIMEOUT: &str = "30s";
 pub const DEFAULT_MAX_BODY_BYTES: u64 = 10_485_760;
@@ -31,6 +33,8 @@ pub struct Config {
     pub reserved_slugs: Vec<String>,
     #[serde(default)]
     pub users: Users,
+    #[serde(default)]
+    pub route_checks: RouteChecks,
     #[serde(default)]
     pub defaults: Defaults,
     #[serde(deserialize_with = "kinds_filled")]
@@ -76,6 +80,26 @@ impl Default for UserName {
 
 fn default_name_claims() -> Vec<String> {
     DEFAULT_NAME_CLAIMS.iter().map(|c| c.to_string()).collect()
+}
+
+/// `route_checks:`: where the gateway answers route checks
+/// (docs/reference/gateway.md#route-checks).
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct RouteChecks {
+    #[serde(default = "default_route_checks_path")]
+    pub path: String,
+}
+
+impl Default for RouteChecks {
+    fn default() -> Self {
+        Self {
+            path: default_route_checks_path(),
+        }
+    }
+}
+
+fn default_route_checks_path() -> String {
+    DEFAULT_ROUTE_CHECKS_PATH.to_string()
 }
 
 /// `users.name.sync`.

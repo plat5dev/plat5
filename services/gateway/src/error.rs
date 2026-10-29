@@ -3,6 +3,9 @@ use std::fmt;
 
 use crate::route_map::{Required, Scope};
 
+/// The 401 message where any credential is taken.
+const ANY_CREDENTIAL: &str = "Authentication required: a sign-in token or an API key.";
+
 /// Standard error kinds for telemetry.
 /// Used in span attributes and log fields.
 /// Closed set: auth, network, db, io, internal, validation.
@@ -71,13 +74,38 @@ impl ApiError {
         }
     }
 
+    /// A 401 on a call that takes any credential, such as route checks.
+    pub fn unauthorized_any(details: Option<serde_json::Value>) -> Self {
+        let mut err = Self::unauthorized(details);
+        err.message = ANY_CREDENTIAL.to_string();
+        err
+    }
+
+    /// A malformed body: **422**, with each field it got wrong.
+    pub fn validation(fields: &[(String, String)]) -> Self {
+        let message = fields
+            .first()
+            .map_or("That doesn't look right.", |(_, m)| m.as_str())
+            .to_string();
+        let fields: Vec<serde_json::Value> = fields
+            .iter()
+            .map(|(path, message)| serde_json::json!({ "path": path, "message": message }))
+            .collect();
+        Self {
+            error_type: "invalid_request_error".to_string(),
+            code: "VALIDATION_ERROR".to_string(),
+            message,
+            details: Some(serde_json::json!({ "fields": fields })),
+        }
+    }
+
     /// A 401 on a matched route: the message names what the route's scope takes
     /// (docs/reference/error-copy.md#gateway-401). It never says why the credential
     /// sent failed, so it tells a caller nothing about a key they hold.
     pub fn unauthorized_for(scope: &Scope, details: Option<serde_json::Value>) -> Self {
         let mut err = Self::unauthorized(details);
         err.message = match scope {
-            Scope::Kind(_) => "Authentication required: a sign-in token or an API key.",
+            Scope::Kind(_) => ANY_CREDENTIAL,
             Scope::User => "Authentication required: a sign-in token or a personal API key.",
             Scope::Public => "Authentication required.",
         }
@@ -182,6 +210,27 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["error"]["code"], "INVALID_REQUEST");
         assert_eq!(parsed["error"]["message"], "Malformed request.");
+    }
+
+    #[test]
+    fn validation_names_each_field_and_shows_the_first() {
+        let err = ApiError::validation(&[
+            ("checks[0].method".into(), "method must be GET.".into()),
+            ("checks[1].path".into(), "path must start with /.".into()),
+        ]);
+        let json = String::from_utf8(err.to_json_bytes(Some("r-1"))).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["error"]["code"], "VALIDATION_ERROR");
+        assert_eq!(parsed["error"]["type"], "invalid_request_error");
+        assert_eq!(parsed["error"]["message"], "method must be GET.");
+        assert_eq!(
+            parsed["error"]["details"]["fields"][1],
+            serde_json::json!({ "path": "checks[1].path", "message": "path must start with /." })
+        );
+        assert_eq!(
+            ApiError::unauthorized_any(None).message,
+            "Authentication required: a sign-in token or an API key."
+        );
     }
 
     #[test]

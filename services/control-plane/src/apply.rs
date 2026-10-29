@@ -169,7 +169,8 @@ pub async fn apply(
 }
 
 /// `GET /internal/gateway`: kinds, every service's routes expanded, rate
-/// limits, CORS and `users` (the IdP name claims), with defaults filled in.
+/// limits, CORS, `users` (the IdP name claims) and `route_checks`, with
+/// defaults filled in.
 pub fn gateway_feed(revision: i64, config: &Value) -> Result<Value, Failure> {
     let c = stored(config)?;
     Ok(gateway_body(revision, &c))
@@ -183,6 +184,7 @@ pub fn gateway_body(revision: i64, c: &Config) -> Value {
         "rate_limits": c.rate_limits,
         "cors": c.cors,
         "users": c.users,
+        "route_checks": c.route_checks,
     })
 }
 
@@ -256,6 +258,7 @@ mod tests {
         );
         let users = json!({ "name": { "claims": ["name", "preferred_username"], "sync": "first_sign_in" } });
         assert_eq!(gateway["users"], users);
+        assert_eq!(gateway["route_checks"], json!({ "path": "/access/routes" }));
         let e10s = &gateway["services"]["e10s"];
         assert_eq!(e10s["timeouts"], json!({ "connect": "10s", "read": "30s" }));
         assert_eq!(e10s["max_body_bytes"], json!(10485760));
@@ -274,6 +277,7 @@ mod tests {
         assert_eq!(identity["reserved_slugs"], json!([]));
         assert_eq!(identity["users"], users);
         assert!(identity.get("services").is_none());
+        assert!(identity.get("route_checks").is_none());
     }
 
     #[test]

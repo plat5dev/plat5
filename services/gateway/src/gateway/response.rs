@@ -49,7 +49,19 @@ pub async fn send_json_error_headers(
     extra_headers: &[(&'static str, String)],
 ) -> Result<()> {
     let body = error.to_json_bytes(ctx.request_id.as_deref());
+    send_json(cors, session, ctx, status, body, extra_headers).await
+}
 
+/// A JSON response the gateway answers itself, with the headers every response
+/// gets: security headers, CORS and `X-Request-ID`.
+pub async fn send_json(
+    cors: &CorsPolicy,
+    session: &mut Session,
+    ctx: &GatewayContext,
+    status: u16,
+    body: Vec<u8>,
+    extra_headers: &[(&'static str, String)],
+) -> Result<()> {
     if let Some(ref span) = ctx.root_span {
         apply_error_span_status(span, status);
     }

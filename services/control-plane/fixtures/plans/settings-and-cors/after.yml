@@ -4,6 +4,8 @@ users:
   name:
     claims: [profile.display_name, nickname]
     sync: each_sign_in
+route_checks:
+  path: /v1/route-checks
 defaults:
   timeouts: { connect: 5s, read: 20s }
   max_body_bytes: 2097152

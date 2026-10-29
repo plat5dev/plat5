@@ -3,6 +3,7 @@
 //! permission check, and the upstream fill. The proxy writes the audit intent after
 //! the fill, and turns a [`Rejection`] into a response.
 
+mod checks;
 mod fill;
 mod permissions;
 
@@ -18,6 +19,9 @@ use crate::metrics;
 use crate::rate_limit::{Bucket, RateLimitInfo, RateLimiter, Unavailable, Verdict};
 use crate::route_map::{Matched, Route, Scope};
 
+pub use checks::{
+    parse_checks, BadField, Check, CheckRefused, Checked, MAX_CHECKS, MAX_CHECKS_BODY,
+};
 pub use fill::{path_and_query, BadParam, Upstream, Values};
 pub use permissions::permitted;
 
@@ -203,39 +207,12 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         let presented = match presented {
             Ok(p) => p,
             // Refused here, without identity: not counted.
-            Err(err) => return Err(unauthorized(err, None, &route.scope)),
+            Err(err) => return Err(unauthorized(err, None, route.scope.name())),
         };
         let auth_type = presented.auth_type();
         cred.auth_type = Some(auth_type);
-        let (credential, kid) = match presented {
-            Presented::Key(key) => (AdmitCredential::Credential(key), None),
-            Presented::Jwt {
-                issuer,
-                subject,
-                name,
-                kid,
-            } => (
-                AdmitCredential::Idp {
-                    issuer,
-                    subject,
-                    name,
-                },
-                kid,
-            ),
-        };
-        let req = AdmitRequest {
-            credential,
-            chain: route
-                .chain
-                .iter()
-                .zip(&matched.refs)
-                .map(|(kind, reference)| ChainRef {
-                    kind: kind.clone(),
-                    reference: reference.clone(),
-                })
-                .collect(),
-            allow_deleted: route.allow_deleted,
-        };
+        let (credential, kid) = presented.into_admit();
+        let req = admit_request(matched, credential);
         let answer = self
             .admit
             .get(&req)
@@ -244,8 +221,11 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         cred.key_id = answer.key_id.clone();
 
         if !answer.valid {
-            let rejection =
-                unauthorized(AuthError::InvalidCredential, Some(auth_type), &route.scope);
+            let rejection = unauthorized(
+                AuthError::InvalidCredential,
+                Some(auth_type),
+                route.scope.name(),
+            );
             return Err(self.count_refusal(ip).await.unwrap_or(rejection));
         }
         if answer.refused(&req) {
@@ -310,8 +290,50 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
     }
 }
 
+/// Admit's request for a matched route: the credential, the chain refs as
+/// written in the path, and the route's `allow_deleted`.
+fn admit_request(matched: &Matched, credential: AdmitCredential) -> AdmitRequest {
+    let route = &matched.route;
+    AdmitRequest {
+        credential,
+        chain: route
+            .chain
+            .iter()
+            .zip(&matched.refs)
+            .map(|(kind, reference)| ChainRef {
+                kind: kind.clone(),
+                reference: reference.clone(),
+            })
+            .collect(),
+        allow_deleted: route.allow_deleted,
+    }
+}
+
+impl Presented {
+    /// The credential as admit takes it, and a JWT's key id for the span.
+    pub fn into_admit(self) -> (AdmitCredential, Option<String>) {
+        match self {
+            Presented::Key(key) => (AdmitCredential::Credential(key), None),
+            Presented::Jwt {
+                issuer,
+                subject,
+                name,
+                kid,
+            } => (
+                AdmitCredential::Idp {
+                    issuer,
+                    subject,
+                    name,
+                },
+                kid,
+            ),
+        }
+    }
+}
+
 /// A 401: logged and metered. JWKS not loaded is the gateway's own trouble, **503**.
-fn unauthorized(err: AuthError, auth_type: Option<AuthType>, scope: &Scope) -> Rejection {
+/// `scope` is the route's scope name, for the log.
+fn unauthorized(err: AuthError, auth_type: Option<AuthType>, scope: &str) -> Rejection {
     if !err.is_client_error() {
         warn!(
             error_kind = ErrorKind::Network.as_str(),
@@ -326,7 +348,7 @@ fn unauthorized(err: AuthError, auth_type: Option<AuthType>, scope: &Scope) -> R
         error_kind = ErrorKind::Auth.as_str(),
         auth_type,
         error_message = err.as_str(),
-        scope = scope.name(),
+        scope,
         "authentication failed"
     );
     Rejection::Unauthorized(err)

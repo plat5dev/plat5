@@ -8,7 +8,7 @@ The control plane holds the operator's typed, deployment-wide state that changes
 
 | Document | Read by | Contract |
 |----------|---------|----------|
-| Settings: `deletion_grace`, `reserved_slugs`, `users`, `defaults` | identity, gateway | [settings](../reference/config/settings.md) |
+| Settings: `deletion_grace`, `reserved_slugs`, `users`, `route_checks`, `defaults` | identity, gateway | [settings](../reference/config/settings.md) |
 | `kinds` | gateway, identity | [kinds](../reference/config/kinds.md) |
 | `roles`, `creator_role` | identity | [roles](../reference/config/roles.md) |
 | `rate_limits` | gateway | [rate limits](../reference/config/rate-limits.md) |
@@ -139,7 +139,7 @@ A dry run writes nothing. The apply recomputes the plan and is refused if anyone
 Changes are ordered kinds, settings, roles, rate limits, CORS, services, then by name.
 
 - `revision` is the config revision the plan was made against, `0` before the first apply. The apply sends it back as `expect.revision`.
-- `what` is `kind`, `role`, `rate_limit`, `service`, `cors`, or `setting` (named `deletion_grace`, `reserved_slugs`, `users`, `defaults` or `creator_role`). `op` is `add`, `change` or `remove`.
+- `what` is `kind`, `role`, `rate_limit`, `service`, `cors`, or `setting` (named `deletion_grace`, `reserved_slugs`, `users`, `route_checks`, `defaults` or `creator_role`). `op` is `add`, `change` or `remove`.
 - `before` and `after` show what changed, field by field: only the fields that differ, `before` absent on an add, `after` absent on a remove.
 - A service line lists its `routes`, expanded as the gateway will match them (full public path, method, scope, upstream, permissions, rate limits, audit), each with its own `op`, `before` and `after`. A service's own fields (`url`, `timeouts`, `max_body_bytes`) show in its `before` and `after`. Identity's and audit's routes change with the kinds, so adding a kind shows their new routes too.
 - `summary` counts lines. A `blocked` line counts only in `blocked`.

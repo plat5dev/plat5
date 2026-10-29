@@ -137,9 +137,22 @@ A 401 on a matched route says what the route takes. The same sentence for no cre
 |-------------|-----------|
 | A kind | Authentication required: a sign-in token or an API key. |
 | `user` | Authentication required: a sign-in token or a personal API key. |
+| [Route checks](gateway.md#route-checks) | Authentication required: a sign-in token or an API key. |
 
 ### Gateway 403
 
 Always the fallback sentence, `Permission denied, or it may not exist.`, with `details` as [`FORBIDDEN`](errors.md#forbidden) gives it.
+
+### Route checks 422
+
+`message` is the first field's; `details.fields` has every one.
+
+| `path` | `message` |
+|--------|-----------|
+| (empty) | The body must be a JSON object. |
+| `checks` | checks must be a list of 1 to 100 checks. |
+| `checks[i]` | A check is an object with a method and a path. |
+| `checks[i].method` | method must be GET, POST, PUT, PATCH, DELETE or HEAD. |
+| `checks[i].path` | path must start with /, be visible ASCII with no ? or #, and be at most 2048 characters. |
 
 Siblings (`cli`, `template-*`): update only if they snapshot exact Plat5 `message` strings.

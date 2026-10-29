@@ -104,5 +104,8 @@
       ],
       "sync": "each_sign_in"
     }
+  },
+  "route_checks": {
+    "path": "/v1/route-checks"
   }
 }

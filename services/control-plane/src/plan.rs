@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use crate::config::{Config, Defaults, Users, DEFAULT_DELETION_GRACE};
+use crate::config::{Config, Defaults, RouteChecks, Users, DEFAULT_DELETION_GRACE};
 use crate::counts::{Counts, CountsRequest, CountsResponse};
 use crate::expand::{self, ExpandedService};
 use crate::schema::FieldError;
@@ -346,6 +346,7 @@ fn settings(c: &Config) -> BTreeMap<String, Value> {
         ("deletion_grace".into(), json!(c.deletion_grace)),
         ("reserved_slugs".into(), json!(slugs)),
         ("users".into(), json!(c.users)),
+        ("route_checks".into(), json!(c.route_checks)),
         (
             "defaults".into(),
             json!({ "timeouts": timeouts, "max_body_bytes": max_body_bytes }),
@@ -361,6 +362,7 @@ fn default_settings() -> BTreeMap<String, Value> {
         ("deletion_grace".into(), json!(DEFAULT_DELETION_GRACE)),
         ("reserved_slugs".into(), json!([])),
         ("users".into(), json!(Users::default())),
+        ("route_checks".into(), json!(RouteChecks::default())),
         (
             "defaults".into(),
             json!({ "timeouts": timeouts, "max_body_bytes": max_body_bytes }),

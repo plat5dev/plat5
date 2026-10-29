@@ -21,11 +21,13 @@ use crate::auth::{parse_claim_path, NameClaims};
 use crate::gateway::CorsPolicy;
 use crate::kinds::{KindDoc, Kinds};
 use crate::metrics;
-use crate::route_map::{PolicyDoc, RouteMap, ServiceDoc};
+use crate::route_map::{Policy, PolicyDoc, RouteMap, ServiceDoc};
 
 /// Longer than the control plane's long-poll wait, so an idle poll ends with 204.
 const POLL_TIMEOUT: Duration = Duration::from_secs(40);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(10);
+/// The policy of every route that names none, and of route checks.
+const DEFAULT_POLICY: &str = "default";
 /// The most of a refusal's reason a poll reports.
 const MAX_REASON_CHARS: usize = 512;
 /// One control-plane revision, swapped whole.
@@ -36,6 +38,16 @@ pub struct Snapshot {
     /// `users.name.claims`, each as path segments: the JWT claims that may
     /// hold a person's name, in order.
     pub name_claims: Arc<NameClaims>,
+    /// Where the gateway answers route checks, and the `default` policy it
+    /// counts each call against.
+    pub route_checks: RouteChecks,
+}
+
+/// `route_checks` (docs/reference/gateway.md#route-checks).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteChecks {
+    pub path: String,
+    pub default: Policy,
 }
 
 #[derive(Deserialize)]
@@ -46,6 +58,12 @@ struct GatewayFeed {
     rate_limits: BTreeMap<String, PolicyDoc>,
     cors: CorsFeed,
     users: UsersFeed,
+    route_checks: RouteChecksFeed,
+}
+
+#[derive(Deserialize)]
+struct RouteChecksFeed {
+    path: String,
 }
 
 #[derive(Deserialize)]
@@ -241,6 +259,19 @@ pub fn build(feed: Value) -> Result<Snapshot, String> {
     let feed: GatewayFeed = serde_json::from_value(feed).map_err(|e| e.to_string())?;
     let kinds = Kinds::from_feed(&feed.kinds);
     let routes = RouteMap::from_feed(&feed.services, &feed.rate_limits, &kinds)?;
+    let default = feed
+        .rate_limits
+        .get(DEFAULT_POLICY)
+        .ok_or("rate_limits has no default policy")?;
+    let route_checks = RouteChecks {
+        path: feed.route_checks.path,
+        default: Policy {
+            name: DEFAULT_POLICY.to_string(),
+            requests: default.requests,
+            window_seconds: default.window_seconds,
+            count_at: None,
+        },
+    };
     Ok(Snapshot {
         revision: feed.revision,
         routes,
@@ -256,6 +287,7 @@ pub fn build(feed: Value) -> Result<Snapshot, String> {
                 .map(|c| parse_claim_path(c))
                 .collect(),
         ),
+        route_checks,
     })
 }
 
@@ -308,9 +340,10 @@ mod tests {
             "revision": 7,
             "kinds": { "organization": { "path": "/orgs/{organization}", "list_permission": "organization:read" } },
             "services": services,
-            "rate_limits": {},
+            "rate_limits": { "default": { "requests": 60, "window_seconds": 30 } },
             "cors": { "allowed_origins": ["https://app.example.com"], "allowed_headers": [] },
-            "users": { "name": { "claims": ["profile.full_name", "name"], "sync": "each_sign_in" } }
+            "users": { "name": { "claims": ["profile.full_name", "name"], "sync": "each_sign_in" } },
+            "route_checks": { "path": "/access/routes" }
         })
     }
 
@@ -335,6 +368,16 @@ mod tests {
         assert_eq!(m.route.timeouts.read, Duration::from_secs(60));
         assert_eq!(m.route.max_body_bytes, 2048);
         assert_eq!(snapshot.routes.route_count(), 1);
+        assert_eq!(snapshot.route_checks.path, "/access/routes");
+        assert_eq!(
+            snapshot.route_checks.default,
+            Policy {
+                name: "default".into(),
+                requests: 60,
+                window_seconds: 30,
+                count_at: None
+            }
+        );
     }
 
     #[test]
@@ -346,9 +389,18 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("rate_limits");
+        let mut no_route_checks = feed(json!({}));
+        no_route_checks
+            .as_object_mut()
+            .unwrap()
+            .remove("route_checks");
+        let mut no_default = feed(json!({}));
+        no_default["rate_limits"] = json!({});
         for bad in [
             no_revision,
             no_rate_limits,
+            no_route_checks,
+            no_default,
             feed(json!({ "w": { "url": "http://w:1" } })),
             feed(widgets(json!({ "connect": "1s" }))),
             feed(widgets(json!({ "connect": "fast", "read": "1s" }))),

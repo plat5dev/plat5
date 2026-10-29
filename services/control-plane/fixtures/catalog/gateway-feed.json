@@ -1206,5 +1206,8 @@
       ],
       "sync": "first_sign_in"
     }
+  },
+  "route_checks": {
+    "path": "/access/routes"
   }
 }

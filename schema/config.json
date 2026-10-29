@@ -10,6 +10,7 @@
     "deletion_grace": { "$ref": "settings.json#/properties/deletion_grace" },
     "reserved_slugs": { "$ref": "settings.json#/properties/reserved_slugs" },
     "users": { "$ref": "settings.json#/properties/users" },
+    "route_checks": { "$ref": "settings.json#/properties/route_checks" },
     "defaults": { "$ref": "settings.json#/properties/defaults" },
     "kinds": { "$ref": "kinds.json#/properties/kinds" },
     "roles": { "$ref": "roles.json#/properties/roles" },

@@ -2,7 +2,7 @@
   "revision": 7,
   "summary": {
     "add": 1,
-    "change": 7,
+    "change": 8,
     "remove": 0,
     "blocked": 0
   },
@@ -42,6 +42,17 @@
         "new",
         "settings"
       ]
+    },
+    {
+      "op": "change",
+      "what": "setting",
+      "name": "route_checks",
+      "before": {
+        "path": "/access/routes"
+      },
+      "after": {
+        "path": "/v1/route-checks"
+      }
     },
     {
       "op": "change",

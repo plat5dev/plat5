@@ -33,6 +33,7 @@ pub fn check(config: &Config) -> Result<(), Vec<FieldError>> {
             all.extend(routes);
         }
         check_shapes(&valid, &mut errs);
+        check_route_checks(config, &valid, &mut errs);
         check_roles(config, &all, &mut errs);
     }
     if errs.is_empty() {
@@ -557,6 +558,31 @@ fn check_shapes(routes: &[ExpandedRoute], errs: &mut Vec<FieldError>) {
     }
 }
 
+/// Rule 5, for the gateway's own path: no route, in any method, matches
+/// `route_checks.path` (docs/reference/gateway.md#route-checks). Each `{param}`
+/// matches any segment, a literal only itself.
+fn check_route_checks(config: &Config, routes: &[ExpandedRoute], errs: &mut Vec<FieldError>) {
+    let path = &config.route_checks.path;
+    let want: Vec<&str> = path.split('/').collect();
+    for route in routes {
+        let segments: Vec<&str> = route.path.split('/').collect();
+        let matches = segments.len() == want.len()
+            && segments
+                .iter()
+                .zip(&want)
+                .all(|(have, w)| have.starts_with('{') || have == w);
+        if matches {
+            errs.push(FieldError::new(
+                "route_checks.path",
+                format!(
+                    "{path} is where the gateway answers route checks, and {} {} at {} matches it",
+                    route.method, route.path, route.at
+                ),
+            ));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -897,6 +923,69 @@ mod tests {
             ]),
         ))
         .unwrap();
+    }
+
+    #[test]
+    fn a_route_matching_the_route_checks_path() {
+        // The default path is free in the base, with identity's resources.
+        let mut c = base();
+        c["services"] = json!({ "identity": { "url": "http://identity:3000" } });
+        run(c.clone()).unwrap();
+
+        // A literal match, in any method, names the route and its field path.
+        let c = route(
+            "public",
+            json!({ "path": "/access/routes", "methods": ["GET"] }),
+        );
+        let errs = errors_at(c, "route_checks.path");
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert!(
+            errs[0]
+                .message
+                .contains(&format!("GET /access/routes at {AT}.public.routes[0].path")),
+            "{errs:?}"
+        );
+
+        // A param matches any segment.
+        let c = route(
+            "public",
+            json!({ "path": "/access/{what}", "methods": ["POST"] }),
+        );
+        let errs = errors_at(c, "route_checks.path");
+        assert!(errs[0].message.contains("POST /access/{what}"), "{errs:?}");
+
+        // Its own path, against identity's resources: /user is the me resource.
+        let mut c = base();
+        c["services"] = json!({ "identity": { "url": "http://identity:3000" } });
+        c["route_checks"] = json!({ "path": "/user" });
+        let errs = errors_at(c, "route_checks.path");
+        assert!(
+            errs.iter()
+                .all(|e| e.message.contains("/user at services.identity")),
+            "{errs:?}"
+        );
+        // GET, PATCH and DELETE /user: one error each.
+        assert_eq!(errs.len(), 3, "{errs:?}");
+
+        // A kind route's full public path counts.
+        let mut c = route(
+            "organization",
+            json!({ "path": "/checks", "methods": ["POST"], "required_permissions": ["organization:read"] }),
+        );
+        c["route_checks"] = json!({ "path": "/orgs/acme/checks" });
+        errors_at(c, "route_checks.path");
+
+        // Prefixes and longer paths don't match.
+        let mut c = with_routes(
+            "public",
+            json!([
+                { "path": "/access", "methods": ["GET"] },
+                { "path": "/access/routes/{id}", "methods": ["GET"] }
+            ]),
+        );
+        run(c.clone()).unwrap();
+        c["route_checks"] = json!({ "path": "/checks/v1" });
+        run(c).unwrap();
     }
 
     /// Identity's expanded public paths for one override set, method and path.

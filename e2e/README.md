@@ -18,6 +18,9 @@ made for these tests and trusted nowhere else. Nothing else may listen on `5401`
 
 `TestNames` applies a second config, the e2e config with
 `users.name.sync: each_sign_in`, and applies the e2e config again when it ends.
+`TestRouteChecks` applies the e2e config plus a `probe` service with a project
+route and a public route, which route checks match but never call, and applies
+the e2e config again when it ends.
 
 `TestEvaluations` (the evaluation API) and `TestUserRoutesKeysInvites` (the
 tree and user event feeds) call identity's internal port directly, as a service
