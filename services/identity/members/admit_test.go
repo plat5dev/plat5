@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/plat5dev/plat5/identity/internal/apikey"
 )
 
 // POST /internal/admit (docs/reference/api/internal.md#admit): one table, one
@@ -17,6 +19,7 @@ var admitFields = []string{"valid", "principal", "key_id", "nodes", "member_id",
 
 // gatewayStatus is what the gateway answers for an admit response on a route
 // requiring need (nil on a user route, "any_member" for any member).
+// docs/reference/api/internal.md#what-the-gateway-answers.
 func gatewayStatus(r response, need any) int {
 	if r.status != 200 {
 		return 503
@@ -30,6 +33,9 @@ func gatewayStatus(r response, need any) int {
 		return 401
 	}
 	if need == nil {
+		if r.body["principal"] == "service_account" {
+			return 403
+		}
 		return 200
 	}
 	if r.body["member_id"] == nil {
@@ -142,6 +148,11 @@ func TestAdmit(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	var saKeyID string
+	if err := e.pool.QueryRow(e.ctx, `SELECT id FROM api_keys WHERE key_hash = $1`, apikey.Hash(saKey)).Scan(&saKeyID); err != nil {
+		t.Fatal(err)
+	}
+
 	unknownKey := "plat5-k-2-" + strings.Repeat("A", 43)
 	read := []string{"project:read"}
 	write := []string{"project:write"}
@@ -159,6 +170,7 @@ func TestAdmit(t *testing.T) {
 		anyMember   bool
 		user        string
 		keyID       string
+		principal   string // checked when set
 	}
 	cases := []struct {
 		name string
@@ -174,7 +186,15 @@ func TestAdmit(t *testing.T) {
 		{"suspended person's key", keyBody(frankKey, org("gruow")...), "any_member", want{status: 401}},
 		{"suspended person's token", idpBody("frank"), nil, want{status: 401}},
 		{"service account that belongs to a deleted node", keyBody(oldSAKey, org("gruow")...), "any_member", want{status: 401}},
-		{"service account on a user route", keyBody(saKey), nil, want{status: 401}},
+
+		// An empty chain, a user route: valid means only that the credential is
+		// good. A service account is valid, with no user id, and the gateway's 403.
+		{"user route: unknown key", keyBody(unknownKey), nil, want{status: 401}},
+		{"user route: revoked key", keyBody(revoked.Secret), nil, want{status: 401}},
+		{"user route: suspended person's key", keyBody(frankKey), nil, want{status: 401}},
+		{"user route: service account that belongs to a deleted node", keyBody(oldSAKey), nil, want{status: 401}},
+		{"user route: service account", keyBody(saKey), nil, want{status: 403, principal: "service_account", keyID: saKeyID}},
+		{"user route: person", idpBody("alice"), nil, want{status: 200, principal: "person", user: alice}},
 
 		// member_id: null, nodes empty → 403
 		{"missing slug", keyBody(aliceKey, project("gruow", "apps", "nope")...), read, want{status: 403}},
@@ -212,8 +232,7 @@ func TestAdmit(t *testing.T) {
 			want{status: 200, member: saM, nodes: []string{gruow.ID, apps.ID, web.ID}, permissions: []string{"organization:read", "project:read", "project:write"}}},
 		{"deleted node, allow_deleted: its own bindings count", admitBody(`"idp": {"issuer": "https://idp.test", "subject": "bob"}`, true, project("gruow", "apps", "old")...), []string{"project:read"},
 			want{status: 200, nodes: []string{gruow.ID, apps.ID, old.ID}, member: bobM, permissions: []string{"organization:read", "project:read", "project:write"}}},
-		{"user route", idpBody("alice"), nil, want{status: 200, user: alice}},
-		{"user route with a personal key", keyBody(aliceKey), nil, want{status: 200, user: alice, keyID: aliceKeyID}},
+		{"user route with a personal key", keyBody(aliceKey), nil, want{status: 200, principal: "person", user: alice, keyID: aliceKeyID}},
 		{"user route for a person in no tree", idpBody("dave"), nil, want{status: 200, user: dave}},
 
 		// non-2xx → 503
@@ -254,6 +273,9 @@ func TestAdmit(t *testing.T) {
 			}
 			if user, _ := r.body["user_id"].(string); user != c.want.user {
 				t.Fatalf("user_id %q, want %q", user, c.want.user)
+			}
+			if c.want.principal != "" && r.body["principal"] != c.want.principal {
+				t.Fatalf("principal %v, want %s", r.body["principal"], c.want.principal)
 			}
 			if c.want.keyID != "" && r.body["key_id"] != c.want.keyID {
 				t.Fatalf("key_id %v, want %s", r.body["key_id"], c.want.keyID)

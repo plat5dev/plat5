@@ -11,7 +11,9 @@ use std::future::Future;
 
 use tracing::{info, warn};
 
-use crate::auth::admit::{Admit, AdmitCache, AdmitCredential, AdmitRequest, ChainRef, NodeRef};
+use crate::auth::admit::{
+    Admit, AdmitAnswer, AdmitCache, AdmitCredential, AdmitRequest, ChainRef, NodeRef,
+};
 use crate::auth::{AuthError, AuthType, Presented};
 use crate::error::{ApiError, ErrorKind};
 use crate::kinds::id_header;
@@ -28,6 +30,9 @@ pub use permissions::permitted;
 pub const MEMBER_ID_HEADER: &str = "X-Plat5-Member-Id";
 pub const USER_ID_HEADER: &str = "X-Plat5-User-Id";
 pub const PRINCIPAL_HEADER: &str = "X-Plat5-Principal";
+
+/// Admit's `principal` for a service account.
+const SERVICE_ACCOUNT: &str = "service_account";
 
 /// The failed-auth limiter's bucket. `@` is in no policy name, so no policy shares it.
 const AUTH_FAILURE_BUCKET: &str = "@auth-failure";
@@ -119,6 +124,8 @@ pub enum Rejection {
     NotFound,
     /// **403** after the rate limit: no route permission held.
     Denied,
+    /// **403** before the rate limit: a service account on a user route.
+    ServiceAccount,
     /// **429**. `info` is set on an admitted route, None on the failed-auth limiter.
     RateLimited {
         retry_after: u64,
@@ -134,7 +141,7 @@ impl Rejection {
     pub fn status(&self) -> u16 {
         match self {
             Rejection::Unauthorized(_) => 401,
-            Rejection::NotFound | Rejection::Denied => 403,
+            Rejection::NotFound | Rejection::Denied | Rejection::ServiceAccount => 403,
             Rejection::RateLimited { .. } => 429,
             Rejection::BadPathParam => 400,
             Rejection::Unavailable => 503,
@@ -146,6 +153,7 @@ impl Rejection {
         match self {
             Rejection::Unauthorized(err) => ApiError::unauthorized_for(&route.scope, err.details()),
             Rejection::NotFound | Rejection::Denied => ApiError::forbidden(&route.required),
+            Rejection::ServiceAccount => ApiError::service_account_forbidden(),
             Rejection::RateLimited { retry_after, .. } => ApiError::rate_limited(*retry_after),
             Rejection::BadPathParam => ApiError::invalid_request(),
             Rejection::Unavailable => ApiError::service_unavailable(),
@@ -228,6 +236,13 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
             );
             return Err(self.count_refusal(ip).await.unwrap_or(rejection));
         }
+        if service_account_on_user_route(&req, &answer) {
+            // The credential is good: not counted by the failed-auth limiter.
+            // Before the rate limit: a user route counts per user, and a service
+            // account has none.
+            cred.principal = answer.principal.clone();
+            return Err(Rejection::ServiceAccount);
+        }
         if answer.refused(&req) {
             // Before the rate limit, so a caller outside a tree can't spend its budget.
             return Err(self.count_refusal(ip).await.unwrap_or(Rejection::NotFound));
@@ -288,6 +303,12 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
             Err(Unavailable) => Err(Rejection::Unavailable),
         }
     }
+}
+
+/// A valid service account's answer on a user route (an empty chain): user
+/// routes are a person's own, so the gateway refuses it with a **403**.
+fn service_account_on_user_route(req: &AdmitRequest, answer: &AdmitAnswer) -> bool {
+    answer.valid && req.chain.is_empty() && answer.principal.as_deref() == Some(SERVICE_ACCOUNT)
 }
 
 /// Admit's request for a matched route: the credential, the chain refs as

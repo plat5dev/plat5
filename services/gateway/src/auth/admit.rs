@@ -175,13 +175,15 @@ impl<A: Admit> AdmitCache<A> {
 }
 
 /// An admitted answer names the principal, and on a tree route one node per chain
-/// ref, by kind; on a user route, the user.
+/// ref, by kind; on a user route, a person's user. A service account has no
+/// user, and the gateway refuses it there.
 fn check_admitted(answer: &AdmitAnswer, req: &AdmitRequest) -> Result<(), &'static str> {
-    if answer.principal.as_deref().is_none_or(str::is_empty) {
+    let Some(principal) = answer.principal.as_deref().filter(|p| !p.is_empty()) else {
         return Err("principal");
-    }
+    };
     if req.chain.is_empty() {
         return match answer.user_id.as_deref() {
+            _ if principal == "service_account" => Ok(()),
             Some(id) if !id.is_empty() => Ok(()),
             _ => Err("user_id"),
         };
@@ -330,6 +332,19 @@ pub mod tests {
             nodes: vec![],
             member_id: None,
             user_id: Some(USER.into()),
+            permissions: vec![],
+        }
+    }
+
+    /// A service account's key on a user route: valid, with no user.
+    pub fn service_account_user() -> AdmitAnswer {
+        AdmitAnswer {
+            valid: true,
+            principal: Some("service_account".into()),
+            key_id: Some(KEY_ID.into()),
+            nodes: vec![],
+            member_id: None,
+            user_id: None,
             permissions: vec![],
         }
     }
@@ -570,6 +585,9 @@ pub mod tests {
             ..user()
         }));
         assert!(c.get(&user_req).await.is_err());
+        // A service account has no user: its answer is whole.
+        let (c, _) = cache(Ok(service_account_user()));
+        assert!(c.get(&user_req).await.is_ok());
     }
 
     #[tokio::test]

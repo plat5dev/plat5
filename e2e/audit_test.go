@@ -233,7 +233,7 @@ func TestAuditLogs(t *testing.T) {
 	if len(s.events(outsider, "/user/audit-events")) != 0 {
 		t.Fatal("the outsider's own log isn't empty")
 	}
-	// A service account isn't admitted on a user route
-	// (docs/reference/api/internal.md#admit).
-	s.call(bot, "GET", "/user/audit-events", nil, 401, nil)
+	// A service account can't use a user route: a 403
+	// (docs/concepts/access.md#how-a-request-is-decided).
+	s.call(bot, "GET", "/user/audit-events", nil, 403, nil)
 }

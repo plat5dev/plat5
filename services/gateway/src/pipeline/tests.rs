@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::auth::admit::tests::{
-    admitted, invalid, not_in_tree, user, FakeAdmit, KEY_ID, MEMBER, USER,
+    admitted, invalid, not_in_tree, service_account_user, user, FakeAdmit, KEY_ID, MEMBER, USER,
 };
 use crate::auth::admit::AdmitAnswer;
 use crate::control_plane::{build, Snapshot};
@@ -646,7 +646,8 @@ async fn user_routes_send_the_user_and_no_nodes() {
     assert_eq!((c.root_id(), c.member_id.as_deref()), (None, None));
     assert_eq!(h.counter.buckets(), vec![format!("default:user:{USER}")]);
 
-    // A service account's key: identity answers valid: false, and it's a 401.
+    // A revoked or unknown key: identity answers valid: false, and it's a 401,
+    // counted by the failed-auth limiter.
     let h = harness(Ok(invalid()));
     let (r, _) = h.run(&me, Ok(key())).await;
     let rejection = r.err().unwrap();
@@ -655,6 +656,32 @@ async fn user_routes_send_the_user_and_no_nodes() {
         rejection.body(&me.route).message,
         "Authentication required: a sign-in token or a personal API key."
     );
+    assert_eq!(h.counter.buckets(), vec![IP_BUCKET]);
+}
+
+#[tokio::test]
+async fn a_service_account_on_a_user_route_is_403() {
+    let snapshot = catalog();
+    let me = find(&snapshot, "GET", "/user");
+    let h = harness(Ok(service_account_user()));
+    let (r, cred) = h.run(&me, Ok(key())).await;
+    let rejection = r.err().unwrap();
+    assert_eq!(rejection, Rejection::ServiceAccount);
+    assert_eq!(rejection.status(), 403);
+    let body = rejection.body(&me.route);
+    assert_eq!(
+        (body.code.as_str(), body.message.as_str(), body.details),
+        ("FORBIDDEN", "Service accounts can't use this route.", None)
+    );
+    // The credential is good: no failed auth, and no user's budget to spend.
+    assert!(h.counter.buckets().is_empty());
+    assert_eq!(
+        (cred.key_id.as_deref(), cred.principal.as_deref()),
+        (Some(KEY_ID), Some("service_account"))
+    );
+    // Cached as an answer, not a refusal.
+    h.run(&me, Ok(key())).await.0.unwrap_err();
+    assert_eq!(h.calls(), 1);
 }
 
 fn e10s() -> Value {
@@ -1011,8 +1038,11 @@ async fn a_restore_check_admits_the_deleted_node_as_the_route_does() {
 #[tokio::test]
 async fn a_service_account_is_false_on_user_checks() {
     let snapshot = catalog();
-    // Identity answers a service account on a user route valid: false.
-    let identity = ByChain::with(&[("acme", service_account(org(&["*"]))), ("", invalid())]);
+    // Identity answers a service account on a user route valid, with no user.
+    let identity = ByChain::with(&[
+        ("acme", service_account(org(&["*"]))),
+        ("", service_account_user()),
+    ]);
     let (p, counter) = checks_pipeline(identity, AUTH_FAILURE);
     let got = run_checks(
         &p,
@@ -1044,12 +1074,16 @@ async fn a_credential_admit_refuses_is_401_counted_once() {
     // The first refusal ends the call.
     assert_eq!(identity.calls.load(Ordering::SeqCst), 1);
 
-    // A JWT refused on a user check: a suspended person, 401.
+    // Refused on a user check: a suspended person's JWT, a revoked key, 401.
     assert_eq!(
         run_checks(&p, &snapshot, &jwt_credential(), &[("GET", "/user")]).await,
         Err(Rejection::Unauthorized(AuthError::InvalidCredential))
     );
-    assert_eq!(counter.count(IP_BUCKET), 2);
+    assert_eq!(
+        run_checks(&p, &snapshot, &key_credential(), &[("GET", "/user")]).await,
+        Err(Rejection::Unauthorized(AuthError::InvalidCredential))
+    );
+    assert_eq!(counter.count(IP_BUCKET), 3);
 
     // The failed-auth limiter answers once it's full.
     let (p, _) = checks_pipeline(
@@ -1068,76 +1102,116 @@ async fn a_credential_admit_refuses_is_401_counted_once() {
     ));
 }
 
+/// Public, user and mixed batches, for a person, a revoked key and a
+/// service account: each check admits as its request would.
 #[tokio::test]
-async fn a_key_no_tree_check_admits_is_admitted_once_with_no_node() {
+async fn route_check_batches_admit_as_their_requests_would() {
     let snapshot = snapshot_with(e10s(), e10s_limits());
+    let public = [("GET", "/health"), ("GET", "/nowhere")];
     let only_user = [("GET", "/user"), ("POST", "/orgs")];
-    // A revoked or unknown key: admit refuses it on any chain.
-    let identity = ByChain::with(&[("", invalid()), ("-", invalid())]);
-    let (p, counter) = checks_pipeline(identity.clone(), AUTH_FAILURE);
-    assert_eq!(
-        run_checks(&p, &snapshot, &key_credential(), &only_user).await,
-        Err(Rejection::Unauthorized(AuthError::InvalidCredential))
+    let mixed = [("GET", "/health"), ("GET", "/user"), ("GET", "/orgs/acme")];
+    let person = || ByChain::with(&[("", user()), ("acme", org(&["*"]))]);
+    let revoked = || ByChain::with(&[("", invalid()), ("acme", invalid())]);
+    let bot = || {
+        ByChain::with(&[
+            ("", service_account_user()),
+            ("acme", service_account(org(&["*"]))),
+        ])
+    };
+    let refused = || Err(Rejection::Unauthorized(AuthError::InvalidCredential));
+    // (identity, credential, batch, answer, admits, failed auths counted)
+    type Case<'a> = (
+        Arc<ByChain>,
+        AdmitCredential,
+        &'a [(&'a str, &'a str)],
+        Result<Vec<bool>, Rejection>,
+        usize,
+        u64,
     );
-    assert_eq!(counter.count(IP_BUCKET), 1, "counted once");
-    // Public and unmatched checks admit nothing either.
-    assert_eq!(
-        run_checks(
-            &p,
-            &snapshot,
-            &key_credential(),
-            &[("GET", "/health"), ("GET", "/nowhere")]
-        )
-        .await,
-        Err(Rejection::Unauthorized(AuthError::InvalidCredential))
-    );
-    assert_eq!(counter.count(IP_BUCKET), 2);
-    let probe = identity.requests.lock().unwrap().last().unwrap().clone();
-    assert_eq!(probe.chain.len(), 1);
-    assert_eq!(probe.chain[0].reference, "-");
-
-    // A service account's key: refused on the user route, valid on a chain
-    // that names no node, so its user checks are false and the call a 200.
-    let identity = ByChain::with(&[("", invalid())]);
-    let (p, counter) = checks_pipeline(identity.clone(), AUTH_FAILURE);
-    assert_eq!(
-        run_checks(&p, &snapshot, &key_credential(), &only_user).await,
-        Ok(vec![false, false])
-    );
-    assert_eq!(counter.count(IP_BUCKET), 0, "a false is no failed auth");
-    // A tree check that admitted the key needs no second admit.
-    let identity = ByChain::with(&[("acme", service_account(org(&["*"]))), ("", invalid())]);
-    let (p, _) = checks_pipeline(identity.clone(), AUTH_FAILURE);
-    run_checks(
-        &p,
-        &snapshot,
-        &key_credential(),
-        &[("GET", "/user"), ("GET", "/orgs/acme")],
-    )
-    .await
-    .unwrap();
-    assert_eq!(identity.calls.load(Ordering::SeqCst), 2);
-}
-
-#[tokio::test]
-async fn a_jwt_no_check_admits_is_admitted_as_on_a_user_route() {
-    let snapshot = snapshot_with(e10s(), e10s_limits());
-    // A suspended person with only public checks.
-    let identity = ByChain::with(&[("", invalid())]);
-    let (p, counter) = checks_pipeline(identity.clone(), AUTH_FAILURE);
-    assert_eq!(
-        run_checks(&p, &snapshot, &jwt_credential(), &[("GET", "/health")]).await,
-        Err(Rejection::Unauthorized(AuthError::InvalidCredential))
-    );
-    assert_eq!(counter.count(IP_BUCKET), 1);
-    assert!(identity.requests.lock().unwrap()[0].chain.is_empty());
-    // A person who isn't suspended.
-    let identity = ByChain::with(&[("", user())]);
-    let (p, _) = checks_pipeline(identity, AUTH_FAILURE);
-    assert_eq!(
-        run_checks(&p, &snapshot, &jwt_credential(), &[("GET", "/health")]).await,
-        Ok(vec![true])
-    );
+    let cases: Vec<Case> = vec![
+        // Only public and unmatched checks: no admit, whatever the credential.
+        (
+            person(),
+            jwt_credential(),
+            &public,
+            Ok(vec![true, false]),
+            0,
+            0,
+        ),
+        (
+            revoked(),
+            key_credential(),
+            &public,
+            Ok(vec![true, false]),
+            0,
+            0,
+        ),
+        (
+            bot(),
+            key_credential(),
+            &public,
+            Ok(vec![true, false]),
+            0,
+            0,
+        ),
+        // Only user checks: admitted with an empty chain, once (the cache).
+        (
+            person(),
+            jwt_credential(),
+            &only_user,
+            Ok(vec![true, true]),
+            1,
+            0,
+        ),
+        (revoked(), key_credential(), &only_user, refused(), 1, 1),
+        (
+            bot(),
+            key_credential(),
+            &only_user,
+            Ok(vec![false, false]),
+            1,
+            0,
+        ),
+        // Mixed: the user check's admit and the tree check's.
+        (
+            person(),
+            jwt_credential(),
+            &mixed,
+            Ok(vec![true, true, true]),
+            2,
+            0,
+        ),
+        (revoked(), key_credential(), &mixed, refused(), 1, 1),
+        (
+            bot(),
+            key_credential(),
+            &mixed,
+            Ok(vec![true, false, true]),
+            2,
+            0,
+        ),
+    ];
+    for (i, (identity, credential, batch, want, admits, counted)) in cases.into_iter().enumerate() {
+        let (p, counter) = checks_pipeline(identity.clone(), AUTH_FAILURE);
+        assert_eq!(
+            run_checks(&p, &snapshot, &credential, batch).await,
+            want,
+            "case {i}"
+        );
+        assert_eq!(
+            identity.calls.load(Ordering::SeqCst),
+            admits,
+            "case {i}: admits"
+        );
+        assert_eq!(counter.count(IP_BUCKET), counted, "case {i}: counted");
+        let requests = identity.requests.lock().unwrap();
+        assert!(
+            requests
+                .iter()
+                .all(|r| r.chain.iter().all(|c| c.kind != "-" && c.reference != "-")),
+            "case {i}: every chain is a route's"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1191,7 +1265,7 @@ async fn route_checks_count_default_once_a_call_per_credential() {
 
 #[tokio::test]
 async fn route_checks_without_identity_are_503() {
-    let snapshot = catalog();
+    let snapshot = snapshot_with(e10s(), e10s_limits());
     let identity = Arc::new(ByChain {
         down: true,
         ..Default::default()
@@ -1201,10 +1275,20 @@ async fn route_checks_without_identity_are_503() {
         run_checks(&p, &snapshot, &key_credential(), &[("GET", "/orgs/acme")]).await,
         Err(Rejection::Unavailable)
     );
-    // Every call admits the credential, so a call of unmatched checks is 503 too.
     assert_eq!(
-        run_checks(&p, &snapshot, &key_credential(), &[("GET", "/nowhere")]).await,
+        run_checks(&p, &snapshot, &key_credential(), &[("GET", "/user")]).await,
         Err(Rejection::Unavailable)
+    );
+    // A call that needs no admit never calls identity, so it still answers.
+    assert_eq!(
+        run_checks(
+            &p,
+            &snapshot,
+            &key_credential(),
+            &[("GET", "/health"), ("GET", "/nowhere")]
+        )
+        .await,
+        Ok(vec![true, false])
     );
 }
 

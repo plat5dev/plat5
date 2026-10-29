@@ -150,18 +150,33 @@ func TestRouteChecks(t *testing.T) {
 	s.call(pat, "GET", projectPath+"/bindings", nil, 403, nil)
 	s.call(pat, "GET", orgPath+"/bindings", nil, 403, nil)
 	s.call(guest, "GET", orgPath, nil, 403, nil)
-	s.call(bot, "GET", "/user", nil, 401, nil)
+	// A service account on a user route: its key is good, so a 403 with its
+	// own sentence, not a 401.
+	code, body, err := s.try(bot, "GET", "/user", nil)
+	var refused apiError
+	_ = json.Unmarshal(body, &refused)
+	if err != nil || code != 403 || refused.Error.Code != "FORBIDDEN" || refused.Error.Message != "Service accounts can't use this route." {
+		t.Fatalf("a service account on a user route: %d %s", code, body)
+	}
 
-	// A revoked key is a 401 with only user checks too, where a valid service
-	// account's key answers false.
+	// A revoked key: a 401 on a user route, and any check that admits it makes
+	// the whole call a 401. Public checks admit nothing, so they still answer.
 	var revoked key
 	s.call(owner, "POST", envPath+"/service-accounts/"+sa.ID+"/keys", map[string]string{}, 201, &revoked)
 	s.call(owner, "DELETE", envPath+"/service-accounts/"+sa.ID+"/keys/"+revoked.ID, nil, 204, nil)
 	settle()
-	if code, body, _ := s.try(caller(revoked.Key), "POST", routeChecksPath, map[string]any{"checks": []check{me}}); code != 401 {
-		t.Fatalf("a revoked key, user checks only: %d %s", code, body)
+	s.call(caller(revoked.Key), "GET", "/user", nil, 401, nil)
+	for name, checks := range map[string][]check{
+		"user checks only": {me},
+		"mixed":            {status, me, check{"GET", envPath}},
+	} {
+		if code, body, _ := s.try(caller(revoked.Key), "POST", routeChecksPath, map[string]any{"checks": checks}); code != 401 {
+			t.Fatalf("a revoked key, %s: %d %s", name, code, body)
+		}
 	}
+	want(t, "revoked key, public checks only", s.routeChecks(caller(revoked.Key), status, unknown), true, false)
 	want(t, "service account, user checks only", s.routeChecks(bot, me), false)
+	want(t, "service account, public checks only", s.routeChecks(bot, status, unknown), true, false)
 
 	// A deleted project: refused, except its restore, as allow_deleted admits it.
 	s.call(owner, "DELETE", projectPath, nil, 204, nil)
@@ -171,7 +186,7 @@ func TestRouteChecks(t *testing.T) {
 	want(t, "project-only member, deleted project", s.routeChecks(pat, tasks, restore), false, false)
 
 	// The call's own errors.
-	code, body, err := s.try(owner, "POST", routeChecksPath, map[string]any{"checks": []check{}})
+	code, body, err = s.try(owner, "POST", routeChecksPath, map[string]any{"checks": []check{}})
 	var bad apiError
 	_ = json.Unmarshal(body, &bad)
 	if err != nil || code != 422 || bad.Error.Code != "VALIDATION_ERROR" {

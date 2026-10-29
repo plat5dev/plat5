@@ -130,6 +130,17 @@ impl ApiError {
         }
     }
 
+    /// A service account on a user route: the credential is good, and user
+    /// routes are a person's own (docs/reference/error-copy.md#gateway-403).
+    pub fn service_account_forbidden() -> Self {
+        Self {
+            error_type: "invalid_request_error".to_string(),
+            code: "FORBIDDEN".to_string(),
+            message: "Service accounts can't use this route.".to_string(),
+            details: None,
+        }
+    }
+
     pub fn not_found() -> Self {
         Self {
             error_type: "invalid_request_error".to_string(),

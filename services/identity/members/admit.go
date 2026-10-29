@@ -77,12 +77,14 @@ func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (
 	if err != nil {
 		return nil, op.Fail(err)
 	}
-	if p == nil || (userRoute && p.kind == PrincipalServiceAccount) {
+	if p == nil {
 		op.OK("invalid")
 		return &Admitted{}, nil
 	}
 	out := &Admitted{Valid: true, Principal: p.kind, KeyID: p.keyID}
 	if userRoute {
+		// A person's user id. A service account has none: the gateway refuses
+		// it on a user route.
 		out.UserID = p.userID
 		op.OK("admitted")
 		return out, nil
