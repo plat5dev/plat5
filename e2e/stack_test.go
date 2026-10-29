@@ -77,7 +77,7 @@ func newStack(t *testing.T) *stack {
 		wait:         wait,
 	}
 	s.serveJWKS(env("JWKS_ADDR", ":5401"))
-	s.applyConfig()
+	s.apply(s.config())
 	s.waitForGateway()
 	return s
 }
@@ -101,11 +101,9 @@ func (s *stack) serveJWKS(addr string) {
 	s.t.Cleanup(func() { _ = srv.Close() })
 }
 
-// applyConfig applies testdata/config.json through the control plane's admin
-// API: a dry run for the plan's revision, then the apply with it as `expect`.
-// A plan with no changes is skipped, so a rerun applies nothing. With audit
-// off, the config leaves the audit service out.
-func (s *stack) applyConfig() {
+// config is testdata/config.json. With audit off, it leaves the audit service
+// out.
+func (s *stack) config() map[string]any {
 	raw, err := os.ReadFile("testdata/config.json")
 	if err != nil {
 		s.t.Fatal(err)
@@ -117,6 +115,13 @@ func (s *stack) applyConfig() {
 	if os.Getenv("AUDIT_ENABLED") == "false" {
 		delete(config["services"].(map[string]any), "audit")
 	}
+	return config
+}
+
+// apply applies a config through the control plane's admin API: a dry run
+// for the plan's revision, then the apply with it as `expect`. A plan with no
+// changes is skipped, so a rerun applies nothing.
+func (s *stack) apply(config map[string]any) {
 
 	var plan struct {
 		Revision int   `json:"revision"`
@@ -191,18 +196,26 @@ func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 // caller is a credential, sent as `Authorization: Bearer`: a JWT or an API key.
 type caller string
 
-// person is a JWT for an IdP subject, as Plat5 Auth issues them
-// (`properties.user_id`, audience `plat5`).
+// person is a JWT for an IdP subject, with a `name` claim.
 func (s *stack) person(subject string) caller {
+	return s.token(subject, map[string]any{"name": "E2E " + subject})
+}
+
+// token is a JWT for an IdP subject, as Plat5 Auth issues them
+// (`properties.user_id`, audience `plat5`), with extra claims added.
+func (s *stack) token(subject string, extra map[string]any) caller {
 	head, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT", "kid": keyID})
-	claims, _ := json.Marshal(map[string]any{
+	body := map[string]any{
 		"iss":        s.issuer,
 		"aud":        "plat5",
 		"sub":        subject,
 		"exp":        time.Now().Add(time.Hour).Unix(),
-		"name":       "E2E " + subject,
 		"properties": map[string]string{"user_id": subject},
-	})
+	}
+	for k, v := range extra {
+		body[k] = v
+	}
+	claims, _ := json.Marshal(body)
 	signing := b64(head) + "." + b64(claims)
 	digest := sha256.Sum256([]byte(signing))
 	sig, err := rsa.SignPKCS1v15(rand.Reader, s.key, crypto.SHA256, digest[:])

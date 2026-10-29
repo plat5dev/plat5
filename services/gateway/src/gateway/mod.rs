@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::audit::{self, Audit, AuditState};
 use crate::auth::admit::{AdmitCache, HttpAdmit};
 use crate::auth::jwt::JwtValidatorState;
-use crate::auth::{AuthError, Authenticator};
+use crate::auth::{AuthError, Authenticator, NameClaims};
 use crate::config::GatewayConfig;
 use crate::control_plane::Snapshot;
 use crate::error::{ApiError, ErrorKind};
@@ -125,13 +125,13 @@ impl Gateway {
         ))
     }
 
-    /// The matched route and the name claim, from one snapshot.
-    fn resolve_route(&self, path: &str, method: &str) -> Option<(Matched, String)> {
+    /// The matched route and the name claims, from one snapshot.
+    fn resolve_route(&self, path: &str, method: &str) -> Option<(Matched, Arc<NameClaims>)> {
         let snapshot = self.snapshot.load();
         snapshot
             .routes
             .find_route(path, method)
-            .map(|matched| (matched, snapshot.name_claim.clone()))
+            .map(|matched| (matched, snapshot.name_claims.clone()))
     }
 
     async fn prepare_upstream(
@@ -139,7 +139,7 @@ impl Gateway {
         session: &mut Session,
         ctx: &mut GatewayContext,
         matched: &Matched,
-        name_claim: &str,
+        name_claims: &NameClaims,
         request_id: &str,
     ) -> Result<bool> {
         let route = &matched.route;
@@ -168,7 +168,7 @@ impl Gateway {
             Scope::Public => Err(AuthError::MissingAuthorization),
             _ => {
                 self.authenticator
-                    .present(session.req_header(), name_claim)
+                    .present(session.req_header(), name_claims)
                     .await
             }
         };
@@ -473,7 +473,7 @@ impl ProxyHttp for Gateway {
         }
 
         // Unmatched: 404, not counted by the failed-auth limiter.
-        let Some((matched, name_claim)) = self.resolve_route(&path, &method) else {
+        let Some((matched, name_claims)) = self.resolve_route(&path, &method) else {
             warn!("no matching route");
             return response::write_json_error(
                 &self.cors(),
@@ -497,7 +497,7 @@ impl ProxyHttp for Gateway {
         if let Some(done) = self.reject_oversized_content_length(session, ctx).await? {
             return Ok(done);
         }
-        self.prepare_upstream(session, ctx, &matched, &name_claim, &request_id)
+        self.prepare_upstream(session, ctx, &matched, &name_claims, &request_id)
             .await
     }
 

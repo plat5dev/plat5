@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_DELETION_GRACE: &str = "30d";
-pub const DEFAULT_NAME_CLAIM: &str = "name";
+/// `users.name.claims` when the config names none.
+pub const DEFAULT_NAME_CLAIMS: [&str; 2] = ["name", "preferred_username"];
 pub const DEFAULT_CONNECT_TIMEOUT: &str = "10s";
 pub const DEFAULT_READ_TIMEOUT: &str = "30s";
 pub const DEFAULT_MAX_BODY_BYTES: u64 = 10_485_760;
@@ -47,22 +48,45 @@ fn default_deletion_grace() -> String {
     DEFAULT_DELETION_GRACE.to_string()
 }
 
-fn default_name_claim() -> String {
-    DEFAULT_NAME_CLAIM.to_string()
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+/// `users:`: how Plat5 reads a person from the IdP's token.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct Users {
-    #[serde(default = "default_name_claim")]
-    pub name_claim: String,
+    #[serde(default)]
+    pub name: UserName,
 }
 
-impl Default for Users {
+/// `users.name`: the claims a sign-in reads a person's name from, and when it
+/// sets it (docs/reference/idp.md#a-persons-name).
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct UserName {
+    #[serde(default = "default_name_claims")]
+    pub claims: Vec<String>,
+    #[serde(default)]
+    pub sync: NameSync,
+}
+
+impl Default for UserName {
     fn default() -> Self {
         Self {
-            name_claim: default_name_claim(),
+            claims: default_name_claims(),
+            sync: NameSync::default(),
         }
     }
+}
+
+fn default_name_claims() -> Vec<String> {
+    DEFAULT_NAME_CLAIMS.iter().map(|c| c.to_string()).collect()
+}
+
+/// `users.name.sync`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NameSync {
+    /// A sign-in sets the name only while it's empty.
+    #[default]
+    FirstSignIn,
+    /// Every sign-in with a non-empty claim sets it; the person can't.
+    EachSignIn,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]

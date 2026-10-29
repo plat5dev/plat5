@@ -262,6 +262,7 @@ pub fn defaults(config: &Config, service: &str) -> Vec<ResourceDefault> {
         "/user",
         vec![
             ("GET", None, user.to_string()),
+            ("PATCH", None, user.to_string()),
             ("DELETE", None, user.to_string()),
         ],
     );

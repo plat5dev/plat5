@@ -1103,6 +1103,18 @@
         },
         {
           "path": "/user",
+          "method": "PATCH",
+          "scope": "user",
+          "upstream": "/users/{user.id}",
+          "required_permissions": null,
+          "rate_limit": [
+            "default"
+          ],
+          "audit": true,
+          "allow_deleted": false
+        },
+        {
+          "path": "/user",
           "method": "DELETE",
           "scope": "user",
           "upstream": "/users/{user.id}",
@@ -1187,6 +1199,12 @@
     "allowed_headers": []
   },
   "users": {
-    "name_claim": "name"
+    "name": {
+      "claims": [
+        "name",
+        "preferred_username"
+      ],
+      "sync": "first_sign_in"
+    }
   }
 }

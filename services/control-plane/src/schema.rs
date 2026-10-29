@@ -228,7 +228,7 @@ mod tests {
         let mut c = base();
         c["deletion_grace"] = json!("30d");
         c["reserved_slugs"] = json!(["new", "settings", "api", "admin"]);
-        c["users"] = json!({ "name_claim": "name" });
+        c["users"] = json!({ "name": { "claims": ["name", "preferred_username"], "sync": "first_sign_in" } });
         c["defaults"] =
             json!({ "timeouts": { "connect": "10s", "read": "30s" }, "max_body_bytes": 10485760 });
         c["roles"]["member"] =
@@ -290,6 +290,58 @@ mod tests {
             (
                 "users",
                 Box::new(|c| c["users"] = json!({ "email_claim": "email" })),
+            ),
+            (
+                "users",
+                Box::new(|c| c["users"] = json!({ "name_claim": "name" })),
+            ),
+            (
+                "users.name",
+                Box::new(|c| c["users"] = json!({ "name": { "claim": "name" } })),
+            ),
+            (
+                "users.name.claims",
+                Box::new(|c| c["users"] = json!({ "name": { "claims": [] } })),
+            ),
+            (
+                "users.name.claims",
+                Box::new(|c| {
+                    c["users"] = json!({ "name": { "claims": ["a", "b", "c", "d", "e", "f", "g", "h", "i"] } })
+                }),
+            ),
+            (
+                "users.name.claims",
+                Box::new(|c| c["users"] = json!({ "name": { "claims": ["name", "name"] } })),
+            ),
+            (
+                "users.name.claims",
+                Box::new(|c| c["users"] = json!({ "name": { "claims": "name" } })),
+            ),
+            (
+                "users.name.claims[1]",
+                Box::new(|c| {
+                    c["users"] = json!({ "name": { "claims": ["name", "profile..name"] } })
+                }),
+            ),
+            (
+                "users.name.claims[0]",
+                Box::new(|c| c["users"] = json!({ "name": { "claims": [".name"] } })),
+            ),
+            (
+                "users.name.claims[0]",
+                Box::new(|c| c["users"] = json!({ "name": { "claims": ["full name"] } })),
+            ),
+            (
+                "users.name.claims[0]",
+                Box::new(|c| c["users"] = json!({ "name": { "claims": [""] } })),
+            ),
+            (
+                "users.name.claims[0]",
+                Box::new(|c| c["users"] = json!({ "name": { "claims": ["a".repeat(129)] } })),
+            ),
+            (
+                "users.name.sync",
+                Box::new(|c| c["users"] = json!({ "name": { "sync": "always" } })),
             ),
             (
                 "defaults.timeouts.connect",
@@ -432,6 +484,20 @@ mod tests {
             mutate(&mut c);
             let errs = errors(c);
             assert!(errs.iter().any(|e| e.path == path), "{path}: {errs:?}");
+        }
+    }
+
+    #[test]
+    fn name_claims_are_dotted_paths() {
+        for users in [
+            json!({}),
+            json!({ "name": {} }),
+            json!({ "name": { "sync": "each_sign_in" } }),
+            json!({ "name": { "claims": ["profile.display_name", "name", "https://example.com/name", "a.b.c.d.e.f.g.h"] } }),
+        ] {
+            let mut c = base();
+            c["users"] = users.clone();
+            check_config(&c).unwrap_or_else(|e| panic!("{users}: {e:?}"));
         }
     }
 

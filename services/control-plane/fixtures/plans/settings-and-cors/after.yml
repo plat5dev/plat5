@@ -1,7 +1,9 @@
 deletion_grace: 7d
 reserved_slugs: [new, settings]
 users:
-  name_claim: display_name
+  name:
+    claims: [profile.display_name, nickname]
+    sync: each_sign_in
 defaults:
   timeouts: { connect: 5s, read: 20s }
   max_body_bytes: 2097152

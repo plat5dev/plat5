@@ -324,6 +324,9 @@ func TestCatalogEveryUpstreamIsServed(t *testing.T) {
 	if got := e.want(200, "alice", "GET", "/user", "").str("id"); got != e.userOf("alice") {
 		t.Fatalf("/user: %s", got)
 	}
+	if got := e.want(200, "alice", "PATCH", "/user", `{"name": "Alice A"}`).str("name"); got != "Alice A" {
+		t.Fatalf("PATCH /user: %s", got)
+	}
 	if got := e.listed("alice", "/user/nodes?kind=environment", "nodes"); !slices.Equal(got, []string{env}) {
 		t.Fatalf("/user/nodes: %v", got)
 	}

@@ -22,7 +22,21 @@ type Snapshot struct {
 	Kinds         map[string]Kind
 	Roles         map[string]Role
 	CreatorRole   string
+	// NameSync is users.name.sync: when a sign-in sets a person's name
+	// (docs/reference/idp.md#a-persons-name).
+	NameSync NameSync
 }
+
+// NameSync is users.name.sync.
+type NameSync string
+
+const (
+	// FirstSignIn: a sign-in sets the name only while it's empty.
+	FirstSignIn NameSync = "first_sign_in"
+	// EachSignIn: every sign-in with a non-empty claim sets it, and the
+	// person can't set it themselves.
+	EachSignIn NameSync = "each_sign_in"
+)
 
 // Role is one entry of the roles document (docs/reference/config/roles.md).
 type Role struct {
@@ -110,6 +124,12 @@ type wireRole struct {
 	BindableAt  []string `json:"bindable_at"`
 }
 
+type wireUsers struct {
+	Name struct {
+		Sync NameSync `json:"sync"`
+	} `json:"name"`
+}
+
 type wireSnapshot struct {
 	Revision      int64               `json:"revision"`
 	DeletionGrace string              `json:"deletion_grace"`
@@ -117,6 +137,7 @@ type wireSnapshot struct {
 	Kinds         map[string]wireKind `json:"kinds"`
 	Roles         map[string]wireRole `json:"roles"`
 	CreatorRole   string              `json:"creator_role"`
+	Users         wireUsers           `json:"users"`
 }
 
 // Parse reads a feed body. The control plane validated the config at apply;
@@ -131,12 +152,21 @@ func Parse(body []byte) (*Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("deletion_grace: %w", err)
 	}
+	sync := w.Users.Name.Sync
+	switch sync {
+	case "":
+		sync = FirstSignIn
+	case FirstSignIn, EachSignIn:
+	default:
+		return nil, fmt.Errorf("users.name.sync: %q is not first_sign_in or each_sign_in", sync)
+	}
 	s := &Snapshot{
 		Revision:      w.Revision,
 		DeletionGrace: grace,
 		ReservedSlugs: make(map[string]bool, len(w.ReservedSlugs)),
 		Kinds:         make(map[string]Kind, len(w.Kinds)),
 		CreatorRole:   w.CreatorRole,
+		NameSync:      sync,
 	}
 	for _, slug := range w.ReservedSlugs {
 		s.ReservedSlugs[slug] = true

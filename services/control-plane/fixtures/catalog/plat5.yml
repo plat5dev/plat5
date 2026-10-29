@@ -6,7 +6,9 @@
 deletion_grace: 30d
 reserved_slugs: [new, settings, api, admin]
 users:
-  name_claim: name
+  name:
+    claims: [name, preferred_username]
+    sync: first_sign_in
 kinds:
   organization:
     path: /orgs/{organization}

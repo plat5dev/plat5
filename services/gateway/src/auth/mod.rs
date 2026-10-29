@@ -93,6 +93,9 @@ impl AuthError {
     }
 }
 
+/// `users.name.claims`, each as path segments, in order.
+pub type NameClaims = Vec<Vec<String>>;
+
 /// Three dot-separated segments is a JWT; anything else is a key.
 pub fn is_jwt(token: &str) -> bool {
     token.split('.').count() == 3
@@ -114,12 +117,12 @@ impl Authenticator {
         }
     }
 
-    /// The request's credential, from `Authorization: Bearer`. `name_claim` is
-    /// `users.name_claim`.
+    /// The request's credential, from `Authorization: Bearer`. `name_claims` is
+    /// `users.name.claims`: a JWT's name is the first of them that's non-empty.
     pub async fn present(
         &self,
         req: &RequestHeader,
-        name_claim: &str,
+        name_claims: &[Vec<String>],
     ) -> Result<Presented, AuthError> {
         let authorization = req
             .headers
@@ -164,12 +167,11 @@ impl Authenticator {
 
         let subject =
             extract_claim_path(&claims, &self.subject_claim).ok_or(AuthError::MissingSubject)?;
-        let name_path: Vec<String> = vec![name_claim.to_string()];
         Ok(Presented::Jwt {
             // Validation checked `iss` against the configured issuer.
             issuer: self.jwt_validator.get_issuer(),
             subject,
-            name: extract_claim_path(&claims, &name_path),
+            name: first_name(&claims, name_claims),
             kid,
         })
     }
@@ -202,13 +204,28 @@ pub fn extract_claim_path(claims: &Value, path: &[String]) -> Option<String> {
     Some(s.to_string())
 }
 
-/// Parse `AUTH_SUBJECT_CLAIM` into path segments. Empty → the default, `sub`.
-pub fn parse_subject_claim(raw: &str) -> Vec<String> {
-    let parts: Vec<String> = raw
-        .split('.')
+/// The first of `paths` that holds a string with something besides spaces,
+/// trimmed: the person's name (docs/reference/idp.md#a-persons-name).
+pub fn first_name(claims: &Value, paths: &[Vec<String>]) -> Option<String> {
+    paths.iter().find_map(|path| {
+        let name = extract_claim_path(claims, path)?;
+        let name = name.trim();
+        (!name.is_empty()).then(|| name.to_string())
+    })
+}
+
+/// A dotted claim path (`AUTH_SUBJECT_CLAIM`, each of `users.name.claims`) as
+/// path segments, each trimmed, empty ones dropped.
+pub fn parse_claim_path(raw: &str) -> Vec<String> {
+    raw.split('.')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .collect();
+        .collect()
+}
+
+/// Parse `AUTH_SUBJECT_CLAIM` into path segments. Empty → the default, `sub`.
+pub fn parse_subject_claim(raw: &str) -> Vec<String> {
+    let parts = parse_claim_path(raw);
     if parts.is_empty() {
         vec!["sub".to_string()]
     } else {
@@ -247,6 +264,55 @@ mod tests {
         assert!(extract_claim_path(&claims, &["name".to_string()]).is_none());
     }
 
+    fn paths(raw: &[&str]) -> NameClaims {
+        raw.iter().map(|c| parse_claim_path(c)).collect()
+    }
+
+    #[test]
+    fn the_name_is_the_first_non_empty_claim_in_order() {
+        let claims = json!({
+            "name": "  ", "nickname": "", "preferred_username": "  dana ",
+            "profile": { "display_name": "Dana Q", "n": 3 }, "email": "dana@example.com"
+        });
+        // Blank, empty, missing and non-string claims are skipped.
+        assert_eq!(
+            first_name(
+                &claims,
+                &paths(&[
+                    "name",
+                    "nickname",
+                    "missing",
+                    "profile.n",
+                    "preferred_username"
+                ])
+            )
+            .as_deref(),
+            Some("dana")
+        );
+        assert_eq!(
+            first_name(
+                &claims,
+                &paths(&["profile.display_name", "preferred_username"])
+            )
+            .as_deref(),
+            Some("Dana Q")
+        );
+        assert_eq!(
+            first_name(
+                &claims,
+                &paths(&["preferred_username", "profile.display_name"])
+            )
+            .as_deref(),
+            Some("dana")
+        );
+        assert_eq!(first_name(&claims, &paths(&["name", "nickname"])), None);
+        assert_eq!(first_name(&claims, &[]), None);
+        assert_eq!(
+            parse_claim_path("profile.display_name"),
+            vec!["profile", "display_name"]
+        );
+    }
+
     fn authenticator() -> Authenticator {
         Authenticator::new(
             JwtValidatorState::new(
@@ -271,7 +337,7 @@ mod tests {
         let a = authenticator();
         for key in ["plat5-k-2-abc", "sk_live_x", "a.b", "a.b.c.d"] {
             assert_eq!(
-                a.present(&request(Some(&format!("Bearer {key}"))), "name")
+                a.present(&request(Some(&format!("Bearer {key}"))), &paths(&["name"]))
                     .await,
                 Ok(Presented::Key(key.to_string())),
                 "{key}"
@@ -284,25 +350,26 @@ mod tests {
     async fn a_jwt_needs_jwks_and_other_schemes_are_refused() {
         let a = authenticator();
         assert_eq!(
-            a.present(&request(None), "name").await,
+            a.present(&request(None), &paths(&["name"])).await,
             Err(AuthError::MissingAuthorization)
         );
         for value in ["Basic abc", "Bearer", "Bearer a b", "bearer x"] {
             assert_eq!(
-                a.present(&request(Some(value)), "name").await,
+                a.present(&request(Some(value)), &paths(&["name"])).await,
                 Err(AuthError::InvalidAuthorizationHeader),
                 "{value}"
             );
         }
         // The JWKS URL answers nothing: a JWT can't be verified.
         assert_eq!(
-            a.present(&request(Some("Bearer h.p.s")), "name").await,
+            a.present(&request(Some("Bearer h.p.s")), &paths(&["name"]))
+                .await,
             Err(AuthError::JwtValidationUnavailable)
         );
         let mut req = request(None);
         req.insert_header("X-API-Key", "plat5-k-2-abc").unwrap();
         assert_eq!(
-            a.present(&req, "name").await,
+            a.present(&req, &paths(&["name"])).await,
             Err(AuthError::MissingAuthorization),
             "X-API-Key is not a credential"
         );

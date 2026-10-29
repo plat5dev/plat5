@@ -97,6 +97,12 @@
     ]
   },
   "users": {
-    "name_claim": "display_name"
+    "name": {
+      "claims": [
+        "profile.display_name",
+        "nickname"
+      ],
+      "sync": "each_sign_in"
+    }
   }
 }

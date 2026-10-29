@@ -29,7 +29,7 @@ const testSchema = "identity_test_members"
 
 // testConfig is a feed body: org > folder > project, and roles for each case.
 const testConfig = `{
-	"revision": 1, "deletion_grace": "30d", "reserved_slugs": ["new"], "users": { "name_claim": "name" },
+	"revision": 1, "deletion_grace": "30d", "reserved_slugs": ["new"], "users": { "name": { "claims": ["name", "preferred_username"], "sync": "first_sign_in" } },
 	"kinds": {
 		"organization": { "path": "/orgs/{organization}", "list_permission": "organization:read" },
 		"folder": { "parent": "organization", "path": "/folders/{folder}", "list_permission": "folder:read" },

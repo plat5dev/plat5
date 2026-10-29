@@ -13,7 +13,7 @@ import (
 )
 
 const good = `{
-	"revision": 3, "deletion_grace": "12h", "reserved_slugs": ["new"], "users": { "name_claim": "name" },
+	"revision": 3, "deletion_grace": "12h", "reserved_slugs": ["new"], "users": { "name": { "claims": ["name", "preferred_username"], "sync": "first_sign_in" } },
 	"kinds": {
 		"organization": { "path": "/orgs/{organization}", "list_permission": "organization:read" },
 		"project": { "parent": "organization", "path": "/projects/{project}", "list_permission": "project:read" }
@@ -36,6 +36,28 @@ func TestParse(t *testing.T) {
 	p, _ := s.Kind("project")
 	if p.Parent != "organization" || p.IsRoot() || p.ListPermission != "project:read" {
 		t.Fatalf("project: %+v", p)
+	}
+}
+
+func TestParseNameSync(t *testing.T) {
+	kinds := `"kinds": { "organization": { "list_permission": "organization:read" } }, "roles": {}, "creator_role": "admin"`
+	for users, want := range map[string]NameSync{
+		``:             FirstSignIn,
+		`"users": {},`: FirstSignIn,
+		`"users": { "name": { "claims": ["name"] } },`:                      FirstSignIn,
+		`"users": { "name": { "sync": "first_sign_in" } },`:                 FirstSignIn,
+		`"users": { "name": { "claims": ["n"], "sync": "each_sign_in" } },`: EachSignIn,
+	} {
+		s, err := Parse([]byte(`{` + users + kinds + `}`))
+		if err != nil {
+			t.Fatalf("%s: %v", users, err)
+		}
+		if s.NameSync != want {
+			t.Fatalf("%s: %q", users, s.NameSync)
+		}
+	}
+	if _, err := Parse([]byte(`{"users": { "name": { "sync": "always" } },` + kinds + `}`)); err == nil {
+		t.Fatal("an unknown sync parsed")
 	}
 }
 

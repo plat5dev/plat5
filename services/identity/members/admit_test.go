@@ -298,8 +298,8 @@ func TestAdmitRoleChanges(t *testing.T) {
 }
 
 // A new IdP subject becomes a person with a user id at their first admit, on
-// any route, with no member anywhere, and user.created; the name claim sets
-// the name, and a missing or empty one leaves it.
+// any route, with no member anywhere, and user.created; the name claim seeds
+// the name, and a later sign-in leaves it (first_sign_in, the default).
 func TestAdmitFirstSignIn(t *testing.T) {
 	e := setup(t)
 	e.org(e.person("alice"), "Gruow")
@@ -324,12 +324,12 @@ func TestAdmitFirstSignIn(t *testing.T) {
 	}
 
 	r = e.admit(admitBody(`"idp": {"issuer": "https://idp.test", "subject": "newbie", "name": "Renamed"}`, false))
-	if r.body["user_id"] != user || name() != "Renamed" {
+	if r.body["user_id"] != user || name() != "New Bie" {
 		t.Fatalf("second admit: %v, name %q", r.body, name())
 	}
 	for _, claim := range []string{`, "name": ""`, ``} {
 		e.admit(admitBody(`"idp": {"issuer": "https://idp.test", "subject": "newbie"`+claim+`}`, false))
-		if name() != "Renamed" {
+		if name() != "New Bie" {
 			t.Fatalf("claim %q changed the name to %q", claim, name())
 		}
 	}

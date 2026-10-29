@@ -107,6 +107,12 @@
     "allowed_headers": []
   },
   "users": {
-    "name_claim": "name"
+    "name": {
+      "claims": [
+        "name",
+        "preferred_username"
+      ],
+      "sync": "first_sign_in"
+    }
   }
 }

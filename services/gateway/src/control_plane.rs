@@ -17,6 +17,7 @@ use serde_json::Value;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
+use crate::auth::{parse_claim_path, NameClaims};
 use crate::gateway::CorsPolicy;
 use crate::kinds::{KindDoc, Kinds};
 use crate::metrics;
@@ -32,8 +33,9 @@ pub struct Snapshot {
     pub revision: i64,
     pub routes: RouteMap,
     pub cors: Arc<CorsPolicy>,
-    /// `users.name_claim`: the IdP claim holding a person's name.
-    pub name_claim: String,
+    /// `users.name.claims`, each as path segments: the JWT claims that may
+    /// hold a person's name, in order.
+    pub name_claims: Arc<NameClaims>,
 }
 
 #[derive(Deserialize)]
@@ -54,7 +56,13 @@ struct CorsFeed {
 
 #[derive(Deserialize)]
 struct UsersFeed {
-    name_claim: String,
+    name: NameFeed,
+}
+
+/// `users.name`. The gateway reads only `claims`; `sync` is identity's.
+#[derive(Deserialize)]
+struct NameFeed {
+    claims: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -240,7 +248,14 @@ pub fn build(feed: Value) -> Result<Snapshot, String> {
             feed.cors.allowed_origins,
             &feed.cors.allowed_headers,
         )),
-        name_claim: feed.users.name_claim,
+        name_claims: Arc::new(
+            feed.users
+                .name
+                .claims
+                .iter()
+                .map(|c| parse_claim_path(c))
+                .collect(),
+        ),
     })
 }
 
@@ -295,7 +310,7 @@ mod tests {
             "services": services,
             "rate_limits": {},
             "cors": { "allowed_origins": ["https://app.example.com"], "allowed_headers": [] },
-            "users": { "name_claim": "full_name" }
+            "users": { "name": { "claims": ["profile.full_name", "name"], "sync": "each_sign_in" } }
         })
     }
 
@@ -309,10 +324,13 @@ mod tests {
     }
 
     #[test]
-    fn builds_routes_cors_and_the_name_claim() {
+    fn builds_routes_cors_and_the_name_claims() {
         let snapshot = build(feed(widgets(json!({ "connect": "1s", "read": "60s" })))).unwrap();
         assert_eq!(snapshot.revision, 7);
-        assert_eq!(snapshot.name_claim, "full_name");
+        assert_eq!(
+            *snapshot.name_claims,
+            vec![vec!["profile", "full_name"], vec!["name"]]
+        );
         let m = snapshot.routes.find_route("/widgets", "GET").unwrap();
         assert_eq!(m.route.timeouts.read, Duration::from_secs(60));
         assert_eq!(m.route.max_body_bytes, 2048);

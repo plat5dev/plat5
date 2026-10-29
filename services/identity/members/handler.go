@@ -14,7 +14,7 @@ import (
 )
 
 // The caller, as the front door sends it (docs/reference/headers.md). Only
-// three routes read them (docs/reference/api/identity.md).
+// four routes read them (docs/reference/api/identity.md).
 const (
 	MemberHeader = "X-Plat5-Member-Id"
 	UserHeader   = "X-Plat5-User-Id"
@@ -52,6 +52,7 @@ func (h *Handler) Mount(r fiber.Router) {
 
 	r.Get("/users", h.LookupUser)
 	r.Get("/users/:user_id", h.GetUser)
+	r.Patch("/users/:user_id", h.SetName)
 	r.Delete("/users/:user_id", h.DeleteAccount)
 	r.Patch("/users/:user_id/status", h.SetStatus)
 	r.Get("/users/:user_id/nodes", h.UserNodes)
@@ -496,6 +497,33 @@ func (h *Handler) GetUser(c fiber.Ctx) error {
 	if err != nil {
 		return mapErr(c, err, "failed to get user", "user", userID)
 	}
+	return c.JSON(userResponse(u))
+}
+
+// SetName is PATCH /users/{user_id} { name }: a string sets the person's
+// name, null clears it. X-Plat5-User-Id says it's the person's own edit.
+func (h *Handler) SetName(c fiber.Ctx) error {
+	var req struct {
+		Name json.RawMessage `json:"name"`
+	}
+	if err := c.Bind().Body(&req); err != nil {
+		return err
+	}
+	if req.Name == nil {
+		return errors.FieldError("name", "Nothing to update.")
+	}
+	var name *string
+	if err := json.Unmarshal(req.Name, &name); err != nil {
+		return errors.FieldError("name", errors.FallbackValidation)
+	}
+	userID := httpx.PathParam(c, "user_id")
+	before, u, err := h.store.SetName(c.Context(), h.src.Current(), userID, name, header(c, UserHeader))
+	if err != nil {
+		return mapErr(c, err, "failed to set name", "user", userID)
+	}
+	d := auditx.Details{}
+	d.ChangedPtr("name", before, u.Name)
+	auditx.Set(c, d)
 	return c.JSON(userResponse(u))
 }
 

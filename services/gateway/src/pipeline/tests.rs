@@ -361,7 +361,7 @@ async fn every_catalog_route_matches_admits_limits_and_fills_its_upstream() {
             assert_eq!(header(&fwd, PRINCIPAL_HEADER), Some("person"));
         }
     }
-    assert_eq!(seen, 84, "identity's 80 routes and audit's 4");
+    assert_eq!(seen, 85, "identity's 81 routes and audit's 4");
     assert_eq!(snapshot.routes.route_count(), seen);
     assert_eq!(restore_routes, 3, "a restore route per kind");
 }

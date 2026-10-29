@@ -6,6 +6,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/plat5dev/plat5/identity/errors"
+	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 	"github.com/plat5dev/plat5/identity/internal/id"
 	"github.com/plat5dev/plat5/identity/lifecycle"
@@ -129,6 +130,64 @@ func (s *Store) SetStatus(ctx context.Context, userID, status string) (string, *
 	}
 	op.OK("ok")
 	return before, &u, nil
+}
+
+// SetName sets a person's name, or clears it when name is nil
+// (docs/reference/idp.md#a-persons-name). caller is X-Plat5-User-Id: when
+// it's sent, the edit is the person's own, and it must name them; under
+// users.name.sync each_sign_in the IdP owns their name, so their own edit is a
+// conflict. Without it the edit is an operator's, allowed in both modes. It
+// returns the name before.
+func (s *Store) SetName(ctx context.Context, snap *feed.Snapshot, userID string, name *string, caller string) (*string, *User, error) {
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "set_user_name", dbx.DefaultTimeout)
+	defer cancel()
+	defer op.End()
+	own := caller != ""
+	if own && caller != userID {
+		return nil, nil, op.Expected("bad caller", ErrBadCaller)
+	}
+	if !id.Valid(userID) {
+		return nil, nil, op.Expected("not found", ErrNotFound)
+	}
+	w, err := s.begin(ctx)
+	if err != nil {
+		return nil, nil, op.Fail(err)
+	}
+	defer w.rollback(ctx)
+	u, err := scanUser(w.tx.QueryRow(ctx, userSelect+`user_id = $1 FOR UPDATE`, userID))
+	switch {
+	case dbx.IsNoRows(err) && own:
+		return nil, nil, op.Expected("bad caller", ErrBadCaller)
+	case dbx.IsNoRows(err):
+		return nil, nil, op.Expected("not found", ErrNotFound)
+	case err != nil:
+		return nil, nil, op.Fail(err)
+	case own && u.Status != StatusActive:
+		return nil, nil, op.Expected("bad caller", ErrBadCaller)
+	case own && snap.NameSync == feed.EachSignIn:
+		return nil, nil, op.Expected("idp owns names", errors.ConflictError(
+			"Your name comes from your sign-in provider.", "name", string(feed.EachSignIn)))
+	}
+	if name != nil {
+		n, err := normalizeName(*name)
+		if err != nil {
+			return nil, nil, op.Expected("invalid", err)
+		}
+		name = &n
+	}
+	before := u.Name
+	if _, err := w.tx.Exec(ctx, `
+		UPDATE principals SET name = $2, updated_at = CASE WHEN name IS NOT DISTINCT FROM $2 THEN updated_at ELSE $3 END
+		WHERE id = $1
+	`, u.principalID, name, s.now().UTC()); err != nil {
+		return nil, nil, op.Fail(err)
+	}
+	if err := w.commit(ctx); err != nil {
+		return nil, nil, op.Fail(err)
+	}
+	u.Name = name
+	op.OK("ok")
+	return before, u, nil
 }
 
 // DeleteAccount deletes a person (docs/concepts/lifecycle.md#deleting-an-account):

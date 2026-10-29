@@ -48,10 +48,22 @@
       "what": "setting",
       "name": "users",
       "before": {
-        "name_claim": "name"
+        "name": {
+          "claims": [
+            "name",
+            "preferred_username"
+          ],
+          "sync": "first_sign_in"
+        }
       },
       "after": {
-        "name_claim": "display_name"
+        "name": {
+          "claims": [
+            "profile.display_name",
+            "nickname"
+          ],
+          "sync": "each_sign_in"
+        }
       }
     },
     {

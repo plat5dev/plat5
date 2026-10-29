@@ -169,7 +169,7 @@ pub async fn apply(
 }
 
 /// `GET /internal/gateway`: kinds, every service's routes expanded, rate
-/// limits, CORS and the IdP name claim, with defaults filled in.
+/// limits, CORS and `users` (the IdP name claims), with defaults filled in.
 pub fn gateway_feed(revision: i64, config: &Value) -> Result<Value, Failure> {
     let c = stored(config)?;
     Ok(gateway_body(revision, &c))
@@ -254,7 +254,8 @@ mod tests {
             gateway["rate_limits"],
             json!({ "default": { "requests": 60, "window_seconds": 60 } })
         );
-        assert_eq!(gateway["users"], json!({ "name_claim": "name" }));
+        let users = json!({ "name": { "claims": ["name", "preferred_username"], "sync": "first_sign_in" } });
+        assert_eq!(gateway["users"], users);
         let e10s = &gateway["services"]["e10s"];
         assert_eq!(e10s["timeouts"], json!({ "connect": "10s", "read": "30s" }));
         assert_eq!(e10s["max_body_bytes"], json!(10485760));
@@ -271,7 +272,20 @@ mod tests {
         let identity = identity_feed(4, &base()).unwrap();
         assert_eq!(identity["deletion_grace"], json!("30d"));
         assert_eq!(identity["reserved_slugs"], json!([]));
-        assert_eq!(identity["users"], json!({ "name_claim": "name" }));
+        assert_eq!(identity["users"], users);
         assert!(identity.get("services").is_none());
+    }
+
+    #[test]
+    fn users_name_fills_each_field_on_its_own() {
+        let mut config = base();
+        config["users"] = json!({ "name": { "sync": "each_sign_in" } });
+        let want =
+            json!({ "name": { "claims": ["name", "preferred_username"], "sync": "each_sign_in" } });
+        assert_eq!(gateway_feed(1, &config).unwrap()["users"], want);
+        assert_eq!(identity_feed(1, &config).unwrap()["users"], want);
+        config["users"] = json!({ "name": { "claims": ["profile.name"] } });
+        let want = json!({ "name": { "claims": ["profile.name"], "sync": "first_sign_in" } });
+        assert_eq!(identity_feed(1, &config).unwrap()["users"], want);
     }
 }
