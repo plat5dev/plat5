@@ -152,6 +152,17 @@ func TestRouteChecks(t *testing.T) {
 	s.call(guest, "GET", orgPath, nil, 403, nil)
 	s.call(bot, "GET", "/user", nil, 401, nil)
 
+	// A revoked key is a 401 with only user checks too, where a valid service
+	// account's key answers false.
+	var revoked key
+	s.call(owner, "POST", envPath+"/service-accounts/"+sa.ID+"/keys", map[string]string{}, 201, &revoked)
+	s.call(owner, "DELETE", envPath+"/service-accounts/"+sa.ID+"/keys/"+revoked.ID, nil, 204, nil)
+	settle()
+	if code, body, _ := s.try(caller(revoked.Key), "POST", routeChecksPath, map[string]any{"checks": []check{me}}); code != 401 {
+		t.Fatalf("a revoked key, user checks only: %d %s", code, body)
+	}
+	want(t, "service account, user checks only", s.routeChecks(bot, me), false)
+
 	// A deleted project: refused, except its restore, as allow_deleted admits it.
 	s.call(owner, "DELETE", projectPath, nil, 204, nil)
 	settle()

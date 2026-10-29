@@ -1049,12 +1049,6 @@ async fn a_credential_admit_refuses_is_401_counted_once() {
         run_checks(&p, &snapshot, &jwt_credential(), &[("GET", "/user")]).await,
         Err(Rejection::Unauthorized(AuthError::InvalidCredential))
     );
-    // A key refused on a user check alone is that check's false: identity
-    // answers a service account's key there the same way.
-    assert_eq!(
-        run_checks(&p, &snapshot, &key_credential(), &[("GET", "/user")]).await,
-        Ok(vec![false])
-    );
     assert_eq!(counter.count(IP_BUCKET), 2);
 
     // The failed-auth limiter answers once it's full.
@@ -1072,6 +1066,78 @@ async fn a_credential_admit_refuses_is_401_counted_once() {
         run_checks(&p, &snapshot, &key_credential(), &tree_checks).await,
         Err(Rejection::RateLimited { info: None, .. })
     ));
+}
+
+#[tokio::test]
+async fn a_key_no_tree_check_admits_is_admitted_once_with_no_node() {
+    let snapshot = snapshot_with(e10s(), e10s_limits());
+    let only_user = [("GET", "/user"), ("POST", "/orgs")];
+    // A revoked or unknown key: admit refuses it on any chain.
+    let identity = ByChain::with(&[("", invalid()), ("-", invalid())]);
+    let (p, counter) = checks_pipeline(identity.clone(), AUTH_FAILURE);
+    assert_eq!(
+        run_checks(&p, &snapshot, &key_credential(), &only_user).await,
+        Err(Rejection::Unauthorized(AuthError::InvalidCredential))
+    );
+    assert_eq!(counter.count(IP_BUCKET), 1, "counted once");
+    // Public and unmatched checks admit nothing either.
+    assert_eq!(
+        run_checks(
+            &p,
+            &snapshot,
+            &key_credential(),
+            &[("GET", "/health"), ("GET", "/nowhere")]
+        )
+        .await,
+        Err(Rejection::Unauthorized(AuthError::InvalidCredential))
+    );
+    assert_eq!(counter.count(IP_BUCKET), 2);
+    let probe = identity.requests.lock().unwrap().last().unwrap().clone();
+    assert_eq!(probe.chain.len(), 1);
+    assert_eq!(probe.chain[0].reference, "-");
+
+    // A service account's key: refused on the user route, valid on a chain
+    // that names no node, so its user checks are false and the call a 200.
+    let identity = ByChain::with(&[("", invalid())]);
+    let (p, counter) = checks_pipeline(identity.clone(), AUTH_FAILURE);
+    assert_eq!(
+        run_checks(&p, &snapshot, &key_credential(), &only_user).await,
+        Ok(vec![false, false])
+    );
+    assert_eq!(counter.count(IP_BUCKET), 0, "a false is no failed auth");
+    // A tree check that admitted the key needs no second admit.
+    let identity = ByChain::with(&[("acme", service_account(org(&["*"]))), ("", invalid())]);
+    let (p, _) = checks_pipeline(identity.clone(), AUTH_FAILURE);
+    run_checks(
+        &p,
+        &snapshot,
+        &key_credential(),
+        &[("GET", "/user"), ("GET", "/orgs/acme")],
+    )
+    .await
+    .unwrap();
+    assert_eq!(identity.calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_jwt_no_check_admits_is_admitted_as_on_a_user_route() {
+    let snapshot = snapshot_with(e10s(), e10s_limits());
+    // A suspended person with only public checks.
+    let identity = ByChain::with(&[("", invalid())]);
+    let (p, counter) = checks_pipeline(identity.clone(), AUTH_FAILURE);
+    assert_eq!(
+        run_checks(&p, &snapshot, &jwt_credential(), &[("GET", "/health")]).await,
+        Err(Rejection::Unauthorized(AuthError::InvalidCredential))
+    );
+    assert_eq!(counter.count(IP_BUCKET), 1);
+    assert!(identity.requests.lock().unwrap()[0].chain.is_empty());
+    // A person who isn't suspended.
+    let identity = ByChain::with(&[("", user())]);
+    let (p, _) = checks_pipeline(identity, AUTH_FAILURE);
+    assert_eq!(
+        run_checks(&p, &snapshot, &jwt_credential(), &[("GET", "/health")]).await,
+        Ok(vec![true])
+    );
 }
 
 #[tokio::test]
@@ -1135,10 +1201,10 @@ async fn route_checks_without_identity_are_503() {
         run_checks(&p, &snapshot, &key_credential(), &[("GET", "/orgs/acme")]).await,
         Err(Rejection::Unavailable)
     );
-    // Nothing that needs identity still answers.
+    // Every call admits the credential, so a call of unmatched checks is 503 too.
     assert_eq!(
         run_checks(&p, &snapshot, &key_credential(), &[("GET", "/nowhere")]).await,
-        Ok(vec![false])
+        Err(Rejection::Unavailable)
     );
 }
 

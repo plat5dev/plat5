@@ -7,7 +7,7 @@
 use serde_json::Value;
 
 use super::{permitted, unauthorized, Counter, Pipeline, Rejection};
-use crate::auth::admit::{credential_hash, Admit, AdmitCredential};
+use crate::auth::admit::{credential_hash, Admit, AdmitCredential, AdmitRequest, ChainRef};
 use crate::auth::{AuthError, Presented};
 use crate::rate_limit::{Bucket, RateLimitInfo, Unavailable, Verdict};
 use crate::route_map::{Policy, RouteMap, Scope};
@@ -125,6 +125,16 @@ pub enum CheckRefused {
     Unavailable,
 }
 
+/// One check's answer, and whether admit took the credential on the way.
+struct Answer {
+    allowed: bool,
+    admitted: bool,
+}
+
+/// A kind and a ref no node has: a kind name is lowercase letters, digits and
+/// `_`, and a ref is a slug or an id.
+const NO_NODE: &str = "-";
+
 /// The call's answer: each check's `allowed`, in order, and the `default`
 /// policy's numbers for the response.
 #[derive(Debug, PartialEq, Eq)]
@@ -147,7 +157,8 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
 
     /// The whole call, once its credential and body are read: one count of
     /// `default` for the credential, then each check in order. Admit refusing
-    /// the credential itself is a **401**, counted once by the failed-auth limiter.
+    /// the credential itself is a **401**, counted once by the failed-auth
+    /// limiter, whether or not any check admitted it.
     pub async fn check_routes(
         &self,
         routes: &RouteMap,
@@ -158,23 +169,26 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
     ) -> Result<Checked, Rejection> {
         let rate_limit = self.limit_checks(default, credential).await?;
         let mut allowed = Vec::with_capacity(checks.len());
+        let mut admitted = false;
         for check in checks {
             match self
                 .check(routes, &check.method, &check.path, credential)
                 .await
             {
-                Ok(answer) => allowed.push(answer),
+                Ok(answer) => {
+                    allowed.push(answer.allowed);
+                    admitted |= answer.admitted;
+                }
                 Err(CheckRefused::Unavailable) => return Err(Rejection::Unavailable),
                 Err(CheckRefused::Credential) => {
-                    let auth_type = match credential {
-                        AdmitCredential::Credential(_) => crate::auth::AuthType::ApiKey,
-                        AdmitCredential::Idp { .. } => crate::auth::AuthType::Jwt,
-                    };
-                    let rejection =
-                        unauthorized(AuthError::InvalidCredential, Some(auth_type), CHECKS_SCOPE);
-                    return Err(self.count_refusal(ip).await.unwrap_or(rejection));
+                    return Err(self.refuse_credential(credential, ip).await)
                 }
             }
+        }
+        // No admit took the credential: admit it once, so a credential admit
+        // refuses is the call's 401 whatever the checks were.
+        if !admitted && !self.credential_valid(credential).await? {
+            return Err(self.refuse_credential(credential, ip).await);
         }
         Ok(Checked {
             allowed,
@@ -184,20 +198,27 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
 
     /// One check: what the pipeline would decide for this credential, method
     /// and path, up to the permission check.
-    pub async fn check(
+    async fn check(
         &self,
         routes: &RouteMap,
         method: &str,
         path: &str,
         credential: &AdmitCredential,
-    ) -> Result<bool, CheckRefused> {
+    ) -> Result<Answer, CheckRefused> {
+        let not = |admitted| Answer {
+            allowed: false,
+            admitted,
+        };
         // Match. No route, or not this method: what a request would get as a 404.
         let Some(matched) = routes.find_route(path, method) else {
-            return Ok(false);
+            return Ok(not(false));
         };
         let route = &matched.route;
         if route.scope == Scope::Public {
-            return Ok(true);
+            return Ok(Answer {
+                allowed: true,
+                admitted: false,
+            });
         }
         // Admit, from the cache, with the route's chain and allow_deleted.
         let req = super::admit_request(&matched, credential.clone());
@@ -208,21 +229,60 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
             .map_err(|_| CheckRefused::Unavailable)?;
         if !answer.valid {
             // Identity answers a service account's key on a user route as it
-            // answers a key it refuses: that check is false, not the call's 401.
+            // answers a key it refuses: that check is false, and the call
+            // admits the key once more to tell them apart (credential_valid).
             let user_check_by_key =
                 req.chain.is_empty() && matches!(credential, AdmitCredential::Credential(_));
             return if user_check_by_key {
-                Ok(false)
+                Ok(not(false))
             } else {
                 Err(CheckRefused::Credential)
             };
         }
         // No such node, or not in its tree: what a request would get as a 403.
         if answer.refused(&req) {
-            return Ok(false);
+            return Ok(not(true));
         }
         // The permission check. A user route requires nothing of a person.
-        Ok(permitted(&route.required, &answer.permissions))
+        Ok(Answer {
+            allowed: permitted(&route.required, &answer.permissions),
+            admitted: true,
+        })
+    }
+
+    /// Whether admit takes the credential at all, for a call no check admitted
+    /// it on. A JWT is admitted as on a user route. A key is admitted with a
+    /// chain that names no node, since identity refuses a service account on a
+    /// user route as it refuses a revoked key: the principal is still checked,
+    /// and a valid key answers `member_id: null`.
+    async fn credential_valid(&self, credential: &AdmitCredential) -> Result<bool, Rejection> {
+        let chain = match credential {
+            AdmitCredential::Idp { .. } => Vec::new(),
+            AdmitCredential::Credential(_) => vec![ChainRef {
+                kind: NO_NODE.to_string(),
+                reference: NO_NODE.to_string(),
+            }],
+        };
+        let req = AdmitRequest {
+            credential: credential.clone(),
+            chain,
+            allow_deleted: false,
+        };
+        match self.admit.get(&req).await {
+            Ok(answer) => Ok(answer.valid),
+            Err(_) => Err(Rejection::Unavailable),
+        }
+    }
+
+    /// The call's **401** for a credential admit refuses, counted once by the
+    /// failed-auth limiter.
+    async fn refuse_credential(&self, credential: &AdmitCredential, ip: &str) -> Rejection {
+        let auth_type = match credential {
+            AdmitCredential::Credential(_) => crate::auth::AuthType::ApiKey,
+            AdmitCredential::Idp { .. } => crate::auth::AuthType::Jwt,
+        };
+        let rejection = unauthorized(AuthError::InvalidCredential, Some(auth_type), CHECKS_SCOPE);
+        self.count_refusal(ip).await.unwrap_or(rejection)
     }
 
     /// One count of `default` per call, per credential.
