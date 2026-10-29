@@ -80,6 +80,17 @@ Clients show `error.message`. `details.fields` is for multi-field 422s; `message
 
 All are **422** `VALIDATION_ERROR` with `path` `role`.
 
+### Users
+
+| When | `message` |
+|------|-----------|
+| Name empty | Name is required. |
+| Name > 128 | Name is too long. |
+| PATCH with no name | Nothing to update. |
+| The person's own name edit under `each_sign_in` | Your name comes from your sign-in provider. |
+
+The last is **409** `CONFLICT` with `{ "field": "name", "value": "each_sign_in" }`; the others **422** with `path` `name`.
+
 ### Service accounts
 
 | When | `message` |

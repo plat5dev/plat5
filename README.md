@@ -2,7 +2,7 @@
 
 Open-source **platform runtime** for multi-tenant APIs. You declare the tree's kinds in config (organization, project, …); Plat5 owns the nodes, who can reach each one, and the check at the gateway. A role bound at an org reaches every project under it; a role bound at one project reaches only that project. Services get node ids and the caller's member id, never a principal id, and do no auth themselves.
 
-Point the gateway at any OIDC IdP ([`docs/reference/idp.md`](docs/reference/idp.md)), including Plat5 Auth if you run it separately.
+Point the gateway at any issuer of signed JWT access tokens ([`docs/reference/idp.md`](docs/reference/idp.md)), including Plat5 Auth if you run it separately.
 
 The model: [`docs/concepts/model.md`](docs/concepts/model.md).
 

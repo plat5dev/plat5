@@ -16,7 +16,7 @@ Every tenant scope is built from config, so no kind is special: organizations an
 | A kind's name in permissions is `permission_name`, by default its own name, and kinds can share one | Plat5 has no permission inheritance; bindings flow down the chain, and permissions are strings. A kind that's part of its parent, like an environment in a project, needs no permissions of its own: `permission_name: project` makes its routes require `project:*`. Said once on the kind, not as one override per identity resource |
 | A kind has one parent | Several parents would only make a kind optional in the middle, and cost every route one copy per chain. With one chain per kind, a route has one public path and an upstream can use any ancestor's id. A list of parents can come back later without breaking anything |
 | Kind names can't be `public`, `member` or `user` | `public` and `user` are scopes; `member` and `user` would clash with the `{member.id}` and `{user.id}` placeholders |
-| `display_name` and `name_claim` are at most 128 characters | Same limit as other names |
+| `display_name`, a person's name, and each claim path in `users.name.claims` are at most 128 characters | Same limit as other names |
 
 ## Ids, slugs and display names
 

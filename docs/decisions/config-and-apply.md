@@ -99,7 +99,7 @@ Why the deployment's config is one document applied whole, through a plan, valid
 | `plat5 start`'s project file is `plat5.dev.yml`; `plat5.yml` means the deployment's config only | One name, one meaning. A deployment never reads the dev file, so nothing local leaks into it |
 | `plat5.dev.yml` holds nothing that's in `plat5.yml`. A service's `url` is the gateway's address; `start` joins the app's compose services the urls name to the stack's network, and with the app run on the host maps those names to it | `start` and `plat5 apply` send the same config, so a local apply never flips urls back |
 | `start` brings the stack up, applies `plat5.yml` through the same plan as `plat5 apply`, then waits for health. A blocked plan is printed and refused | Identity and the gateway are ready only once they have a config. One path for every change |
-| The dev seed goes through identity's routes: a dev token carrying a `name` claim, a node named `Dev` of each root kind, and one personal key | A personal key reaches every tree its person can. A person's name comes only from the IdP. One node per root kind avoids picking one |
+| The dev seed goes through identity's routes: a dev token, `PATCH /user` naming the dev person, a node named `Dev` of each root kind, and one personal key | A personal key reaches every tree its person can. Plat5 Auth's tokens carry no name, so the seed sets it as a person would. One node per root kind avoids picking one |
 | The Plat5 repo keeps no starting flow or example service of its own: the README points to the CLI and its templates | One starting flow, kept where it runs |
 
 ## One definition, copies checked

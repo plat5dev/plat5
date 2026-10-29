@@ -4,14 +4,14 @@ Operator guide: run Plat5 (and optionally [Plat5 Auth](https://github.com/plat5d
 
 This is **not** the CLI. `plat5 start` is laptop-only. On a server you pull GHCR images, fill `.env`, and apply your config yourself.
 
-Local contracts stay in this repo (see the [docs map](../README.md)). Auth env/OIDC live in the Auth repo. This page is the cross-product operator path those READMEs already link.
+Local contracts stay in this repo (see the [docs map](../README.md)). Auth's env and OAuth 2.0 surface live in the Auth repo. This page is the cross-product operator path those READMEs already link.
 
 ## What you run
 
 ```
 Internet
   https://api.example.com   → TLS edge → gateway :5001
-  https://auth.example.com  → TLS edge → issuer  :5000   (or any OIDC IdP)
+  https://auth.example.com  → TLS edge → issuer  :5000   (or any issuer of JWT access tokens)
 
 Docker (two stacks, two networks):
   plat5   postgres, valkey, gateway, identity, audit, control-plane
@@ -71,7 +71,7 @@ Env reference: [auth `docs/env.md`](https://github.com/plat5dev/auth/blob/master
 
 ### Other IdP
 
-Point Plat5 at it. Typical `AUTH_SUBJECT_CLAIM` is `sub`. See [`reference/idp.md`](../reference/idp.md).
+Any OAuth 2.0 issuer of signed JWT access tokens works. Point Plat5 at it. Typical `AUTH_SUBJECT_CLAIM` is `sub`. See [`reference/idp.md`](../reference/idp.md).
 
 ## 2. Plat5 runtime
 
@@ -92,7 +92,7 @@ Pin `PLAT5_VERSION` to a released tag (see `.env.template`).
 AUTH_ISSUER=https://auth.example.com
 AUTH_JWKS_URI=https://auth.example.com/.well-known/jwks.json
 AUTH_ALLOWED_AUDIENCES=<same as AUTH_ALLOWED_CLIENTS>   # or * to accept any
-AUTH_SUBJECT_CLAIM=properties.user_id   # Plat5 Auth; the default, sub, suits most OIDC IdPs
+AUTH_SUBJECT_CLAIM=properties.user_id   # Plat5 Auth; the default, sub, suits most other IdPs
 # APIKEY_BRAND=plat5                    # optional; identity only; keys {brand}-k-2-…
 ```
 
@@ -195,7 +195,7 @@ The gateway starts serving once it has loaded routes from the control plane. Gat
 
 ## Footguns
 
-- Choose `AUTH_SUBJECT_CLAIM` before the first sign-in. Identity links each person by issuer and that claim's value, so changing the claim later signs everyone in as a new person. With Plat5 Auth use `properties.user_id` (the template default); use `sub` for generic OIDC IdPs.
+- Choose `AUTH_SUBJECT_CLAIM` before the first sign-in. Identity links each person by issuer and that claim's value, so changing the claim later signs everyone in as a new person. With Plat5 Auth use `properties.user_id` (the template default); use `sub` for IdPs that put a stable subject there ([IdP](../reference/idp.md#subject-claim)).
 - `plat5 start` and its `plat5.dev.yml` don't operate this stack. `plat5.yml` does, through `plat5 apply`.
 - `docker compose down -v` on this stack wipes identity (nodes, people, keys), audit, and the applied config. Plat5 Auth runs as its own stack; its users go only with its own volumes.
 - Wiping Postgres loses the applied config (kinds, roles, routes, CORS) along with identity and audit. Re-apply the config from your repo.

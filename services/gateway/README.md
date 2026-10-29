@@ -28,7 +28,7 @@ The pipeline tests (`src/pipeline/tests.rs`) run every route of the catalog fixt
 | `AUTH_ISSUER` | (required) | JWT `iss` |
 | `AUTH_JWKS_URI` | (required) | JWKS URL |
 | `AUTH_ALLOWED_AUDIENCES` | (required) | Comma-separated allowed `aud` values; `*` accepts any audience |
-| `AUTH_SUBJECT_CLAIM` | `sub` | Dotted claim path for the person's IdP subject (e.g. `properties.user_id`). The name claim is `users.name_claim` in `plat5.yml` |
+| `AUTH_SUBJECT_CLAIM` | `sub` | Dotted claim path for the person's IdP subject (e.g. `properties.user_id`). The name claims are `users.name.claims` in `plat5.yml` |
 | `ADMIT_CACHE_TTL` | `5m` | How long an admit answer is cached, a duration |
 | `ADMIT_NEGATIVE_CACHE_TTL` | `10s` | How long a refusal (`valid: false`, `member_id: null`) is cached |
 | `AUDIT_ENABLED` | `true` | Wiring: whether the deployment runs an audit service. Anything but `true` / `false` refuses boot |

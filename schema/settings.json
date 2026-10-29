@@ -19,7 +19,7 @@
     },
     "users": {
       "title": "users",
-      "description": "How identity reads a person from the IdP's token.",
+      "description": "How Plat5 reads a person from the IdP's token.",
       "$ref": "#/$defs/users"
     },
     "defaults": {
@@ -33,14 +33,40 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "name_claim": {
-          "title": "name_claim",
-          "description": "The IdP claim holding a person's name. Default `name`.",
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
+        "name": {
+          "title": "name",
+          "description": "Where a person's name comes from at sign-in, and when a sign-in sets it.",
+          "$ref": "#/$defs/users_name"
         }
       }
+    },
+    "users_name": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "claims": {
+          "title": "claims",
+          "description": "The token claims that may hold the person's name, read in order: the first non-empty one wins. 1 to 8, each a dotted path like `AUTH_SUBJECT_CLAIM` (`name`, `profile.display_name`). Default `[name, preferred_username]`.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/claim" }
+        },
+        "sync": {
+          "title": "sync",
+          "description": "When a sign-in sets the name. `first_sign_in`: only while the person's name is empty. `each_sign_in`: on every sign-in with a non-empty claim, and the person can't change it themselves. Default `first_sign_in`.",
+          "enum": ["first_sign_in", "each_sign_in"]
+        }
+      }
+    },
+    "claim": {
+      "title": "claim",
+      "description": "A dotted path into the token's claims: segments of anything but dots and spaces, joined by dots. At most 128 characters.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^.\\s]+(\\.[^.\\s]+)*$"
     },
     "defaults": {
       "type": "object",

@@ -44,7 +44,7 @@ After an apply, the CLI waits up to 10 seconds for every gateway replica to repo
 
 **Apply.** Once the control plane is up, `start` applies `plat5.yml` through the same plan as `plat5 apply`, without a prompt. The first apply, on a fresh deployment, prints only its summary rather than the whole config as a diff. A blocked plan is printed and refused. A service's `url` is the address the gateway reaches, as in any deployment; `start` puts your app's containers on the stack's network so their compose service names resolve, and with your app run on your machine instead, maps those names to it.
 
-**Dev seed.** `start` then makes sure there's something to call with, through identity's routes like any client: a dev token from local Auth carrying a `name` claim, so the dev person has a name; a node named `Dev` of each root kind, found through `/user/nodes` and reused; and one personal key (`POST /user/keys`), which reaches every tree its person can. A config without those routes gets a warning, and `start` goes on.
+**Dev seed.** `start` then makes sure there's something to call with, through identity's routes like any client: a dev token from local Auth; the dev person's name, `Dev Person`, set with `PATCH /user`, since Plat5 Auth's tokens carry no name; a node named `Dev` of each root kind, found through `/user/nodes` and reused; and one personal key (`POST /user/keys`), which reaches every tree its person can. A config without those routes gets a warning, and `start` goes on.
 
 ### Starters
 

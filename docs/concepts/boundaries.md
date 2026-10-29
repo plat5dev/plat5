@@ -34,7 +34,7 @@ Do not add these because they would be convenient:
 - Login UI, passwords or JWKS. That's the IdP
 - HSTS at the gateway. TLS is the edge's
 - Last-owner guards. An org without an admin is recovered by an operator plane
-- Display-name overrides per tree. A person's name comes from the IdP
+- Names per tree. A person has one name, seeded from the IdP and then theirs or the IdP's (`users.name.sync`)
 - Lifecycle events derived from audit
 
 ## Extension points

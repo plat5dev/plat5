@@ -4,15 +4,16 @@ What identity's [resources](../config/resources.md) point at, and what any other
 
 The service is a function of the URL. Its own API addresses everything by id: `/nodes/{node_id}/…`, `/users/{user_id}/…`. Slugs exist only at the gateway; identity's resources map public paths onto these.
 
-Who may call is the front door. Identity doesn't know which front door called, and doesn't compare the caller to what it grants. It reads the caller on three routes only:
+Who may call is the front door. Identity doesn't know which front door called, and doesn't compare the caller to what it grants. It reads the caller on four routes only:
 
 | Route | Reads | For |
 |-------|-------|-----|
 | `POST /nodes/{node_id}/children/{kind}` | `X-Plat5-Member-Id` | That member gets `creator_role` on the new node, if the kind binds its creator |
 | `GET /nodes/{node_id}/children/{kind}` | `X-Plat5-Member-Id` | The list is filtered to what that member can read |
 | `POST /roots/{kind}` | `X-Plat5-User-Id` | That user gets a member in the new tree, with `creator_role` on the root, if the kind binds its creator |
+| `PATCH /users/{user_id}` | `X-Plat5-User-Id` | The edit is the person's own (`PATCH /user` at the gateway), so under `users.name.sync: each_sign_in` a `name` is **409** |
 
-Each is optional: without it, nobody is bound and the list is the full list. When sent, `X-Plat5-Member-Id` must name an active member of the node's tree, and `X-Plat5-User-Id` an active user, or the request is **400**. Every other route ignores both.
+Each is optional: without it, nobody is bound, the list is the full list, and a user edit is an operator's. When sent, `X-Plat5-Member-Id` must name an active member of the node's tree, and `X-Plat5-User-Id` an active user (on `PATCH /users/{user_id}`, the path's user), or the request is **400**. Every other route ignores both.
 
 ## Nodes
 
@@ -58,6 +59,7 @@ People, by user id. Not behind any default public route except the caller's own 
 |--------|------|--------|
 | `GET` | `/users?issuer=…&subject=…` | Exact lookup by IdP link, both required. `{ users: [...], has_more: false }`, with at most one |
 | `GET` | `/users/{user_id}` | [User](#user) |
+| `PATCH` | `/users/{user_id}` | `{ name }`: a string sets the person's name, `null` clears it ([a person's name](../idp.md#a-persons-name)). Returns the user. The person's own edit, with `X-Plat5-User-Id`, is **409** under `users.name.sync: each_sign_in`; an operator's, without it, is allowed in both modes |
 | `DELETE` | `/users/{user_id}` | [Delete the account](../../concepts/lifecycle.md#deleting-an-account). **204**; already deleted: **204** |
 | `PATCH` | `/users/{user_id}/status` | `{ status: active \| suspended }` |
 | `GET` | `/users/{user_id}/nodes` | `?kind=` across every tree (omitted: every kind), [filtered](../../concepts/access.md#lists) to what the person can read. `?status=deleted` for deleted ones. Nodes |
@@ -130,7 +132,7 @@ Lists are [paginated](../lists.md) under the plural key. Times are RFC 3339, UTC
 
 #### User
 
-`{ id, name, status }`. `status` is `active` or `suspended`.
+`{ id, name, status }`. `name` is `null` until it's known ([a person's name](../idp.md#a-persons-name)). `status` is `active` or `suspended`.
 
 #### Service account
 
@@ -148,7 +150,7 @@ Lists are [paginated](../lists.md) under the plural key. Times are RFC 3339, UTC
 
 | Field | Rule |
 |-------|------|
-| Node `display_name`, service account `name`, key `name` | 1 to 128 characters. A key's `name` defaults to `Unnamed key` |
+| Node `display_name`, a person's `name`, service account `name`, key `name` | 1 to 128 characters after trimming. A key's `name` defaults to `Unnamed key`; a person's is `null` until it's known |
 | Invite `expires_in` | From `60s` to `30d`. Default `7d` |
 | Invite `max_uses` | At least 1, or `unlimited`. Omitted or `null` → 1 |
 
@@ -169,6 +171,7 @@ Product sentences for each: [`reference/error-copy.md`](../error-copy.md#identit
 | Removing a service account's member through the members route | **422** |
 | Restore with a deleted parent, or past `deletion_grace` | **409** |
 | Create under a deleted or purged node | **409** |
+| A person's own `name` edit under `users.name.sync: each_sign_in` | **409** `CONFLICT` |
 
 ## Audit details
 

@@ -86,7 +86,7 @@ Every credential is `Authorization: Bearer`. A value of three dot-separated segm
 
 Any credential works on any route in a kind scope: a person's JWT or personal key reaches every tree they're in, and admit picks the member for the tree in the path. A service account key works only in its own tree, and never on user routes.
 
-**JWT.** Verified against JWKS ([`reference/idp.md`](../reference/idp.md)). The gateway reads the issuer, the subject claim (`AUTH_SUBJECT_CLAIM`) and the name claim (`users.name_claim`), and sends them to admit as `idp`.
+**JWT.** A signed JWT access token from the configured issuer, verified against its JWKS ([`reference/idp.md`](../reference/idp.md)). The gateway reads the issuer, the subject claim (`AUTH_SUBJECT_CLAIM`) and the first non-empty name claim of `users.name.claims`, and sends them to admit as `idp`.
 
 **Key.** Sent to admit as `credential`, as presented.
 

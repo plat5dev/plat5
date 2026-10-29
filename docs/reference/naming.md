@@ -5,11 +5,11 @@ Formats and terminology for permissions, routes, metrics, and error codes across
 ## Project Terminology
 
 - **Plat5** — Brand and main product: gateway, identity, control plane, contracts (platform runtime).
-- **Plat5 Auth** — Optional reference OIDC IdP (separate product).
+- **Plat5 Auth** — Optional reference OAuth 2.0 issuer of signed JWT access tokens, built on OpenAuth (separate product).
 - **Service** — Any unit of code that runs with Plat5 (e.g. `gateway`, `identity`, `widgets`).
 - **Platform service** — Plat5 runtime units: `gateway`, `control-plane`, `identity`, `audit`.
 - **Business service** — Use-case service behind Plat5: domain APIs.
-- **IdP** — External identity provider (JWT issuer). Not part of Plat5 (optional Plat5 Auth is a separate product).
+- **IdP** — External identity provider: an issuer of signed JWT access tokens ([`reference/idp.md`](idp.md)). Not part of Plat5 (optional Plat5 Auth is a separate product).
 
 ### Scope of Plat5
 

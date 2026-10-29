@@ -43,7 +43,7 @@ Set env (or defaults) for any IdP reachable from the gateway container:
 |----------|---------------|--------|
 | `AUTH_ISSUER` | `http://localhost:5401` | Token `iss` as clients see it |
 | `AUTH_JWKS_URI` | `http://host.docker.internal:5401/.well-known/jwks.json` | Fetch JWKS via host port |
-| `AUTH_SUBJECT_CLAIM` | `properties.user_id` | Plat5 Auth's claim. The gateway's own default is `sub`, which suits most OIDC providers |
+| `AUTH_SUBJECT_CLAIM` | `properties.user_id` | Plat5 Auth's claim. The gateway's own default is `sub`, which suits most other IdPs |
 | `AUTH_ALLOWED_AUDIENCES` | `plat5` | Required. Match your IdP client/`aud`; `*` accepts any |
 
 Gateway uses `host.docker.internal` so a host-published IdP does not need a shared Docker network. API keys are an alternative to JWT, also sent as `Authorization: Bearer`; the IdP is still required. See [`../docs/reference/idp.md`](../docs/reference/idp.md).

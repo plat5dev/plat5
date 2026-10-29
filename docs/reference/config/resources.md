@@ -62,7 +62,7 @@ For a kind `K` with parent `P`. Paths are relative to `K`'s node unless the scop
 | `members` | `K`, a root | `/members` | `GET` `{kind}:bindings:read`; `POST` `{kind}:bindings:write` | `/nodes/{K.id}/members` |
 | `member` | `K`, a root | `/members/{member_id}` | `GET` `any_member`; `DELETE` `{kind}:bindings:write` | `/nodes/{K.id}/members/{member_id}` |
 | `roots` | `user`, for a root `K` | `<collection>` | `POST` | `/roots/K` |
-| `me` | `user` | `/user` | `GET`, `DELETE` | `/users/{user.id}` |
+| `me` | `user` | `/user` | `GET`, `PATCH`, `DELETE` | `/users/{user.id}` |
 | `my_nodes` | `user` | `/user/nodes` | `GET` | `/users/{user.id}/nodes` |
 | `my_keys` | `user` | `/user/keys` | `GET`, `POST` | `/users/{user.id}/keys` |
 | `my_key` | `user` | `/user/keys/{key_id}` | `DELETE` | `/users/{user.id}/keys/{key_id}` |

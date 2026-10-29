@@ -34,7 +34,7 @@ CREATE TABLE principals (
     kind          TEXT NOT NULL CHECK (kind IN ('person', 'service_account')),
     user_id       TEXT UNIQUE,                         -- persons only: the id user routes carry
     status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
-    name          TEXT,                                -- a service account's name; a person's from name_claim
+    name          TEXT,                                -- a service account's name; a person's, null until known
     node_id       TEXT REFERENCES nodes (id),          -- service accounts only
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),

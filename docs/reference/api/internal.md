@@ -27,7 +27,7 @@ POST /internal/admit
 }
 ```
 
-1. **Principal.** Hash the key, or look up the IdP link. A new IdP subject creates the person; `name` (from `users.name_claim`) sets or updates the person's name. A suspended person, a revoked key, a key identity can't read, or a service account whose node is deleted is `valid: false`. So is a service account on a user route.
+1. **Principal.** Hash the key, or look up the IdP link. A new IdP subject creates the person. `name`, the first non-empty claim of `users.name.claims`, sets the person's name as `users.name.sync` says ([a person's name](../idp.md#a-persons-name)). A suspended person, a revoked key, a key identity can't read, or a service account whose node is deleted is `valid: false`. So is a service account on a user route.
 2. **Nodes.** Resolve each `ref` (slug or id) under the previous node, by kind. A missing, purged or deleted node ends here. With `allow_deleted`, the last node may be deleted (not purged), and its own bindings still count. Nothing else ever counts a deleted node's bindings.
 3. **Member.** The principal's active member in the chain's tree.
 4. **Permissions.** The union of the roles of that member's bindings on any node in the chain, includes resolved ([`concepts/access.md`](../../concepts/access.md#resolution)).
@@ -201,8 +201,8 @@ On `INTERNAL_PORT`. Each is one read, at one head, in one Postgres snapshot.
 
 | Path | Reader | `200` body |
 |------|--------|------------|
-| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "rate_limits", "cors", "users" }`. **404** before the first apply. `users` gives the gateway `name_claim`, the JWT claim it sends to admit as `name` |
-| `GET /internal/identity` | identity | `{ "revision", "deletion_grace", "reserved_slugs", "users", "kinds", "roles", "creator_role" }`. **404** before the first apply |
+| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "rate_limits", "cors", "users" }`. **404** before the first apply. `users` gives the gateway `name.claims`, the JWT claims it reads for the `name` it sends to admit |
+| `GET /internal/identity` | identity | `{ "revision", "deletion_grace", "reserved_slugs", "users", "kinds", "roles", "creator_role" }`. **404** before the first apply. `users` gives identity `name.sync` |
 
 The gateway's `services` are expanded: each service's `url`, `timeouts` and `max_body_bytes` with `defaults` filled in, and its `routes` as the gateway matches them, one per method:
 
@@ -212,7 +212,7 @@ The gateway's `services` are expanded: each service's `url`, `timeouts` and `max
   "required_permissions": ["catalog:write"], "rate_limit": ["default"], "audit": true, "allow_deleted": false }
 ```
 
-Identity's and audit's resources are expanded the same way. `rate_limit` is resolved (`[]` for none), `audit` is the method default filled in (`false` in `public`, which is never audited), and `required_permissions` is a list or `"any_member"` (`null` outside a kind scope). Roles are served as written, with `includes`; identity resolves them. Other keys are the config's own ([config](../../concepts/config.md#the-config)), with defaults filled in: `deletion_grace` `30d`, `reserved_slugs` `[]`, `users` `{ "name_claim": "name" }`, and `cors` `{ "allowed_origins": [], "allowed_headers": [] }` when the config has none.
+Identity's and audit's resources are expanded the same way. `rate_limit` is resolved (`[]` for none), `audit` is the method default filled in (`false` in `public`, which is never audited), and `required_permissions` is a list or `"any_member"` (`null` outside a kind scope). Roles are served as written, with `includes`; identity resolves them. Other keys are the config's own ([config](../../concepts/config.md#the-config)), with defaults filled in: `deletion_grace` `30d`, `reserved_slugs` `[]`, `users` `{ "name": { "claims": ["name", "preferred_username"], "sync": "first_sign_in" } }` (each field filled in on its own), and `cors` `{ "allowed_origins": [], "allowed_headers": [] }` when the config has none.
 
 Without `after`, the answer is immediate. With `?after={revision}`, the control plane waits until the head is past `after`, for up to 25 seconds. Nothing newer in that time is **204**, and the reader asks again. A cursor ahead of the head (the store was reset) is answered at once.
 
