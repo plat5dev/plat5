@@ -43,7 +43,7 @@ Identity resolves `chain` by kind name only and doesn't check it against its kin
 | Admit result | Status |
 |--------------|--------|
 | `valid: false` | **401**, counted by the failed-auth limiter |
-| `principal: "service_account"` on a user route | **403**, before the rate limit, not counted |
+| `principal: "service_account"` on a user route | **403**, after one count of `default` per credential ([rate limits](../gateway.md#rate-limits)), not counted by the failed-auth limiter |
 | `member_id: null` on a kind route | **403**, before the rate limit, counted by the failed-auth limiter |
 | `permissions` share none with the route, and the route isn't `any_member` | **403**, after the rate limit |
 | Otherwise | Forwarded |

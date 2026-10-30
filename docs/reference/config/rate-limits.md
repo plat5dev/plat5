@@ -45,6 +45,7 @@ All of a route's policies are checked at once and counted only if every one pass
 | `count_at: <kind>` | A kind | Policy and the node of that kind in the chain: everyone in it shares one budget |
 | No `count_at` | `user` | Policy and the caller's user id |
 | No `count_at` | `public` | Policy and the client IP |
+| `default` | A route checks call, or a service account refused on a `user` route | `default` and the credential (a key's hash, or a JWT's issuer and subject): [gateway](../gateway.md#rate-limits) |
 
 `count_at` must be the route's kind or an ancestor, and only on routes in a kind scope (**422** otherwise). A `count_at: project` bucket means a sandbox project can't spend a live project's budget; a `count_at: organization` bucket caps the org as a whole. A route can carry both.
 

@@ -68,6 +68,7 @@ Counters live in **Valkey**; replicas share one budget. `VALKEY_URL` is required
 | Exceed | **429** `RATE_LIMITED`, `details.retry_after_seconds`, `Retry-After` |
 | Admitted headers | On limited routes (2xx and 429): `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, for the tightest policy |
 | Keys | Under a fixed `plat5:rl:` prefix |
+| A service account on a user route | One count of the `default` policy per credential (its key), the same bucket as [route checks](#route-checks), before the **403**, whatever the route's own `rate_limit`. Over budget, **429** with `X-RateLimit-*` instead; the **403** carries none |
 | Failed-auth IP | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60; `0` = off). Counts only what identity refused: `valid: false` and `member_id: null`. A JWT refused locally, an unmatched route and a service account on a user route don't count. **429** sets `Retry-After`; no `X-RateLimit-*` |
 
 ## Audit
@@ -125,7 +126,7 @@ Other fields are ignored. Each `allowed` is what the gateway would decide for th
 A node that doesn't exist and a node the caller can't reach are both `false`, as both are the same **403** on the request. Rate limits, body limits, the param check of the fill and the upstream aren't evaluated, so `true` doesn't promise the request succeeds. Each admit comes from the [cache](#cache), as a request's would.
 
 - **Credential.** Any credential a route takes. Missing, malformed, or a JWT refused locally: **401**. Each check admits as its request would: a kind check with its chain, a `user` check with an empty chain; a `public` or unmatched check doesn't admit. Any admit answering `valid: false` (an unknown or revoked key, a suspended person, a service account whose node is deleted) makes the whole call **401**, counted once by the failed-auth limiter. A call that needs no admit never calls identity: it answers whatever the credential, even with identity down. A `false` is never counted by the failed-auth limiter.
-- **Rate limit.** One count of the `default` policy per call, per credential (a key, or a JWT's issuer and subject), before any check. `X-RateLimit-*` on the **200** and the **429**, as on a route.
+- **Rate limit.** One count of the `default` policy per call, per credential (a key, or a JWT's issuer and subject), before any check. A service account refused on a user route spends from the same bucket. `X-RateLimit-*` on the **200** and the **429**, as on a route.
 - **Not audited**, and nothing is forwarded.
 - **CORS** as on any response; its preflight is any `OPTIONS`.
 - **Other methods** on the path match no route: **404**.
