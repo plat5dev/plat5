@@ -19,7 +19,7 @@ use crate::error::{ApiError, ErrorKind};
 use crate::kinds::id_header;
 use crate::metrics;
 use crate::rate_limit::{Bucket, RateLimitInfo, RateLimiter, Unavailable, Verdict};
-use crate::route_map::{Matched, Route, Scope};
+use crate::route_map::{Matched, Policy, Route, Scope};
 
 pub use checks::{
     parse_checks, BadField, Check, CheckRefused, Checked, MAX_CHECKS, MAX_CHECKS_BODY,
@@ -185,9 +185,12 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
 
     /// Authenticate and admit, then rate limit. `presented` is what
     /// [`crate::auth::Authenticator::present`] found. `cred` is filled as far as it gets.
+    /// `default` is the `default` policy, counted per credential for a service
+    /// account refused on a user route.
     pub async fn admit_and_limit(
         &self,
         matched: &Matched,
+        default: &Policy,
         ip: &str,
         presented: Result<Presented, AuthError>,
         cred: &mut RequestCredential,
@@ -195,7 +198,7 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         let route = &matched.route;
         let admitted = match &route.scope {
             Scope::Public => Admitted::Public,
-            _ => Admitted::Caller(self.admit(matched, ip, presented, cred).await?),
+            _ => Admitted::Caller(self.admit(matched, default, ip, presented, cred).await?),
         };
         let rate_limit = self.limit(route, ip, &admitted).await?;
         Ok(Passed {
@@ -207,6 +210,7 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
     async fn admit(
         &self,
         matched: &Matched,
+        default: &Policy,
         ip: &str,
         presented: Result<Presented, AuthError>,
         cred: &mut RequestCredential,
@@ -237,10 +241,12 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
             return Err(self.count_refusal(ip).await.unwrap_or(rejection));
         }
         if service_account_on_user_route(&req, &answer) {
-            // The credential is good: not counted by the failed-auth limiter.
-            // Before the rate limit: a user route counts per user, and a service
-            // account has none.
+            // The credential is good: not counted by the failed-auth limiter. A
+            // user route counts per user, and a service account has none, so it
+            // counts against `default` per credential, as a route checks call
+            // does, before the 403.
             cred.principal = answer.principal.clone();
+            self.limit_credential(default, &req.credential).await?;
             return Err(Rejection::ServiceAccount);
         }
         if answer.refused(&req) {

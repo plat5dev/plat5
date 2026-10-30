@@ -38,16 +38,17 @@ pub struct Snapshot {
     /// `users.name.claims`, each as path segments: the JWT claims that may
     /// hold a person's name, in order.
     pub name_claims: Arc<NameClaims>,
-    /// Where the gateway answers route checks, and the `default` policy it
-    /// counts each call against.
+    /// Where the gateway answers route checks.
     pub route_checks: RouteChecks,
+    /// The `default` policy, counted per credential for a route checks call
+    /// and for a service account refused on a user route.
+    pub default_policy: Policy,
 }
 
 /// `route_checks` (docs/reference/gateway.md#route-checks).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RouteChecks {
     pub path: String,
-    pub default: Policy,
 }
 
 #[derive(Deserialize)]
@@ -265,12 +266,12 @@ pub fn build(feed: Value) -> Result<Snapshot, String> {
         .ok_or("rate_limits has no default policy")?;
     let route_checks = RouteChecks {
         path: feed.route_checks.path,
-        default: Policy {
-            name: DEFAULT_POLICY.to_string(),
-            requests: default.requests,
-            window_seconds: default.window_seconds,
-            count_at: None,
-        },
+    };
+    let default_policy = Policy {
+        name: DEFAULT_POLICY.to_string(),
+        requests: default.requests,
+        window_seconds: default.window_seconds,
+        count_at: None,
     };
     Ok(Snapshot {
         revision: feed.revision,
@@ -288,6 +289,7 @@ pub fn build(feed: Value) -> Result<Snapshot, String> {
                 .collect(),
         ),
         route_checks,
+        default_policy,
     })
 }
 
@@ -370,7 +372,7 @@ mod tests {
         assert_eq!(snapshot.routes.route_count(), 1);
         assert_eq!(snapshot.route_checks.path, "/access/routes");
         assert_eq!(
-            snapshot.route_checks.default,
+            snapshot.default_policy,
             Policy {
                 name: "default".into(),
                 requests: 60,

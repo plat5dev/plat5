@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::audit::{self, Audit, AuditState};
 use crate::auth::admit::{AdmitCache, HttpAdmit};
 use crate::auth::jwt::JwtValidatorState;
-use crate::auth::{AuthError, Authenticator, NameClaims};
+use crate::auth::{AuthError, Authenticator};
 use crate::config::GatewayConfig;
 use crate::control_plane::Snapshot;
 use crate::error::{ApiError, ErrorKind};
@@ -125,21 +125,12 @@ impl Gateway {
         ))
     }
 
-    /// The matched route and the name claims, from one snapshot.
-    fn resolve_route(&self, path: &str, method: &str) -> Option<(Matched, Arc<NameClaims>)> {
-        let snapshot = self.snapshot.load();
-        snapshot
-            .routes
-            .find_route(path, method)
-            .map(|matched| (matched, snapshot.name_claims.clone()))
-    }
-
     async fn prepare_upstream(
         &self,
         session: &mut Session,
         ctx: &mut GatewayContext,
         matched: &Matched,
-        name_claims: &NameClaims,
+        snapshot: &Snapshot,
         request_id: &str,
     ) -> Result<bool> {
         let route = &matched.route;
@@ -168,14 +159,20 @@ impl Gateway {
             Scope::Public => Err(AuthError::MissingAuthorization),
             _ => {
                 self.authenticator
-                    .present(session.req_header(), name_claims)
+                    .present(session.req_header(), &snapshot.name_claims)
                     .await
             }
         };
         // request_filter has entered the root span: a JWT's kid is recorded on it.
         let decided = self
             .pipeline
-            .admit_and_limit(matched, &ip, presented, &mut ctx.credential)
+            .admit_and_limit(
+                matched,
+                &snapshot.default_policy,
+                &ip,
+                presented,
+                &mut ctx.credential,
+            )
             .await;
         let passed = match decided {
             Ok(passed) => passed,
@@ -326,7 +323,7 @@ impl Gateway {
             .pipeline
             .check_routes(
                 &snapshot.routes,
-                &snapshot.route_checks.default,
+                &snapshot.default_policy,
                 &credential,
                 &checks,
                 &ip,
@@ -622,8 +619,9 @@ impl ProxyHttp for Gateway {
             return self.handle_route_checks(session, ctx, &snapshot).await;
         }
 
-        // Unmatched: 404, not counted by the failed-auth limiter.
-        let Some((matched, name_claims)) = self.resolve_route(&path, &method) else {
+        // Unmatched: 404, not counted by the failed-auth limiter. The route, the
+        // name claims and the default policy all come from this one snapshot.
+        let Some(matched) = snapshot.routes.find_route(&path, &method) else {
             warn!("no matching route");
             return response::write_json_error(
                 &self.cors(),
@@ -647,7 +645,7 @@ impl ProxyHttp for Gateway {
         if let Some(done) = self.reject_oversized_content_length(session, ctx).await? {
             return Ok(done);
         }
-        self.prepare_upstream(session, ctx, &matched, &name_claims, &request_id)
+        self.prepare_upstream(session, ctx, &matched, &snapshot, &request_id)
             .await
     }
 

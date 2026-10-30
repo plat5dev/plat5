@@ -158,7 +158,7 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         checks: &[Check],
         ip: &str,
     ) -> Result<Checked, Rejection> {
-        let rate_limit = self.limit_checks(default, credential).await?;
+        let rate_limit = self.limit_credential(default, credential).await?;
         let mut allowed = Vec::with_capacity(checks.len());
         for check in checks {
             match self
@@ -224,8 +224,9 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         Ok(permitted(&route.required, &answer.permissions))
     }
 
-    /// One count of `default` per call, per credential.
-    async fn limit_checks(
+    /// One count of `default` per credential: a route checks call, or a
+    /// service account refused on a user route. The bucket is the same.
+    pub(super) async fn limit_credential(
         &self,
         default: &Policy,
         credential: &AdmitCredential,

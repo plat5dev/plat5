@@ -117,6 +117,8 @@ impl Counter for Arc<MemCounter> {
 
 struct Harness {
     pipeline: Pipeline<Arc<FakeAdmit>, Arc<MemCounter>>,
+    /// The `default` policy a request passes in.
+    default: Policy,
     admit: Arc<FakeAdmit>,
     counter: Arc<MemCounter>,
 }
@@ -144,6 +146,12 @@ fn harness_with(answer: Result<AdmitAnswer, String>, auth_failure: Limit) -> Har
             counter.clone(),
             auth_failure,
         ),
+        default: Policy {
+            name: "default".into(),
+            requests: 60,
+            window_seconds: 60,
+            count_at: None,
+        },
         admit,
         counter,
     }
@@ -170,7 +178,7 @@ impl Harness {
         let mut cred = RequestCredential::default();
         let r = self
             .pipeline
-            .admit_and_limit(matched, IP, presented, &mut cred)
+            .admit_and_limit(matched, &self.default, IP, presented, &mut cred)
             .await;
         (r, cred)
     }
@@ -673,8 +681,14 @@ async fn a_service_account_on_a_user_route_is_403() {
         (body.code.as_str(), body.message.as_str(), body.details),
         ("FORBIDDEN", "Service accounts can't use this route.", None)
     );
-    // The credential is good: no failed auth, and no user's budget to spend.
-    assert!(h.counter.buckets().is_empty());
+    // The credential is good: no failed auth. No user's budget either: one
+    // count of default for the key, the route checks bucket.
+    let bucket = format!(
+        "default:credential:{}",
+        crate::auth::admit::credential_hash(&key_credential())
+    );
+    assert_eq!(h.counter.buckets(), vec![bucket.clone()]);
+    assert_eq!(h.counter.count(&bucket), 1);
     assert_eq!(
         (cred.key_id.as_deref(), cred.principal.as_deref()),
         (Some(KEY_ID), Some("service_account"))
@@ -682,6 +696,36 @@ async fn a_service_account_on_a_user_route_is_403() {
     // Cached as an answer, not a refusal.
     h.run(&me, Ok(key())).await.0.unwrap_err();
     assert_eq!(h.calls(), 1);
+}
+
+#[tokio::test]
+async fn a_service_account_on_a_user_route_spends_default_per_key() {
+    let snapshot = catalog();
+    let me = find(&snapshot, "GET", "/user");
+    let mut h = harness(Ok(service_account_user()));
+    h.default.requests = 2;
+    for _ in 0..2 {
+        assert_eq!(
+            h.run(&me, Ok(key())).await.0.unwrap_err(),
+            Rejection::ServiceAccount
+        );
+    }
+    // The third is over the budget: a 429 with the policy's numbers, not the 403.
+    match h.run(&me, Ok(key())).await.0 {
+        Err(Rejection::RateLimited {
+            retry_after: 60,
+            info: Some(info),
+        }) => assert_eq!((info.limit, info.remaining), (2, 0)),
+        other => panic!("{other:?}"),
+    }
+    // Never the failed-auth limiter, and the same bucket a route checks call
+    // with this key spends.
+    let bucket = format!(
+        "default:credential:{}",
+        crate::auth::admit::credential_hash(&key_credential())
+    );
+    assert!(h.counter.buckets().iter().all(|b| *b == bucket));
+    assert_eq!(h.counter.count(&bucket), 2);
 }
 
 fn e10s() -> Value {
@@ -925,7 +969,7 @@ async fn run_checks(
     pipeline
         .check_routes(
             &snapshot.routes,
-            &snapshot.route_checks.default,
+            &snapshot.default_policy,
             credential,
             &checks(list),
             IP,
@@ -1229,7 +1273,7 @@ async fn route_checks_count_default_once_a_call_per_credential() {
         async move {
             p.check_routes(
                 &snapshot.routes,
-                &snapshot.route_checks.default,
+                &snapshot.default_policy,
                 &credential,
                 &checks(&three),
                 IP,
