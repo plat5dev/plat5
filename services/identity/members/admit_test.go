@@ -325,7 +325,7 @@ func TestAdmitRoleChanges(t *testing.T) {
 func TestAdmitFirstSignIn(t *testing.T) {
 	e := setup(t)
 	e.org(e.person("alice"), "Gruow")
-	before, beforeUsers := e.lastEvent(), e.lastUserEvent()
+	before := e.lastEvent()
 
 	r := e.admit(admitBody(`"idp": {"issuer": "https://idp.test", "subject": "newbie", "name": "New Bie"}`, false, "organization", "gruow"))
 	if gatewayStatus(r, "any_member") != 403 || r.body["valid"] != true || r.body["user_id"] != nil {
@@ -335,7 +335,7 @@ func TestAdmitFirstSignIn(t *testing.T) {
 	if got := e.eventsAfter(before); len(got) != 0 {
 		t.Fatalf("a first sign-in makes no member: %v", got)
 	}
-	if got := e.userEventsAfter(beforeUsers); !slices.Equal(got, []string{"user.created " + user}) {
+	if got := e.userEventsAfter(before); !slices.Equal(got, []string{"user.created " + user}) {
 		t.Fatalf("user events %v", got)
 	}
 	name := func() string {
@@ -355,7 +355,7 @@ func TestAdmitFirstSignIn(t *testing.T) {
 			t.Fatalf("claim %q changed the name to %q", claim, name())
 		}
 	}
-	if got := e.userEventsAfter(beforeUsers); len(got) != 1 {
+	if got := e.userEventsAfter(before); len(got) != 1 {
 		t.Fatalf("a later sign-in wrote user events: %v", got)
 	}
 	// Same subject at another issuer is another person.
@@ -363,7 +363,7 @@ func TestAdmitFirstSignIn(t *testing.T) {
 	if r.body["user_id"] == user {
 		t.Fatal("issuer ignored")
 	}
-	if got := e.userEventsAfter(beforeUsers); !slices.Equal(got, []string{"user.created " + user, "user.created " + r.body["user_id"].(string)}) {
+	if got := e.userEventsAfter(before); !slices.Equal(got, []string{"user.created " + user, "user.created " + r.body["user_id"].(string)}) {
 		t.Fatalf("user events %v", got)
 	}
 }

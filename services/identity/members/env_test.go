@@ -238,12 +238,13 @@ func (e *env) removed(memberID string) bool {
 	return e.count(`SELECT count(*) FROM members WHERE id = $1 AND removed_at IS NOT NULL`, memberID) == 1
 }
 
-// eventsAfter is the tree events after id after, as
+// eventsAfter is the node and member events after id after, as
 // "type [kind] id root [principal]" lines.
 func (e *env) eventsAfter(after int64) []string {
 	e.t.Helper()
 	rows, err := e.pool.Query(e.ctx, `
-		SELECT type, kind, COALESCE(node_id, member_id), root_id, principal FROM tree_events WHERE id > $1 ORDER BY id
+		SELECT type, kind, COALESCE(node_id, member_id), root_id, principal FROM events
+		WHERE id > $1 AND type NOT LIKE 'user.%' ORDER BY id
 	`, after)
 	if err != nil {
 		e.t.Fatal(err)
@@ -268,10 +269,11 @@ func (e *env) eventsAfter(after int64) []string {
 	return out
 }
 
+// lastEvent is the log's head, so a test reads only the events after it.
 func (e *env) lastEvent() int64 {
 	e.t.Helper()
 	var id int64
-	if err := e.pool.QueryRow(e.ctx, `SELECT COALESCE(max(id), 0) FROM tree_events`).Scan(&id); err != nil {
+	if err := e.pool.QueryRow(e.ctx, `SELECT COALESCE(max(id), 0) FROM events`).Scan(&id); err != nil {
 		e.t.Fatal(err)
 	}
 	return id
@@ -280,7 +282,7 @@ func (e *env) lastEvent() int64 {
 // userEventsAfter is the user events after id after, as "type user_id" lines.
 func (e *env) userEventsAfter(after int64) []string {
 	e.t.Helper()
-	rows, err := e.pool.Query(e.ctx, `SELECT type || ' ' || user_id FROM user_events WHERE id > $1 ORDER BY id`, after)
+	rows, err := e.pool.Query(e.ctx, `SELECT type || ' ' || user_id FROM events WHERE id > $1 AND type LIKE 'user.%' ORDER BY id`, after)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -291,24 +293,25 @@ func (e *env) userEventsAfter(after int64) []string {
 	return out
 }
 
-func (e *env) lastUserEvent() int64 {
+// typesAfter is the types of every event after id after, in log order.
+func (e *env) typesAfter(after int64) []string {
 	e.t.Helper()
-	var id int64
-	if err := e.pool.QueryRow(e.ctx, `SELECT COALESCE(max(id), 0) FROM user_events`).Scan(&id); err != nil {
+	rows, err := e.pool.Query(e.ctx, `SELECT type FROM events WHERE id > $1 ORDER BY id`, after)
+	if err != nil {
 		e.t.Fatal(err)
 	}
-	return id
+	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return out
 }
 
-// occurredAt is the distinct occurred_at of the tree events after treeAfter
-// and the user events after userAfter: one value when one transaction wrote
-// them all.
-func (e *env) occurredAt(treeAfter, userAfter int64) []time.Time {
+// occurredAt is the distinct occurred_at of the events after after: one value
+// when one transaction wrote them all.
+func (e *env) occurredAt(after int64) []time.Time {
 	e.t.Helper()
-	rows, err := e.pool.Query(e.ctx, `
-		SELECT occurred_at FROM tree_events WHERE id > $1
-		UNION SELECT occurred_at FROM user_events WHERE id > $2
-	`, treeAfter, userAfter)
+	rows, err := e.pool.Query(e.ctx, `SELECT DISTINCT occurred_at FROM events WHERE id > $1`, after)
 	if err != nil {
 		e.t.Fatal(err)
 	}

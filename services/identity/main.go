@@ -73,7 +73,8 @@ func main() {
 
 	nodeHandler := nodes.NewHandler(nodeStore, src)
 	memberHandler := members.NewHandler(memberStore, src)
-	lifecycleHandler := lifecycle.NewHandler(lifecycle.NewStore(pool))
+	lifecycleHandler := lifecycle.NewHandler(lifecycle.NewStore(pool), lifecycle.LongPollWait)
+	go lifecycleHandler.Follow(runCtx, lifecycle.PollInterval, baseLogger)
 
 	app := newPublicApp(telem, nodeHandler, memberHandler)
 	internalApp := newInternalApp(telem, pool, src, lifecycleHandler, nodeHandler, memberHandler)
@@ -164,6 +165,10 @@ func newInternalApp(
 		return c.JSON(fiber.Map{"status": "healthy"})
 	})
 	app.Get("/metrics", adaptor.HTTPHandler(metrics.Handler()))
+	// The lifecycle log is long-polled: off traces and request metrics, like
+	// health, with only a 5xx logged. Mounted before /internal's traced group,
+	// so that group's middleware never runs for it.
+	app.Get(lifecycle.Path, middleware.FailureLogger(telem), lifecycleHandler.List)
 
 	// Health and /metrics stay off traces and HTTP RED (docs/reference/health.md).
 	// No token: internal ports are reachable only inside the deployment's
@@ -180,7 +185,6 @@ func newInternalApp(
 		)
 	}
 	internalAPI := traced("/internal")
-	lifecycleHandler.MountInternal(internalAPI)
 	memberHandler.MountInternal(internalAPI)
 	nodeHandler.MountInternal(internalAPI)
 	// AuthZEN's access evaluation API, for services, at AuthZEN's paths

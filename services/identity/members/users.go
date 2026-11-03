@@ -252,7 +252,7 @@ func (s *Store) DeleteAccount(ctx context.Context, userID string) (bool, error) 
 		op.OK("unchanged")
 		return false, nil
 	}
-	w.userEvent(lifecycle.UserDeleted(u.ID))
+	w.event(lifecycle.UserDeleted(u.ID))
 	if err := w.commit(ctx); err != nil {
 		return false, op.Fail(err)
 	}

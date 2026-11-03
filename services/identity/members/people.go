@@ -95,7 +95,7 @@ func (s *Store) ensurePerson(ctx context.Context, w *write, issuer, subject stri
 	`, issuer, subject, principalID, now); err != nil {
 		return "", err
 	}
-	w.userEvent(lifecycle.UserCreated(userID))
+	w.event(lifecycle.UserCreated(userID))
 	return principalID, nil
 }
 

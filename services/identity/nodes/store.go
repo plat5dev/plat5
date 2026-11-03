@@ -127,7 +127,7 @@ func (s *Store) Create(ctx context.Context, snap *feed.Snapshot, in CreateInput)
 	if err != nil {
 		return nil, op.Reject(err, ErrNotFound)
 	}
-	if err := lifecycle.RecordTree(ctx, tx, lifecycle.NodeEvent(lifecycle.TypeNodeCreated, n.Kind, n.ID, n.RootID)); err != nil {
+	if err := lifecycle.Record(ctx, tx, lifecycle.NodeEvent(lifecycle.TypeNodeCreated, n.Kind, n.ID, n.RootID)); err != nil {
 		return nil, op.Fail(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -715,7 +715,7 @@ func (s *Store) purgeTree(ctx context.Context, rootID string, now time.Time) (in
 	}
 	sort.Slice(removed, func(i, j int) bool { return removed[i].memberID < removed[j].memberID })
 	for _, m := range removed {
-		if err := lifecycle.RecordTree(ctx, tx, lifecycle.MemberEvent(lifecycle.TypeMemberRemoved, m.memberID, rootID, m.principal)); err != nil {
+		if err := lifecycle.Record(ctx, tx, lifecycle.MemberEvent(lifecycle.TypeMemberRemoved, m.memberID, rootID, m.principal)); err != nil {
 			return 0, err
 		}
 	}
@@ -823,7 +823,7 @@ func sortChanged(c []changedNode) {
 
 func recordNodeEvents(ctx context.Context, tx pgx.Tx, typ string, nodes []changedNode) error {
 	for _, n := range nodes {
-		if err := lifecycle.RecordTree(ctx, tx, lifecycle.NodeEvent(typ, n.kind, n.id, n.rootID)); err != nil {
+		if err := lifecycle.Record(ctx, tx, lifecycle.NodeEvent(typ, n.kind, n.id, n.rootID)); err != nil {
 			return err
 		}
 	}

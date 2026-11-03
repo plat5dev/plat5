@@ -88,3 +88,45 @@ func RequestLogger(telem *telemetry.Telemetry) fiber.Handler {
 		return nil
 	}
 }
+
+// FailureLogger is for long-polled reads: no span, no request metric, and a
+// log line only for a 5xx. A long-poll as a trace or a request metric would be
+// one long span every cycle and a latency that measures nothing.
+func FailureLogger(telem *telemetry.Telemetry) fiber.Handler {
+	return func(c fiber.Ctx) error {
+		reqLogger := telem.LoggerWithContext(c.Context())
+		if requestID := c.Get("X-Request-ID"); requestID != "" {
+			reqLogger = reqLogger.With().Str("request_id", requestID).Logger()
+		}
+		c.SetContext(reqLogger.WithContext(c.Context()))
+
+		err := c.Next()
+
+		status := c.Response().StatusCode()
+		kind := errors.KindInternal.String()
+		if err != nil {
+			apiErr := errors.FromError(err)
+			status = apiErr.Status
+			if apiErr.Kind.String() != "" {
+				kind = apiErr.Kind.String()
+			}
+		}
+		if status >= 500 {
+			routePattern := "unknown"
+			if r := c.Route(); r != nil && r.Path != "" {
+				routePattern = r.Path
+			}
+			event := reqLogger.Error().
+				Bool("error", true).
+				Str("route", routePattern).
+				Str("method", c.Method()).
+				Int("status", status).
+				Str("error_kind", kind)
+			if err != nil {
+				event = event.Str("error_message", err.Error())
+			}
+			event.Msg("request completed with error")
+		}
+		return err
+	}
+}
