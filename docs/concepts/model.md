@@ -29,7 +29,7 @@ On every request the gateway answers three questions: who is calling (the creden
 
 ## Ids and slugs
 
-Every id is a ULID, lowercase, with no type prefix: `01jbx9q3t5vk8m2n4p6r7s8t9w`. Ids are stored, returned and accepted only in that form; an uppercase id isn't canonical and matches nothing. Secrets keep a prefix so leak scanners can find them: API keys (`{brand}-k-2-…`) and invite tokens (`inv_…`). A principal's id never leaves identity.
+Every id of a resource Plat5 stores is a ULID, lowercase, with no type prefix: `01jbx9q3t5vk8m2n4p6r7s8t9w`. Those ids are stored, returned and accepted only in that form; an uppercase id isn't canonical and matches nothing. Other ids take the form that fits them: a lifecycle event's `id` is a number from the log's sequence, a `request_id` is a UUIDv4, and an audit event's `created_id` is whatever the service sent. Secrets keep a prefix so leak scanners can find them: API keys (`{brand}-k-2-…`) and invite tokens (`inv_…`). A principal's id never leaves identity.
 
 Every node has a slug, fixed at creation. Fixed rules, not config:
 
@@ -52,7 +52,7 @@ A path segment that starts with a digit is read as a node id, anything else as a
 5. **Services see node ids and the caller's member id on tree routes, and a user id only on user routes and in user events. Never a principal id.**
 6. **Services do no auth, so any front door can call them.** A service's API is its paths and documented headers, reachable only on the private network. Plat5's gateway is one front door; others (an operator plane, an internal job, a custom gateway) bring their own rules and docs.
 7. **The deployment's data, not Plat5's names.** Kinds, roles, permissions and routes are all config.
-8. **Config changes are planned before they apply; deletes are soft.**
+8. **Config changes are planned before they apply; deletes are soft only for nodes.** A deleted node can be restored until it's purged. Deleting a service account, a binding or an account is final.
 9. **Defaults, not limits.** Where reasonable teams would choose differently, Plat5 picks a default and the deployment can change it. Plat5 fixes only what isolation, security, or the shared contract needs.
 
 ## Where each decision lives

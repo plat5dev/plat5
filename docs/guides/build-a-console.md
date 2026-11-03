@@ -59,7 +59,7 @@ A form that creates a node can hold fields that belong to a service, such as a p
 
 ## Deleting and restoring
 
-Deletes are soft for the deployment's grace period. A deleted node's `purge_after` says until when it can be restored. `?status=deleted` on a list shows deleted nodes, and `POST …/restore` brings one back ([lifecycle](../concepts/lifecycle.md#deleting-restoring-and-purging)). A deleted org is found with `GET /user/nodes?kind=organization&status=deleted`.
+Node deletes are soft for the deployment's grace period. A deleted node's `purge_after` says until when it can be restored. `?status=deleted` on a list shows deleted nodes, and `POST …/restore` brings one back ([lifecycle](../concepts/lifecycle.md#deleting-restoring-and-purging)). A deleted org is found with `GET /user/nodes?kind=organization&status=deleted`.
 
 ## Leaving
 

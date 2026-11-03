@@ -1,10 +1,10 @@
 # Lifecycle
 
-Why deletes are soft, restorable and then purged, how nodes, members and stored data begin and end, and why services follow them in one log. The rules: [`concepts/lifecycle.md`](../concepts/lifecycle.md), [`internals/identity-schema.md`](../internals/identity-schema.md).
+Why node deletes are soft, restorable and then purged while other deletes are final, how nodes, members and stored data begin and end, and why services follow them in one log. The rules: [`concepts/lifecycle.md`](../concepts/lifecycle.md), [`internals/identity-schema.md`](../internals/identity-schema.md).
 
 ## Deleting, restoring and purging
 
-Every delete is soft for `deletion_grace`, 30 days by default, restorable, then purged. A mistake can be undone for the whole grace, and the data is gone for good once it ends.
+A node delete is soft for `deletion_grace`, 30 days by default, restorable, then purged. A mistake can be undone for the whole grace, and the data is gone for good once it ends. Deleting a service account, a binding or an account is final.
 
 | Decision | Why |
 |----------|-----|

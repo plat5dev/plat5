@@ -10,7 +10,7 @@ A service never creates a node in its own tables first: it creates it through th
 
 ## Deleting, restoring and purging
 
-- **Soft deletes.** Soft for `deletion_grace` (30 days by default), restorable, then purged. The grace is fixed when the node is deleted (`purge_after`), so changing `deletion_grace` applies to new deletes only. Ids are never reused.
+- **Soft deletes, for nodes only.** Deleting a service account, a binding or an account is final ([members](#members), [deleting an account](#deleting-an-account)). A node delete is soft for `deletion_grace` (30 days by default), restorable, then purged. The grace is fixed when the node is deleted (`purge_after`), so changing `deletion_grace` applies to new deletes only. Ids are never reused.
 
 - **Deletion ids.** Each delete stamps one `deletion_id` on every node it soft-deletes. A restore restores exactly the nodes with that id. A node already deleted keeps its own id.
 
