@@ -14,6 +14,10 @@ roles:
     permissions: [organization:read]
     bindable_at: [organization]
 creator_role: admin
+# `default` is an ordinary policy name: it applies to routes that name none
+# because defaults.rate_limit names it.
+defaults:
+  rate_limit: [default]
 rate_limits:
   default: { requests: 60, window_seconds: 60 }
 services:

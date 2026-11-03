@@ -1,0 +1,204 @@
+{
+  "revision": 8,
+  "kinds": {
+    "organization": {
+      "path": "/orgs/{organization}",
+      "list_permission": "organization:read"
+    },
+    "project": {
+      "parent": "organization",
+      "path": "/projects/{project}",
+      "list_permission": "project:read"
+    }
+  },
+  "services": {
+    "e10s": {
+      "url": "http://e10s:3000",
+      "timeouts": {
+        "connect": "10s",
+        "read": "30s"
+      },
+      "max_body_bytes": 10485760,
+      "routes": [
+        {
+          "path": "/health",
+          "method": "GET",
+          "scope": "public",
+          "upstream": "/health",
+          "required_permissions": null,
+          "rate_limit": [
+            "default"
+          ],
+          "audit": false,
+          "allow_deleted": false
+        },
+        {
+          "path": "/orgs/{organization}/plans",
+          "method": "GET",
+          "scope": "organization",
+          "upstream": "/orgs/{organization.id}/plans",
+          "required_permissions": [
+            "organization:read"
+          ],
+          "rate_limit": [
+            "default"
+          ],
+          "audit": false,
+          "allow_deleted": false
+        },
+        {
+          "path": "/orgs/{organization}/projects/{project}/plans",
+          "method": "GET",
+          "scope": "project",
+          "upstream": "/projects/{project.id}/plans",
+          "required_permissions": [
+            "project:read"
+          ],
+          "rate_limit": [
+            "default"
+          ],
+          "audit": false,
+          "allow_deleted": false
+        },
+        {
+          "path": "/orgs/{organization}/projects/{project}/plans",
+          "method": "POST",
+          "scope": "project",
+          "upstream": "/projects/{project.id}/plans",
+          "required_permissions": [
+            "catalog:write"
+          ],
+          "rate_limit": [
+            "default"
+          ],
+          "audit": true,
+          "allow_deleted": false
+        }
+      ]
+    },
+    "identity": {
+      "url": "http://identity:3000",
+      "timeouts": {
+        "connect": "10s",
+        "read": "30s"
+      },
+      "max_body_bytes": 10485760,
+      "routes": [
+        {
+          "path": "/orgs/{organization}",
+          "method": "GET",
+          "scope": "organization",
+          "upstream": "/nodes/{organization.id}",
+          "required_permissions": [
+            "organization:read"
+          ],
+          "rate_limit": [
+            "default"
+          ],
+          "audit": false,
+          "allow_deleted": false
+        },
+        {
+          "path": "/orgs/{organization}",
+          "method": "PATCH",
+          "scope": "organization",
+          "upstream": "/nodes/{organization.id}",
+          "required_permissions": [
+            "organization:write"
+          ],
+          "rate_limit": [
+            "default"
+          ],
+          "audit": true,
+          "allow_deleted": false
+        },
+        {
+          "path": "/orgs/{organization}",
+          "method": "DELETE",
+          "scope": "organization",
+          "upstream": "/nodes/{organization.id}",
+          "required_permissions": [
+            "organization:admin"
+          ],
+          "rate_limit": [
+            "default"
+          ],
+          "audit": true,
+          "allow_deleted": false
+        },
+        {
+          "path": "/orgs/{organization}/apps",
+          "method": "GET",
+          "scope": "organization",
+          "upstream": "/nodes/{organization.id}/children/project",
+          "required_permissions": "any_member",
+          "rate_limit": [
+            "default"
+          ],
+          "audit": false,
+          "allow_deleted": false
+        },
+        {
+          "path": "/orgs/{organization}/apps",
+          "method": "POST",
+          "scope": "organization",
+          "upstream": "/nodes/{organization.id}/children/project",
+          "required_permissions": [
+            "project:create"
+          ],
+          "rate_limit": [
+            "default"
+          ],
+          "audit": true,
+          "allow_deleted": false
+        },
+        {
+          "path": "/orgs/{organization}/projects/{project}",
+          "method": "GET",
+          "scope": "project",
+          "upstream": "/nodes/{project.id}",
+          "required_permissions": [
+            "project:read"
+          ],
+          "rate_limit": [
+            "default"
+          ],
+          "audit": false,
+          "allow_deleted": false
+        }
+      ]
+    }
+  },
+  "rate_limits": {
+    "default": {
+      "requests": 60,
+      "window_seconds": 60
+    }
+  },
+  "defaults": {
+    "rate_limit": [
+      "default"
+    ],
+    "timeouts": {
+      "connect": "10s",
+      "read": "30s"
+    },
+    "max_body_bytes": 10485760
+  },
+  "cors": {
+    "allowed_origins": [],
+    "allowed_headers": []
+  },
+  "users": {
+    "name": {
+      "claims": [
+        "name",
+        "preferred_username"
+      ],
+      "sync": "first_sign_in"
+    }
+  },
+  "route_checks": {
+    "path": "/access/routes"
+  }
+}

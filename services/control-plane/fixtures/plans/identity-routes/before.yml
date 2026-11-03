@@ -1,3 +1,4 @@
+# Identity's file as generated, cut short.
 kinds:
   organization:
     path: /orgs/{organization}
@@ -14,11 +15,37 @@ roles:
     permissions: [organization:read]
     bindable_at: [organization]
 creator_role: admin
+defaults:
+  rate_limit: [default]
 rate_limits:
   default: { requests: 60, window_seconds: 60 }
 services:
   identity:
     url: http://identity:3000
+    scopes:
+      organization:
+        upstream_prefix: /nodes/{organization.id}
+        routes:
+          - path: /
+            methods:
+              GET: { required_permissions: [organization:read] }
+              PATCH: { required_permissions: [organization:write] }
+              DELETE: { required_permissions: [organization:delete] }
+          - path: /projects
+            upstream: /nodes/{organization.id}/children/project
+            methods:
+              GET: { required_permissions: any_member }
+              POST: { required_permissions: [project:create] }
+      project:
+        upstream_prefix: /nodes/{project.id}
+        routes:
+          - path: /
+            methods:
+              GET: { required_permissions: [project:read] }
+          - path: /invites
+            methods:
+              GET: { required_permissions: [guests:write] }
+              POST: { required_permissions: [guests:write] }
   e10s:
     url: http://e10s:3000
     scopes:

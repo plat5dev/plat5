@@ -19,7 +19,7 @@ use crate::apply::{self, Failure};
 use crate::error::AppError;
 use crate::metrics;
 use crate::schema;
-use crate::store::Report;
+use crate::store::{Reader, Report};
 use crate::AppState;
 
 /// How long an internal read with `after` waits for a newer revision.
@@ -299,14 +299,17 @@ async fn apply_config(
         .into_response())
 }
 
-fn revision_body(r: &crate::store::Revision) -> Value {
-    json!({
+/// A revision's source, for a pull. Read strictly first: a source the
+/// running version can't read is **422**, never served with a field dropped.
+fn revision_body(r: &crate::store::Revision, request_id: &str) -> Result<Value, AppError> {
+    apply::read(&r.config).map_err(|f| failure(request_id, f))?;
+    Ok(json!({
         "revision": r.revision,
         "created_at": r.created_at.to_rfc3339(),
         "request_id": r.request_id,
         "summary": r.summary,
         "config": r.config,
-    })
+    }))
 }
 
 /// The current config, as applied. **404** before the first apply.
@@ -321,7 +324,10 @@ async fn get_config(
         .await
         .map_err(|e| failure(&request_id, Failure::Store(e)))?;
     match current {
-        Some(r) => Ok((with_request_id(request_id), Json(revision_body(&r))).into_response()),
+        Some(r) => {
+            let body = revision_body(&r, &request_id)?;
+            Ok((with_request_id(request_id), Json(body)).into_response())
+        }
         None => Err(AppError::not_found(request_id, "config", "head")),
     }
 }
@@ -366,7 +372,10 @@ async fn get_revision(
         .await
         .map_err(|e| failure(&request_id, Failure::Store(e)))?;
     match revision {
-        Some(r) => Ok((with_request_id(request_id), Json(revision_body(&r))).into_response()),
+        Some(r) => {
+            let body = revision_body(&r, &request_id)?;
+            Ok((with_request_id(request_id), Json(body)).into_response())
+        }
         None => Err(AppError::not_found(
             request_id,
             "revision",
@@ -445,13 +454,14 @@ async fn wait_for_newer(state: &AppState, after: Option<i64>) -> bool {
     state.feed.wait_past(after, LONG_POLL_WAIT).await
 }
 
-/// A feed read: the current config shaped for one reader. **204** when nothing
-/// newer came within the wait; **404** before the first apply.
+/// A feed read: the body stored with the head for one reader, as it was
+/// expanded at apply. **204** when nothing newer came within the wait; **404**
+/// before the first apply.
 async fn feed(
     state: AppState,
     after: Option<i64>,
     headers: &axum::http::HeaderMap,
-    shape: fn(i64, &Value) -> Result<Value, Failure>,
+    reader: Reader,
 ) -> Result<Response, AppError> {
     let request_id = request_id_from_headers(headers);
     if !wait_for_newer(&state, after).await {
@@ -459,14 +469,13 @@ async fn feed(
     }
     let current = state
         .store
-        .current()
+        .current_body(reader)
         .await
         .map_err(|e| failure(&request_id, Failure::Store(e)))?;
-    let Some(current) = current else {
+    let Some((revision, body)) = current else {
         return Err(AppError::not_found(request_id, "config", "head"));
     };
-    let body = shape(current.revision, &current.config).map_err(|f| failure(&request_id, f))?;
-    Ok(Json(body).into_response())
+    Ok(Json(apply::feed_body(revision, &body)).into_response())
 }
 
 async fn gateway_feed(
@@ -486,7 +495,7 @@ async fn gateway_feed(
             tracing::warn!(error = %e, replica = %report.replica, "gateway report not kept");
         }
     }
-    feed(state, query.after, &headers, apply::gateway_feed).await
+    feed(state, query.after, &headers, Reader::Gateway).await
 }
 
 async fn identity_feed(
@@ -494,5 +503,5 @@ async fn identity_feed(
     Query(query): Query<FeedQuery>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, AppError> {
-    feed(state, query.after, &headers, apply::identity_feed).await
+    feed(state, query.after, &headers, Reader::Identity).await
 }

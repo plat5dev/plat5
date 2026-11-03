@@ -1,4 +1,5 @@
-# A role grants a permission no route requires.
+# A role grants a permission no route requires: one checked only through
+# identity's evaluation API. Accepted.
 kinds:
   organization:
     path: /orgs/{organization}
@@ -15,6 +16,8 @@ roles:
     permissions: [organization:read, catalog:delete]
     bindable_at: [organization]
 creator_role: admin
+defaults:
+  rate_limit: [default]
 rate_limits:
   default: { requests: 60, window_seconds: 60 }
 services:

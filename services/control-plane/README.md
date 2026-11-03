@@ -1,6 +1,6 @@
 # Control plane
 
-The deployment's config: settings, kinds, roles, rate limits, CORS and services, applied as one whole config. A dry run answers the plan, and every service expanded as the gateway would be served it; an apply recomputes the plan and writes one revision if its precondition holds. Serves the current config to the gateway and identity over long-poll, with every service's routes expanded.
+The deployment's config: settings, kinds, roles, rate limits, CORS and services, applied as one whole config. A dry run answers the plan, and every service expanded as the gateway would be served it; an apply recomputes the plan and writes one revision if its precondition holds: the source as sent, and the two bodies it serves, expanded with defaults filled in. Serves the head's stored bodies to the gateway and identity over long-poll; a feed read expands nothing. The plan compares the head's stored bodies with the new config's.
 
 Contract: [`../../docs/concepts/config.md`](../../docs/concepts/config.md), [`../../docs/reference/api/control-plane.md`](../../docs/reference/api/control-plane.md), the feeds in [`../../docs/reference/api/internal.md`](../../docs/reference/api/internal.md#control-plane-feeds). The config's JSON Schema is [`../../schema/`](../../schema/), compiled in (`build.rs`).
 
@@ -17,14 +17,13 @@ Contract: [`../../docs/concepts/config.md`](../../docs/concepts/config.md), [`..
 
 | File | |
 |------|--|
-| `src/config.rs` | The config's types |
+| `src/config.rs` | The config's types, refusing unknown fields |
 | `src/schema.rs` | `schema/`, compiled in; errors as field paths |
-| `src/resources.rs` | Identity's and audit's resources at their defaults |
-| `src/expand.rs` | Every service's routes as the gateway matches them, overrides applied |
+| `src/expand.rs` | Every service's routes as the gateway matches them, defaults filled in |
 | `src/rules.rs` | The rules at apply and the route rules, over the expanded routes |
-| `src/plan.rs` | The plan, line by line with before and after, and the apply's precondition |
+| `src/plan.rs` | The plan over the served bodies, line by line with before and after, and the apply's precondition |
 | `src/counts.rs` | Identity's plan counts |
-| `src/apply.rs`, `src/store.rs` | Apply with the head locked; revisions and gateway replica reports in Postgres; the feed bodies |
+| `src/apply.rs`, `src/store.rs` | Apply with the head locked; the feed bodies; revisions (source and bodies) and gateway replica reports in Postgres |
 | `src/feed.rs` | The head readers long-poll |
 | `src/fixtures.rs`, `fixtures/` | The fixtures, below |
 | `src/docgen.rs` | Test: `docs/reference/config/` field tables match the schema |
@@ -35,7 +34,7 @@ Other services' tests read these, so the control plane's tests keep them fresh: 
 
 | Path | |
 |------|--|
-| `fixtures/catalog/plat5.yml` | A config three kinds deep (organization, project, environment) with the example role set and identity's and audit's resources at their defaults |
+| `fixtures/catalog/plat5.yml`, `services/` | A config three kinds deep (organization, project, environment) with the example role set, and identity's and audit's service files as `plat5 routes generate` writes them |
 | `fixtures/catalog/gateway-feed.json` | Derived: `GET /internal/gateway` for it, every route expanded. The gateway's, identity's and audit's tests read it |
 | `fixtures/catalog/identity-feed.json` | Derived: `GET /internal/identity` for it |
 | `fixtures/plans/<case>/before.yml`, `after.yml` | The applied config (absent before the first apply) and the one planned |

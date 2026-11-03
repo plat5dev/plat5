@@ -5,7 +5,7 @@
   "description": "The whole config, as the CLI sends it and the control plane stores it: plat5.yml's keys, with services as a map of service name to service.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["kinds", "roles", "creator_role", "rate_limits"],
+  "required": ["defaults", "kinds", "roles", "creator_role", "rate_limits"],
   "properties": {
     "deletion_grace": { "$ref": "settings.json#/properties/deletion_grace" },
     "reserved_slugs": { "$ref": "settings.json#/properties/reserved_slugs" },
@@ -22,10 +22,6 @@
       "description": "Map of service name → service.",
       "type": "object",
       "propertyNames": { "$ref": "services.json#/$defs/service_name" },
-      "properties": {
-        "identity": { "$ref": "services.json#/$defs/identity" },
-        "audit": { "$ref": "services.json#/$defs/audit" }
-      },
       "additionalProperties": { "$ref": "services.json#/$defs/service" }
     }
   }

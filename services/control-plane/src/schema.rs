@@ -192,7 +192,8 @@ mod tests {
             },
             "roles": { "admin": { "permissions": ["*"], "bindable_at": ["organization", "project"] } },
             "creator_role": "admin",
-            "rate_limits": { "default": { "requests": 60, "window_seconds": 60 } }
+            "defaults": { "rate_limit": ["standard"] },
+            "rate_limits": { "standard": { "requests": 60, "window_seconds": 60 } }
         })
     }
 
@@ -230,8 +231,11 @@ mod tests {
         c["reserved_slugs"] = json!(["new", "settings", "api", "admin"]);
         c["users"] = json!({ "name": { "claims": ["name", "preferred_username"], "sync": "first_sign_in" } });
         c["route_checks"] = json!({ "path": "/access/routes" });
-        c["defaults"] =
-            json!({ "timeouts": { "connect": "10s", "read": "30s" }, "max_body_bytes": 10485760 });
+        c["defaults"] = json!({
+            "rate_limit": ["standard"],
+            "timeouts": { "connect": "10s", "read": "30s" },
+            "max_body_bytes": 10485760
+        });
         c["roles"]["member"] =
             json!({ "permissions": ["organization:read"], "bindable_at": ["organization"] });
         c["roles"]["developer"] = json!({
@@ -240,13 +244,14 @@ mod tests {
             "bindable_at": ["organization", "project"]
         });
         c["rate_limits"] = json!({
-            "default": { "requests": 60, "window_seconds": 60 },
+            "standard": { "requests": 60, "window_seconds": 60 },
             "evals-org": { "requests": 300, "window_seconds": 1, "count_at": "organization" }
         });
         c["cors"] = json!({ "allowed_origins": ["https://app.example.com"], "allowed_headers": ["x-custom"] });
         c["services"] = json!({
-            "identity": { "url": "http://identity:3000" },
-            "audit": { "url": "http://audit:3002" },
+            "identity": { "url": "http://identity:3000", "scopes": { "user": { "routes": [
+                { "path": "/user", "upstream": "/users/{user.id}", "methods": ["GET", "PATCH", "DELETE"] }
+            ] } } },
             "e10s": {
                 "url": "http://e10s:3000",
                 "timeouts": { "connect": "2s", "read": "30s" },
@@ -435,8 +440,26 @@ mod tests {
                 Box::new(|c| c["kinds"]["project"]["segment"] = json!("projects")),
             ),
             (
-                "kinds.project.permission_name",
-                Box::new(|c| c["kinds"]["project"]["permission_name"] = json!("project:x")),
+                "kinds.project",
+                Box::new(|c| c["kinds"]["project"]["permission_name"] = json!("project")),
+            ),
+            (
+                "",
+                Box::new(|c| {
+                    c.as_object_mut().unwrap().remove("defaults");
+                }),
+            ),
+            (
+                "defaults",
+                Box::new(|c| c["defaults"] = json!({ "max_body_bytes": 1 })),
+            ),
+            (
+                "defaults.rate_limit",
+                Box::new(|c| c["defaults"]["rate_limit"] = json!([])),
+            ),
+            (
+                "defaults.rate_limit",
+                Box::new(|c| c["defaults"]["rate_limit"] = json!(["standard", "standard"])),
             ),
             (
                 "kinds.project",
@@ -496,10 +519,9 @@ mod tests {
                     c.as_object_mut().unwrap().remove("rate_limits");
                 }),
             ),
-            ("rate_limits", Box::new(|c| c["rate_limits"] = json!({}))),
             (
-                "rate_limits.default",
-                Box::new(|c| c["rate_limits"]["default"] = json!({ "requests": 1 })),
+                "rate_limits.standard",
+                Box::new(|c| c["rate_limits"]["standard"] = json!({ "requests": 1 })),
             ),
             (
                 "rate_limits.p",
@@ -708,100 +730,32 @@ mod tests {
         c
     }
 
+    // Identity and audit are services like any other: scopes and routes,
+    // and nothing else.
     #[test]
-    fn identity_and_audit_take_resources() {
-        let identity = json!({
-            "url": "http://identity:3000",
-            "resources": {
-                "node": { "methods": { "DELETE": { "required_permissions": ["{kind}:admin"] } } },
-                "invites": false,
-                "membership": { "methods": { "DELETE": false, "GET": null } },
-                "me": { "rate_limit": ["default"] }
-            },
-            "kinds": {
-                "project": { "resources": { "children": { "path": "/apps" } } },
-                "organization": { "resources": { "roots": { "audit": true } } }
-            }
-        });
+    fn identity_and_audit_are_ordinary_services() {
+        let identity = json!({ "url": "http://identity:3000", "scopes": { "organization": {
+            "upstream_prefix": "/nodes/{organization.id}",
+            "routes": [{ "path": "/", "methods": { "GET": { "required_permissions": ["organization:read"] } } }]
+        } } });
         check_config(&with_service("identity", identity.clone())).unwrap();
-        check_config(&with_service("audit", json!({
-            "url": "http://audit:3002",
-            "resources": { "my_events": false },
-            "kinds": { "organization": { "resources": { "events": { "required_permissions": ["org:audit"] } } } }
-        })))
-        .unwrap();
-
-        let bad = |name: &str, mutate: &dyn Fn(&mut Value), path: &str| {
+        for (field, value) in [
+            ("resources", json!({ "invites": false })),
+            ("kinds", json!({ "project": { "resources": {} } })),
+        ] {
             let mut s = identity.clone();
-            if name == "audit" {
-                s = json!({ "url": "http://audit:3002" });
-            }
-            mutate(&mut s);
-            let errs = errors(with_service(name, s));
-            assert!(errs.iter().any(|e| e.path == path), "{path}: {errs:?}");
-        };
-        bad(
-            "identity",
-            &|s| {
-                s["scopes"] =
-                    json!({ "public": { "routes": [{ "path": "/a", "methods": ["GET"] }] } })
-            },
-            "services.identity",
-        );
-        bad(
-            "identity",
-            &|s| s["resources"]["access"] = json!(false),
-            "services.identity.resources",
-        );
-        bad(
-            "identity",
-            &|s| s["resources"]["roots"] = json!(false),
-            "services.identity.resources",
-        );
-        bad(
-            "identity",
-            &|s| s["kinds"]["project"]["resources"]["me"] = json!(false),
-            "services.identity.kinds.project.resources",
-        );
-        bad(
-            "identity",
-            &|s| s["kinds"]["project"]["routes"] = json!([]),
-            "services.identity.kinds.project",
-        );
-        bad(
-            "identity",
-            &|s| s["resources"]["node"]["upstream"] = json!("/x"),
-            "services.identity.resources.node",
-        );
-        bad(
-            "identity",
-            &|s| s["resources"]["node"]["allow_deleted"] = json!(true),
-            "services.identity.resources.node",
-        );
-        bad(
-            "identity",
-            &|s| s["resources"]["node"]["methods"] = json!(["GET"]),
-            "services.identity.resources.node",
-        );
-        bad(
-            "identity",
-            &|s| {
-                s.as_object_mut().unwrap().remove("url");
-            },
-            "services.identity",
-        );
-        bad(
-            "audit",
-            &|s| s["resources"] = json!({ "node": false }),
-            "services.audit.resources",
-        );
-        bad(
-            "audit",
-            &|s| s["kinds"] = json!({ "organization": { "resources": { "my_events": false } } }),
-            "services.audit.kinds.organization.resources",
-        );
-
-        // `{kind}` is for resources only.
+            s[field] = value;
+            assert!(
+                has_error_at(with_service("identity", s), "services.identity"),
+                "{field}"
+            );
+        }
+        // A url alone is no service.
+        assert!(has_error_at(
+            with_service("audit", json!({ "url": "http://audit:3002" })),
+            "services.audit"
+        ));
+        // `{kind}` is no placeholder in a permission.
         let route = with_route(
             "project",
             json!({ "path": "/a", "methods": ["GET"], "required_permissions": ["{kind}:read"] }),
@@ -824,12 +778,12 @@ mod tests {
             "public": { "routes": [{ "path": "/health", "methods": ["GET"] }] }
         } } }))
         );
-        assert!(file.is_valid(&json!({ "identity": { "url": "http://identity:3000" } })));
+        let one = json!({ "url": "http://identity:3000", "scopes": { "public": {
+            "routes": [{ "path": "/health", "methods": ["GET"] }]
+        } } });
+        assert!(file.is_valid(&json!({ "identity": one })));
         assert!(!file.is_valid(&json!({})));
-        assert!(!file.is_valid(&json!({
-            "identity": { "url": "http://identity:3000" },
-            "audit": { "url": "http://audit:3002" }
-        })));
+        assert!(!file.is_valid(&json!({ "identity": one, "audit": one })));
     }
 
     #[test]
@@ -838,7 +792,7 @@ mod tests {
         let mut c = base();
         c["services"] = json!(["services/identity.yml", "services/e10s.yml"]);
         assert!(file.is_valid(&c));
-        c["services"] = json!({ "identity": { "url": "http://identity:3000" } });
+        c["services"] = json!({ "e10s": { "url": "http://e10s:3000" } });
         assert!(!file.is_valid(&c));
     }
 
@@ -855,7 +809,11 @@ mod tests {
 
     #[test]
     fn fixture_configs_pass() {
-        let mut files = vec![fixtures().join("catalog/plat5.yml")];
+        check_config(&crate::fixtures::flat(
+            &fixtures().join("catalog/plat5.yml"),
+        ))
+        .unwrap_or_else(|e| panic!("catalog: {e:?}"));
+        let mut files = Vec::new();
         for case in std::fs::read_dir(fixtures().join("plans")).unwrap() {
             let case = case.unwrap().path();
             for name in ["before.yml", "after.yml"] {

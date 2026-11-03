@@ -9,6 +9,8 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Postgres, Transaction};
 use tracing::info;
 
+use crate::apply::Served;
+
 const SCHEMA: &str = "control_plane";
 const MIGRATIONS: &[(&str, &str)] = &[("001_init", include_str!("../migrations/001_init.sql"))];
 
@@ -34,7 +36,8 @@ impl From<sqlx::Error> for StoreError {
     }
 }
 
-/// One applied revision: the config as sent, and the plan's summary.
+/// One applied revision: the config as sent, and the plan's summary. The
+/// bodies it serves are read on their own ([`Store::current_body`]).
 #[derive(Debug, Clone)]
 pub struct Revision {
     pub revision: i64,
@@ -44,11 +47,28 @@ pub struct Revision {
     pub created_at: DateTime<Utc>,
 }
 
-/// The head, locked for an apply. Dropped without `write`, it rolls back.
+/// The head, locked for an apply, with the bodies it serves. Dropped without
+/// `write`, it rolls back.
 pub struct Locked {
     tx: Transaction<'static, Postgres>,
     pub revision: i64,
-    pub config: Option<Value>,
+    pub served: Option<Served>,
+}
+
+/// Which feed's body.
+#[derive(Clone, Copy, Debug)]
+pub enum Reader {
+    Gateway,
+    Identity,
+}
+
+impl Reader {
+    fn column(self) -> &'static str {
+        match self {
+            Reader::Gateway => "gateway",
+            Reader::Identity => "identity",
+        }
+    }
 }
 
 impl Store {
@@ -133,35 +153,67 @@ impl Store {
         Ok(rev)
     }
 
-    /// Locks the head for an apply and reads the config it's at.
+    /// The bodies the head serves, read in one snapshot. `None` before the
+    /// first apply.
+    pub async fn served(&self) -> Result<(i64, Option<Served>), StoreError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+        let (head,): (i64,) = sqlx::query_as("SELECT revision FROM config_head")
+            .fetch_one(&mut *tx)
+            .await?;
+        let served = served_in(&mut tx, head).await?;
+        tx.commit().await?;
+        Ok((head, served))
+    }
+
+    /// The head and one feed's body, as stored at apply, in one snapshot.
+    /// `None` before the first apply.
+    pub async fn current_body(&self, reader: Reader) -> Result<Option<(i64, Value)>, StoreError> {
+        let row: Option<(i64, Value)> = sqlx::query_as(&format!(
+            "SELECT r.revision, r.{} FROM config_head h
+             JOIN config_revisions r ON r.revision = h.revision",
+            reader.column()
+        ))
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// Locks the head for an apply and reads the bodies it serves.
     pub async fn lock(&self) -> Result<Locked, StoreError> {
         let mut tx = self.pool.begin().await?;
         let (revision,): (i64,) = sqlx::query_as("SELECT revision FROM config_head FOR UPDATE")
             .fetch_one(&mut *tx)
             .await?;
-        let config = revision_in(&mut tx, revision).await?.map(|r| r.config);
+        let served = served_in(&mut tx, revision).await?;
         Ok(Locked {
             tx,
             revision,
-            config,
+            served,
         })
     }
 
-    /// Writes the next revision and moves the head to it. Returns the revision.
+    /// Writes the next revision, its source and the bodies it serves, and
+    /// moves the head to it. Returns the revision.
     pub async fn write(
         &self,
         mut locked: Locked,
         config: &Value,
+        served: &Served,
         summary: &Value,
         request_id: &str,
     ) -> Result<i64, StoreError> {
         let next = locked.revision + 1;
         sqlx::query(
-            "INSERT INTO config_revisions (revision, config, summary, request_id)
-             VALUES ($1, $2, $3, $4)",
+            "INSERT INTO config_revisions (revision, config, gateway, identity, summary, request_id)
+             VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(next)
         .bind(config)
+        .bind(&served.gateway)
+        .bind(&served.identity)
         .bind(summary)
         .bind(request_id)
         .execute(&mut *locked.tx)
@@ -258,6 +310,18 @@ pub struct Report {
 pub struct Replica {
     pub report: Report,
     pub seen_at: DateTime<Utc>,
+}
+
+async fn served_in(
+    conn: &mut sqlx::PgConnection,
+    revision: i64,
+) -> Result<Option<Served>, StoreError> {
+    let row: Option<(Value, Value)> =
+        sqlx::query_as("SELECT gateway, identity FROM config_revisions WHERE revision = $1")
+            .bind(revision)
+            .fetch_optional(conn)
+            .await?;
+    Ok(row.map(|(gateway, identity)| Served { gateway, identity }))
 }
 
 async fn revision_in(

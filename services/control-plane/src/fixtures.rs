@@ -1,7 +1,7 @@
 //! The fixtures in `fixtures/`, shared with the other services' tests:
 //!
 //! - `catalog/plat5.yml`: a config three kinds deep, with identity's and audit's
-//!   resources at their defaults, and beside it the two feeds the control plane
+//!   routes as `plat5 routes generate` writes them, and beside it the two feeds the control plane
 //!   serves for it, `gateway-feed.json` and `identity-feed.json`. Identity's,
 //!   audit's and the gateway's tests read them.
 //! - `plans/<case>/`: configs and the plan each makes (`plan/tests.rs`).
@@ -24,6 +24,26 @@ pub fn yaml(path: &Path) -> Value {
     let yaml: serde_yaml::Value =
         serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     serde_json::to_value(yaml).unwrap()
+}
+
+/// A `plat5.yml` loaded flat, as the CLI sends it: its `services` list
+/// replaced by a map of service name to service, each read from its file.
+pub fn flat(path: &Path) -> Value {
+    let mut config = yaml(path);
+    let Some(files) = config["services"].as_array().cloned() else {
+        return config;
+    };
+    let base = path.parent().expect("a file has a directory");
+    let mut services = serde_json::Map::new();
+    for file in files {
+        let file = base.join(file.as_str().expect("a service file path"));
+        let Value::Object(one) = yaml(&file) else {
+            panic!("{}: not one service", file.display());
+        };
+        services.extend(one);
+    }
+    config["services"] = Value::Object(services);
+    config
 }
 
 pub fn updating() -> bool {
@@ -57,16 +77,16 @@ pub fn check_json(path: &Path, got: &Value) {
 #[test]
 fn catalog_feeds_are_fresh() {
     let dir = dir().join("catalog");
-    let config = match apply::check(&yaml(&dir.join("plat5.yml"))) {
+    let config = match apply::check(&flat(&dir.join("plat5.yml"))) {
         Ok(c) => c,
         Err(f) => panic!("catalog/plat5.yml: {f:?}"),
     };
     check_json(
         &dir.join("gateway-feed.json"),
-        &apply::gateway_body(1, &config),
+        &apply::feed_body(1, &apply::gateway_body(&config)),
     );
     check_json(
         &dir.join("identity-feed.json"),
-        &apply::identity_body(1, &config),
+        &apply::feed_body(1, &apply::identity_body(&config)),
     );
 }

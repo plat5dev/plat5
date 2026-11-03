@@ -1,15 +1,14 @@
 //! One path for every apply: split off `expect`, check the schema and the
-//! rules, plan against the head, and write if the precondition holds. Also what
-//! the feeds serve.
-
-use std::collections::BTreeMap;
+//! rules, expand, plan the head's stored bodies against the new ones, and
+//! write the source and the bodies if the precondition holds. The feeds serve
+//! the stored bodies; nothing here runs on a feed read.
 
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 
 use crate::config::{Config, APPLY_ONLY_KEYS};
 use crate::counts::Counts;
-use crate::expand::{self, ExpandedService};
+use crate::expand;
 use crate::plan::{self, Expect, Plan, Refused, Summary};
 use crate::rules;
 use crate::schema::{self, FieldError};
@@ -90,17 +89,38 @@ pub fn prepare(body: Value) -> Result<Prepared, Failure> {
 
 /// The schema, then the rules.
 pub fn check(sent: &Value) -> Result<Config, Failure> {
-    schema::check_config(sent).map_err(Failure::Invalid)?;
-    let config: Config = serde_json::from_value(sent.clone())
-        .map_err(|e| Failure::Invalid(vec![FieldError::new("", e.to_string())]))?;
+    let config = read(sent)?;
     rules::check(&config).map_err(Failure::Invalid)?;
     Ok(config)
 }
 
-/// A stored revision's config. It passed every check when it was applied.
-fn stored(config: &Value) -> Result<Config, Failure> {
-    serde_json::from_value(config.clone())
-        .map_err(|e| Failure::Store(StoreError(format!("stored config doesn't parse: {e}"))))
+/// A config read strictly: the schema, then the types, both refusing any field
+/// they don't know (docs/concepts/config.md#the-config). Also how a stored
+/// source is read for a pull, so one the running version can't read fails
+/// loudly instead of losing a field.
+pub fn read(sent: &Value) -> Result<Config, Failure> {
+    schema::check_config(sent).map_err(Failure::Invalid)?;
+    serde_json::from_value(sent.clone())
+        .map_err(|e| Failure::Invalid(vec![FieldError::new("", e.to_string())]))
+}
+
+/// What a revision serves: the gateway's and identity's feed bodies, expanded
+/// with defaults filled in, without their revision. Stored with the revision
+/// at apply; the feeds serve them as stored, and the plan compares them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Served {
+    pub gateway: Value,
+    pub identity: Value,
+}
+
+impl Served {
+    /// The bodies the running version serves for `config`.
+    pub fn of(config: &Config) -> Self {
+        Self {
+            gateway: gateway_body(config),
+            identity: identity_body(config),
+        }
+    }
 }
 
 /// A dry run's answer: the plan, and every service of the planned config as
@@ -109,7 +129,7 @@ fn stored(config: &Value) -> Result<Config, Failure> {
 pub struct DryRun {
     #[serde(flatten)]
     pub plan: Plan,
-    pub services: BTreeMap<String, ExpandedService>,
+    pub services: Value,
 }
 
 pub async fn dry_run(
@@ -117,15 +137,12 @@ pub async fn dry_run(
     counts: &dyn Counts,
     prepared: &Prepared,
 ) -> Result<DryRun, Failure> {
-    let current = store.current().await?;
-    let (revision, config) = match &current {
-        Some(r) => (r.revision, Some(stored(&r.config)?)),
-        None => (store.head().await?, None),
-    };
-    let plan = plan::dry_run(revision, config.as_ref(), &prepared.config, counts).await?;
+    let (revision, current) = store.served().await?;
+    let next = Served::of(&prepared.config);
+    let plan = plan::dry_run(revision, current.as_ref(), &next, counts).await?;
     Ok(DryRun {
         plan,
-        services: expand::expand(&prepared.config),
+        services: next.gateway["services"].clone(),
     })
 }
 
@@ -143,11 +160,11 @@ pub async fn apply(
     request_id: &str,
 ) -> Result<Applied, Failure> {
     let locked = store.lock().await?;
-    let current = locked.config.as_ref().map(stored).transpose()?;
+    let next = Served::of(&prepared.config);
     let plan = plan::apply(
         locked.revision,
-        current.as_ref(),
-        &prepared.config,
+        locked.served.as_ref(),
+        &next,
         prepared.expect.as_ref(),
         counts,
     )
@@ -160,7 +177,7 @@ pub async fn apply(
     }
     let summary = serde_json::to_value(&plan.summary).expect("summary serializes");
     let revision = store
-        .write(locked, &prepared.sent, &summary, request_id)
+        .write(locked, &prepared.sent, &next, &summary, request_id)
         .await?;
     Ok(Applied {
         revision,
@@ -168,36 +185,40 @@ pub async fn apply(
     })
 }
 
-/// `GET /internal/gateway`: kinds, every service's routes expanded, rate
-/// limits, CORS, `users` (the IdP name claims) and `route_checks`, with
-/// defaults filled in.
-pub fn gateway_feed(revision: i64, config: &Value) -> Result<Value, Failure> {
-    let c = stored(config)?;
-    Ok(gateway_body(revision, &c))
+/// A stored body as a feed serves it: `revision` first, then the body.
+pub fn feed_body(revision: i64, body: &Value) -> Value {
+    let mut out = Map::new();
+    out.insert("revision".into(), json!(revision));
+    if let Value::Object(fields) = body {
+        out.extend(
+            fields
+                .iter()
+                .filter(|(k, _)| *k != "revision")
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
+    }
+    Value::Object(out)
 }
 
-pub fn gateway_body(revision: i64, c: &Config) -> Value {
+/// The body of `GET /internal/gateway`: kinds, every service's routes
+/// expanded, rate limits, `defaults`, CORS, `users` (the IdP name claims) and
+/// `route_checks`, with defaults filled in.
+pub fn gateway_body(c: &Config) -> Value {
     json!({
-        "revision": revision,
         "kinds": c.kinds,
         "services": expand::expand(c),
         "rate_limits": c.rate_limits,
+        "defaults": c.defaults.filled(),
         "cors": c.cors,
         "users": c.users,
         "route_checks": c.route_checks,
     })
 }
 
-/// `GET /internal/identity`: the settings, kinds and roles, with defaults
-/// filled in. Roles as written, with their includes.
-pub fn identity_feed(revision: i64, config: &Value) -> Result<Value, Failure> {
-    let c = stored(config)?;
-    Ok(identity_body(revision, &c))
-}
-
-pub fn identity_body(revision: i64, c: &Config) -> Value {
+/// The body of `GET /internal/identity`: the settings, kinds and roles, with
+/// defaults filled in. Roles as written, with their includes.
+pub fn identity_body(c: &Config) -> Value {
     json!({
-        "revision": revision,
         "deletion_grace": c.deletion_grace,
         "reserved_slugs": c.reserved_slugs,
         "users": c.users,
@@ -244,9 +265,17 @@ mod tests {
         assert_eq!(errs[0].path, "");
     }
 
+    fn gateway_feed(revision: i64, config: &Value) -> Value {
+        feed_body(revision, &gateway_body(&check(config).unwrap()))
+    }
+
+    fn identity_feed(revision: i64, config: &Value) -> Value {
+        feed_body(revision, &identity_body(&check(config).unwrap()))
+    }
+
     #[test]
     fn feeds_fill_defaults_and_expand_routes() {
-        let gateway = gateway_feed(4, &base()).unwrap();
+        let gateway = gateway_feed(4, &base());
         assert_eq!(gateway["revision"], json!(4));
         assert_eq!(
             gateway["cors"],
@@ -255,6 +284,10 @@ mod tests {
         assert_eq!(
             gateway["rate_limits"],
             json!({ "default": { "requests": 60, "window_seconds": 60 } })
+        );
+        assert_eq!(
+            gateway["defaults"],
+            json!({ "rate_limit": ["default"], "timeouts": { "connect": "10s", "read": "30s" }, "max_body_bytes": 10485760 })
         );
         let users = json!({ "name": { "claims": ["name", "preferred_username"], "sync": "first_sign_in" } });
         assert_eq!(gateway["users"], users);
@@ -272,7 +305,7 @@ mod tests {
             })
         );
         assert_eq!(e10s["routes"][0]["required_permissions"], Value::Null);
-        let identity = identity_feed(4, &base()).unwrap();
+        let identity = identity_feed(4, &base());
         assert_eq!(identity["deletion_grace"], json!("30d"));
         assert_eq!(identity["reserved_slugs"], json!([]));
         assert_eq!(identity["users"], users);
@@ -286,10 +319,36 @@ mod tests {
         config["users"] = json!({ "name": { "sync": "each_sign_in" } });
         let want =
             json!({ "name": { "claims": ["name", "preferred_username"], "sync": "each_sign_in" } });
-        assert_eq!(gateway_feed(1, &config).unwrap()["users"], want);
-        assert_eq!(identity_feed(1, &config).unwrap()["users"], want);
+        assert_eq!(gateway_feed(1, &config)["users"], want);
+        assert_eq!(identity_feed(1, &config)["users"], want);
         config["users"] = json!({ "name": { "claims": ["profile.name"] } });
         let want = json!({ "name": { "claims": ["profile.name"], "sync": "first_sign_in" } });
-        assert_eq!(identity_feed(1, &config).unwrap()["users"], want);
+        assert_eq!(identity_feed(1, &config)["users"], want);
+    }
+
+    // Unknown fields fail wherever a config is read, nested ones included.
+    #[test]
+    fn unknown_fields_fail() {
+        for (at, set) in [
+            ("top", json!({ "bogus": 1 })),
+            (
+                "kind",
+                json!({ "kinds": { "organization": { "path": "/orgs/{organization}", "permission_name": "org" } } }),
+            ),
+            (
+                "defaults",
+                json!({ "defaults": { "rate_limit": ["default"], "burst": 1 } }),
+            ),
+        ] {
+            let mut config = base();
+            for (k, v) in set.as_object().unwrap() {
+                config[k] = v.clone();
+            }
+            assert!(
+                matches!(read(&config), Err(Failure::Invalid(_))),
+                "{at}: read"
+            );
+            assert!(matches!(check(&config), Err(Failure::Invalid(_))), "{at}");
+        }
     }
 }

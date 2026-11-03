@@ -1,8 +1,9 @@
 # The config the shared fixtures are made from: one parent per kind, a chain
-# three kinds deep, the example role set, and identity's and audit's resources
-# at their defaults. The control plane's tests write what it serves for this
-# config beside it (UPDATE_FIXTURES=1 cargo test catalog); identity's, audit's
-# and the gateway's tests read those files.
+# three kinds deep, the example role set, and identity's and audit's routes in
+# services/, as plat5 routes generate writes them for these kinds. The control
+# plane's tests write what it serves for this config beside it
+# (UPDATE_FIXTURES=1 cargo test catalog); identity's, audit's and the gateway's
+# tests read those files.
 deletion_grace: 30d
 reserved_slugs: [new, settings, api, admin]
 users:
@@ -34,9 +35,9 @@ roles:
     bindable_at: [organization, project]
 creator_role: admin
 rate_limits:
-  default: { requests: 60, window_seconds: 60 }
+  standard: { requests: 60, window_seconds: 60 }
+defaults:
+  rate_limit: [standard]
 services:
-  identity:
-    url: http://identity:3000
-  audit:
-    url: http://audit:3002
+  - services/identity.yml
+  - services/audit.yml

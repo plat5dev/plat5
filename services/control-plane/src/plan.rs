@@ -1,16 +1,20 @@
 //! The plan: what an apply would change, line by line with what changed field by
 //! field, and the apply's precondition (docs/concepts/config.md#plan-and-apply).
-//! Pure but for identity's counts, so the store only locks, reads and writes
-//! around it.
+//! It compares what readers are served: before is the head's stored bodies,
+//! after the new config's, expanded by the running version. So after an
+//! upgrade, a plan of unchanged files shows what the new version serves
+//! differently. Pure but for identity's counts, so the store only locks, reads
+//! and writes around it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use crate::config::{Config, Defaults, RouteChecks, Users, DEFAULT_DELETION_GRACE};
+use crate::apply::Served;
+use crate::config::{RouteChecks, Users, DEFAULT_DELETION_GRACE};
 use crate::counts::{Counts, CountsRequest, CountsResponse};
-use crate::expand::{self, ExpandedService};
+use crate::expand;
 use crate::schema::FieldError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -116,12 +120,12 @@ pub enum Refused {
 
 const KIND_NOT_EMPTY: &str = "kind_not_empty";
 
-/// The dry run: the plan against the config at `revision` (`None` before the
-/// first apply). Writes nothing and ignores `expect`.
+/// The dry run: the plan against the bodies served at `revision` (`None`
+/// before the first apply). Writes nothing and ignores `expect`.
 pub async fn dry_run(
     revision: i64,
-    current: Option<&Config>,
-    next: &Config,
+    current: Option<&Served>,
+    next: &Served,
     counts: &dyn Counts,
 ) -> Result<Plan, Refused> {
     make_plan(revision, current, next, counts).await
@@ -132,8 +136,8 @@ pub async fn dry_run(
 /// writes.
 pub async fn apply(
     revision: i64,
-    current: Option<&Config>,
-    next: &Config,
+    current: Option<&Served>,
+    next: &Served,
     expect: Option<&Expect>,
     counts: &dyn Counts,
 ) -> Result<Plan, Refused> {
@@ -184,24 +188,34 @@ pub async fn apply(
     Ok(plan)
 }
 
+/// A map of named things in a served body, each as served.
+fn named(body: &Value, key: &str) -> BTreeMap<String, Value> {
+    body.get(key)
+        .and_then(Value::as_object)
+        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        .unwrap_or_default()
+}
+
 async fn make_plan(
     revision: i64,
-    current: Option<&Config>,
-    next: &Config,
+    current: Option<&Served>,
+    next: &Served,
     counts: &dyn Counts,
 ) -> Result<Plan, Refused> {
-    let empty_kinds = BTreeMap::new();
-    let old_kinds = current.map_or(&empty_kinds, |c| &c.kinds);
+    let old_kinds = current
+        .map(|c| named(&c.gateway, "kinds"))
+        .unwrap_or_default();
+    let new_kinds = named(&next.gateway, "kinds");
+    let parent = |k: &Value| k.get("parent").cloned();
 
     // What needs identity: kinds removed, and kinds under a new parent.
     let removed: BTreeSet<&String> = old_kinds
         .keys()
-        .filter(|k| !next.kinds.contains_key(*k))
+        .filter(|k| !new_kinds.contains_key(*k))
         .collect();
-    let moved: BTreeSet<&String> = next
-        .kinds
+    let moved: BTreeSet<&String> = new_kinds
         .iter()
-        .filter(|(k, kind)| old_kinds.get(*k).is_some_and(|o| o.parent != kind.parent))
+        .filter(|(k, kind)| old_kinds.get(*k).is_some_and(|o| parent(o) != parent(kind)))
         .map(|(k, _)| k)
         .collect();
     let request = CountsRequest {
@@ -219,16 +233,7 @@ async fn make_plan(
 
     let mut changes = Vec::new();
 
-    let old: BTreeMap<String, Value> = old_kinds
-        .iter()
-        .map(|(k, v)| (k.clone(), json!(v)))
-        .collect();
-    let new: BTreeMap<String, Value> = next
-        .kinds
-        .iter()
-        .map(|(k, v)| (k.clone(), json!(v)))
-        .collect();
-    for mut c in diff_map(What::Kind, &old, &new) {
+    for mut c in diff_map(What::Kind, &old_kinds, &new_kinds) {
         let needs_empty = match c.op {
             Op::Remove => true,
             Op::Change => moved.contains(&c.name),
@@ -262,41 +267,39 @@ async fn make_plan(
         }
     }
 
-    let roles = |c: &Config| -> BTreeMap<String, Value> {
-        c.roles.iter().map(|(k, v)| (k.clone(), json!(v))).collect()
-    };
     changes.extend(diff_map(
         What::Role,
-        &current.map(roles).unwrap_or_default(),
-        &roles(next),
+        &current
+            .map(|c| named(&c.identity, "roles"))
+            .unwrap_or_default(),
+        &named(&next.identity, "roles"),
     ));
-
-    let policies = |c: &Config| -> BTreeMap<String, Value> {
-        c.rate_limits
-            .iter()
-            .map(|(k, v)| (k.clone(), json!(v)))
-            .collect()
-    };
     changes.extend(diff_map(
         What::RateLimit,
-        &current.map(policies).unwrap_or_default(),
-        &policies(next),
+        &current
+            .map(|c| named(&c.gateway, "rate_limits"))
+            .unwrap_or_default(),
+        &named(&next.gateway, "rate_limits"),
     ));
 
-    let old_cors = json!(current.map(|c| c.cors.clone()).unwrap_or_default());
-    let new_cors = json!(next.cors);
-    if old_cors != new_cors {
-        let op = if current.is_some() {
-            Op::Change
-        } else {
-            Op::Add
-        };
-        let before = current.is_some().then_some(&old_cors);
-        changes.push(line(op, What::Cors, "cors", before, Some(&new_cors)));
+    let new_cors = next.gateway["cors"].clone();
+    match current.map(|c| &c.gateway["cors"]) {
+        Some(old) if *old == new_cors => {}
+        Some(old) => changes.push(line(
+            Op::Change,
+            What::Cors,
+            "cors",
+            Some(old),
+            Some(&new_cors),
+        )),
+        None if new_cors == json!({ "allowed_origins": [], "allowed_headers": [] }) => {}
+        None => changes.push(line(Op::Add, What::Cors, "cors", None, Some(&new_cors))),
     }
 
-    let old_services = current.map(expand::expand).unwrap_or_default();
-    let new_services = expand::expand(next);
+    let old_services = current
+        .map(|c| named(&c.gateway, "services"))
+        .unwrap_or_default();
+    let new_services = named(&next.gateway, "services");
     for (name, service) in &new_services {
         match old_services.get(name) {
             None => {
@@ -337,42 +340,40 @@ async fn make_plan(
     })
 }
 
-/// The settings by name, each with its default filled in.
-fn settings(c: &Config) -> BTreeMap<String, Value> {
-    let mut slugs = c.reserved_slugs.clone();
-    slugs.sort();
-    let (timeouts, max_body_bytes) = c.defaults.filled();
+/// The settings by name, as served, with their defaults filled in.
+fn settings(s: &Served) -> BTreeMap<String, Value> {
+    let mut slugs: Vec<Value> = s.identity["reserved_slugs"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    slugs.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
     BTreeMap::from([
-        ("deletion_grace".into(), json!(c.deletion_grace)),
-        ("reserved_slugs".into(), json!(slugs)),
-        ("users".into(), json!(c.users)),
-        ("route_checks".into(), json!(c.route_checks)),
         (
-            "defaults".into(),
-            json!({ "timeouts": timeouts, "max_body_bytes": max_body_bytes }),
+            "deletion_grace".into(),
+            s.identity["deletion_grace"].clone(),
         ),
-        ("creator_role".into(), json!(c.creator_role)),
+        ("reserved_slugs".into(), Value::Array(slugs)),
+        ("users".into(), s.gateway["users"].clone()),
+        ("route_checks".into(), s.gateway["route_checks"].clone()),
+        ("defaults".into(), s.gateway["defaults"].clone()),
+        ("creator_role".into(), s.identity["creator_role"].clone()),
     ])
 }
 
-/// What each setting is before the first apply. `creator_role` has no default.
+/// What each setting is before the first apply. `defaults` and `creator_role`
+/// have none: every config states them.
 fn default_settings() -> BTreeMap<String, Value> {
-    let (timeouts, max_body_bytes) = Defaults::default().filled();
     BTreeMap::from([
         ("deletion_grace".into(), json!(DEFAULT_DELETION_GRACE)),
         ("reserved_slugs".into(), json!([])),
         ("users".into(), json!(Users::default())),
         ("route_checks".into(), json!(RouteChecks::default())),
-        (
-            "defaults".into(),
-            json!({ "timeouts": timeouts, "max_body_bytes": max_body_bytes }),
-        ),
     ])
 }
 
 /// A service's own fields, as the gateway is served them.
-fn own(s: &ExpandedService) -> Value {
-    json!({ "url": s.url, "timeouts": s.timeouts, "max_body_bytes": s.max_body_bytes })
+fn own(s: &Value) -> Value {
+    json!({ "url": s["url"], "timeouts": s["timeouts"], "max_body_bytes": s["max_body_bytes"] })
 }
 
 /// A line. On a change, `before` and `after` keep only the fields that differ.
@@ -430,23 +431,20 @@ fn diff_map(
 }
 
 /// A service's expanded routes that differ, by path and method.
-fn diff_routes(old: Option<&ExpandedService>, new: Option<&ExpandedService>) -> Vec<RouteChange> {
-    let rows = |s: Option<&ExpandedService>| -> BTreeMap<(String, usize, String), Value> {
-        s.map_or(&[][..], |s| &s.routes)
+fn diff_routes(old: Option<&Value>, new: Option<&Value>) -> Vec<RouteChange> {
+    let rows = |s: Option<&Value>| -> BTreeMap<(String, usize, String), Value> {
+        s.and_then(|s| s["routes"].as_array())
+            .map_or(&[][..], Vec::as_slice)
             .iter()
             .map(|r| {
-                let mut v = json!(r);
-                let fields = v.as_object_mut().expect("a route is an object");
-                fields.shift_remove("path");
-                fields.shift_remove("method");
-                (
-                    (
-                        r.path.clone(),
-                        expand::verb_order(&r.method),
-                        r.method.clone(),
-                    ),
-                    v,
-                )
+                let mut v = r.clone();
+                let path = r["path"].as_str().unwrap_or_default().to_string();
+                let method = r["method"].as_str().unwrap_or_default().to_string();
+                if let Some(fields) = v.as_object_mut() {
+                    fields.shift_remove("path");
+                    fields.shift_remove("method");
+                }
+                ((path, expand::verb_order(&method), method), v)
             })
             .collect()
     };

@@ -2,20 +2,16 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://plat5.com/schema/services.json",
   "title": "Service file",
-  "description": "One service, keyed by its name: a service file listed in plat5.yml's services. `identity` and `audit` take resources instead of scopes.",
+  "description": "One service, keyed by its name: a service file listed in plat5.yml's services.",
   "type": "object",
   "minProperties": 1,
   "maxProperties": 1,
   "propertyNames": { "$ref": "#/$defs/service_name" },
-  "properties": {
-    "identity": { "$ref": "#/$defs/identity" },
-    "audit": { "$ref": "#/$defs/audit" }
-  },
   "additionalProperties": { "$ref": "#/$defs/service" },
   "$defs": {
     "service_name": {
       "title": "service name",
-      "description": "The file's one top-level key: 1–128 of `[A-Za-z0-9._-]`. `identity` and `audit` take [resources](resources.md). The `service` on every audit event.",
+      "description": "The file's one top-level key: 1–128 of `[A-Za-z0-9._-]`. No name is reserved. The `service` on every audit event.",
       "type": "string",
       "pattern": "^[A-Za-z0-9._-]{1,128}$"
     },
@@ -115,7 +111,7 @@
         },
         "rate_limit": {
           "title": "rate_limit",
-          "description": "Policies from `rate_limits` ([rate limits](rate-limits.md)). Omitted: `[default]`. `false`: none.",
+          "description": "Policies from `rate_limits` ([rate limits](rate-limits.md)). Omitted: the policies `defaults.rate_limit` names. `false`: none.",
           "$ref": "#/$defs/rate_limit"
         },
         "audit": {
@@ -174,136 +170,6 @@
           "items": { "$ref": "rate_limits.json#/$defs/policy_name" }
         },
         { "const": false }
-      ]
-    },
-    "identity": {
-      "title": "identity",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["url"],
-      "properties": {
-        "url": { "$ref": "#/$defs/service/properties/url" },
-        "timeouts": { "$ref": "#/$defs/service/properties/timeouts" },
-        "max_body_bytes": { "$ref": "#/$defs/service/properties/max_body_bytes" },
-        "resources": {
-          "description": "Overrides for every kind, and for the user-scope resources.",
-          "type": "object",
-          "propertyNames": {
-            "enum": [
-              "node", "restore", "children", "membership", "bindings", "binding",
-              "service_accounts", "service_account", "keys", "key", "invites", "invite",
-              "roles", "members", "member", "me", "my_nodes", "my_keys", "my_key", "redeem"
-            ]
-          },
-          "additionalProperties": { "$ref": "#/$defs/resource" }
-        },
-        "kinds": {
-          "description": "Overrides for one kind. They apply after `resources`.",
-          "type": "object",
-          "propertyNames": { "$ref": "kinds.json#/$defs/kind_name" },
-          "additionalProperties": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "resources": {
-                "type": "object",
-                "propertyNames": {
-                  "enum": [
-                    "node", "restore", "children", "membership", "bindings", "binding",
-                    "service_accounts", "service_account", "keys", "key", "invites", "invite",
-                    "roles", "members", "member", "roots"
-                  ]
-                },
-                "additionalProperties": { "$ref": "#/$defs/resource" }
-              }
-            }
-          }
-        }
-      }
-    },
-    "audit": {
-      "title": "audit",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["url"],
-      "properties": {
-        "url": { "$ref": "#/$defs/service/properties/url" },
-        "timeouts": { "$ref": "#/$defs/service/properties/timeouts" },
-        "max_body_bytes": { "$ref": "#/$defs/service/properties/max_body_bytes" },
-        "resources": {
-          "description": "Overrides for every kind, and for the user-scope resources.",
-          "type": "object",
-          "propertyNames": { "enum": ["events", "my_events"] },
-          "additionalProperties": { "$ref": "#/$defs/resource" }
-        },
-        "kinds": {
-          "description": "Overrides for one kind. They apply after `resources`.",
-          "type": "object",
-          "propertyNames": { "$ref": "kinds.json#/$defs/kind_name" },
-          "additionalProperties": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "resources": {
-                "type": "object",
-                "propertyNames": { "enum": ["events"] },
-                "additionalProperties": { "$ref": "#/$defs/resource" }
-              }
-            }
-          }
-        }
-      }
-    },
-    "resource": {
-      "description": "An override of one resource's default: `false` removes it. Each key replaces its default: `path`, one verb under `methods` (`false` removes the verb), or a route-level field. Permissions can use `{kind}`.",
-      "anyOf": [
-        { "const": false },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "path": { "$ref": "#/$defs/path" },
-            "methods": {
-              "type": "object",
-              "propertyNames": { "$ref": "#/$defs/verb" },
-              "additionalProperties": {
-                "anyOf": [
-                  { "const": false },
-                  { "type": "null" },
-                  { "$ref": "#/$defs/resource_method" }
-                ]
-              }
-            },
-            "required_permissions": { "$ref": "#/$defs/resource_permissions" },
-            "rate_limit": { "$ref": "#/$defs/rate_limit" },
-            "audit": { "type": "boolean" }
-          }
-        }
-      ]
-    },
-    "resource_method": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "required_permissions": { "$ref": "#/$defs/resource_permissions" },
-        "rate_limit": { "$ref": "#/$defs/rate_limit" },
-        "audit": { "type": "boolean" }
-      }
-    },
-    "resource_permissions": {
-      "oneOf": [
-        {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 32,
-          "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "maxLength": 64,
-            "pattern": "^(?:[a-z0-9:._-]|\\{kind\\})+$"
-          }
-        },
-        { "const": "any_member" }
       ]
     }
   }

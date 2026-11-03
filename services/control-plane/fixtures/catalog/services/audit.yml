@@ -1,0 +1,37 @@
+# Audit's routes at the gateway, for every kind in plat5.yml. plat5 routes
+# generate wrote them (plat5 docs/reference/config/generated-routes.md); from
+# here this is an ordinary service file, served as written.
+#
+# To drop a route, delete it, or delete one verb under its methods. Edit a
+# path or a permission the same way.
+#
+# Regenerate after adding or removing a kind, or changing a kind's path or
+# list_permission: plat5 routes generate. It overwrites this file, keeping only
+# url, timeouts and max_body_bytes, so review the diff and delete again what
+# you had dropped.
+audit:
+  url: http://audit:3002
+  scopes:
+    organization:
+      upstream_prefix: /nodes/{organization.id}
+      routes:
+        - path: /audit-events
+          methods:
+            GET: { required_permissions: [audit:read] }
+    project:
+      upstream_prefix: /nodes/{project.id}
+      routes:
+        - path: /audit-events
+          methods:
+            GET: { required_permissions: [audit:read] }
+    environment:
+      upstream_prefix: /nodes/{environment.id}
+      routes:
+        - path: /audit-events
+          methods:
+            GET: { required_permissions: [audit:read] }
+    user:
+      routes:
+        - path: /user/audit-events
+          upstream: /users/{user.id}/audit-events
+          methods: [GET]

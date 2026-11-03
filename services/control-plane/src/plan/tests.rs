@@ -26,9 +26,10 @@ fn plans() -> PathBuf {
     fixtures::dir().join("plans")
 }
 
-fn load(path: &Path) -> Config {
+/// The bodies the running version serves for the config at `path`.
+fn load(path: &Path) -> Served {
     match apply::check(&fixtures::yaml(path)) {
-        Ok(c) => c,
+        Ok(c) => Served::of(&c),
         Err(f) => panic!("{}: {f:?}", path.display()),
     }
 }
@@ -56,7 +57,7 @@ async fn fixture_configs_plan() {
             case.join("refused.json"),
         );
         let after = match apply::check(&fixtures::yaml(&case.join("after.yml"))) {
-            Ok(c) => c,
+            Ok(c) => Served::of(&c),
             Err(Failure::Invalid(errs)) => {
                 fixtures::check_json(&refused_file, &json!(errs));
                 if fixtures::updating() {
@@ -83,11 +84,11 @@ async fn fixture_configs_plan() {
             .await
             .unwrap_or_else(|e| panic!("{name}: {e:?}"));
         fixtures::check_json(&plan_file, &serde_json::to_value(&plan).unwrap());
-        fixtures::check_json(&feed_file, &apply::gateway_body(revision + 1, &after));
+        fixtures::check_json(&feed_file, &apply::feed_body(revision + 1, &after.gateway));
     }
 }
 
-fn case(name: &str) -> (Config, Config, CountsResponse) {
+fn case(name: &str) -> (Served, Served, CountsResponse) {
     let dir = plans().join(name);
     (
         load(&dir.join("before.yml")),
@@ -204,12 +205,7 @@ async fn identity_is_asked_only_when_the_plan_needs_counts() {
     apply(0, None, &after, Some(&Expect { revision: 0 }), &NoCounts)
         .await
         .unwrap();
-    for name in [
-        "roles",
-        "services",
-        "add-kind-at-bottom",
-        "identity-overrides",
-    ] {
+    for name in ["roles", "services", "add-kind-at-bottom", "identity-routes"] {
         let (before, after, _) = case(name);
         dry_run(7, Some(&before), &after, &NoCounts)
             .await
@@ -225,6 +221,32 @@ async fn identity_is_asked_only_when_the_plan_needs_counts() {
             "{name}"
         );
     }
+}
+
+// After an upgrade, the stored bodies are what an older version expanded. A
+// plan of the same config compares them with what the running version
+// expands, and shows the difference.
+#[tokio::test]
+async fn a_plan_compares_the_stored_bodies_with_new_ones() {
+    let after = load(&plans().join("services/after.yml"));
+    let mut stored = after.clone();
+    stored.gateway["services"]["e10s"]["routes"][0]["rate_limit"] = json!([]);
+    stored.gateway["defaults"]["max_body_bytes"] = json!(1);
+    let plan = dry_run(7, Some(&stored), &after, &NoCounts).await.unwrap();
+    assert_eq!(plan.summary.change, 2, "{plan:?}");
+    let defaults = &plan.changes[0];
+    assert_eq!(
+        (defaults.what, defaults.name.as_str()),
+        (What::Setting, "defaults")
+    );
+    assert_eq!(defaults.before, Some(json!({ "max_body_bytes": 1 })));
+    let routes = plan.changes[1].routes.as_ref().unwrap();
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0].before, Some(json!({ "rate_limit": [] })));
+    assert_eq!(routes[0].after, Some(json!({ "rate_limit": ["default"] })));
+    // The same bodies plan nothing.
+    let plan = dry_run(7, Some(&after), &after, &NoCounts).await.unwrap();
+    assert!(plan.is_empty());
 }
 
 #[test]

@@ -13,7 +13,6 @@ mod feed;
 mod fixtures;
 mod metrics;
 mod plan;
-mod resources;
 mod rules;
 mod schema;
 mod store;

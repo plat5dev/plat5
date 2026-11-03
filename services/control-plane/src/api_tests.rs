@@ -387,8 +387,8 @@ async fn plan_and_apply_against_postgres() {
     );
     assert!(gateway[1]["seen_at"].is_string());
 
-    // Identity's and audit's routes too: expanded from their resources.
-    let catalog = fixtures::yaml(&fixtures::dir().join("catalog/plat5.yml"));
+    // Identity's and audit's routes too: their files, served as written.
+    let catalog = fixtures::flat(&fixtures::dir().join("catalog/plat5.yml"));
     let (status, plan) = api
         .admin("POST", "/apply?dry_run=true", Some(catalog.clone()))
         .await;
@@ -399,11 +399,106 @@ async fn plan_and_apply_against_postgres() {
         .admin(
             "POST",
             "/apply",
-            Some(with(catalog, json!({ "expect": { "revision": 2 } }))),
+            Some(with(
+                catalog.clone(),
+                json!({ "expect": { "revision": 2 } }),
+            )),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{applied}");
     let (_, gateway) = api.feed("/internal/gateway?after=2").await;
     assert_eq!(gateway["revision"], json!(3));
     assert_eq!(plan["services"], gateway["services"]);
+    assert_eq!(gateway["defaults"]["rate_limit"], json!(["standard"]));
+
+    // An upgrade: revision 3's bodies as an older version expanded them. The
+    // feeds serve what's stored, and a plan of the same files shows what the
+    // running version serves differently.
+    let pool = sqlx::PgPool::connect(&url).await.unwrap();
+    let real = gateway["services"]["identity"]["routes"][0].clone();
+    sqlx::query(
+        "UPDATE control_plane.config_revisions
+         SET gateway = jsonb_set(gateway, '{services,identity,routes,0,upstream}', '\"/older/expansion\"')
+         WHERE revision = 3",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (_, gateway) = api.feed("/internal/gateway").await;
+    assert_eq!(gateway["revision"], json!(3));
+    assert_eq!(
+        gateway["services"]["identity"]["routes"][0]["upstream"],
+        json!("/older/expansion")
+    );
+    let (status, plan) = api
+        .admin("POST", "/apply?dry_run=true", Some(catalog.clone()))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{plan}");
+    assert_eq!(
+        plan["summary"],
+        json!({ "add": 0, "change": 1, "remove": 0, "blocked": 0 })
+    );
+    assert_eq!(
+        plan["changes"][0]["routes"],
+        json!([{
+            "op": "change", "method": real["method"], "path": real["path"],
+            "before": { "upstream": "/older/expansion" },
+            "after": { "upstream": real["upstream"] }
+        }])
+    );
+    let (status, applied) = api
+        .admin(
+            "POST",
+            "/apply",
+            Some(with(
+                catalog.clone(),
+                json!({ "expect": { "revision": 3 } }),
+            )),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(applied["revision"], json!(4));
+    let (_, gateway) = api.feed("/internal/gateway?after=3").await;
+    assert_eq!(gateway["services"]["identity"]["routes"][0], real);
+    // Applied, the same files plan empty and write nothing.
+    let (_, plan) = api
+        .admin("POST", "/apply?dry_run=true", Some(catalog.clone()))
+        .await;
+    assert_eq!(plan["changes"], json!([]));
+    let (_, again) = api
+        .admin(
+            "POST",
+            "/apply",
+            Some(with(
+                catalog.clone(),
+                json!({ "expect": { "revision": 4 } }),
+            )),
+        )
+        .await;
+    assert_eq!(again["revision"], json!(4));
+
+    // Unknown fields fail: in an apply and a plan, and in a stored source a
+    // pull reads.
+    let unknown = with(
+        catalog.clone(),
+        json!({ "bogus": 1, "expect": { "revision": 4 } }),
+    );
+    let (status, err) = api.admin("POST", "/apply", Some(unknown.clone())).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{err}");
+    let (status, _) = api
+        .admin("POST", "/apply?dry_run=true", Some(unknown))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    sqlx::query(
+        "UPDATE control_plane.config_revisions
+         SET config = jsonb_set(config, '{kinds,organization,permission_name}', '\"org\"')
+         WHERE revision = 1",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (status, err) = api.admin("GET", "/revisions/1", None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{err}");
+    assert_eq!(err["error"]["code"], json!("VALIDATION_ERROR"));
+    assert_eq!(api.admin("GET", "/config", None).await.0, StatusCode::OK);
 }

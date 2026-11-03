@@ -88,6 +88,16 @@
       "count_at": "organization"
     }
   },
+  "defaults": {
+    "rate_limit": [
+      "default"
+    ],
+    "timeouts": {
+      "connect": "5s",
+      "read": "20s"
+    },
+    "max_body_bytes": 2097152
+  },
   "cors": {
     "allowed_origins": [
       "https://app.example.com"

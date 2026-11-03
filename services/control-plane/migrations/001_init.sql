@@ -8,11 +8,15 @@ CREATE TABLE IF NOT EXISTS config_head (
 
 INSERT INTO config_head (id, revision) VALUES (true, 0) ON CONFLICT (id) DO NOTHING;
 
--- `config` is the flat config as sent, so a pull gives back what was applied.
--- `summary` is the plan's summary.
+-- `config` is the source, the flat config as sent, so a pull gives back what
+-- was applied. `gateway` and `identity` are the bodies the feeds serve, expanded
+-- at apply with defaults filled in, without their revision: a feed read expands
+-- nothing. `summary` is the plan's summary.
 CREATE TABLE IF NOT EXISTS config_revisions (
     revision   BIGINT PRIMARY KEY,
     config     JSONB NOT NULL,
+    gateway    JSONB NOT NULL,
+    identity   JSONB NOT NULL,
     summary    JSONB NOT NULL,
     request_id TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()

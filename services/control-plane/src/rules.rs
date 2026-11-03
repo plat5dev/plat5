@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::config::{Config, RateLimit, DEFAULT_POLICY, PUBLIC_SCOPE, USER_SCOPE};
+use crate::config::{Config, RateLimit, PUBLIC_SCOPE, USER_SCOPE};
 use crate::expand::{self, ExpandedRoute, Spec};
 use crate::schema::FieldError;
 
@@ -22,19 +22,15 @@ pub fn check(config: &Config) -> Result<(), Vec<FieldError>> {
     // The rest reads the tree; with a broken tree its errors are noise.
     if errs.is_empty() {
         check_policies(config, &mut errs);
-        let specs = expand::specs(config, &mut errs);
-        let mut all = Vec::new();
         let mut valid = Vec::new();
-        for spec in &specs {
-            let routes = expand::expand_spec(config, spec);
+        for spec in &expand::specs(config) {
             if check_spec(config, spec, &mut errs) {
-                valid.extend(routes.iter().cloned());
+                valid.extend(expand::expand_spec(config, spec));
             }
-            all.extend(routes);
         }
         check_shapes(&valid, &mut errs);
         check_route_checks(config, &valid, &mut errs);
-        check_roles(config, &all, &mut errs);
+        check_roles(config, &mut errs);
     }
     if errs.is_empty() {
         return Ok(());
@@ -91,16 +87,12 @@ fn check_kinds(config: &Config, errs: &mut Vec<FieldError>) {
     }
 }
 
-/// A policy's `count_at` is a kind, and `default` has none.
+/// Rule 5, for the policies: a `count_at` is a kind, and each policy
+/// `defaults.rate_limit` names is in `rate_limits` and has no `count_at`.
 fn check_policies(config: &Config, errs: &mut Vec<FieldError>) {
     for (name, policy) in &config.rate_limits {
         if let Some(kind) = &policy.count_at {
-            if name == DEFAULT_POLICY {
-                errs.push(FieldError::new(
-                    format!("rate_limits.{name}"),
-                    "the default policy applies to every route, so it can't have count_at",
-                ));
-            } else if !config.kinds.contains_key(kind) {
+            if !config.kinds.contains_key(kind) {
                 errs.push(FieldError::new(
                     format!("rate_limits.{name}.count_at"),
                     format!("{kind:?} is not a kind"),
@@ -108,11 +100,26 @@ fn check_policies(config: &Config, errs: &mut Vec<FieldError>) {
             }
         }
     }
+    for (i, name) in config.defaults.rate_limit.iter().enumerate() {
+        let at = format!("defaults.rate_limit[{i}]");
+        match config.rate_limits.get(name) {
+            None => errs.push(FieldError::new(
+                at,
+                format!("{name:?} is not a policy in rate_limits"),
+            )),
+            Some(p) if p.count_at.is_some() => errs.push(FieldError::new(
+                at,
+                format!("{name:?} counts at a kind: a default applies to user and public routes too, which have no node to count at"),
+            )),
+            Some(_) => {}
+        }
+    }
 }
 
-/// Rule 2 and 3: roles bind at kinds and include roles, `creator_role` binds
-/// everywhere, and every permission a role grants does something.
-fn check_roles(config: &Config, routes: &[ExpandedRoute], errs: &mut Vec<FieldError>) {
+/// Rule 2: roles bind at kinds and include roles, and `creator_role` binds
+/// everywhere. A role may grant any permission
+/// (docs/reference/config/roles.md).
+fn check_roles(config: &Config, errs: &mut Vec<FieldError>) {
     for (slug, role) in &config.roles {
         for (i, kind) in role.bindable_at.iter().enumerate() {
             if !config.kinds.contains_key(kind) {
@@ -157,23 +164,6 @@ fn check_roles(config: &Config, routes: &[ExpandedRoute], errs: &mut Vec<FieldEr
                         config.creator_role,
                         missing.join(", ")
                     ),
-                ));
-            }
-        }
-    }
-
-    let mut required: BTreeSet<&str> = routes
-        .iter()
-        .filter_map(|r| r.required_permissions.as_ref())
-        .flat_map(|r| r.permissions().iter().map(String::as_str))
-        .collect();
-    required.extend(config.kinds.values().map(|k| k.list_permission.as_str()));
-    for (slug, role) in &config.roles {
-        for (i, p) in role.permissions.iter().enumerate() {
-            if p != "*" && !required.contains(p.as_str()) {
-                errs.push(FieldError::new(
-                    format!("roles.{slug}.permissions[{i}]"),
-                    format!("no route requires {p:?}, and no kind lists by it: a typo, or a route that was removed"),
                 ));
             }
         }
@@ -272,26 +262,6 @@ fn check_spec(config: &Config, spec: &Spec, errs: &mut Vec<FieldError>) -> bool 
         );
         ok = false;
     }
-    if let Some(keeps) = &spec.keeps {
-        let want: BTreeSet<&String> = keeps.iter().collect();
-        let got: BTreeSet<&String> = params.iter().collect();
-        if want != got {
-            let want: Vec<String> = keeps.iter().map(|p| format!("{{{p}}}")).collect();
-            err(
-                errs,
-                &spec.path_at,
-                format!(
-                    "an overridden path keeps the resource's params: {}",
-                    if want.is_empty() {
-                        "none".to_string()
-                    } else {
-                        want.join(", ")
-                    }
-                ),
-            );
-            ok = false;
-        }
-    }
     if let Scope::Kind(_) = scope {
         for (child, kind) in config.children(&spec.scope) {
             let collection = kind.collection();
@@ -348,7 +318,7 @@ fn check_spec(config: &Config, spec: &Spec, errs: &mut Vec<FieldError>) -> bool 
                 RateLimit::Policies(p) => (p.clone(), r.at.clone()),
                 RateLimit::Off(_) => (Vec::new(), r.at.clone()),
             },
-            // Omitted is `default`, which has no count_at to check.
+            // Omitted is `defaults.rate_limit`, checked once for every route.
             None => (Vec::new(), String::new()),
         };
         for name in names {
@@ -599,8 +569,9 @@ mod tests {
                 "member": { "permissions": ["organization:read"], "bindable_at": ["organization"] }
             },
             "creator_role": "admin",
+            "defaults": { "rate_limit": ["standard"] },
             "rate_limits": {
-                "default": { "requests": 60, "window_seconds": 60 },
+                "standard": { "requests": 60, "window_seconds": 60 },
                 "per-project": { "requests": 100, "window_seconds": 1, "count_at": "project" },
                 "per-org": { "requests": 300, "window_seconds": 1, "count_at": "organization" }
             }
@@ -682,20 +653,19 @@ mod tests {
         errors_at(c, "creator_role");
     }
 
+    // A role may grant a permission no route requires: one checked only
+    // through identity's evaluation API, or a typo, which grants nothing.
     #[test]
-    fn a_permission_no_route_requires() {
+    fn a_role_may_grant_any_permission() {
         let mut c = base();
-        c["roles"]["member"]["permissions"] = json!(["organization:read", "typo:read"]);
-        errors_at(c, "roles.member.permissions[1]");
-        // A kind's list_permission counts; so do identity's defaults.
-        let mut c = base();
-        c["roles"]["member"]["permissions"] = json!(["project:read"]);
+        c["roles"]["member"]["permissions"] = json!(["organization:read", "reports:export"]);
         run(c).unwrap();
-        let mut c = base();
-        c["roles"]["member"]["permissions"] = json!(["project:bindings:write"]);
-        errors_at(c.clone(), "roles.member.permissions[0]");
-        c["services"] = json!({ "identity": { "url": "http://identity:3000" } });
-        run(c).unwrap();
+        // And a route may require one no role grants.
+        run(route(
+            "project",
+            json!({ "path": "/a", "methods": ["GET"], "required_permissions": ["nobody:has"] }),
+        ))
+        .unwrap();
     }
 
     #[test]
@@ -863,25 +833,33 @@ mod tests {
         c["rate_limits"]["per-team"] =
             json!({ "requests": 1, "window_seconds": 1, "count_at": "team" });
         errors_at(c, "rate_limits.per-team.count_at");
+        // defaults.rate_limit names policies, none with count_at.
         let mut c = base();
-        c["rate_limits"]["default"]["count_at"] = json!("organization");
-        let errs = errors_at(c, "rate_limits.default");
-        assert_eq!(
-            errs[0].message,
-            "the default policy applies to every route, so it can't have count_at"
-        );
-        // Omitted is `default`, in every scope; `false` is none.
-        let c = with_routes(
+        c["defaults"]["rate_limit"] = json!(["standard", "ghost"]);
+        errors_at(c, "defaults.rate_limit[1]");
+        let mut c = base();
+        c["defaults"]["rate_limit"] = json!(["per-org"]);
+        errors_at(c, "defaults.rate_limit[0]");
+        // No policy name is special: `default` is an ordinary one, and the
+        // standard policy can count at a kind when no default names it.
+        let mut c = base();
+        c["rate_limits"]["default"] =
+            json!({ "requests": 1, "window_seconds": 1, "count_at": "organization" });
+        run(c).unwrap();
+        // Omitted is defaults.rate_limit, in every scope; `false` is none.
+        let mut c = with_routes(
             "public",
             json!([
                 { "path": "/a", "methods": ["GET"] },
                 { "path": "/b", "methods": ["GET"], "rate_limit": false }
             ]),
         );
+        c["rate_limits"]["burst"] = json!({ "requests": 5, "window_seconds": 1 });
+        c["defaults"]["rate_limit"] = json!(["standard", "burst"]);
         run(c.clone()).unwrap();
         let config: Config = serde_json::from_value(c).unwrap();
         let routes = &expand::expand(&config)["e10s"].routes;
-        assert_eq!(routes[0].rate_limit, vec![DEFAULT_POLICY]);
+        assert_eq!(routes[0].rate_limit, vec!["standard", "burst"]);
         assert!(routes[1].rate_limit.is_empty());
     }
 
@@ -898,16 +876,13 @@ mod tests {
         assert!(errs[0]
             .message
             .contains(&format!("{AT}.public.routes[0].path")));
-        // Across services, and against identity's resources.
+        // Across services.
         let mut c = route(
             "organization",
             json!({ "path": "/", "methods": ["GET"], "required_permissions": ["organization:read"] }),
         );
-        c["services"]["identity"] = json!({ "url": "http://identity:3000" });
-        let errs = errors_at(
-            c,
-            "services.identity.kinds.organization.resources.node.path",
-        );
+        c["services"]["identity"] = identity();
+        let errs = errors_at(c, "services.identity.scopes.organization.routes[0].path");
         assert!(
             errs[0]
                 .message
@@ -927,9 +902,9 @@ mod tests {
 
     #[test]
     fn a_route_matching_the_route_checks_path() {
-        // The default path is free in the base, with identity's resources.
+        // The default path is free in the base, with identity's routes.
         let mut c = base();
-        c["services"] = json!({ "identity": { "url": "http://identity:3000" } });
+        c["services"] = json!({ "identity": identity() });
         run(c.clone()).unwrap();
 
         // A literal match, in any method, names the route and its field path.
@@ -954,9 +929,9 @@ mod tests {
         let errs = errors_at(c, "route_checks.path");
         assert!(errs[0].message.contains("POST /access/{what}"), "{errs:?}");
 
-        // Its own path, against identity's resources: /user is the me resource.
+        // Its own path, against identity's routes: /user.
         let mut c = base();
-        c["services"] = json!({ "identity": { "url": "http://identity:3000" } });
+        c["services"] = json!({ "identity": identity() });
         c["route_checks"] = json!({ "path": "/user" });
         let errs = errors_at(c, "route_checks.path");
         assert!(
@@ -988,77 +963,80 @@ mod tests {
         run(c).unwrap();
     }
 
-    /// Identity's expanded public paths for one override set, method and path.
-    fn identity_paths(identity: Value) -> Vec<String> {
-        let mut s = json!({ "url": "http://identity:3000" });
-        s.as_object_mut()
-            .unwrap()
-            .extend(identity.as_object().unwrap().clone());
-        let c = with_identity(s);
-        crate::schema::check_config(&c).unwrap_or_else(|e| panic!("schema: {e:?}"));
-        let config: Config = serde_json::from_value(c).unwrap();
-        check(&config).unwrap();
-        crate::expand::expand(&config)["identity"]
-            .routes
-            .iter()
-            .map(|r| format!("{} {}", r.method, r.path))
-            .collect()
+    /// A piece of identity's service file, as `plat5 routes generate` writes it.
+    fn identity() -> Value {
+        json!({
+            "url": "http://identity:3000",
+            "scopes": {
+                "organization": {
+                    "upstream_prefix": "/nodes/{organization.id}",
+                    "routes": [
+                        { "path": "/", "methods": {
+                            "GET": { "required_permissions": ["organization:read"] },
+                            "PATCH": { "required_permissions": ["organization:write"] }
+                        } },
+                        { "path": "/membership", "upstream": "/nodes/{organization.id}/memberships/{member.id}",
+                          "methods": {
+                            "GET": { "required_permissions": "any_member" },
+                            "DELETE": { "required_permissions": "any_member" }
+                        } }
+                    ]
+                },
+                "user": { "routes": [
+                    { "path": "/orgs", "upstream": "/roots/organization", "methods": ["POST"] },
+                    { "path": "/user", "upstream": "/users/{user.id}", "methods": ["GET", "PATCH", "DELETE"] }
+                ] }
+            }
+        })
     }
 
-    // `false` on a collection removes the routes below it; turning it back on
-    // for one kind brings them back; an item's own entry at a layer wins.
+    // Identity is a service like any other: its file is what's served.
     #[test]
-    fn collection_false_removes_its_items() {
-        let has = |paths: &[String], p: &str| paths.iter().any(|x| x == p);
-        let org_sa = "/orgs/{organization}/service-accounts";
-        let proj_sa = "/orgs/{organization}/projects/{project}/service-accounts";
+    fn identity_routes_are_served_as_written() {
+        let mut c = base();
+        c["services"] = json!({ "identity": identity() });
+        run(c.clone()).unwrap();
+        let config: Config = serde_json::from_value(c).unwrap();
+        let routes = &crate::expand::expand(&config)["identity"].routes;
+        let leave = routes
+            .iter()
+            .find(|r| r.method == "DELETE" && r.path == "/orgs/{organization}/membership")
+            .unwrap();
+        assert_eq!(
+            leave.upstream,
+            "/nodes/{organization.id}/memberships/{member.id}"
+        );
+        assert_eq!(leave.rate_limit, vec!["standard"]);
+        assert!(routes
+            .iter()
+            .all(|r| !(r.method == "POST" && r.path.ends_with("/members"))));
+        // The old resource overrides are unknown fields.
+        let mut c = base();
+        c["services"] = json!({ "identity": { "url": "http://identity:3000", "resources": { "invites": false } } });
+        assert!(crate::schema::check_config(&c).is_err());
+        assert!(serde_json::from_value::<Config>(c).is_err());
+    }
 
-        let paths = identity_paths(json!({
-            "kinds": { "project": { "resources": { "service_accounts": false, "invites": false } } }
-        }));
-        for p in [
-            format!("GET {proj_sa}"),
-            format!("DELETE {proj_sa}/{{service_account_id}}"),
-            format!("POST {proj_sa}/{{service_account_id}}/keys"),
-            format!("DELETE {proj_sa}/{{service_account_id}}/keys/{{key_id}}"),
-            "DELETE /orgs/{organization}/projects/{project}/invites/{invite_id}".to_string(),
-        ] {
-            assert!(!has(&paths, &p), "{p} kept: {paths:?}");
-        }
-        assert!(has(
-            &paths,
-            &format!("DELETE {org_sa}/{{service_account_id}}/keys/{{key_id}}")
-        ));
-        assert!(has(
-            &paths,
-            "DELETE /orgs/{organization}/invites/{invite_id}"
-        ));
-
-        // Off for every kind, back on for the org: the org's items come back.
-        let paths = identity_paths(json!({
-            "resources": { "service_accounts": false },
-            "kinds": { "organization": { "resources": { "service_accounts": {} } } }
-        }));
-        assert!(has(
-            &paths,
-            &format!("POST {org_sa}/{{service_account_id}}/keys")
-        ));
-        assert!(!has(
-            &paths,
-            &format!("POST {proj_sa}/{{service_account_id}}/keys")
-        ));
-
-        // keys off removes key too; the service accounts stay.
-        let paths = identity_paths(json!({ "resources": { "keys": false } }));
-        assert!(has(&paths, &format!("GET {org_sa}/{{service_account_id}}")));
-        assert!(!has(
-            &paths,
-            &format!("DELETE {org_sa}/{{service_account_id}}/keys/{{key_id}}")
-        ));
-
-        // The user scope: my_keys off removes my_key.
-        let paths = identity_paths(json!({ "resources": { "my_keys": false } }));
-        assert!(!has(&paths, "DELETE /user/keys/{key_id}"), "{paths:?}");
+    // A kind's list_permission is <kind name>:read when it names none.
+    #[test]
+    fn list_permission_defaults_to_the_kinds_read() {
+        let mut c = base();
+        c["kinds"]["project"]
+            .as_object_mut()
+            .unwrap()
+            .remove("list_permission");
+        c["kinds"]["environment"] = json!({
+            "parent": "project", "path": "/envs/{environment}", "list_permission": "project:read"
+        });
+        c["roles"]["admin"]["bindable_at"] = json!(["organization", "project", "environment"]);
+        run(c.clone()).unwrap();
+        let config: Config = serde_json::from_value(c.clone()).unwrap();
+        assert_eq!(config.kinds["project"].list_permission, "project:read");
+        assert_eq!(config.kinds["environment"].list_permission, "project:read");
+        // permission_name is gone: an unknown field.
+        c["kinds"]["environment"]["permission_name"] = json!("project");
+        assert!(crate::schema::check_config(&c).is_err());
+        assert!(serde_json::from_value::<Config>(c).is_err());
     }
 
     // bind_creator is on unless a kind turns it off, and is sent only when off.
@@ -1073,120 +1051,5 @@ mod tests {
         let sent = serde_json::to_value(&config.kinds).unwrap();
         assert_eq!(sent["organization"].get("bind_creator"), None);
         assert_eq!(sent["project"]["bind_creator"], json!(false));
-    }
-
-    // A kind's permission_name is what {kind} reads as in identity's
-    // resources, and starts its default list_permission.
-    #[test]
-    fn permission_name_shared_with_the_parent() {
-        let mut c = with_identity(json!({ "url": "http://identity:3000" }));
-        c["kinds"]["environment"] = json!({
-            "parent": "project", "path": "/envs/{environment}", "permission_name": "project"
-        });
-        c["kinds"]["project"]
-            .as_object_mut()
-            .unwrap()
-            .remove("list_permission");
-        c["roles"]["admin"]["bindable_at"] = json!(["organization", "project", "environment"]);
-        c["roles"]["developer"] = json!({ "permissions": ["project:read", "project:write"], "bindable_at": ["environment"] });
-        run(c.clone()).unwrap();
-        let config: Config = serde_json::from_value(c.clone()).unwrap();
-        assert_eq!(config.kinds["project"].list_permission, "project:read");
-        assert_eq!(config.kinds["environment"].list_permission, "project:read");
-        assert_eq!(
-            config.kinds["organization"].list_permission,
-            "organization:read"
-        );
-
-        let env = "/orgs/{organization}/projects/{project}/envs/{environment}";
-        let required = |method: &str, path: &str| {
-            let r = crate::expand::expand(&config)["identity"]
-                .routes
-                .iter()
-                .find(|r| r.method == method && r.path == path)
-                .unwrap_or_else(|| panic!("no {method} {path}"))
-                .clone();
-            r.required_permissions.unwrap().permissions().to_vec()
-        };
-        assert_eq!(required("PATCH", env), ["project:write"]);
-        assert_eq!(
-            required("POST", "/orgs/{organization}/projects/{project}/envs"),
-            ["project:create"]
-        );
-        assert_eq!(
-            required("GET", &format!("{env}/bindings")),
-            ["project:bindings:read"]
-        );
-        assert_eq!(
-            required("PATCH", "/orgs/{organization}/projects/{project}"),
-            ["project:write"]
-        );
-
-        // Nothing requires the kind's own name any more.
-        c["roles"]["developer"]["permissions"] = json!(["environment:read"]);
-        errors_at(c, "roles.developer.permissions[0]");
-    }
-
-    fn with_identity(identity: Value) -> Value {
-        let mut c = base();
-        c["roles"]["member"]["permissions"] = json!(["organization:read"]);
-        c["services"] = json!({ "identity": identity });
-        c
-    }
-
-    #[test]
-    fn identity_overrides() {
-        let id = |extra: Value| {
-            let mut s = json!({ "url": "http://identity:3000" });
-            s.as_object_mut()
-                .unwrap()
-                .extend(extra.as_object().unwrap().clone());
-            with_identity(s)
-        };
-        run(id(json!({
-            "resources": { "binding": { "path": "/grants/{binding_id}" }, "invites": false },
-            "kinds": { "project": { "resources": { "children": { "path": "/apps" } } } }
-        })))
-        .unwrap();
-        let base_at = "services.identity";
-        errors_at(
-            id(json!({ "resources": { "binding": { "path": "/grants/{id}" } } })),
-            &format!("{base_at}.resources.binding.path"),
-        );
-        errors_at(
-            id(json!({ "kinds": { "team": { "resources": { "node": false } } } })),
-            &format!("{base_at}.kinds.team"),
-        );
-        errors_at(
-            id(json!({ "kinds": { "organization": { "resources": { "children": false } } } })),
-            &format!("{base_at}.kinds.organization.resources.children"),
-        );
-        errors_at(
-            id(json!({ "kinds": { "project": { "resources": { "members": false } } } })),
-            &format!("{base_at}.kinds.project.resources.members"),
-        );
-        errors_at(
-            id(json!({ "resources": { "node": { "methods": { "POST": null } } } })),
-            &format!("{base_at}.resources.node.methods.POST"),
-        );
-        errors_at(
-            id(
-                json!({ "kinds": { "project": { "resources": { "membership": { "methods": { "DELETE": false } } } } } }),
-            ),
-            &format!("{base_at}.kinds.project.resources.membership.methods.DELETE"),
-        );
-        // membership's DELETE is on roots; a shared override of it is fine.
-        run(id(
-            json!({ "resources": { "membership": { "methods": { "DELETE": false } } } }),
-        ))
-        .unwrap();
-        errors_at(
-            id(json!({ "resources": { "me": { "required_permissions": ["organization:read"] } } })),
-            &format!("{base_at}.resources.me.required_permissions"),
-        );
-        errors_at(
-            id(json!({ "resources": { "node": { "rate_limit": ["ghost"] } } })),
-            &format!("{base_at}.resources.node.rate_limit"),
-        );
     }
 }

@@ -29,7 +29,7 @@
     },
     "defaults": {
       "title": "defaults",
-      "description": "What a service gets for a field it leaves out.",
+      "description": "Required. What a route or a service gets for a field it leaves out.",
       "$ref": "#/$defs/defaults"
     }
   },
@@ -89,7 +89,16 @@
     "defaults": {
       "type": "object",
       "additionalProperties": false,
+      "required": ["rate_limit"],
       "properties": {
+        "rate_limit": {
+          "title": "rate_limit",
+          "description": "Required. One or more policies from `rate_limits`, unique, none with `count_at`: what a route without `rate_limit` uses, and what the gateway counts its route checks and a service account refused on a user route against ([rate limits](rate-limits.md#on-a-route)).",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "rate_limits.json#/$defs/policy_name" }
+        },
         "timeouts": {
           "title": "timeouts",
           "description": "`{ connect, read }`, each a duration. Default `10s` and `30s`.",

@@ -40,7 +40,7 @@
       "properties": {
         "permissions": {
           "title": "permissions",
-          "description": "`[a-z0-9:._-]+`, max 64 chars, unique, max 64 permissions. `[\"*\"]` grants every permission; `*` is valid only alone. Each must be required by some route, or be a kind's `list_permission`.",
+          "description": "`[a-z0-9:._-]+`, max 64 chars, unique, max 64 permissions. `[\"*\"]` grants every permission; `*` is valid only alone.",
           "anyOf": [
             { "const": ["*"] },
             { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/permission" } }
