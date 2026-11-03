@@ -1,6 +1,6 @@
 # Lifecycle
 
-Why deletes are soft, restorable and then purged, how nodes, members and stored data begin and end, and why services follow them in two feeds. The rules: [`concepts/lifecycle.md`](../concepts/lifecycle.md), [`internals/identity-schema.md`](../internals/identity-schema.md).
+Why deletes are soft, restorable and then purged, how nodes, members and stored data begin and end, and why services follow them in one log. The rules: [`concepts/lifecycle.md`](../concepts/lifecycle.md), [`internals/identity-schema.md`](../internals/identity-schema.md).
 
 ## Deleting, restoring and purging
 
@@ -50,10 +50,15 @@ Every delete is soft for `deletion_grace`, 30 days by default, restorable, then 
 
 | Decision | Why |
 |----------|-----|
-| Two feeds, each with its own sequence: tree events (`node.*`, `member.*`) for tree data, user events (`user.*`) for user-route data | The same line as `X-Plat5-Member-Id` and `X-Plat5-User-Id`. A service that keeps only user-route data reads user events and never sees the tree. No sequence is shared, so no event's position links a user to a member, as one sequence would for an admin add's `user.created` beside its `member.created` |
-| A user event carries only `id`, `type`, `user_id` and `occurred_at`. A tree event never carries a user id | A service deletes a person's user-route data with the user id alone, and nothing in either feed joins a person's data to a tree |
+| One log, `GET /internal/events`, with one sequence for all eight types | One endpoint, one cursor and one lock. A log's position can show a person's `user.created` beside an admin add's `member.created`, and that's fine: the log is on identity's internal port, read only by the deployment's own services, which are trusted with it. What keeps a person's data out of a tree is what events carry: a node or member event never carries a user id |
+| A user event carries only `id`, `type`, `user_id` and `occurred_at` | A service deletes a person's user-route data with the user id alone |
 | `user.created` and `user.deleted` only. Suspension isn't an event | Suspension is access. A service asks about access through the evaluation API when its work runs, as it does for every other change in access, instead of following it |
-| The events of one transaction share `occurred_at`, so a service reading both feeds can match them: an account deletion's `member.removed` events and its `user.deleted`, or an admin add's `user.created` and `member.created` | A service can already match an account deletion's `member.removed` events across trees that way, and services are trusted with it. The feeds are on identity's internal port, read only by the deployment's own services |
+| The events of one transaction are adjacent and share `occurred_at` | A service can tell an account deletion's `member.removed` events from other removals, and match them to its `user.deleted` |
+| The events with a duty, `node.purged`, `member.removed` and `user.deleted`, are endings that never change. The other five are informational | A service that reads the log from its first event and acts idempotently ends up correct, whatever it missed or saw twice. |
+| Every event is kept for the life of the deployment | A new service, or one restoring a backup, reads from the start with nothing else to ask for. Pruning would need a second way to catch up |
+| Replaying from an earlier cursor is the reconcile: no sweeps, no batch status API | One mechanism covers a new service, a lost or restored database and a handler bug. The cursor lives with the data it cleans up, so a restore rewinds both together |
+| `types` filters the log, and only a matching event ends a wait | A service that acts on three types doesn't wake for the other five |
+| It long-polls like the control plane's feeds: immediate without `after`, a wait of up to 25 seconds with it, then **204** | An ending reaches services within about a second without a tight poll loop, and readers of Plat5's feeds all work one way |
 
 ## Stored data
 

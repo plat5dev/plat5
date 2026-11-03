@@ -25,7 +25,7 @@ On every request the gateway answers three questions: who is calling (the creden
 | **Credential** | An IdP token or a personal API key (people), or a service account key. Belongs to the principal, not to a tree |
 | **Front door** | Anything on the private network that calls services. Plat5's gateway is one; an operator plane is another |
 | **Audit log** | Per root, and per person for their user routes. Who did what, for reporting and compliance ([`concepts/audit.md`](audit.md)) |
-| **Lifecycle event** | What's created and what ends, in two feeds: tree events (a node created, deleted, restored or purged; a member joining or leaving a tree) and user events (a person coming to exist; an account deleted) ([`concepts/lifecycle.md`](lifecycle.md#lifecycle-events)) |
+| **Lifecycle event** | What's created and what ends, in one log: a node created, deleted, restored or purged; a member joining or leaving a tree; a person coming to exist or their account deleted ([`concepts/lifecycle.md`](lifecycle.md#lifecycle-events)) |
 
 ## Ids and slugs
 

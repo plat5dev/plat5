@@ -44,13 +44,7 @@ Optionally, store ancestor ids beside the node id, from `X-Plat5-<Kind>-Id` (an 
 
 ## Following the tree and people
 
-Identity writes two feeds ([lifecycle](../concepts/lifecycle.md#lifecycle-events)). Read the one for the data you keep; a service that keeps both reads both, with a cursor for each.
-
-**Tree data**, keyed by node and member ids, follows `GET /internal/tree-events`. Allocate state on `node.created` if you want it before the first request. Stop background work on `node.deleted` and keep the data; resume on `node.restored`. Delete the node's data on `node.purged`, matching on the event's `kind`. On `member.removed`, delete the records that member owned; authored records stay ([where a field goes](../concepts/model.md#where-a-field-goes)). `member.created` needs nothing.
-
-**User-route data**, keyed by user id, follows `GET /internal/user-events`. On `user.deleted`, delete everything keyed by that user id. `user.created` usually needs nothing: create a person's data the first time they call a user route.
-
-An event can arrive more than once, so handling it twice must be harmless. Shapes and paging: [internal APIs](../reference/api/internal.md#tree-events).
+Identity writes one lifecycle log. Follow it for the data you keep, and do its duties, as [lifecycle](../concepts/lifecycle.md#following-the-log) describes. Shape, params and waiting: [internal APIs](../reference/api/internal.md#lifecycle-events).
 
 ## Nodes with service fields
 

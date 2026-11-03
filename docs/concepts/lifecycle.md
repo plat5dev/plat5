@@ -44,39 +44,45 @@ A kind is removed, or changes parent, only while it has no nodes, deleted ones i
 
 ## Lifecycle events
 
-What's created and what ends, for other services to act on, in two feeds on identity's internal port. Each event is written in the same transaction as the change. Reading is opt-in. Plat5 names no queue or broker; anyone who wants push delivery runs a relay that reads the feeds.
+What's created and what ends, for other services to act on, in one log on identity's internal port. Each event is written in the same transaction as the change. Reading is opt-in. Plat5 names no queue or broker; anyone who wants push delivery runs a relay that reads the log. Shape, params and waiting: [internal APIs](../reference/api/internal.md#lifecycle-events).
 
-| Feed | Events | Read by a service that keeps |
-|------|--------|------------------------------|
-| Tree events, `GET /internal/tree-events` | `node.*`, `member.*` | Tree data, keyed by node and member ids |
-| User events, `GET /internal/user-events` | `user.*` | User-route data, keyed by user id |
+| Event | When |
+|-------|------|
+| `node.created` | A node is created |
+| `node.deleted` | Soft delete, directly or by cascade |
+| `node.restored` | Restore within the grace period |
+| `node.purged` | `deletion_grace` after delete |
+| `member.created` | A principal joins a tree: a redeemed invite, an admin add, a service account create, a root create |
+| `member.removed` | Removed, left, account deleted, a person left with no bindings, a service account deleted, or its root purged |
+| `user.created` | A person comes to exist: first sign-in, or an admin adding someone who has never signed in |
+| `user.deleted` | The account is deleted ([deleting an account](#deleting-an-account)) |
 
-The feeds hold the same line as `X-Plat5-Member-Id` and `X-Plat5-User-Id`: a tree event never carries a user id, and a user event carries no tree, no member and no name. A service that keeps both kinds of data reads both. Shapes and paging: [internal APIs](../reference/api/internal.md#tree-events).
+The set of types is fixed, whatever kinds a deployment declares. A cascade writes one event per node, parents before children. Node events carry the node's `kind`; member events carry `principal`, `person` or `service_account`.
 
-### Tree events
+Events hold the same line as `X-Plat5-Member-Id` and `X-Plat5-User-Id`: a node or member event never carries a user id, and a user event carries the person's user id and nothing else: no tree, no member, no name. No event carries a principal id or a role.
 
-A cascade writes one event per node, parents before children. The set of types is fixed, whatever kinds a deployment declares. Node events carry the node's `kind`.
+Binding changes and suspension aren't events: they're access, which is asked for, not pushed. A service asks identity when its work runs ([access](access.md#outside-a-request)).
 
-| Event | When | A service should |
-|-------|------|------------------|
-| `node.created` | A node is created | Allocate state if it wants to before the first request |
-| `node.deleted` | Soft delete, directly or by cascade | Stop background work; keep the data |
-| `node.restored` | Restore within the grace period | Resume |
-| `node.purged` | `deletion_grace` after delete | Delete the data |
-| `member.created` | A principal joins a tree: a redeemed invite, an admin add, a service account create, a root create | Nothing usually |
-| `member.removed` | Removed, left, account deleted, a person left with no bindings, a service account deleted, or its root purged | Remove records owned by that member that should go with it |
+### What the log guarantees
 
-`principal` is `person` or `service_account`. No principal id, user id, name or role. Binding changes aren't events: access is asked for, not pushed. A service asks identity when its work runs ([access](access.md#outside-a-request)).
+- **Commit order.** Ids are in commit order, and a reader never skips an event.
+- **One transaction, together.** The events of one transaction are adjacent in the log and share `occurred_at`: an account deletion's `member.removed` events and its `user.deleted`, or an admin add's `user.created` and `member.created`.
+- **Kept.** Every event is kept for the life of the deployment, so the log can always be read from its first event.
+- **At least once.** From the consumer's side, an event can arrive more than once.
 
-### User events
+### Following the log
 
-| Event | When | A service should |
-|-------|------|------------------|
-| `user.created` | A person comes to exist: first sign-in, or an admin adding someone who has never signed in | Nothing usually; create user-route data lazily |
-| `user.deleted` | The account is deleted ([deleting an account](#deleting-an-account)) | Delete the person's user-route data |
+- **Read from the first event.** Keep a cursor, the last id acted on, and save it after acting.
+- **Keep the cursor with the data it cleans up,** in the same database, so a restore from backup rewinds both together and the replay redoes exactly the deletes the backup is missing.
+- **Make every handler safe to run twice.**
+- **Replay to reconcile.** To recover a lost or restored database, or to fix a handler bug, move the cursor back, to the start if needed, and read again. There is no other reconcile.
 
-Each carries the person's user id and nothing else about them. Suspension isn't an event: it's access, which a service asks about through identity's evaluation API ([access](access.md#outside-a-request)).
+Three events carry a duty, for a service that keeps the data they name:
 
-### Reading the feeds
+| Event | The service |
+|-------|-------------|
+| `node.purged` | Deletes the node's data, matching on `kind` |
+| `member.removed` | Deletes what that member owned; authored records stay ([where a field goes](model.md#where-a-field-goes)) |
+| `user.deleted` | Deletes everything keyed by that user id |
 
-Each feed has its own sequence, and event writes to a feed are serialized, so a feed's order is its commit order. A consumer keeps one cursor per feed. The events of one transaction share `occurred_at`, in both feeds: an account deletion's `member.removed` events and its `user.deleted` carry the same one. Delivery is at least once from the consumer's side, so acting on an event must be idempotent. Events are kept ([`TODO.md`](../../TODO.md)).
+Each is an ending that never changes, so a service that reads the log from its first event and acts idempotently ends up correct. The other five are informational. State is created lazily, and background work checks node state and access through identity's evaluation API when it runs ([access](access.md#outside-a-request)).

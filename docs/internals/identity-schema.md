@@ -93,27 +93,29 @@ CREATE TABLE invites (
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE tree_events (                            -- append-only; outlives what it names
+CREATE TABLE events (                                 -- append-only; outlives what it names
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     type        TEXT NOT NULL CHECK (type IN ('node.created', 'node.deleted', 'node.restored', 'node.purged',
-                                              'member.created', 'member.removed')),
+                                              'member.created', 'member.removed',
+                                              'user.created', 'user.deleted')),
     kind        TEXT,                                  -- node events: the node's kind
-    node_id     TEXT,
-    member_id   TEXT,
-    root_id     TEXT NOT NULL,
-    principal   TEXT CHECK (principal IN ('person', 'service_account')),
-    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()     -- the transaction's time
-);
-
-CREATE TABLE user_events (                            -- append-only; its own sequence, never joined to tree_events
-    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    type        TEXT NOT NULL CHECK (type IN ('user.created', 'user.deleted')),
-    user_id     TEXT NOT NULL,
-    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    node_id     TEXT,                                  -- node events
+    member_id   TEXT,                                  -- member events
+    root_id     TEXT,                                  -- node and member events
+    principal   TEXT CHECK (principal IN ('person', 'service_account')),  -- member events
+    user_id     TEXT,                                  -- user events
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),    -- the transaction's time
+    -- Each type carries its own fields and no others.
+    CHECK ((type LIKE 'node.%') = (kind IS NOT NULL AND node_id IS NOT NULL)),
+    CHECK ((type LIKE 'member.%') = (member_id IS NOT NULL AND principal IS NOT NULL)),
+    CHECK ((type LIKE 'user.%') = (user_id IS NOT NULL)),
+    CHECK ((type LIKE 'user.%') = (root_id IS NULL)),
+    CHECK (type LIKE 'node.%' OR (kind IS NULL AND node_id IS NULL)),
+    CHECK (type LIKE 'member.%' OR (member_id IS NULL AND principal IS NULL))
 );
 ```
 
-Ids are lowercase ULIDs with no prefix ([ids](../concepts/model.md#ids-and-slugs)). Principal ids never leave identity; a person's `user_id` is a separate id, sent only on user routes and in user events.
+Ids are lowercase ULIDs with no prefix ([ids](../concepts/model.md#ids-and-slugs)). Principal ids never leave identity; a person's `user_id` is a separate id, sent only on user routes and in `user.*` events.
 
 ### Invariants the code enforces
 
@@ -126,4 +128,4 @@ The rules themselves are in the concept docs ([access](../concepts/access.md), [
 - **Deletions.** Each delete stamps one `deletion_id` on every node it soft-deletes; restore matches on it. A node already deleted keeps its own id.
 - **Purge.** Purge sets `status = 'purged'` and keeps the row. Below a root it sets `slug` to `NULL`, freeing it; a purged root keeps its slug until an operator releases it.
 - **Writes that touch members** take the tree's lock, so "one active member" and "removed when left with no bindings" can't race.
-- **Events.** Each feed's writes take that feed's lock, held to commit, so a reader never sees a later id before an earlier one commits. A transaction that writes both takes the tree events' lock first. A person's row and its `user.created` are written together, as are the principal's deletion and its `user.deleted`.
+- **Events.** A change writes its events after every other write. Each event write takes the log's one advisory lock, held to commit, so ids commit in order, a reader never sees a later id before an earlier one commits, and a transaction's events are adjacent. A person's row and its `user.created` are written together, as are the principal's deletion and its `user.deleted`.

@@ -4,9 +4,9 @@
 
 - **Siblings follow the contracts.** Each moves to the shapes in `docs/`:
   - `toolbox`: its e2e and helpers use user routes, bare ids and `Bearer` keys, apply a config first since nothing is seeded, and read `node.*` events.
-  - The docs site: syncs `reference/config/services.md`, `resources.md`, `settings.md` and `rate-limits.md`, which replace `reference/config/routes.md` and `reference/api/edge-catalog.md`; and the new sections on access outside a request (`guides/write-a-service.md`, `concepts/access.md`, `reference/api/internal.md`), at the release that ships them. The same for the two event feeds (`concepts/lifecycle.md`, `reference/api/internal.md`, `guides/write-a-service.md`), and the product page's mention of `/internal/lifecycle-events` moves to `/internal/tree-events`. The same for a person's name: `reference/idp.md` (the JWT access token contract, `users.name`), `reference/config/settings.md` and the `me` resource's `PATCH /user`. The same for route checks: `reference/gateway.md`, `reference/config/settings.md` (`route_checks`), `concepts/access.md` and `guides/build-a-console.md`.
+  - The docs site: syncs `reference/config/services.md`, `resources.md`, `settings.md` and `rate-limits.md`, which replace `reference/config/routes.md` and `reference/api/edge-catalog.md`; and the new sections on access outside a request (`guides/write-a-service.md`, `concepts/access.md`, `reference/api/internal.md`), at the release that ships them. The same for the lifecycle log (`concepts/lifecycle.md`, `reference/api/internal.md`, `reference/lists.md`, `guides/write-a-service.md`), and the product page's mention of `/internal/lifecycle-events` moves to `/internal/events`. The same for a person's name: `reference/idp.md` (the JWT access token contract, `users.name`), `reference/config/settings.md` and the `me` resource's `PATCH /user`. The same for route checks: `reference/gateway.md`, `reference/config/settings.md` (`route_checks`), `concepts/access.md` and `guides/build-a-console.md`.
   - The consoles: the customer console's profile page offers a name edit (`PATCH /user`), shows `name: null` as no name yet, and shows the **409** message when the IdP owns names. The operator console can set or clear a person's name, once `operator`'s route files add `PATCH` to `/users/{user_id}`, sent without `X-Plat5-User-Id`.
-  - The API starters (`template-*`): each one's event consumer reads `/internal/tree-events`, and deletes the person's `/user/profile` on `user.deleted` from `/internal/user-events`, with its own cursor. They could also show checking access outside a request, for example a task notification that asks identity's evaluation API before it sends.
+  - The API starters (`template-*`): each one's event consumer reads `GET /internal/events?types=node.purged,user.deleted` with one cursor, deleting an environment's tasks on `node.purged` and the person's `/user/profile` on `user.deleted`. They could also show checking access outside a request, for example a task notification that asks identity's evaluation API before it sends.
 - **CI for the CLI.** Its schema-copy and init-files tests (`internal/schema`, `internal/cmd`) skip unless a `plat5` checkout sits next to the CLI, so CI must check one out there.
 
 # Deferred
@@ -29,15 +29,9 @@ Ready: a service that needs it.
 
 ## Audit retention
 
-Audit events are kept, including after a node is purged. Partitions are monthly, so retention is dropping old partitions. Identity's `node.purged` ([`docs/concepts/lifecycle.md`](docs/concepts/lifecycle.md#tree-events)) is the signal for erasing a purged tree's events.
+Audit events are kept, including after a node is purged. Partitions are monthly, so retention is dropping old partitions. Identity's `node.purged` ([`docs/concepts/lifecycle.md`](docs/concepts/lifecycle.md#lifecycle-events)) is the signal for erasing a purged tree's events.
 
 Ready: storage growth that hurts, or an org whose events must be erased on purge.
-
-## Lifecycle event retention
-
-Identity's tree events and user events are kept. A consumer can always read either feed from its first event.
-
-Ready: storage growth that hurts. Then prune by age, and answer a `starting_after` older than the oldest kept event with **410**, so the consumer knows to reconcile.
 
 ## Linking a second IdP subject
 

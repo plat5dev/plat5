@@ -1,6 +1,6 @@
 # Internal APIs
 
-Calls on each service's `INTERNAL_PORT`, never on the gateway: between Plat5's own services, and from the deployment's services to identity's event feeds and access evaluation. They take no token: internal ports are reachable only inside the deployment's network, never exposed outside it. Publishing one is giving away the deployment.
+Calls on each service's `INTERNAL_PORT`, never on the gateway: between Plat5's own services, and from the deployment's services to identity's lifecycle log and access evaluation. They take no token: internal ports are reachable only inside the deployment's network, never exposed outside it. Publishing one is giving away the deployment.
 
 ## Identity
 
@@ -59,17 +59,18 @@ POST /internal/plan
 
 The control plane calls it on a dry run and again on the apply, only when the plan removes a kind or changes a kind's parent ([`concepts/config.md`](../../concepts/config.md#blocked-changes)). A plan that does neither never calls identity. `nodes` counts the kind's live and deleted nodes, purged never. `sample` is up to five of the counted nodes' ids, live ones first, in id order. Every kind in the request has an entry, zeros included. All counts come from one snapshot. A body identity can't read (a kind name empty) is **422**.
 
-### Tree events
+### Lifecycle events
 
-Nodes and members, for a service that keeps tree data. When each event is written, and what a service does with it: [lifecycle](../../concepts/lifecycle.md#tree-events).
+Identity's one log of what's created and what ends. When each event is written, what the log guarantees, and what a service does with it: [lifecycle](../../concepts/lifecycle.md#lifecycle-events).
 
 ```
-GET /internal/tree-events?starting_after=812&limit=50
+GET /internal/events?after=812&limit=50&types=node.purged,member.removed,user.deleted
 → 200
 {
-  "tree_events": [
-    { "id": "813", "type": "node.deleted", "kind": "project", "node_id": "01jbx…", "root_id": "01jbw…", "occurred_at": "2026-10-27T09:14:03Z" },
-    { "id": "814", "type": "member.removed", "member_id": "01jby…", "root_id": "01jbw…", "principal": "person", "occurred_at": "2026-10-27T09:15:40Z" }
+  "events": [
+    { "id": "813", "type": "node.purged", "kind": "project", "node_id": "01jbx…", "root_id": "01jbw…", "occurred_at": "2026-10-27T09:14:03Z" },
+    { "id": "815", "type": "member.removed", "member_id": "01jby…", "root_id": "01jbw…", "principal": "person", "occurred_at": "2026-10-27T09:15:40Z" },
+    { "id": "816", "type": "user.deleted", "user_id": "01jbz…", "occurred_at": "2026-10-27T09:15:40Z" }
   ],
   "has_more": false
 }
@@ -77,50 +78,29 @@ GET /internal/tree-events?starting_after=812&limit=50
 
 | Field | |
 |-------|--|
-| `id` | A decimal string from the feed's sequence |
-| `type` | `node.created`, `node.deleted`, `node.restored`, `node.purged`, `member.created` or `member.removed` |
+| `id` | A decimal string from the log's one sequence |
+| `type` | `node.created`, `node.deleted`, `node.restored`, `node.purged`, `member.created`, `member.removed`, `user.created` or `user.deleted` |
 | `kind`, `node_id` | Node events only: the node's kind and id |
 | `member_id`, `principal` | Member events only: the member, and `person` or `service_account` |
-| `root_id` | The root of the event's tree |
+| `root_id` | Node and member events: the root of the event's tree |
+| `user_id` | User events only: the person's user id |
 | `occurred_at` | The time of the transaction that wrote the event, RFC 3339 in UTC |
 
-A field an event doesn't carry is absent, not `null`. Never a user id, principal id, name or role.
-
-### User events
-
-People, for a service that keeps user-route data. When each event is written, and what a service does with it: [lifecycle](../../concepts/lifecycle.md#user-events).
-
-```
-GET /internal/user-events?starting_after=56
-→ 200
-{
-  "user_events": [
-    { "id": "57", "type": "user.created", "user_id": "01jbz…", "occurred_at": "2026-10-27T09:12:51Z" },
-    { "id": "58", "type": "user.deleted", "user_id": "01jbq…", "occurred_at": "2026-10-27T09:15:40Z" }
-  ],
-  "has_more": false
-}
-```
-
-| Field | |
-|-------|--|
-| `id` | A decimal string from the feed's sequence, separate from tree events' |
-| `type` | `user.created` or `user.deleted` |
-| `user_id` | The person's user id |
-| `occurred_at` | As for tree events |
-
-These four fields and no others: no tree, no member, no name.
-
-### Paging a feed
-
-Both feeds page the same way, like [lists](../lists.md) but with sequence ids.
+A field an event doesn't carry is absent, not `null`. A node or member event never carries a user id, and a user event carries no tree. No event carries a principal id, a name or a role.
 
 | Param | |
 |-------|--|
+| `after` | Optional. The last `id` read; omitted, the log starts from its first event. Anything but a positive decimal integer with no leading zero: **422** |
 | `limit` | Optional. Default **50**, max **100**; over the max is clamped. Below 1, or not an integer: **422** |
-| `starting_after` | Optional. The last `id` read from the same feed; omitted, the feed starts from its first event. Anything but a positive decimal integer with no leading zero: **422**. An id past the end is an empty page |
+| `types` | Optional. A comma-separated list of types; only those are answered, and only those end a wait. Omitted, every type. A type not in the list above, or an empty item: **422** |
 
-Events come in `id` order, ascending, which is commit order. `has_more` is `true` when another page exists. The two feeds' ids are unrelated: pass each feed its own. Don't do arithmetic on an id. Postgres unavailable: **500** `INTERNAL_ERROR`.
+A **422** is `VALIDATION_ERROR` in the [error envelope](../errors.md), naming the param.
+
+`events` are in `id` order, ascending, which is commit order. Ids increase but can skip numbers: don't do arithmetic on an id. `has_more` is `true` when more events matching `types` follow the last one in `events`; ask again at once with its `id` as `after`.
+
+Without `after`, the answer is immediate, even with no events. With `after`, identity waits until an event past `after` that matches `types` exists, for up to 25 seconds. Nothing in that time is **204**, and the reader asks again with the same `after`. An `after` past the newest event (identity's database was reset) is answered at once: **200** with no events. An event reaches waiting readers on every identity replica within about a second.
+
+Reads stay off traces and request metrics, like health checks. A 5xx is still logged. Postgres unavailable: **500** `INTERNAL_ERROR`.
 
 ### Access evaluation
 

@@ -41,6 +41,6 @@ Node lists through the gateway return only what the caller can see ([access](../
 
 Audit's reads take the same `limit` and `starting_after`, but run `id` **descending** (newest first). See [`reference/api/audit.md`](api/audit.md#reading).
 
-## Event feeds
+## The lifecycle log
 
-Identity's internal feeds, tree events and user events, use `starting_after` with a decimal sequence id, ascending ([internal APIs](api/internal.md#paging-a-feed)).
+Identity's internal lifecycle log pages with `after`, a decimal sequence id, ascending, and waits for new events ([internal APIs](api/internal.md#lifecycle-events)).
