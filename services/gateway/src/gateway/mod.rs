@@ -168,7 +168,7 @@ impl Gateway {
             .pipeline
             .admit_and_limit(
                 matched,
-                &snapshot.default_policy,
+                &snapshot.default_policies,
                 &ip,
                 presented,
                 &mut ctx.credential,
@@ -251,7 +251,8 @@ impl Gateway {
 
 impl Gateway {
     /// Route checks (docs/reference/gateway.md#route-checks): the credential as
-    /// a route takes it, the body, one count of `default`, then each check
+    /// a route takes it, the body, one count of each policy `defaults.rate_limit`
+    /// names, then each check
     /// through the pipeline's own match, admit and permission steps. Never
     /// forwarded, never audited.
     async fn handle_route_checks(
@@ -323,7 +324,7 @@ impl Gateway {
             .pipeline
             .check_routes(
                 &snapshot.routes,
-                &snapshot.default_policy,
+                &snapshot.default_policies,
                 &credential,
                 &checks,
                 &ip,
@@ -620,7 +621,7 @@ impl ProxyHttp for Gateway {
         }
 
         // Unmatched: 404, not counted by the failed-auth limiter. The route, the
-        // name claims and the default policy all come from this one snapshot.
+        // name claims and the default policies all come from this one snapshot.
         let Some(matched) = snapshot.routes.find_route(&path, &method) else {
             warn!("no matching route");
             return response::write_json_error(

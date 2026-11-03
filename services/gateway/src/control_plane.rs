@@ -26,8 +26,6 @@ use crate::route_map::{Policy, PolicyDoc, RouteMap, ServiceDoc};
 /// Longer than the control plane's long-poll wait, so an idle poll ends with 204.
 const POLL_TIMEOUT: Duration = Duration::from_secs(40);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(10);
-/// The policy of every route that names none, and of route checks.
-const DEFAULT_POLICY: &str = "default";
 /// The most of a refusal's reason a poll reports.
 const MAX_REASON_CHARS: usize = 512;
 /// One control-plane revision, swapped whole.
@@ -40,9 +38,9 @@ pub struct Snapshot {
     pub name_claims: Arc<NameClaims>,
     /// Where the gateway answers route checks.
     pub route_checks: RouteChecks,
-    /// The `default` policy, counted per credential for a route checks call
-    /// and for a service account refused on a user route.
-    pub default_policy: Policy,
+    /// The policies `defaults.rate_limit` names, counted per credential for a
+    /// route checks call and for a service account refused on a user route.
+    pub default_policies: Vec<Policy>,
 }
 
 /// `route_checks` (docs/reference/gateway.md#route-checks).
@@ -57,9 +55,17 @@ struct GatewayFeed {
     kinds: BTreeMap<String, KindDoc>,
     services: BTreeMap<String, ServiceDoc>,
     rate_limits: BTreeMap<String, PolicyDoc>,
+    defaults: DefaultsFeed,
     cors: CorsFeed,
     users: UsersFeed,
     route_checks: RouteChecksFeed,
+}
+
+/// `defaults`. The gateway reads only `rate_limit`: a route's own timeouts
+/// and body limit come filled in.
+#[derive(Deserialize)]
+struct DefaultsFeed {
+    rate_limit: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -260,18 +266,28 @@ pub fn build(feed: Value) -> Result<Snapshot, String> {
     let feed: GatewayFeed = serde_json::from_value(feed).map_err(|e| e.to_string())?;
     let kinds = Kinds::from_feed(&feed.kinds);
     let routes = RouteMap::from_feed(&feed.services, &feed.rate_limits, &kinds)?;
-    let default = feed
-        .rate_limits
-        .get(DEFAULT_POLICY)
-        .ok_or("rate_limits has no default policy")?;
+    if feed.defaults.rate_limit.is_empty() {
+        return Err("defaults.rate_limit names no policy".into());
+    }
+    let default_policies = feed
+        .defaults
+        .rate_limit
+        .iter()
+        .map(|name| match feed.rate_limits.get(name) {
+            None => Err(format!("defaults.rate_limit: no policy {name:?}")),
+            Some(p) if p.count_at.is_some() => {
+                Err(format!("defaults.rate_limit: {name:?} counts at a kind"))
+            }
+            Some(p) => Ok(Policy {
+                name: name.clone(),
+                requests: p.requests,
+                window_seconds: p.window_seconds,
+                count_at: None,
+            }),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let route_checks = RouteChecks {
         path: feed.route_checks.path,
-    };
-    let default_policy = Policy {
-        name: DEFAULT_POLICY.to_string(),
-        requests: default.requests,
-        window_seconds: default.window_seconds,
-        count_at: None,
     };
     Ok(Snapshot {
         revision: feed.revision,
@@ -289,7 +305,7 @@ pub fn build(feed: Value) -> Result<Snapshot, String> {
                 .collect(),
         ),
         route_checks,
-        default_policy,
+        default_policies,
     })
 }
 
@@ -342,7 +358,13 @@ mod tests {
             "revision": 7,
             "kinds": { "organization": { "path": "/orgs/{organization}", "list_permission": "organization:read" } },
             "services": services,
-            "rate_limits": { "default": { "requests": 60, "window_seconds": 30 } },
+            "rate_limits": {
+                "default": { "requests": 1, "window_seconds": 1 },
+                "standard": { "requests": 60, "window_seconds": 30 },
+                "burst": { "requests": 5, "window_seconds": 1 },
+                "per-org": { "requests": 9, "window_seconds": 1, "count_at": "organization" }
+            },
+            "defaults": { "rate_limit": ["standard", "burst"] },
             "cors": { "allowed_origins": ["https://app.example.com"], "allowed_headers": [] },
             "users": { "name": { "claims": ["profile.full_name", "name"], "sync": "each_sign_in" } },
             "route_checks": { "path": "/access/routes" }
@@ -371,14 +393,23 @@ mod tests {
         assert_eq!(m.route.max_body_bytes, 2048);
         assert_eq!(snapshot.routes.route_count(), 1);
         assert_eq!(snapshot.route_checks.path, "/access/routes");
+        // The policies defaults.rate_limit names; `default` is no special name.
         assert_eq!(
-            snapshot.default_policy,
-            Policy {
-                name: "default".into(),
-                requests: 60,
-                window_seconds: 30,
-                count_at: None
-            }
+            snapshot.default_policies,
+            vec![
+                Policy {
+                    name: "standard".into(),
+                    requests: 60,
+                    window_seconds: 30,
+                    count_at: None
+                },
+                Policy {
+                    name: "burst".into(),
+                    requests: 5,
+                    window_seconds: 1,
+                    count_at: None
+                }
+            ]
         );
     }
 
@@ -396,13 +427,22 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("route_checks");
-        let mut no_default = feed(json!({}));
-        no_default["rate_limits"] = json!({});
+        let mut no_defaults = feed(json!({}));
+        no_defaults.as_object_mut().unwrap().remove("defaults");
+        let mut no_default_policy = feed(json!({}));
+        no_default_policy["defaults"]["rate_limit"] = json!([]);
+        let mut unknown_default = feed(json!({}));
+        unknown_default["defaults"]["rate_limit"] = json!(["ghost"]);
+        let mut counted_default = feed(json!({}));
+        counted_default["defaults"]["rate_limit"] = json!(["per-org"]);
         for bad in [
             no_revision,
             no_rate_limits,
             no_route_checks,
-            no_default,
+            no_defaults,
+            no_default_policy,
+            unknown_default,
+            counted_default,
             feed(json!({ "w": { "url": "http://w:1" } })),
             feed(widgets(json!({ "connect": "1s" }))),
             feed(widgets(json!({ "connect": "fast", "read": "1s" }))),

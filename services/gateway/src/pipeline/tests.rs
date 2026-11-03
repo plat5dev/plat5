@@ -117,8 +117,8 @@ impl Counter for Arc<MemCounter> {
 
 struct Harness {
     pipeline: Pipeline<Arc<FakeAdmit>, Arc<MemCounter>>,
-    /// The `default` policy a request passes in.
-    default: Policy,
+    /// The policies `defaults.rate_limit` names, as a request passes them in.
+    defaults: Vec<Policy>,
     admit: Arc<FakeAdmit>,
     counter: Arc<MemCounter>,
 }
@@ -146,12 +146,12 @@ fn harness_with(answer: Result<AdmitAnswer, String>, auth_failure: Limit) -> Har
             counter.clone(),
             auth_failure,
         ),
-        default: Policy {
-            name: "default".into(),
+        defaults: vec![Policy {
+            name: "standard".into(),
             requests: 60,
             window_seconds: 60,
             count_at: None,
-        },
+        }],
         admit,
         counter,
     }
@@ -178,7 +178,7 @@ impl Harness {
         let mut cred = RequestCredential::default();
         let r = self
             .pipeline
-            .admit_and_limit(matched, &self.default, IP, presented, &mut cred)
+            .admit_and_limit(matched, &self.defaults, IP, presented, &mut cred)
             .await;
         (r, cred)
     }
@@ -321,10 +321,10 @@ async fn every_catalog_route_matches_admits_limits_and_fills_its_upstream() {
                 assert!(req.allow_deleted, "{template} must admit a deleted node");
             }
 
-            // The default policy, per caller: at the node for a member, by user id on user routes.
+            // The policy defaults.rate_limit names, per caller: at the node for a member, by user id on user routes.
             let bucket = match &route.scope {
-                Scope::User => format!("default:user:{USER}"),
-                _ => format!("default:{}:{MEMBER}", node_id(route.chain.last().unwrap())),
+                Scope::User => format!("standard:user:{USER}"),
+                _ => format!("standard:{}:{MEMBER}", node_id(route.chain.last().unwrap())),
             };
             assert_eq!(h.counter.buckets(), vec![bucket], "{template}");
 
@@ -369,7 +369,7 @@ async fn every_catalog_route_matches_admits_limits_and_fills_its_upstream() {
             assert_eq!(header(&fwd, PRINCIPAL_HEADER), Some("person"));
         }
     }
-    assert_eq!(seen, 85, "identity's 81 routes and audit's 4");
+    assert_eq!(seen, 84, "identity's 80 routes and audit's 4");
     assert_eq!(snapshot.routes.route_count(), seen);
     assert_eq!(restore_routes, 3, "a restore route per kind");
 }
@@ -430,7 +430,7 @@ fn project_read(snapshot: &Snapshot) -> Matched {
 async fn admit_table() {
     let snapshot = catalog();
     let read = project_read(&snapshot);
-    let route_bucket = format!("default:{}:{MEMBER}", node_id("project"));
+    let route_bucket = format!("standard:{}:{MEMBER}", node_id("project"));
     let ok = || answer_for(&read.route, &["project:read"]);
 
     // valid: false → 401, counted on the failed-auth limiter, before the rate limit.
@@ -652,7 +652,7 @@ async fn user_routes_send_the_user_and_no_nodes() {
         panic!()
     };
     assert_eq!((c.root_id(), c.member_id.as_deref()), (None, None));
-    assert_eq!(h.counter.buckets(), vec![format!("default:user:{USER}")]);
+    assert_eq!(h.counter.buckets(), vec![format!("standard:user:{USER}")]);
 
     // A revoked or unknown key: identity answers valid: false, and it's a 401,
     // counted by the failed-auth limiter.
@@ -684,7 +684,7 @@ async fn a_service_account_on_a_user_route_is_403() {
     // The credential is good: no failed auth. No user's budget either: one
     // count of default for the key, the route checks bucket.
     let bucket = format!(
-        "default:credential:{}",
+        "standard:credential:{}",
         crate::auth::admit::credential_hash(&key_credential())
     );
     assert_eq!(h.counter.buckets(), vec![bucket.clone()]);
@@ -703,7 +703,7 @@ async fn a_service_account_on_a_user_route_spends_default_per_key() {
     let snapshot = catalog();
     let me = find(&snapshot, "GET", "/user");
     let mut h = harness(Ok(service_account_user()));
-    h.default.requests = 2;
+    h.defaults[0].requests = 2;
     for _ in 0..2 {
         assert_eq!(
             h.run(&me, Ok(key())).await.0.unwrap_err(),
@@ -721,7 +721,7 @@ async fn a_service_account_on_a_user_route_spends_default_per_key() {
     // Never the failed-auth limiter, and the same bucket a route checks call
     // with this key spends.
     let bucket = format!(
-        "default:credential:{}",
+        "standard:credential:{}",
         crate::auth::admit::credential_hash(&key_credential())
     );
     assert!(h.counter.buckets().iter().all(|b| *b == bucket));
@@ -748,7 +748,7 @@ fn e10s() -> Value {
                       "/projects/{project.id}/free", json!("any_member"), json!([])),
                 route("/orgs/{organization}/projects/{project}/plans/{plan_id}", "GET", "project",
                       "/projects/{project.id}/plans/{plan_id}", json!(["project:read"]), json!([])),
-                route("/health", "GET", "public", "/health", json!(null), json!(["default"])),
+                route("/health", "GET", "public", "/health", json!(null), json!(["standard"])),
             ]
         }
     })
@@ -824,7 +824,7 @@ async fn no_policy_counts_nowhere_and_public_counts_by_ip() {
         .unwrap();
     assert_eq!(admitted, Admitted::Public);
     assert_eq!(h.calls(), 0);
-    assert_eq!(h.counter.buckets(), vec![format!("default:ip:{IP}")]);
+    assert_eq!(h.counter.buckets(), vec![format!("standard:ip:{IP}")]);
     assert_eq!(
         fwd,
         Forward {
@@ -969,7 +969,7 @@ async fn run_checks(
     pipeline
         .check_routes(
             &snapshot.routes,
-            &snapshot.default_policy,
+            &snapshot.default_policies,
             credential,
             &checks(list),
             IP,
@@ -1259,10 +1259,10 @@ async fn route_check_batches_admit_as_their_requests_would() {
 }
 
 #[tokio::test]
-async fn route_checks_count_default_once_a_call_per_credential() {
+async fn route_checks_count_the_defaults_once_a_call_per_credential() {
     let snapshot = snapshot_with(
         json!({}),
-        json!({ "default": { "requests": 2, "window_seconds": 60 } }),
+        json!({ "standard": { "requests": 2, "window_seconds": 60 } }),
     );
     let identity = ByChain::with(&[("acme", org(&["*"]))]);
     let (p, counter) = checks_pipeline(identity, AUTH_FAILURE);
@@ -1273,7 +1273,7 @@ async fn route_checks_count_default_once_a_call_per_credential() {
         async move {
             p.check_routes(
                 &snapshot.routes,
-                &snapshot.default_policy,
+                &snapshot.default_policies,
                 &credential,
                 &checks(&three),
                 IP,
@@ -1288,7 +1288,7 @@ async fn route_checks_count_default_once_a_call_per_credential() {
         Some((2, 1))
     );
     let bucket = format!(
-        "default:credential:{}",
+        "standard:credential:{}",
         crate::auth::admit::credential_hash(&key_credential())
     );
     assert_eq!(counter.buckets(), vec![bucket.clone()]);
@@ -1305,6 +1305,45 @@ async fn route_checks_count_default_once_a_call_per_credential() {
     // Another credential has its own budget; a JWT's is its issuer and subject.
     call(jwt_credential()).await.unwrap();
     assert_eq!(counter.count(&bucket), 2);
+}
+
+// defaults.rate_limit names the policies route checks count, whatever their
+// names: each counted per credential, checked together, the tightest reported.
+#[tokio::test]
+async fn route_checks_count_every_policy_defaults_rate_limit_names() {
+    let mut feed = fixture("catalog/gateway-feed.json");
+    feed["rate_limits"]["default"] = json!({ "requests": 1, "window_seconds": 1 });
+    feed["rate_limits"]["burst"] = json!({ "requests": 2, "window_seconds": 10 });
+    feed["rate_limits"]["standard"] = json!({ "requests": 5, "window_seconds": 60 });
+    feed["defaults"]["rate_limit"] = json!(["standard", "burst"]);
+    let snapshot = build(feed).unwrap();
+    let identity = ByChain::with(&[("acme", org(&["*"]))]);
+    let (p, counter) = checks_pipeline(identity, AUTH_FAILURE);
+    let key = key_credential();
+    let call = || run_checks(&p, &snapshot, &key, &[("GET", "/orgs/acme")]);
+    assert_eq!(call().await, Ok(vec![true]));
+    let hash = crate::auth::admit::credential_hash(&key_credential());
+    let mut buckets = counter.buckets();
+    buckets.sort();
+    assert_eq!(
+        buckets,
+        vec![
+            format!("burst:credential:{hash}"),
+            format!("standard:credential:{hash}")
+        ]
+    );
+    call().await.unwrap();
+    // burst is spent: refused, and standard isn't counted.
+    assert!(matches!(
+        call().await,
+        Err(Rejection::RateLimited {
+            retry_after: 10,
+            ..
+        })
+    ));
+    assert_eq!(counter.count(&format!("standard:credential:{hash}")), 2);
+    // `default` is an ordinary name: nothing counts it.
+    assert_eq!(counter.count(&format!("default:credential:{hash}")), 0);
 }
 
 #[tokio::test]

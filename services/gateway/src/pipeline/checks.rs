@@ -6,7 +6,7 @@
 
 use serde_json::Value;
 
-use super::{permitted, unauthorized, Counter, Pipeline, Rejection};
+use super::{permitted, tightest, unauthorized, Counter, Pipeline, Rejection};
 use crate::auth::admit::{credential_hash, Admit, AdmitCredential};
 use crate::auth::{AuthError, Presented};
 use crate::rate_limit::{Bucket, RateLimitInfo, Unavailable, Verdict};
@@ -125,8 +125,8 @@ pub enum CheckRefused {
     Unavailable,
 }
 
-/// The call's answer: each check's `allowed`, in order, and the `default`
-/// policy's numbers for the response.
+/// The call's answer: each check's `allowed`, in order, and the tightest
+/// default policy's numbers for the response.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Checked {
     pub allowed: Vec<bool>,
@@ -146,19 +146,20 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
     }
 
     /// The whole call, once its credential and body are read: one count of
-    /// `default` for the credential, then each check in order. A check admits
+    /// each policy `defaults.rate_limit` names for the credential, then each
+    /// check in order. A check admits
     /// as its request would; a check that needs no admit never calls identity.
     /// Admit refusing the credential on any check is the call's **401**,
     /// counted once by the failed-auth limiter.
     pub async fn check_routes(
         &self,
         routes: &RouteMap,
-        default: &Policy,
+        defaults: &[Policy],
         credential: &AdmitCredential,
         checks: &[Check],
         ip: &str,
     ) -> Result<Checked, Rejection> {
-        let rate_limit = self.limit_credential(default, credential).await?;
+        let rate_limit = self.limit_credential(defaults, credential).await?;
         let mut allowed = Vec::with_capacity(checks.len());
         for check in checks {
             match self
@@ -224,27 +225,29 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         Ok(permitted(&route.required, &answer.permissions))
     }
 
-    /// One count of `default` per credential: a route checks call, or a
-    /// service account refused on a user route. The bucket is the same.
+    /// One count of each policy `defaults.rate_limit` names, per credential:
+    /// a route checks call, or a service account refused on a user route. The
+    /// buckets are the same. Checked and counted together, as on a route; Ok
+    /// carries the tightest one's numbers.
     pub(super) async fn limit_credential(
         &self,
-        default: &Policy,
+        defaults: &[Policy],
         credential: &AdmitCredential,
     ) -> Result<Option<RateLimitInfo>, Rejection> {
-        let bucket = Bucket {
-            key: format!(
-                "{}:credential:{}",
-                default.name,
-                credential_hash(credential)
-            ),
-            requests: default.requests,
-            window_seconds: default.window_seconds,
-        };
-        match self.counter.check(&[bucket]).await {
-            Ok(Verdict::Allowed(infos)) => Ok(infos.into_iter().next()),
+        let hash = credential_hash(credential);
+        let buckets: Vec<Bucket> = defaults
+            .iter()
+            .map(|p| Bucket {
+                key: format!("{}:credential:{hash}", p.name),
+                requests: p.requests,
+                window_seconds: p.window_seconds,
+            })
+            .collect();
+        match self.counter.check(&buckets).await {
+            Ok(Verdict::Allowed(infos)) => Ok(tightest(infos)),
             Ok(Verdict::Exceeded { retry_after, infos }) => Err(Rejection::RateLimited {
                 retry_after,
-                info: infos.into_iter().next(),
+                info: tightest(infos),
             }),
             Err(Unavailable) => Err(Rejection::Unavailable),
         }
