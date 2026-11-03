@@ -224,6 +224,25 @@ func TestEvaluationChanges(t *testing.T) {
 	}
 }
 
+// A role may grant a permission no route requires: the control plane accepts
+// it, and only evaluations check it (docs/reference/config/roles.md).
+func TestEvaluationOnlyPermission(t *testing.T) {
+	e, tr := evalSetup(t)
+	body := evalBody(tr.bob, "project", tr.web.ID, "reports:export")
+	if e.decide(body) {
+		t.Fatal("granted before any role grants it")
+	}
+	cfg := strings.Replace(testConfig, `"permissions": ["project:read", "project:write"]`,
+		`"permissions": ["project:read", "project:write", "reports:export"]`, 1)
+	if cfg == testConfig {
+		t.Fatal("config unchanged")
+	}
+	e.src.Store(parseConfig(t, cfg))
+	if !e.decide(body) {
+		t.Fatal("a role granting reports:export doesn't grant it")
+	}
+}
+
 // Top-level subject, action, resource and context are defaults; a key in an
 // item replaces the default whole. No items is one evaluation.
 func TestEvaluationsDefaults(t *testing.T) {

@@ -2,7 +2,7 @@
 
 Plat5 **identity**: the tree of nodes, and the principals, users, members, bindings, keys and invites in it.
 
-Contracts: [identity API](../../docs/reference/api/identity.md), [internal APIs](../../docs/reference/api/internal.md), [lifecycle](../../docs/concepts/lifecycle.md), [schema](../../docs/internals/identity-schema.md). Its gateway routes are its [resources](../../docs/reference/config/resources.md), expanded by the control plane: nothing is generated.
+Contracts: [identity API](../../docs/reference/api/identity.md), [internal APIs](../../docs/reference/api/internal.md), [lifecycle](../../docs/concepts/lifecycle.md), [schema](../../docs/internals/identity-schema.md). Its gateway routes are the ones `services/identity.yml` lists, as `plat5 routes generate` writes them ([generated routes](../../docs/reference/config/generated-routes.md#identitys-routes)); the control plane serves the file as written.
 
 ## Layout
 
@@ -25,7 +25,7 @@ TEST_DATABASE_URL='postgres://postgres:test@localhost:55999/postgres?sslmode=dis
 
 Without `TEST_DATABASE_URL`, tests that need Postgres are skipped.
 
-`members/catalog_test.go` walks every identity route the gateway serves the way the gateway sends it: the routes from the control plane's `fixtures/catalog/gateway-feed.json`, the config from `fixtures/catalog/identity-feed.json`. Regenerate those there when the resources change.
+`members/catalog_test.go` walks every identity route the gateway serves the way the gateway sends it: the routes from the control plane's `fixtures/catalog/gateway-feed.json`, the config from `fixtures/catalog/identity-feed.json`. Regenerate those there (`UPDATE_FIXTURES=1 cargo test`) when `fixtures/catalog/` changes.
 
 ## Local
 

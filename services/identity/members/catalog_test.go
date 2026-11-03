@@ -12,8 +12,8 @@ import (
 	"github.com/plat5dev/plat5/identity/nodes"
 )
 
-// Identity's resources, expanded by the control plane into the routes the
-// gateway serves, against identity: every upstream is served with its
+// Identity's routes, as plat5 routes generate writes them and the control
+// plane serves them to the gateway, against identity: every upstream is served with its
 // documented status, and every permission-gated route admits a member whose
 // only grant is that permission. The routes are the control plane's own
 // output for organization > project > environment
@@ -229,6 +229,17 @@ func (e *edgeEnv) edge(subject, method, target, body string) response {
 }
 
 // want sends the request and fails unless it answers status.
+// addBySubject adds a person to the root by IdP subject, straight to
+// identity: the generated routes leave it out of the gateway
+// (docs/reference/config/generated-routes.md), so it's an operator's or
+// provisioning's call.
+func (e *edgeEnv) addBySubject(rootID, subject, role string) string {
+	e.t.Helper()
+	r := e.call("POST", "/nodes/"+rootID+"/members", "", fmt.Sprintf(`{"idp": {"issuer": "https://idp.test", "subject": %q}, "role": %q}`, subject, role))
+	e.expect(r, 201, "add "+subject)
+	return r.str("id")
+}
+
 func (e *edgeEnv) want(status int, subject, method, target, body string) response {
 	e.t.Helper()
 	r := e.edge(subject, method, target, body)
@@ -297,7 +308,7 @@ func TestCatalogEveryUpstreamIsServed(t *testing.T) {
 			t.Fatalf("%s: %v, want %s", path, got, want)
 		}
 	}
-	bob := e.want(201, "alice", "POST", "/orgs/gruow/members", `{"idp": {"issuer": "https://idp.test", "subject": "bob"}, "role": "member"}`).str("id")
+	bob := e.addBySubject(org, "bob", "member")
 
 	// Below the root, gus redeems each invite and becomes a guest; at the
 	// root, the member to bind is gus, and rita redeems to join.
@@ -445,11 +456,11 @@ func (e *edgeEnv) nodeAt(path string) *nodes.Node {
 func TestCatalogListsReadTheListPermission(t *testing.T) {
 	_, routes := catalog(t, nil)
 	e := setupCatalog(t, roleForEachPermission(routes))
-	e.want(201, "alice", "POST", "/orgs", `{"display_name": "Gruow", "slug": "gruow"}`)
+	org := e.want(201, "alice", "POST", "/orgs", `{"display_name": "Gruow", "slug": "gruow"}`).str("id")
 	top := e.want(201, "alice", "POST", "/orgs/gruow/projects", `{"display_name": "Gatheroom", "slug": "gatheroom"}`).str("id")
 	other := e.want(201, "alice", "POST", "/orgs/gruow/projects", `{"display_name": "Apps", "slug": "apps"}`).str("id")
 	env := e.want(201, "alice", "POST", "/orgs/gruow/projects/apps/envs", `{"display_name": "Prod", "slug": "prod"}`).str("id")
-	bob := e.want(201, "alice", "POST", "/orgs/gruow/members", `{"idp": {"issuer": "https://idp.test", "subject": "bob"}, "role": "nobody"}`).str("id")
+	bob := e.addBySubject(org, "bob", "nobody")
 
 	check := func(what, target string, want ...string) {
 		t.Helper()

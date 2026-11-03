@@ -144,6 +144,23 @@ func TestMembersAndGuests(t *testing.T) {
 	if r.status != 422 || r.message() != "Delete the service account to remove it." {
 		t.Fatalf("remove service account member: %d %s", r.status, r.message())
 	}
+
+	// DELETE on a membership is the members DELETE: a public membership route
+	// reads and leaves through one upstream. A root only.
+	leaver := e.join(org, "leaver", "member")
+	e.expect(e.call("GET", "/nodes/"+org.ID+"/memberships/"+leaver, "", ""), 200, "membership")
+	before = e.lastEvent()
+	e.expect(e.call("DELETE", "/nodes/"+org.ID+"/memberships/"+leaver, "", ""), 204, "leave")
+	if !e.removed(leaver) {
+		t.Fatal("left member isn't removed")
+	}
+	if got := e.eventsAfter(before); !slices.Equal(got, []string{"member.removed " + leaver + " " + org.ID + " person"}) {
+		t.Fatalf("events %v", got)
+	}
+	e.expect(e.call("DELETE", "/nodes/"+org.ID+"/memberships/"+leaver, "", ""), 204, "leave again")
+	e.expect(e.call("DELETE", "/nodes/"+p.ID+"/memberships/"+guest, "", ""), 404, "below a root")
+	r = e.call("DELETE", "/nodes/"+org.ID+"/memberships/"+sa, "", "")
+	e.expect(r, 422, "a service account's membership")
 }
 
 func TestBindings(t *testing.T) {

@@ -43,6 +43,9 @@ func (h *Handler) Mount(r fiber.Router) {
 	r.Patch("/nodes/:node_id/bindings/:binding_id", h.PatchBinding)
 	r.Delete("/nodes/:node_id/bindings/:binding_id", h.DeleteBinding)
 	r.Get("/nodes/:node_id/memberships/:member_id", h.Membership)
+	// The same as the members DELETE, so a public membership route reads and
+	// leaves through one upstream. A root only, like it.
+	r.Delete("/nodes/:node_id/memberships/:member_id", h.RemoveMember)
 
 	r.Get("/nodes/:node_id/members", h.ListMembers)
 	r.Post("/nodes/:node_id/members", h.AddMember)
