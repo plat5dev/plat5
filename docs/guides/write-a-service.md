@@ -54,21 +54,18 @@ A node is identity's: its id, kind, parent, slug, display name and status. Anyth
 
 **When a field must exist from the start**, the service owns the create:
 
-1. The deployment turns identity's create off for that kind, and gives the collection path to the service's route:
+1. The deployment deletes identity's create for that kind from `services/identity.yml`, keeping the collection's `GET`, and gives the collection path to the service's route:
 
    ```yaml
-   # services/identity.yml
-   identity:
-     url: http://identity:3000
-     kinds:
-       project:
-         resources:
-           children:
-             methods:
-               POST: false
+   # services/identity.yml, in the organization scope
+   - path: /projects
+     upstream: /nodes/{organization.id}/children/project
+     methods:
+       GET: { required_permissions: any_member }
+       # POST deleted: the service creates projects
    ```
 
-   The service's route is `POST /projects` in its `organization` scope (`POST /orgs/{organization}/projects`), requiring what identity's did, `project:create` by default ([resources](../reference/config/resources.md)). `GET` on the collection stays identity's.
+   The service's route is `POST /projects` in its `organization` scope (`POST /orgs/{organization}/projects`), requiring what identity's did, `project:create` as generated ([generated routes](../reference/config/generated-routes.md)). Regenerating puts identity's `POST` back, so delete it again when you review the diff.
 2. The service validates its fields first. Then it creates the node through identity's service API, `POST /nodes/{parent id}/children/project` with `{ display_name, slug? }`, passing the caller's `X-Plat5-Member-Id`, so the creator is bound when the kind binds its creator ([identity's API](../reference/api/identity.md)).
 3. It inserts its own row. If that fails, it deletes the node through identity (`DELETE /nodes/{node id}`) and answers with its error.
 4. It sets `X-Plat5-Audit-Created` to the new node's id ([audit](../concepts/audit.md#what-a-service-adds)).
@@ -77,7 +74,7 @@ A node deleted in step 3 is a deleted node like any other until its purge, after
 
 If that node is restored, it still has no row. The service treats the missing row as not set up: its other routes for the node answer **409** until the console sends the fields with `PUT`.
 
-For a root kind, the resource is `roots` (`kinds.<kind>.resources.roots`), the service's route is a `user` route, and identity's create is `POST /roots/{kind}`, passing the caller's `X-Plat5-User-Id`. A user route names the tree it changed with `X-Plat5-Audit-Nodes` and `X-Plat5-Audit-Member`.
+For a root kind, the route to delete is identity's `user`-scope create (`POST /orgs` for `organization`), the service's route is a `user` route, and identity's create is `POST /roots/{kind}`, passing the caller's `X-Plat5-User-Id`. A user route names the tree it changed with `X-Plat5-Audit-Nodes` and `X-Plat5-Audit-Member`.
 
 ## Checking access outside a request
 

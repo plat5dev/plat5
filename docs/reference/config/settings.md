@@ -13,6 +13,7 @@ users:
 route_checks:
   path: /access/routes
 defaults:
+  rate_limit: [standard]
   timeouts: { connect: 10s, read: 30s }
   max_body_bytes: 10485760
 ```
@@ -28,13 +29,14 @@ defaults:
 | `sync` | When a sign-in sets the name. `first_sign_in`: only while the person's name is empty. `each_sign_in`: on every sign-in with a non-empty claim, and the person can't change it themselves. Default `first_sign_in` |
 | `route_checks` | The gateway's route checks: whether the caller may call each of a batch of routes, for a UI that hides what the caller can't use ([gateway](../gateway.md#route-checks)) |
 | `path` | Where the gateway answers them, for `POST`. Literal segments of lowercase letters, digits, `-`, `_` and `.`, none starting with `.`; at most 256 characters. No route may match it, in any method (**422**, naming the route). Default `/access/routes` |
-| `defaults` | What a service gets for a field it leaves out |
+| `defaults` | Required. What a route or a service gets for a field it leaves out |
+| `rate_limit` | Required. One or more policies from `rate_limits`, unique, none with `count_at`: what a route without `rate_limit` uses, and what the gateway counts its route checks and a service account refused on a user route against ([rate limits](rate-limits.md#on-a-route)) |
 | `timeouts` | `{ connect, read }`, each a duration. Default `10s` and `30s` |
 | `max_body_bytes` | The largest request body the gateway forwards, in bytes. Default `10485760` (10 MiB) |
 <!-- end generated -->
 
 What `users.name` does at sign-in, and who else can set a person's name: [IdP](../idp.md#a-persons-name). What the gateway answers at `route_checks.path`: [route checks](../gateway.md#route-checks).
 
-A service's own `timeouts` and `max_body_bytes` override these ([services](services.md#service-fields)). The default rate limit is the `default` policy, which every config has ([rate limits](rate-limits.md#on-a-route)).
+A route's own `rate_limit`, and a service's own `timeouts` and `max_body_bytes`, override these ([services](services.md#service-fields)).
 
 The issuer, the JWKS, the accepted audiences and the subject claim are trust anchors, kept in the gateway's environment ([`reference/env.md`](../env.md#gateway)).

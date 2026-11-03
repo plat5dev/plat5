@@ -43,7 +43,7 @@ Identity resolves `chain` by kind name only and doesn't check it against its kin
 | Admit result | Status |
 |--------------|--------|
 | `valid: false` | **401**, counted by the failed-auth limiter |
-| `principal: "service_account"` on a user route | **403**, after one count of `default` per credential ([rate limits](../gateway.md#rate-limits)), not counted by the failed-auth limiter |
+| `principal: "service_account"` on a user route | **403**, after one count of each `defaults.rate_limit` policy per credential ([rate limits](../gateway.md#rate-limits)), not counted by the failed-auth limiter |
 | `member_id: null` on a kind route | **403**, before the rate limit, counted by the failed-auth limiter |
 | `permissions` share none with the route, and the route isn't `any_member` | **403**, after the rate limit |
 | Otherwise | Forwarded |
@@ -178,11 +178,11 @@ AuthZEN gives an error status and a message string, with no shape for the body; 
 
 ## Control plane feeds
 
-On `INTERNAL_PORT`. Each is one read, at one head, in one Postgres snapshot.
+On `INTERNAL_PORT`. Each is one read, at one head, in one Postgres snapshot. Each answers the body stored with that revision at apply, as it was expanded then ([revisions](../../concepts/config.md#revisions)); a feed read expands nothing.
 
 | Path | Reader | `200` body |
 |------|--------|------------|
-| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "rate_limits", "cors", "users", "route_checks" }`. **404** before the first apply. `users` gives the gateway `name.claims`, the JWT claims it reads for the `name` it sends to admit. `route_checks` gives it `path`, where it answers [route checks](../gateway.md#route-checks) |
+| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "rate_limits", "defaults", "cors", "users", "route_checks" }`. **404** before the first apply. `defaults` gives the gateway `rate_limit`, the policies it counts route checks and a service account on a user route against. `users` gives it `name.claims`, the JWT claims it reads for the `name` it sends to admit. `route_checks` gives it `path`, where it answers [route checks](../gateway.md#route-checks) |
 | `GET /internal/identity` | identity | `{ "revision", "deletion_grace", "reserved_slugs", "users", "kinds", "roles", "creator_role" }`. **404** before the first apply. `users` gives identity `name.sync` |
 
 The gateway's `services` are expanded: each service's `url`, `timeouts` and `max_body_bytes` with `defaults` filled in, and its `routes` as the gateway matches them, one per method:
@@ -190,10 +190,10 @@ The gateway's `services` are expanded: each service's `url`, `timeouts` and `max
 ```json
 { "path": "/orgs/{organization}/projects/{project}/plans/{plan_id}/versions", "method": "POST",
   "scope": "project", "upstream": "/projects/{project.id}/plans/{plan_id}/versions",
-  "required_permissions": ["catalog:write"], "rate_limit": ["default"], "audit": true, "allow_deleted": false }
+  "required_permissions": ["catalog:write"], "rate_limit": ["standard"], "audit": true, "allow_deleted": false }
 ```
 
-Identity's and audit's resources are expanded the same way. `rate_limit` is resolved (`[]` for none), `audit` is the method default filled in (`false` in `public`, which is never audited), and `required_permissions` is a list or `"any_member"` (`null` outside a kind scope). Roles are served as written, with `includes`; identity resolves them. Other keys are the config's own ([config](../../concepts/config.md#the-config)), with defaults filled in: `deletion_grace` `30d`, `reserved_slugs` `[]`, `users` `{ "name": { "claims": ["name", "preferred_username"], "sync": "first_sign_in" } }` (each field filled in on its own), `route_checks` `{ "path": "/access/routes" }`, and `cors` `{ "allowed_origins": [], "allowed_headers": [] }` when the config has none.
+`rate_limit` is resolved (`defaults.rate_limit` for a route that names none, `[]` for `false`), `audit` is the method default filled in (`false` in `public`, which is never audited), and `required_permissions` is a list or `"any_member"` (`null` outside a kind scope). Roles are served as written, with `includes`; identity resolves them. Kinds are served with `list_permission` filled in. Other keys are the config's own ([config](../../concepts/config.md#the-config)), with defaults filled in: `deletion_grace` `30d`, `reserved_slugs` `[]`, `users` `{ "name": { "claims": ["name", "preferred_username"], "sync": "first_sign_in" } }` (each field filled in on its own), `route_checks` `{ "path": "/access/routes" }`, and `cors` `{ "allowed_origins": [], "allowed_headers": [] }` when the config has none.
 
 Without `after`, the answer is immediate. With `?after={revision}`, the control plane waits until the head is past `after`, for up to 25 seconds. Nothing newer in that time is **204**, and the reader asks again. A cursor ahead of the head (the store was reset) is answered at once.
 

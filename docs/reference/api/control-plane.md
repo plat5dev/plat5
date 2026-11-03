@@ -25,9 +25,9 @@ Admin API routes require `Authorization: Bearer <ADMIN_TOKEN>`, compared in cons
 |--------|------|-------|
 | `POST` | `/apply?dry_run=true` | The plan. Writes nothing |
 | `POST` | `/apply` | Apply, with `expect`. JSON or YAML |
-| `GET` | `/config` | The current config, as applied, and its `revision`. **404** before the first apply |
+| `GET` | `/config` | The head revision's source, the config as applied, and its `revision`. **404** before the first apply |
 | `GET` | `/revisions` | History, newest first: `revision`, `created_at`, `request_id`, and the plan's `summary` |
-| `GET` | `/revisions/{rev}` | The config at that revision |
+| `GET` | `/revisions/{rev}` | That revision's source, as applied ([revisions](../../concepts/config.md#revisions)) |
 | `GET` | `/status` | <a id="status"></a>Where each reader replica stands ([below](#reader-status)) |
 | `GET` | `/schema` | The JSON Schema for the config and each document. No token |
 
@@ -47,7 +47,7 @@ Validation, auth and empty-body failures use the Plat5 envelope ([`reference/err
 
 ## Dry run
 
-A dry run answers the plan ([config](../../concepts/config.md#the-plan)) plus `services`: every service in the planned config, identity and audit included, expanded exactly as the gateway feed serves them ([feeds](internal.md#control-plane-feeds)), each with its `url`, `timeouts`, `max_body_bytes` and `routes`. It's the config as it would be after the apply, not the change. `plat5 routes list` prints its routes.
+A dry run answers the plan ([config](../../concepts/config.md#the-plan)) plus `services`: every service in the planned config, expanded by the running control plane exactly as the gateway feed would serve them after the apply ([feeds](internal.md#control-plane-feeds)), each with its `url`, `timeouts`, `max_body_bytes` and `routes`. It's the config as it would be after the apply, not the change. `plat5 routes list` prints its routes.
 
 ```json
 { "revision": 41, "summary": { … }, "changes": [ … ],

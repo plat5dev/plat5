@@ -2,7 +2,7 @@
 
 Each service is one file, listed in `plat5.yml`'s `services` ([config](../../concepts/config.md#the-config)). The file's one top-level key is the service's name; under it sit the service's own settings and its routes, grouped by scope. How the gateway uses them: [access](../../concepts/access.md#how-a-request-is-decided), [`reference/gateway.md`](../gateway.md).
 
-`identity` and `audit` are reserved names: their files take `resources` instead of `scopes` ([resources](resources.md)).
+Identity's and audit's files are service files like any other, written by `plat5 routes generate` ([generated routes](generated-routes.md)).
 
 ## Format
 
@@ -41,7 +41,7 @@ With the kinds in [kinds](kinds.md), the versions route is `GET` and `POST /orgs
 <!-- generated from schema with types: services.json#/$defs/service_name services.json#/$defs/service/properties -->
 | Field | Type | Rule |
 |-------|------|------|
-| service name | `string` | The file's one top-level key: 1–128 of `[A-Za-z0-9._-]`. `identity` and `audit` take [resources](resources.md). The `service` on every audit event |
+| service name | `string` | The file's one top-level key: 1–128 of `[A-Za-z0-9._-]`. No name is reserved. The `service` on every audit event |
 | `url` | `string` | Upstream, exactly `http://host:port` (explicit port, no path, no query), from the **gateway's** network view. `https://` is **422**: TLS upstreams aren't supported. Credentials in the URL, a port outside 1–65535, or any other form is **422** |
 | `timeouts` | `{connect, read}?` | Upstream timeouts, each a duration. One left out uses `defaults.timeouts` ([settings](settings.md)) |
 | `max_body_bytes` | `integer?` | The largest request body forwarded to this service. Larger is **413**. Omitted uses `defaults.max_body_bytes` |
@@ -66,7 +66,7 @@ With the kinds in [kinds](kinds.md), the versions route is `GET` and `POST /orgs
 | `upstream` | `string?` | A full upstream template, replacing `upstream_prefix` plus `path` |
 | `methods` | `array<string> \| map<string, null \| method>` | The verbs: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`. A list is a map with no overrides. In a map, each verb's `required_permissions`, `rate_limit` and `audit` override the route's |
 | `required_permissions` | `array<string> \| "any_member"?` | Any one of these permissions admits. `any_member` admits any member of the tree, guests included. Required for every verb in a kind scope, from the route or the verb. Not in `user` or `public` |
-| `rate_limit` | `array<string> \| false?` | Policies from `rate_limits` ([rate limits](rate-limits.md)). Omitted: `[default]`. `false`: none |
+| `rate_limit` | `array<string> \| false?` | Policies from `rate_limits` ([rate limits](rate-limits.md)). Omitted: the policies `defaults.rate_limit` names. `false`: none |
 | `audit` | `bool?` | Omitted: the method default. Not in `public` |
 | `allow_deleted` | `bool?` | Default `false`. `true` lets the route's node be deleted (not purged); its own bindings are kept until purge and still count here, so whoever managed the node can restore it. For identity's restore route ([`reference/api/internal.md`](../api/internal.md#admit)). Kind scopes only |
 <!-- end generated -->
@@ -144,5 +144,5 @@ The [schema](../../concepts/config.md#schema) defines the shape, and the control
 - Placeholders and upstreams as [above](#upstream)
 - `required_permissions` stated for every verb in a kind scope; absent in `user` and `public`
 - `allow_deleted` only in a kind scope; `audit` not in `public`
-- Every `rate_limit` name is a policy; a policy with `count_at` only in a kind scope, at that kind or an ancestor. `default` has no `count_at`
+- Every `rate_limit` name is a policy; a policy with `count_at` only in a kind scope, at that kind or an ancestor
 - Timeouts are durations; `max_body_bytes` at least 1

@@ -61,7 +61,7 @@ GET /users/{user_id}/audit-events
 
 On audit's public port. The first is a node's log: every event whose `nodes` or `named_node_ids` contain it, or whose `created_id` is it, so the node and everything below it. In it, a named event's `actor.member_id` is `named_member_id`, its `actor.user_id` is `null`, and `actor_member_id` filters on the named member: a user id never appears outside the person's own log. The second is a person's own log: the user-route events whose actor is that user.
 
-Audit's resources publish them: `GET …/audit-events` at every kind with `audit:read`, and `GET /user/audit-events` for the caller's own ([resources](../config/resources.md#audits-defaults)). Reading a project's history takes `audit:read` at the project, or at the org.
+Audit's generated routes publish them: `GET …/audit-events` at every kind with `audit:read`, and `GET /user/audit-events` for the caller's own ([generated routes](../config/generated-routes.md#audits-routes)). Reading a project's history takes `audit:read` at the project, or at the org.
 
 | Query | |
 |-------|--|

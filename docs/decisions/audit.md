@@ -33,7 +33,7 @@ Why audit events carry the node chain, live in one log per root and per person, 
 
 | Decision | Why |
 |----------|-----|
-| Each kind gets an audit route from audit's resources, instead of a `?node=` filter | The gateway can check permissions only at the route's node; a filter would let an org-level permission read below, or a project-level one read above |
+| Each kind gets its own audit route (the generator writes one per kind), instead of a `?node=` filter | The gateway can check permissions only at the route's node; a filter would let an org-level permission read below, or a project-level one read above |
 | Reading is `audit:read`, with no kind in the name, checked at the node or above | A binding's reach is where it sits and below, so a role bound at a project already delegates that project's history without the org's. Two kinds of tree that need different audit readers use two roles |
 | `GET /user/audit-events` is the caller's own user-route events, with no permission | A person can always see what they did with their own account |
 | Reads filter by response status | "What failed" is the first question in an incident |

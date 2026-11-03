@@ -43,7 +43,7 @@ A person has one name across every tree, shown by member lookups and `GET /user`
 
 A sign-in with no name claim, or only empty ones, leaves the name as it is in both modes.
 
-**By the person.** `PATCH /user { name }` on the user scope ([resources](config/resources.md#identitys-defaults)). `null` clears it, so under `first_sign_in` the next sign-in with a claim sets it again.
+**By the person.** `PATCH /user { name }` on the user scope ([generated routes](config/generated-routes.md#identitys-routes)). `null` clears it, so under `first_sign_in` the next sign-in with a claim sets it again.
 
 **By an operator.** `PATCH /users/{user_id} { name }` on identity's service API ([identity's API](api/identity.md#users)), in both modes, so an operator can always replace or clear an abusive name.
 

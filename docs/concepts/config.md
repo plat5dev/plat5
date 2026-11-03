@@ -1,6 +1,6 @@
 # Config
 
-The deployment's desired state: settings, kinds, roles, rate limits, CORS and services, as one config. The operator applies the whole config at once: a dry run shows the plan, and the apply carries a precondition that makes a stale plan fail. The control plane validates the config as a whole, records it as a revision in Postgres, and serves it to the gateway and identity. It is Plat5's only supported write path for any of these.
+The deployment's desired state: settings, kinds, roles, rate limits, CORS and services, as one config. The operator applies the whole config at once: a dry run shows the plan, and the apply carries a precondition that makes a stale plan fail. The control plane validates the config as a whole, records it as a revision in Postgres with the bodies it serves, and serves them to the gateway and identity. It is Plat5's only supported write path for any of these.
 
 ## What it holds
 
@@ -13,7 +13,7 @@ The control plane holds the operator's typed, deployment-wide state that changes
 | `roles`, `creator_role` | identity | [roles](../reference/config/roles.md) |
 | `rate_limits` | gateway | [rate limits](../reference/config/rate-limits.md) |
 | `cors` | gateway | [cors](../reference/config/cors.md) |
-| `services` | gateway | [services](../reference/config/services.md); identity's and audit's [resources](../reference/config/resources.md) |
+| `services` | gateway | [services](../reference/config/services.md); identity's and audit's [generated routes](../reference/config/generated-routes.md) |
 
 Each document has a published schema ([below](#schema)), and the [rules at apply](#validation-at-apply) check them together. There is no free-form key.
 
@@ -21,7 +21,7 @@ These stay out of it, as process env:
 
 | Kept out | Why |
 |----------|-----|
-| Wiring: URLs, ports, and `AUDIT_ENABLED`, whether the deployment runs an audit service | Needed to reach the control plane, or to boot, in the first place |
+| Wiring: URLs, ports, and `AUDIT_ENABLED` and `AUDIT_URL`, whether and where the gateway writes audit events | Needed to reach the control plane, or to boot, in the first place. Kept out of the config so the admin token can't turn audit off ([audit](audit.md#on-and-off)) |
 | Secrets: `ADMIN_TOKEN` | Not desired state |
 | Trust anchors: `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_ALLOWED_AUDIENCES`, `AUTH_SUBJECT_CLAIM` | Changing the issuer lets you sign in as anyone; `ADMIN_TOKEN` must not be able to |
 | `APIKEY_BRAND`, `ADMIT_CACHE_TTL`, `ADMIT_NEGATIVE_CACHE_TTL` | Set at boot; changing them while running buys nothing |
@@ -32,7 +32,7 @@ These stay out of it, as process env:
 Two kinds of file, split by owner, kept in a repo:
 
 - **`plat5.yml`** is the deployment's shape: settings, kinds, roles, rate limits and CORS. It's small, changes rarely, and belongs to whoever runs Plat5. It also lists the service files.
-- **One service file per service**: its URL, timeouts and routes. It belongs to that service's team. Identity's and audit's files hold only overrides of their [resources](../reference/config/resources.md).
+- **One service file per service**: its URL, timeouts and routes. It belongs to that service's team. Identity's and audit's files are the same shape, written for every kind by `plat5 routes generate` and then the deployment's to edit ([generated routes](../reference/config/generated-routes.md)).
 
 ```yaml
 # plat5.yml
@@ -64,7 +64,7 @@ The CLI reads `plat5.yml`, follows its `services` list, and sends one flat objec
 
 **The config is the whole desired state.** Each apply replaces everything: a service missing from `services` is removed, and the plan shows it. There is no per-document or per-service write.
 
-The config has no format key: its absence means the first format. A second format adds a `version` key, with a migration the CLI and control plane run. Any key the schema doesn't know is **422**.
+The config has no format key: its absence means the first format. A second format adds a `version` key, with a migration the CLI and control plane run. Any key the schema doesn't know is **422**, wherever a config is read: at apply, in a plan, and when `config pull` writes a revision out. A stored source the running version can't read fails loudly, never read with the field dropped or defaulted.
 
 The admin API: [`reference/api/control-plane.md`](../reference/api/control-plane.md). The CLI: [`reference/cli.md`](../reference/cli.md).
 
@@ -74,11 +74,11 @@ The control plane is the one validator: it checks the schema, then these rules, 
 
 1. Every `parent` is a kind, and there are no cycles. Kind names are lowercase identifiers and not `public`, `member` or `user`.
 2. Every `bindable_at` kind exists. Every role in `includes` exists, and includes don't cycle. `creator_role` is a role bindable at every kind.
-3. Every permission a role grants is required by some route, identity's and audit's included, or is a kind's `list_permission`. `*` is always allowed.
-4. Every route's scope is a kind, `user` or `public`, and its path, methods, permissions and upstream follow the [route rules](../reference/config/services.md#validation).
-5. No two routes, in one service or across services, have the same method and shape ([route matching](../reference/config/services.md#matching)). No route matches `route_checks.path`, where the gateway answers [route checks](../reference/gateway.md#route-checks), in any method.
-6. `rate_limits` has a `default` policy without `count_at`. Every `rate_limit` names a policy in `rate_limits`, and a policy's `count_at` is the route's kind or an ancestor.
-7. `identity` and `audit` name only their own resources and verbs, and kinds that exist ([resources](../reference/config/resources.md)).
+3. Every route's scope is a kind, `user` or `public`, and its path, methods, permissions and upstream follow the [route rules](../reference/config/services.md#validation).
+4. No two routes, in one service or across services, have the same method and shape ([route matching](../reference/config/services.md#matching)). No route matches `route_checks.path`, where the gateway answers [route checks](../reference/gateway.md#route-checks), in any method.
+5. Every policy `defaults.rate_limit` names is in `rate_limits` and has no `count_at`. Every route's `rate_limit` names a policy in `rate_limits`, and a policy's `count_at` is the route's kind or an ancestor.
+
+A role may grant any permission, whether or not a route requires it, and a route may require one no role grants ([roles](../reference/config/roles.md)).
 
 A kind with nodes can't be removed or change parent: those are [blocked](#blocked-changes) at plan time. Shape errors (a malformed duration, a reserved slug that isn't a slug, an unknown key) are reported by the [schema](#schema) before these run.
 
@@ -130,7 +130,7 @@ A dry run writes nothing. The apply recomputes the plan and is refused if anyone
     { "op": "change", "what": "service", "name": "identity",
       "routes": [
         { "op": "add", "method": "GET", "path": "/orgs/{organization}/projects/{project}/envs",
-          "after": { "scope": "project", "upstream": "/nodes/{project.id}/children/environment", "required_permissions": "any_member" } }
+          "after": { "scope": "project", "upstream": "/nodes/{project.id}/children/environment", "required_permissions": "any_member", "rate_limit": ["standard"] } }
       ] }
   ]
 }
@@ -140,8 +140,8 @@ Changes are ordered kinds, settings, roles, rate limits, CORS, services, then by
 
 - `revision` is the config revision the plan was made against, `0` before the first apply. The apply sends it back as `expect.revision`.
 - `what` is `kind`, `role`, `rate_limit`, `service`, `cors`, or `setting` (named `deletion_grace`, `reserved_slugs`, `users`, `route_checks`, `defaults` or `creator_role`). `op` is `add`, `change` or `remove`.
-- `before` and `after` show what changed, field by field: only the fields that differ, `before` absent on an add, `after` absent on a remove.
-- A service line lists its `routes`, expanded as the gateway will match them (full public path, method, scope, upstream, permissions, rate limits, audit), each with its own `op`, `before` and `after`. A service's own fields (`url`, `timeouts`, `max_body_bytes`) show in its `before` and `after`. Identity's and audit's routes change with the kinds, so adding a kind shows their new routes too.
+- `before` and `after` show what changed, field by field: only the fields that differ, `before` absent on an add, `after` absent on a remove. `before` comes from what readers are served now, the head's stored bodies; `after` is the new config, expanded by the running control plane. So after an upgrade, a plan of unchanged files shows exactly what the new version would serve differently ([upgrading](#upgrading)).
+- A service line lists its `routes`, expanded as the gateway will match them (full public path, method, scope, upstream, permissions, rate limits, audit), each with its own `op`, `before` and `after`. A service's own fields (`url`, `timeouts`, `max_body_bytes`) show in its `before` and `after`.
 - `summary` counts lines. A `blocked` line counts only in `blocked`.
 - Any `blocked` line stops the whole apply.
 
@@ -162,7 +162,7 @@ Everything else is safe:
 
 | Change | Effect |
 |--------|--------|
-| Kind added | Its nodes can be created at once; identity's and audit's resources give it routes |
+| Kind added | Its nodes can be created at once, through the routes the config gives it; `plat5 routes generate` writes identity's and audit's |
 | `deletion_grace` changed | Applies to new deletes only: identity stores `purge_after` on each node when it's deleted ([lifecycle](lifecycle.md#deleting-restoring-and-purging)) |
 | Role added, changed or removed; a kind added to or dropped from `bindable_at` | Bindings keep the role's name. A role that's gone, or not bindable at that kind, grants nothing, and grants again if a role with that name comes back. So don't reuse a removed role's name for something else |
 | Service or route added, changed or removed | A removed service's routes stop matching; its data is the service's |
@@ -181,7 +181,12 @@ A kind renamed reads as a remove plus an add. Tightened rules (a new reserved sl
 
 ## Revisions
 
-Each apply writes one revision: the whole config as sent, in one Postgres transaction, with the plan's summary. An apply whose plan has no changes writes nothing and answers the current revision. Revisions are kept. There's no restore endpoint: rolling back is applying an older revision's config ([CLI](../reference/cli.md)).
+Each apply writes one revision, in one Postgres transaction, with the plan's summary. A revision stores:
+
+- **the source**: the whole config as sent, for `config pull` and rollback;
+- **the served bodies**: the gateway's feed and identity's feed, expanded, with defaults filled in.
+
+A revision means one thing on every reader: the feeds serve its stored bodies and never expand them again. An apply whose plan has no changes writes nothing and answers the current revision. Revisions are kept. There's no restore endpoint: rolling back is applying an older revision's source, expanded by the running version, through the same plan ([CLI](../reference/cli.md)).
 
 The current revision is the **head**. Writes are serialized on it, so head order is commit order, and readers long-poll it.
 
@@ -189,7 +194,7 @@ A fresh deployment has no config: identity and the gateway wait for the first `p
 
 ## How a change reaches readers
 
-The gateway and identity long-poll the control plane's feeds ([`reference/api/internal.md`](../reference/api/internal.md#control-plane-feeds)), so an apply reaches every replica within about a second. The control plane expands every service's routes, identity's and audit's resources included, before serving them: the gateway parses the feed and builds its route table, nothing more.
+The gateway and identity long-poll the control plane's feeds ([`reference/api/internal.md`](../reference/api/internal.md#control-plane-feeds)), so an apply reaches every replica within about a second. Each feed serves the head's stored body: the control plane expanded every service's routes at apply, and the gateway parses the feed and builds its route table, nothing more.
 
 | | Gateway | Identity |
 |--|--|--|
@@ -202,4 +207,6 @@ Each gateway replica reports the revision it loaded, or the one it refused and w
 
 A reader never treats "nothing loaded" as an empty state: no routes would answer **404** for everything, and no roles would grant nothing to everyone.
 
-Upgrade the gateway with or before the control plane: a newer control plane can serve a snapshot an older gateway can't build, and that gateway keeps its last snapshot until it's upgraded.
+## Upgrading
+
+Upgrade the gateway with or before the control plane, then plan and apply. A new control plane serves the stored bodies as they are, so nothing changes for readers until then. The plan on unchanged files shows what the new version expands differently; an empty plan writes nothing. A body a newer control plane writes can be one an older gateway can't build: that gateway refuses it, keeps its last snapshot, and reports why, until it's upgraded. Steps: [deploy](../guides/deploy.md#pins).

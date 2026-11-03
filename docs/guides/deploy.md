@@ -98,7 +98,7 @@ AUTH_SUBJECT_CLAIM=properties.user_id   # Plat5 Auth; the default, sub, suits mo
 
 The tree's kinds, the roles and the routes live in the control plane, in `plat5.yml`, which you keep in a repo with the service files it lists ([`concepts/config.md`](../concepts/config.md#the-config)). A fresh stack has no config: identity and the gateway wait until you apply one with `plat5 apply`, which shows the plan first. Later changes go the same way, and identity and the gateway pick them up without a restart. Start from `plat5 init`'s files ([CLI](../reference/cli.md#the-local-stack)). Formats and rules: [`reference/config/kinds.md`](../reference/config/kinds.md), [`concepts/access.md`](../concepts/access.md).
 
-Audit is on by default: the gateway records each audited request in its tree's audit log, through the `audit` service. While audit is down, audited requests are **503**. `AUDIT_ENABLED=false` on the gateway says the deployment runs no audit service; then stop the `audit` service and leave `services/audit.yml` out of `plat5.yml`. Model and guarantees: [`concepts/audit.md`](../concepts/audit.md).
+Audit is on by default: the gateway records each audited request in its tree's audit log, through the `audit` service. While audit is down, audited requests are **503**. Writing events and publishing audit's read routes are separate settings ([on and off](../concepts/audit.md#on-and-off)): to run without audit, set `AUDIT_ENABLED=false` on the gateway, and leave `services/audit.yml` out of `plat5.yml` too if nobody should read old events. Model and guarantees: [`concepts/audit.md`](../concepts/audit.md).
 
 `POSTGRES_PASSWORD` is interpolated into `DATABASE_URL`. Use a **URL-safe** value (hex). `+` / `/` from raw base64 break the URL (`invalid port`).
 
@@ -153,7 +153,7 @@ plat5 routes list        # every route the gateway will serve, identity's and au
 plat5 apply              # plat5.yml and every service file it lists; shows the plan, asks to confirm
 ```
 
-Identity's and audit's routes come from their resources, for every kind, with defaults you override in their service files ([resources](../reference/config/resources.md)). Removing one hides it from the gateway; the identity process still serves it on the network. Grant your routes' permissions in `roles`, or only `*` holders can call them.
+Identity's and audit's routes are in their own service files, which `plat5 routes generate` writes for every kind and you then edit ([generated routes](../reference/config/generated-routes.md)). Deleting one hides it from the gateway; the identity process still serves it on the network. Grant your routes' permissions in `roles`, or only `*` holders can call them.
 
 Your writes are in their tree's audit log by default. Set `audit: false` on a write nobody needs there, and `audit: true` on a read worth recording ([`reference/config/services.md`](../reference/config/services.md#audit)).
 
@@ -205,4 +205,9 @@ The gateway starts serving once it has loaded routes from the control plane. Gat
 
 Images: `ghcr.io/plat5dev/{gateway,identity,control-plane,audit}:$PLAT5_VERSION` and `ghcr.io/plat5dev/auth:$AUTH_VERSION`. Tags are independent. Use released `v*` tags, not `latest`.
 
-Upgrade the gateway with or before the control plane. The gateway [refuses a whole snapshot](../reference/gateway.md#control-plane) it can't build, so a control plane that writes something an older gateway doesn't know leaves that gateway on its last snapshot until it's upgraded.
+To upgrade ([upgrading](../concepts/config.md#upgrading)):
+
+1. Upgrade the gateway, with or before the control plane. The gateway [refuses a whole snapshot](../reference/gateway.md#control-plane) it can't build, so a control plane that writes something an older gateway doesn't know leaves that gateway on its last snapshot until it's upgraded.
+2. Upgrade the control plane and identity. Readers keep being served the head revision's stored bodies, unchanged.
+3. `plat5 plan` on your unchanged files. It shows what the new version serves differently; review it.
+4. `plat5 apply`. An empty plan writes nothing.

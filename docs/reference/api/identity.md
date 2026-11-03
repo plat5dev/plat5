@@ -1,8 +1,8 @@
 # Identity service API
 
-What identity's [resources](../config/resources.md) point at, and what any other front door calls. Every path is ids; nothing here resolves slugs. Concepts: [access](../../concepts/access.md), [lifecycle](../../concepts/lifecycle.md).
+What identity's [generated routes](../config/generated-routes.md) point at, and what any other front door calls. Every path is ids; nothing here resolves slugs. Concepts: [access](../../concepts/access.md), [lifecycle](../../concepts/lifecycle.md).
 
-The service is a function of the URL. Its own API addresses everything by id: `/nodes/{node_id}/…`, `/users/{user_id}/…`. Slugs exist only at the gateway; identity's resources map public paths onto these.
+The service is a function of the URL. Its own API addresses everything by id: `/nodes/{node_id}/…`, `/users/{user_id}/…`. Slugs exist only at the gateway; identity's service file maps public paths onto these.
 
 Who may call is the front door. Identity doesn't know which front door called, and doesn't compare the caller to what it grants. It reads the caller on four routes only:
 
@@ -38,6 +38,7 @@ Each is optional: without it, nobody is bound, the list is the full list, and a 
 | `PATCH` | `/nodes/{node_id}/bindings/{binding_id}` | `{ role }` |
 | `DELETE` | `/nodes/{node_id}/bindings/{binding_id}` | **204**, and again **204** once it's gone. A person's member left with no bindings is removed. A service account's isn't |
 | `GET` | `/nodes/{node_id}/memberships/{member_id}` | [Membership](#membership): what that member holds here |
+| `DELETE` | `/nodes/{root_id}/memberships/{member_id}` | The same as `DELETE /nodes/{root_id}/members/{member_id}` ([members](#members)), so a public `…/membership` route reads and leaves through one upstream. A root only; any other node is **404** |
 
 ## Members
 
@@ -53,7 +54,7 @@ Each is optional: without it, nobody is bound, the list is the full list, and a 
 
 ## Users
 
-People, by user id. Not behind any default public route except the caller's own ([resources](../config/resources.md)); for an operator plane and other front doors.
+People, by user id. Not behind any generated public route except the caller's own ([generated routes](../config/generated-routes.md)); for an operator plane and other front doors.
 
 | Method | Path | Notes |
 |--------|------|--------|

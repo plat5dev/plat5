@@ -4,11 +4,11 @@ Keep `plat5.yml` and the service files in a repo, and change it only through `pl
 
 ## Add a kind at the bottom
 
-Add it to `kinds` in `plat5.yml` with its `parent` and `path`, grant its permissions in `roles`, add any service routes for it, and apply. Identity and audit give it their routes ([resources](../reference/config/resources.md)); the plan lists them. `plat5 routes list` shows the result.
+Add it to `kinds` in `plat5.yml` with its `parent` and `path`, then `plat5 routes generate` to write identity's and audit's routes for it ([CLI](../reference/cli.md#generating-identitys-and-audits-routes)). Review the diff and delete again any route you had dropped. Grant its permissions in `roles`, add any service routes for it, and apply; the plan lists the new routes. `plat5 routes list` shows the result.
 
 ## Remove a kind
 
-Delete its nodes first, through the node routes: the plan is blocked while the kind has nodes, deleted ones included, and lists some of them. Then remove it from `kinds`, with every route scoped to it and every role permission only its routes required, in one apply ([blocked changes](../concepts/config.md#blocked-changes)).
+Delete its nodes first, through the node routes: the plan is blocked while the kind has nodes, deleted ones included, and lists some of them. Then remove it from `kinds`, regenerate identity's and audit's files (or delete that kind's routes from them), and remove every other route scoped to it, in one apply ([blocked changes](../concepts/config.md#blocked-changes)). Role permissions only its routes required can stay or go.
 
 ## Change a kind's parent
 
@@ -20,11 +20,11 @@ Edit `roles` in `plat5.yml` and apply. Removing a role, or a kind from its `bind
 
 ## Change identity's or audit's routes
 
-Override their resources in `services/identity.yml` or `services/audit.yml`: a path, one verb's permissions, or `false` to remove a resource or a verb ([resources](../reference/config/resources.md)).
+Edit `services/identity.yml` or `services/audit.yml` like any service file: delete a route to drop it, change a `path` or a verb's permissions, then apply ([generated routes](../reference/config/generated-routes.md)). A later `plat5 routes generate` overwrites the edits, so review its diff.
 
 ## Roll back
 
-`plat5 config pull --revision n`, then `plat5 apply`. It goes through the same plan.
+`plat5 config pull --revision n`, then `plat5 apply`. It goes through the same plan ([revisions](../concepts/config.md#revisions)).
 
 ## Check for drift in CI
 

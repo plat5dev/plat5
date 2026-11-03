@@ -1,6 +1,6 @@
 # Build a console
 
-A console is a client of the gateway's routes, like a CLI or a script. It holds the person's IdP token and calls routes by slug. The routes below are the defaults ([resources](../reference/config/resources.md)); `plat5 routes list` shows a deployment's own.
+A console is a client of the gateway's routes, like a CLI or a script. It holds the person's IdP token and calls routes by slug. The routes below are the generated ones ([generated routes](../reference/config/generated-routes.md)); `plat5 routes list` shows a deployment's own.
 
 ## Signing in and the person
 
@@ -50,6 +50,7 @@ A form that creates a node can hold fields that belong to a service, such as a p
 - `GET /orgs/{organization}/members` lists the org's members, guests marked.
 - `GET …/roles` lists the roles bindable at that node, for a role picker ([`reference/api/identity.md`](../reference/api/identity.md#roles)).
 - Binding writes take a member id in the org and a role.
+- Adding a member by IdP subject (`POST /orgs/{organization}/members`) isn't a generated route ([generated routes](../reference/config/generated-routes.md#identitys-routes)). Offer it only when a route check for it answers `true`, which it does only where the deployment publishes the route.
 
 ## Inviting
 

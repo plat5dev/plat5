@@ -44,7 +44,7 @@ A credential carries its principal's bindings in the tree it's used in. Keys hav
 
 Bindings don't expire. Time-boxed access, such as support for a week, is a binding someone adds and removes.
 
-The roles document's fields: [`reference/config/roles.md`](../reference/config/roles.md). The permissions identity's and audit's routes require by default: [`reference/config/resources.md`](../reference/config/resources.md#the-default-permissions).
+The roles document's fields: [`reference/config/roles.md`](../reference/config/roles.md). The permissions identity's and audit's routes require by default: [`reference/config/generated-routes.md`](../reference/config/generated-routes.md#the-generated-permissions).
 
 ### Resolution
 

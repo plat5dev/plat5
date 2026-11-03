@@ -14,8 +14,9 @@ Every command takes the path to `plat5.yml`, default `./plat5.yml`, and follows 
 | `plat5 apply [plat5.yml]` | Dry run, show the diff, ask to confirm, apply, then report where the gateway's replicas stand |
 | `plat5 apply plan.json` | Apply a saved plan as it is. No prompt: the saved plan shows every change |
 | `plat5 apply [plat5.yml] --auto-approve` | Apply without the prompt |
-| `plat5 routes list [plat5.yml]` | Every service's expanded routes, identity's and audit's included: method, public path, scope, upstream and permissions, sorted by path. It sends the config as a dry run and prints the routes the control plane expanded ([dry run](api/control-plane.md#dry-run)), so it needs a control plane, local or deployed |
-| `plat5 config pull [--revision n] [dir]` | Write an applied revision out as `plat5.yml` plus `services/<service>.yml`, into a directory with no `.yml` files. Revisions are stored as sent, so it gives back what was applied |
+| `plat5 routes list [plat5.yml]` | Every service's routes as the gateway will match them: method, public path, scope, upstream and permissions, sorted by path. It sends the config as a dry run and prints the routes the control plane expanded ([dry run](api/control-plane.md#dry-run)), so it needs a control plane, local or deployed |
+| `plat5 routes generate [plat5.yml]` | Write identity's and audit's routes for every kind, overwriting `services/identity.yml` and `services/audit.yml` ([below](#generating-identitys-and-audits-routes)). Offline |
+| `plat5 config pull [--revision n] [dir]` | Write an applied revision's source out as `plat5.yml` plus `services/<service>.yml`, into a directory with no `.yml` files. A revision keeps its source as sent, so it gives back what was applied. A source that doesn't pass `plat5 validate` (a field this version doesn't know) is refused, naming the field, and nothing is written |
 
 The diff: `+` add, `~` change, `-` remove, each line with its changed fields, `before → after`, leaving out fields that are unset or empty. A service line lists its expanded routes the same way. Blocked lines print with what's in the way. Then the summary: `Plan: 2 to add, 1 to change, 0 to remove.`
 
@@ -23,7 +24,19 @@ After an apply, the CLI waits up to 10 seconds for every gateway replica to repo
 
 `plat5 plan --detailed-exitcode` exits `0` with no changes, `2` with changes, `1` on an error. A scheduled CI job running it against the repo's config shows drift: a deployment that no longer matches the repo.
 
-**Rolling back** is applying an older config: `plat5 config pull --revision 38`, then `plat5 apply`. It goes through the same plan.
+**Rolling back** is applying an older config: `plat5 config pull --revision 38`, then `plat5 apply`. It goes through the same plan, so the running version expands the old source and the plan shows what changes from what readers are served now.
+
+## Generating identity's and audit's routes
+
+`plat5 routes generate` reads `plat5.yml`'s `kinds` and writes `services/identity.yml` and `services/audit.yml` beside it. It overwrites them: each file's `url`, `timeouts` and `max_body_bytes` are kept when the file exists, and everything else is written afresh. Review the diff (`git diff`), and delete again any route you had dropped. It doesn't edit `plat5.yml`: the files publish their routes once `services` lists them. What it writes, route by route: [generated routes](config/generated-routes.md).
+
+| Rule | |
+|------|--|
+| Kinds | Every kind, in `plat5.yml` order: its own routes in its scope, its collection's routes in its parent's scope, and on a root, its member routes and its create in the `user` scope. Then the `user` scope's own routes |
+| Permissions | Written out per kind. A kind's permission prefix is its `list_permission` without `:read` when it ends in `:read`, else the kind's name. With the default `list_permission`, `<kind>:read`, that's the kind's own name; `list_permission: project:read` on `environment` gives an environment's routes `project:read`, `project:write`, `project:delete`, `project:create`, `project:bindings:read` and the rest |
+| Left out | `POST` on a root's `/members`: adding a member by raw IdP subject. A deployment that wants it adds the route |
+
+Regenerate after adding or removing a kind, or changing a kind's `path` or `list_permission`.
 
 ## The local stack
 
@@ -32,7 +45,7 @@ After an apply, the CLI waits up to 10 seconds for every gateway replica to repo
 | Command | Does |
 |---------|------|
 | `plat5 init [dir]` | Ask for a starter and the modules. `-y` takes `--template none` and every module. `--no-auth`, `--no-observability` and `--no-operator` turn a module off |
-| `plat5 init [dir] --template none` | Write a project: a `plat5.yml` with `organization`, `project` and `environment` kinds and the example roles, `services/identity.yml` (service accounts off at projects, invites off at environments) and `services/audit.yml`, `operator.routes.yml` from operator's shipped route list, and `plat5.dev.yml` |
+| `plat5 init [dir] --template none` | Write a project: a `plat5.yml` with `organization`, `project` and `environment` kinds and the example roles, `services/identity.yml` and `services/audit.yml` from the [generator](#generating-identitys-and-audits-routes) less init's choices (no service-account routes on projects; no invite routes and no binding `POST` on environments), `operator.routes.yml` from operator's shipped route list, and `plat5.dev.yml` |
 | `plat5 init [dir] --template <starter>` | The same, plus an API from a starter, a customer console and an operator console ([starters](#starters)) |
 | `plat5 start` | Run the stack, apply `plat5.yml`, seed the dev person, print links and keys. Running it again updates the stack in place |
 | `plat5 stop` | Stop the stack and your app. Data is kept |

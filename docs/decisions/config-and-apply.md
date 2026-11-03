@@ -15,14 +15,14 @@ Why the deployment's config is one document applied whole, through a plan, valid
 | `OPTIONS` isn't a route method | The gateway answers every `OPTIONS` as a preflight, so a route for it could never match |
 | A route under a child kind's collection is **422**; the collection itself is allowed | Otherwise a customer's project named `archived` is shadowed by a literal `/projects/archived`, unreachable by slug, with no error anywhere |
 | Two routes with the same method and shape are **422**, naming both, in one service or across services. A literal beats a param when matching | One of the two would be silently dead. Refusing at apply, with both field paths, says which |
-| Deployment defaults (upstream timeouts, `max_body_bytes`) sit in `defaults:` in `plat5.yml`; a service's own fields override them. Boot-only wiring, secrets and trust anchors stay env | Config decides what a deployment could decide, and a change is an apply, not a restart |
+| Deployment defaults (the default rate-limit policies, upstream timeouts, `max_body_bytes`) sit in `defaults:` in `plat5.yml`; a route's or a service's own fields override them. Boot-only wiring, secrets and trust anchors stay env | Config decides what a deployment could decide, and a change is an apply, not a restart |
 | The config is one flat object: `plat5.yml`'s keys, with `services` as a map of name to service | The documents are checked together anyway; one shape from the file to the control plane leaves nothing to translate |
 | The config has no format key. A second format adds `version`, with a migration | An absent key means the first format; a key with one possible value says nothing |
 | One published JSON Schema, `schema/`, compiled into the control plane and copied into the CLI. `GET /schema` needs no token | One definition of the config's shape, used by the validator, the CLI and editors alike. A schema isn't a secret, and editors fetch it |
 | Durations are `^[1-9][0-9]*(s\|m\|h\|d)$`, for timeouts too | One number, one unit: unambiguous and easy to show in a diff |
 | The control plane's errors name a field path (`services.e10s.scopes.project.routes[2].path`); the CLI adds the file | The control plane receives one body and can't know files. The CLI split the config into files, so it knows which file holds a path |
 | The control plane holds the deployment's typed desired state, and nothing else: no wiring, secrets or trust anchors | It must never become an untyped settings bag |
-| `AUDIT_ENABLED` stays env | It's wiring: whether the deployment runs an audit service. Events already written mean the same afterwards |
+| `AUDIT_ENABLED` and `AUDIT_URL` stay env, and decide only whether the gateway writes events; `services/audit.yml` only publishes audit's reads | Wiring, and the admin token must not be able to turn audit off. Events already written mean the same afterwards. Two settings with one job each are easier to read than one that means two things |
 
 ## Roles in the config
 
@@ -30,7 +30,7 @@ Why the deployment's config is one document applied whole, through a plan, valid
 |----------|-----|
 | A role can name other roles in `includes`, transitively, and grants their permissions plus its own. Only permissions are included. A cycle or a missing role is **422** | A role like `admin` stays the sum of the roles under it, and a permission added to one reaches every role that includes it. `bindable_at` is where a role makes sense, which an including role decides for itself |
 | Identity resolves includes when it reads the config; the feed carries roles as written | One place resolves them, and the plan shows the roles as the team wrote them |
-| A role permission no route requires is **422**. Identity's and audit's resources count, defaults included, and so does a kind's `list_permission`. A route permission no role grants is legal | The first is a typo or a removed route, and it would grant nothing forever. The second is a route meant for `*` holders only |
+| A role may grant any permission, whether or not a route requires it. A route permission no role grants is legal | A permission can be checked through identity's evaluation API as well as on a route, so the config can't tell an unused one from a service's own; a typo grants nothing. The second is a route meant for `*` holders only |
 | `role` is required on member add and on invites; there is no default role | Default-deny below the root is the role you give new members. A default that only fills an omitted field hides that choice |
 | One example role set, kept in the CLI's templates and shown in the docs. Its top role is `admin` with `*`, and no other role holds `bindings:write` | Whoever holds `bindings:write` can grant any role, so a second role holding it would be `admin` under another name |
 
@@ -41,15 +41,17 @@ Why the deployment's config is one document applied whole, through a plan, valid
 | The control plane is the one validator: the schema, the rules tying documents together, and route shapes, on every apply | It's the only writer of the config, so what it accepted is what every reader gets, and readers trust it. Two copies of the route rules drift apart |
 | The gateway parses the feed and builds its route table, nothing more. A snapshot it can't parse or build is refused whole and reported | A partial route table is a state nobody applied |
 | A contract test, not shared code: every fixture config the control plane accepts is fed through the gateway's builder in its tests | "Apply accepted it" provably means "the gateway can build it", without shared code between two services released apart |
-| Upgrade the gateway with or before the control plane | A newer control plane can accept what an older gateway can't build; the older one keeps its last snapshot |
+| Upgrade the gateway with or before the control plane, then plan and apply | A newer control plane can write a body an older gateway can't build; the older one keeps its last snapshot. Stored bodies don't change on upgrade, so the plan is where a new version's differences appear |
 
 ## Identity's and audit's routes
 
 | Decision | Why |
 |----------|-----|
-| Identity's and audit's routes come from resources with documented defaults, overridden per deployment, for every kind or one; nothing is generated | Generated files get edited, and the next generation overwrites the edits. Defaults plus overrides keep them and need nothing per kind |
-| The control plane expands them, with every other service's routes, before serving the gateway; identity's feed carries no routes | One expansion, in the one validator. Identity learns list visibility from `list_permission`, not from routes |
-| `plat5 routes list` prints every expanded route, and the plan shows route changes expanded | With defaults, the expanded routes are what a reader needs to see |
+| `services/identity.yml` and `services/audit.yml` are ordinary service files, listing their routes; the control plane adds nothing to them | The file is the truth: what's in it is what's served, read the same way as every other service. Defaults with an override language would be a second config language, harder to read than the routes it produces and harder to explain when an apply fails |
+| `plat5 routes generate` writes them for every kind, overwriting both; the user reviews the diff | The generator is scaffolding. Adding a kind is a regenerate and a review; the result is plain routes the deployment edits |
+| Routes name permissions literally; a kind carries no name for its permissions. The generator takes a kind's prefix from its `list_permission` | One kind reached through another's permissions is visible in its routes, not hidden behind a field that rewrote them |
+| The generated routes leave out adding a member by raw IdP subject | It trusts the caller to name a person by IdP subject: right for an operator plane or provisioning, not a default customer route. A deployment that wants it adds the route |
+| Identity serves `DELETE /nodes/{node_id}/memberships/{member_id}` beside the members route | Leaving a tree then has the same upstream as reading one's membership, so a route keeps one upstream for all its methods and the service-file shape doesn't grow |
 | `plat5 routes list` is a dry run: it prints the routes the control plane expanded | A second copy of the expansion in the CLI drifts from the one the gateway is served |
 
 ## Plan and apply
@@ -71,8 +73,11 @@ Why the deployment's config is one document applied whole, through a plan, valid
 |----------|-----|
 | One revision per apply; an apply with nothing to change writes none | A revision records a change; an apply that changes nothing has nothing to record |
 | Revisions store the config as sent. `config pull` writes `plat5.yml` and `services/<service>.yml` into a directory with no `.yml` files | Pull gives back what was written, not a normalized form with defaults filled in |
+| Revisions also store the bodies the feeds serve, expanded at apply; feeds never expand again | A revision must mean one thing on every reader. Expanding on each read would let a control-plane upgrade change what the gateway is served for the same revision, with no plan, and split a fleet between versions |
+| The plan compares the head's stored bodies with the new config expanded by the running code | After an upgrade, a plan of unchanged files shows what the new version changes, and applying it writes a revision like any other change |
+| The config is parsed strictly everywhere: an unknown field fails in apply, plan and pull | A stored source the running code can't read fails loudly instead of being read with a field silently dropped |
 | Every feed and `GET /config` answer **404** before the first apply | Nothing loaded never reads as empty |
-| Rolling back is applying an older revision's config through the same plan | One path for every change |
+| Rolling back is applying an older revision's source through the same plan, expanded by the running code | One path for every change; the plan shows what the rollback changes from what readers are served now |
 
 ## Readers
 
@@ -107,5 +112,5 @@ Why the deployment's config is one document applied whole, through a plan, valid
 | Decision | Why |
 |----------|-----|
 | The config reference pages' field tables are generated from the schema between markers. A test fails when they're stale; `UPDATE_DOCS=1` rewrites them. Prose stays hand-written | The field tables can't drift from the schema, and the explanation stays prose; generating whole pages would push prose into the schema |
-| `fixtures/catalog/` holds a config with one parent per kind and the expanded routes and identity feed the control plane serves for it. A control-plane test fails when they're stale (`UPDATE_FIXTURES=1` rewrites them); identity's, audit's and the gateway's tests read them | The control plane is Rust and identity and audit are Go. One expanded file every side tests against can't drift silently |
+| `fixtures/catalog/` holds a config with one parent per kind, its identity and audit files from the generator, and the expanded routes and identity feed the control plane serves for it. A control-plane test fails when they're stale (`UPDATE_FIXTURES=1` rewrites them); identity's, audit's and the gateway's tests read them | The control plane is Rust and identity and audit are Go. One expanded file every side tests against can't drift silently |
 | The CLI's schema copy and `init` files are checked against a `plat5` checkout beside the CLI, and skip without one | The CLI repo builds alone; the check runs wherever both are checked out, as in CI |

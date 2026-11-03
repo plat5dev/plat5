@@ -37,7 +37,7 @@
 | Doc | |
 |-----|--|
 | [config/settings](reference/config/settings.md), [kinds](reference/config/kinds.md), [roles](reference/config/roles.md), [rate limits](reference/config/rate-limits.md), [cors](reference/config/cors.md), [services](reference/config/services.md) | Config documents. Field tables generated from `schema/` |
-| [config/resources](reference/config/resources.md) | Identity's and audit's routes: their resources, defaults and default permissions |
+| [config/generated-routes](reference/config/generated-routes.md) | Identity's and audit's routes as `plat5 routes generate` writes them, and the permissions they use |
 | [api/identity](reference/api/identity.md) | Identity's service API |
 | [api/control-plane](reference/api/control-plane.md) | The admin API |
 | [api/audit](reference/api/audit.md) | Audit events and reads |
