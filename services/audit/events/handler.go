@@ -36,7 +36,7 @@ func (h *Handler) MountInternal(router fiber.Router) {
 	router.Patch("/events/:request_id", h.PatchOutcome)
 }
 
-// MountPublic registers the reads. Audit's resources publish them as
+// MountPublic registers the reads. services/audit.yml publishes them as
 // …/audit-events at every kind and /user/audit-events
 // (docs/reference/api/audit.md#reading).
 func (h *Handler) MountPublic(router fiber.Router) {

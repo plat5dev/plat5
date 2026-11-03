@@ -4,13 +4,16 @@ Tests that run against a running Plat5 stack through the gateway. Opt-in: they
 skip unless `PLAT5_E2E=1`.
 
 A fresh stack has no config, so the tests apply theirs first:
-[`testdata/config.json`](testdata/config.json), the flat config the CLI sends
-(`services` as a map), with kinds organization → project → environment, the example
-roles, and service accounts turned off at projects.
+[`testdata/config.json`](testdata/config.json), the CLI's init files loaded
+flat as the CLI sends them (`services` as a map): kinds organization → project
+→ environment, the example roles, and `services/identity.yml` and `audit.yml`
+as `plat5 routes generate` writes them, less the routes init leaves out. The
+CLI's `TestInitFilesMatchPlat5` keeps the two the same.
 They dry-run it through the control plane's admin API and apply it with the
 plan's revision as `expect`; a plan with no changes applies nothing, so a rerun
-leaves the stack as it is. With `AUDIT_ENABLED=false` the config leaves the
-audit service out.
+leaves the stack as it is. The config is the same with audit off: the
+gateway's `AUDIT_ENABLED` decides whether it writes events, and
+`services/audit.yml` only publishes audit's reads.
 
 The tests serve their own JWKS on host port `5401` (compose's default
 `AUTH_JWKS_URI`) and mint tokens with `testdata/jwt-signing-key.pem`, a key
@@ -38,7 +41,7 @@ cd e2e && PLAT5_E2E=1 go test ./... -count=1 -v
 | Env | Default | |
 |-----|---------|--|
 | `PLAT5_E2E` | unset | `1` runs the tests |
-| `AUDIT_ENABLED` | unset | `false` skips the audit test and leaves audit out of the config, for a stack run with audit off |
+| `AUDIT_ENABLED` | unset | `false` skips the tests that read audit events, for a stack run with audit off |
 | `GATEWAY_URL` | `http://localhost:5400` | The gateway, as clients see it |
 | `CONTROL_PLANE_URL` | `http://localhost:5402` | The control plane's admin API |
 | `IDENTITY_INTERNAL_URL` | `http://localhost:5404` | Identity's internal port, for the evaluation API and the lifecycle log |

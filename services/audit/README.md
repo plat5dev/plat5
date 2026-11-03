@@ -4,7 +4,7 @@ Plat5 **audit** service: stores the audit log the gateway writes, one log per ro
 
 Contract: [`docs/concepts/audit.md`](../../docs/concepts/audit.md), [`docs/reference/api/audit.md`](../../docs/reference/api/audit.md). Storage: [`docs/internals/audit-storage.md`](../../docs/internals/audit-storage.md).
 
-Its public routes come from audit's resources in `services/audit.yml` (`events` at every kind, `my_events` at `/user/audit-events`), expanded by the control plane ([resources](../../docs/reference/config/resources.md#audits-defaults)). Audit checks no permission: the gateway does.
+Its public routes are the ones `services/audit.yml` lists (`/audit-events` at every kind, and `/user/audit-events`), as `plat5 routes generate` writes them ([generated routes](../../docs/reference/config/generated-routes.md#audits-routes)). Audit checks no permission: the gateway does.
 
 ## Layout
 

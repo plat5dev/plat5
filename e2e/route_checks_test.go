@@ -134,9 +134,12 @@ func TestRouteChecks(t *testing.T) {
 	me := check{"GET", "/user"}
 	unknown := check{"GET", "/nowhere/" + run}
 	wrongMethod := check{"PUT", orgPath}
+	// Adding a member by IdP subject isn't a generated route: unmatched, so
+	// false even for "*".
+	addBySubject := check{"POST", orgPath + "/members"}
 
-	want(t, "owner", s.routeChecks(owner, tasks, orgBindings, orgNode, deleteProject, status, me, unknown, wrongMethod),
-		true, true, true, true, true, true, false, false)
+	want(t, "owner", s.routeChecks(owner, tasks, orgBindings, orgNode, deleteProject, status, me, unknown, wrongMethod, addBySubject),
+		true, true, true, true, true, true, false, false, false)
 	want(t, "project-only member", s.routeChecks(pat, tasks, orgBindings, orgNode, projects, deleteProject),
 		true, false, true, true, false)
 	want(t, "guest", s.routeChecks(guest, tasks, orgNode, orgBindings, projects),
@@ -226,7 +229,8 @@ func TestRouteChecks(t *testing.T) {
 		t.Fatalf("an unknown key: %d %s", code, body)
 	}
 
-	// Rate-limit headers, as on a route.
+	// Rate-limit headers, as on a route: the e2e config's defaults.rate_limit,
+	// standard, 100 a second.
 	req, _ = http.NewRequest("POST", s.gateway+routeChecksPath,
 		bytes.NewReader([]byte(`{"checks":[{"method":"GET","path":"/status"}]}`)))
 	req.Header.Set("Authorization", "Bearer "+string(owner))

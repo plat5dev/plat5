@@ -102,8 +102,9 @@ func (s *stack) serveJWKS(addr string) {
 	s.t.Cleanup(func() { _ = srv.Close() })
 }
 
-// config is testdata/config.json. With audit off, it leaves the audit service
-// out.
+// config is testdata/config.json, audit on or off: the gateway's env decides
+// whether it writes events, and services/audit.yml only publishes audit's
+// reads (docs/concepts/audit.md#on-and-off).
 func (s *stack) config() map[string]any {
 	raw, err := os.ReadFile("testdata/config.json")
 	if err != nil {
@@ -112,9 +113,6 @@ func (s *stack) config() map[string]any {
 	var config map[string]any
 	if err := json.Unmarshal(raw, &config); err != nil {
 		s.t.Fatal(err)
-	}
-	if os.Getenv("AUDIT_ENABLED") == "false" {
-		delete(config["services"].(map[string]any), "audit")
 	}
 	return config
 }
@@ -393,8 +391,8 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 	}
 	s.call(bot, "GET", byID, nil, 200, &got)
 
-	// …refused by permission: an environment's routes require project's
-	// permissions (permission_name), and developer holds no project:delete.
+	// …refused by permission: an environment's routes in services/identity.yml
+	// require project's permissions, and developer holds no project:delete.
 	var denied apiError
 	s.call(bot, "DELETE", envPath, nil, 403, &denied)
 	if denied.Error.Message != "Permission denied, or it may not exist." {

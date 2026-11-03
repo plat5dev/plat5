@@ -33,7 +33,7 @@ plat5 config pull my-config                    # later: what's applied, as files
 
 Every change after that goes the same way, and identity and the gateway pick it up without a restart. See [`../docs/concepts/config.md`](../docs/concepts/config.md#plan-and-apply). The e2e applies its own config ([`../e2e/README.md`](../e2e/README.md)).
 
-Audit: the gateway records audited requests through the `audit` service (`AUDIT_URL`). It is on by default. `AUDIT_ENABLED=false` turns it off for the deployment; then audit need not run, and `services/audit.yml` stays out of the config. See [`../docs/concepts/audit.md`](../docs/concepts/audit.md).
+Audit: the gateway records audited requests through the `audit` service (`AUDIT_URL`). It is on by default. `AUDIT_ENABLED=false` turns the gateway's writes off; then audit need not run. `services/audit.yml` only publishes audit's reads, independent of that: left in the config with audit not running, they answer as an unreachable upstream does. See [`../docs/concepts/audit.md`](../docs/concepts/audit.md).
 
 ## JWT / IdP
 

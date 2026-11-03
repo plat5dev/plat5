@@ -1,36 +1,289 @@
 {
   "deletion_grace": "30d",
   "reserved_slugs": ["new", "settings", "api", "admin"],
-  "users": { "name": { "claims": ["name", "preferred_username"], "sync": "first_sign_in" } },
+  "users": { "name": {"claims": ["name", "preferred_username"], "sync": "first_sign_in"} },
   "kinds": {
+    "environment": {
+      "bind_creator": false,
+      "list_permission": "project:read",
+      "parent": "project",
+      "path": "/envs/{environment}"
+    },
     "organization": { "path": "/orgs/{organization}" },
-    "project": { "parent": "organization", "path": "/projects/{project}", "bind_creator": false },
-    "environment": { "parent": "project", "path": "/envs/{environment}", "permission_name": "project", "bind_creator": false }
+    "project": { "bind_creator": false, "parent": "organization", "path": "/projects/{project}" }
   },
   "roles": {
-    "admin": { "permissions": ["*"], "bindable_at": ["organization", "project", "environment"] },
-    "member": { "permissions": ["organization:read"], "bindable_at": ["organization"] },
+    "admin": { "bindable_at": ["organization", "project", "environment"], "permissions": ["*"] },
     "developer": {
+      "bindable_at": ["organization", "project", "environment"],
       "includes": ["member"],
-      "permissions": ["project:read", "project:write", "project:bindings:read"],
-      "bindable_at": ["organization", "project", "environment"]
+      "permissions": ["project:read", "project:write", "project:bindings:read"]
     },
+    "member": { "bindable_at": ["organization"], "permissions": ["organization:read"] },
     "viewer": {
+      "bindable_at": ["organization", "project", "environment"],
       "includes": ["member"],
-      "permissions": ["project:read"],
-      "bindable_at": ["organization", "project", "environment"]
+      "permissions": ["project:read"]
     }
   },
   "creator_role": "admin",
-  "rate_limits": { "default": { "requests": 100, "window_seconds": 1 } },
+  "rate_limits": { "standard": {"requests": 100, "window_seconds": 1} },
+  "defaults": { "rate_limit": ["standard"] },
   "services": {
     "identity": {
-      "url": "http://identity:3000",
-      "kinds": {
-        "project": { "resources": { "service_accounts": false } },
-        "environment": { "resources": { "invites": false, "bindings": { "methods": { "POST": false } } } }
-      }
+      "scopes": {
+        "environment": {
+          "routes": [
+            {
+              "methods": {
+                "DELETE": { "required_permissions": ["project:delete"] },
+                "GET": { "required_permissions": ["project:read"] },
+                "PATCH": { "required_permissions": ["project:write"] }
+              },
+              "path": "/"
+            },
+            {
+              "allow_deleted": true,
+              "methods": { "POST": {"required_permissions": ["project:delete"]} },
+              "path": "/restore"
+            },
+            {
+              "methods": { "GET": {"required_permissions": "any_member"} },
+              "path": "/membership",
+              "upstream": "/nodes/{environment.id}/memberships/{member.id}"
+            },
+            { "methods": {"GET": {"required_permissions": ["project:bindings:read"]}}, "path": "/bindings" },
+            {
+              "methods": {
+                "DELETE": { "required_permissions": ["project:bindings:write"] },
+                "PATCH": { "required_permissions": ["project:bindings:write"] }
+              },
+              "path": "/bindings/{binding_id}"
+            },
+            {
+              "methods": {
+                "GET": { "required_permissions": ["project:bindings:read"] },
+                "POST": { "required_permissions": ["project:bindings:write"] }
+              },
+              "path": "/service-accounts"
+            },
+            {
+              "methods": {
+                "DELETE": { "required_permissions": ["project:bindings:write"] },
+                "GET": { "required_permissions": ["project:bindings:read"] },
+                "PATCH": { "required_permissions": ["project:bindings:write"] }
+              },
+              "path": "/service-accounts/{service_account_id}"
+            },
+            {
+              "methods": {
+                "GET": { "required_permissions": ["project:bindings:write"] },
+                "POST": { "required_permissions": ["project:bindings:write"] }
+              },
+              "path": "/service-accounts/{service_account_id}/keys"
+            },
+            {
+              "methods": { "DELETE": {"required_permissions": ["project:bindings:write"]} },
+              "path": "/service-accounts/{service_account_id}/keys/{key_id}"
+            },
+            { "methods": {"GET": {"required_permissions": "any_member"}}, "path": "/roles" }
+          ],
+          "upstream_prefix": "/nodes/{environment.id}"
+        },
+        "organization": {
+          "routes": [
+            {
+              "methods": {
+                "DELETE": { "required_permissions": ["organization:delete"] },
+                "GET": { "required_permissions": ["organization:read"] },
+                "PATCH": { "required_permissions": ["organization:write"] }
+              },
+              "path": "/"
+            },
+            {
+              "allow_deleted": true,
+              "methods": { "POST": {"required_permissions": ["organization:delete"]} },
+              "path": "/restore"
+            },
+            {
+              "methods": {
+                "GET": { "required_permissions": "any_member" },
+                "POST": { "required_permissions": ["project:create"] }
+              },
+              "path": "/projects",
+              "upstream": "/nodes/{organization.id}/children/project"
+            },
+            {
+              "methods": {
+                "DELETE": { "required_permissions": "any_member" },
+                "GET": { "required_permissions": "any_member" }
+              },
+              "path": "/membership",
+              "upstream": "/nodes/{organization.id}/memberships/{member.id}"
+            },
+            {
+              "methods": {
+                "GET": { "required_permissions": ["organization:bindings:read"] },
+                "POST": { "required_permissions": ["organization:bindings:write"] }
+              },
+              "path": "/bindings"
+            },
+            {
+              "methods": {
+                "DELETE": { "required_permissions": ["organization:bindings:write"] },
+                "PATCH": { "required_permissions": ["organization:bindings:write"] }
+              },
+              "path": "/bindings/{binding_id}"
+            },
+            {
+              "methods": {
+                "GET": { "required_permissions": ["organization:bindings:read"] },
+                "POST": { "required_permissions": ["organization:bindings:write"] }
+              },
+              "path": "/service-accounts"
+            },
+            {
+              "methods": {
+                "DELETE": { "required_permissions": ["organization:bindings:write"] },
+                "GET": { "required_permissions": ["organization:bindings:read"] },
+                "PATCH": { "required_permissions": ["organization:bindings:write"] }
+              },
+              "path": "/service-accounts/{service_account_id}"
+            },
+            {
+              "methods": {
+                "GET": { "required_permissions": ["organization:bindings:write"] },
+                "POST": { "required_permissions": ["organization:bindings:write"] }
+              },
+              "path": "/service-accounts/{service_account_id}/keys"
+            },
+            {
+              "methods": { "DELETE": {"required_permissions": ["organization:bindings:write"]} },
+              "path": "/service-accounts/{service_account_id}/keys/{key_id}"
+            },
+            {
+              "methods": {
+                "GET": { "required_permissions": ["organization:bindings:write"] },
+                "POST": { "required_permissions": ["organization:bindings:write"] }
+              },
+              "path": "/invites"
+            },
+            {
+              "methods": { "DELETE": {"required_permissions": ["organization:bindings:write"]} },
+              "path": "/invites/{invite_id}"
+            },
+            { "methods": {"GET": {"required_permissions": "any_member"}}, "path": "/roles" },
+            {
+              "methods": { "GET": {"required_permissions": ["organization:bindings:read"]} },
+              "path": "/members"
+            },
+            {
+              "methods": {
+                "DELETE": { "required_permissions": ["organization:bindings:write"] },
+                "GET": { "required_permissions": "any_member" }
+              },
+              "path": "/members/{member_id}"
+            }
+          ],
+          "upstream_prefix": "/nodes/{organization.id}"
+        },
+        "project": {
+          "routes": [
+            {
+              "methods": {
+                "DELETE": { "required_permissions": ["project:delete"] },
+                "GET": { "required_permissions": ["project:read"] },
+                "PATCH": { "required_permissions": ["project:write"] }
+              },
+              "path": "/"
+            },
+            {
+              "allow_deleted": true,
+              "methods": { "POST": {"required_permissions": ["project:delete"]} },
+              "path": "/restore"
+            },
+            {
+              "methods": {
+                "GET": { "required_permissions": "any_member" },
+                "POST": { "required_permissions": ["project:create"] }
+              },
+              "path": "/envs",
+              "upstream": "/nodes/{project.id}/children/environment"
+            },
+            {
+              "methods": { "GET": {"required_permissions": "any_member"} },
+              "path": "/membership",
+              "upstream": "/nodes/{project.id}/memberships/{member.id}"
+            },
+            {
+              "methods": {
+                "GET": { "required_permissions": ["project:bindings:read"] },
+                "POST": { "required_permissions": ["project:bindings:write"] }
+              },
+              "path": "/bindings"
+            },
+            {
+              "methods": {
+                "DELETE": { "required_permissions": ["project:bindings:write"] },
+                "PATCH": { "required_permissions": ["project:bindings:write"] }
+              },
+              "path": "/bindings/{binding_id}"
+            },
+            {
+              "methods": {
+                "GET": { "required_permissions": ["guests:write"] },
+                "POST": { "required_permissions": ["guests:write"] }
+              },
+              "path": "/invites"
+            },
+            {
+              "methods": { "DELETE": {"required_permissions": ["guests:write"]} },
+              "path": "/invites/{invite_id}"
+            },
+            { "methods": {"GET": {"required_permissions": "any_member"}}, "path": "/roles" }
+          ],
+          "upstream_prefix": "/nodes/{project.id}"
+        },
+        "user": {
+          "routes": [
+            { "methods": ["POST"], "path": "/orgs", "upstream": "/roots/organization" },
+            { "methods": ["GET", "PATCH", "DELETE"], "path": "/user", "upstream": "/users/{user.id}" },
+            { "methods": ["GET"], "path": "/user/nodes", "upstream": "/users/{user.id}/nodes" },
+            { "methods": ["GET", "POST"], "path": "/user/keys", "upstream": "/users/{user.id}/keys" },
+            {
+              "methods": ["DELETE"],
+              "path": "/user/keys/{key_id}",
+              "upstream": "/users/{user.id}/keys/{key_id}"
+            },
+            {
+              "methods": ["POST"],
+              "path": "/user/invites/redeem",
+              "upstream": "/users/{user.id}/invites/redeem"
+            }
+          ]
+        }
+      },
+      "url": "http://identity:3000"
     },
-    "audit": { "url": "http://audit:3002" }
+    "audit": {
+      "scopes": {
+        "environment": {
+          "routes": [{"methods": {"GET": {"required_permissions": ["audit:read"]}}, "path": "/audit-events"}],
+          "upstream_prefix": "/nodes/{environment.id}"
+        },
+        "organization": {
+          "routes": [{"methods": {"GET": {"required_permissions": ["audit:read"]}}, "path": "/audit-events"}],
+          "upstream_prefix": "/nodes/{organization.id}"
+        },
+        "project": {
+          "routes": [{"methods": {"GET": {"required_permissions": ["audit:read"]}}, "path": "/audit-events"}],
+          "upstream_prefix": "/nodes/{project.id}"
+        },
+        "user": {
+          "routes": [{"methods": ["GET"], "path": "/user/audit-events", "upstream": "/users/{user.id}/audit-events"}]
+        }
+      },
+      "url": "http://audit:3002"
+    }
   }
 }
