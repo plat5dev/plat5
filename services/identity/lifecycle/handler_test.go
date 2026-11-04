@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 
 	apierrors "github.com/plat5dev/plat5/identity/errors"
@@ -333,5 +334,22 @@ func TestShutdownEndsWaits(t *testing.T) {
 	}()
 	if status, _ := do(t, testApp(h), Path+"?after=4"); status != 204 {
 		t.Fatalf("status %d", status)
+	}
+}
+
+// Postgres unavailable is 503 SERVICE_UNAVAILABLE, with or without after.
+func TestPostgresDownIs503(t *testing.T) {
+	pool, err := pgxpool.New(context.Background(), "postgres://plat5:plat5@127.0.0.1:1/plat5?connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	app := testApp(newTestHandler(NewStore(pool), time.Second))
+	for _, query := range []string{"", "?after=1"} {
+		status, body := get(t, app, query)
+		e, _ := body["error"].(map[string]any)
+		if status != 503 || e["code"] != "SERVICE_UNAVAILABLE" {
+			t.Fatalf("%q: %d %v", query, status, body)
+		}
 	}
 }

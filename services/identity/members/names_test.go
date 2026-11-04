@@ -116,12 +116,16 @@ func TestNameFirstSignIn(t *testing.T) {
 	e.signIn("dana", ptr("Dana Again"))
 	e.wantName(user, ptr("Dana Again"), "a claim after clearing")
 
-	// An operator edits it too.
+	// An operator sets and clears it too, the same edit.
 	r = e.call("PATCH", "/users/"+user, "", nameBody(ptr("Set By Ops")))
 	e.expect(r, 200, "operator edit")
 	e.wantName(user, ptr("Set By Ops"), "operator edit")
 	e.signIn("dana", ptr("Dana"))
 	e.wantName(user, ptr("Set By Ops"), "a claim after an operator's edit")
+	e.expect(e.call("PATCH", "/users/"+user, "", `{"name": null}`), 200, "operator clear")
+	e.wantName(user, nil, "operator clear")
+	e.signIn("dana", ptr("Dana Back"))
+	e.wantName(user, ptr("Dana Back"), "a claim after an operator's clear")
 
 	// A name change isn't an event.
 	if got := e.userEventsAfter(0); len(got) != 1 {
@@ -144,30 +148,24 @@ func TestNameEachSignIn(t *testing.T) {
 	e.signIn("erin", nil)
 	e.wantName(user, ptr("Erin Renamed"), "no claim")
 
-	// The IdP owns the name: the person's own edit is a conflict, a clear too.
+	// The IdP owns the name: an edit is refused, a clear too, whoever sends
+	// it: the person (PATCH /user, with X-Plat5-User-Id) or an operator.
 	for _, body := range []string{nameBody(ptr("Mine")), `{"name": null}`, nameBody(ptr(""))} {
-		r := e.callUser("PATCH", "/users/"+user, user, body)
-		e.expect(r, 409, "own edit "+body)
-		if r.code() != "CONFLICT" || r.message() != "Your name comes from your sign-in provider." {
-			t.Fatalf("own edit: %v", r.body)
-		}
-		details := r.body["error"].(map[string]any)["details"].(map[string]any)
-		if details["field"] != "name" || details["value"] != "each_sign_in" {
-			t.Fatalf("details %v", details)
+		for who, r := range map[string]response{
+			"person":   e.callUser("PATCH", "/users/"+user, user, body),
+			"operator": e.call("PATCH", "/users/"+user, "", body),
+		} {
+			e.expect(r, 409, who+" edit "+body)
+			if r.code() != "NAME_OWNED_BY_IDP" || r.message() != "This name comes from the sign-in provider." || r.body["error"].(map[string]any)["details"] != nil {
+				t.Fatalf("%s edit: %v", who, r.body)
+			}
+			if r.headers[auditx.Header] != "" {
+				t.Fatalf("%s edit: details %s", who, r.headers[auditx.Header])
+			}
 		}
 	}
 	e.wantName(user, ptr("Erin Renamed"), "after refused edits")
-
-	// An operator can still replace or remove it.
-	r := e.call("PATCH", "/users/"+user, "", nameBody(ptr("Moderated")))
-	e.expect(r, 200, "operator edit")
-	if got := r.headers[auditx.Header]; got != `{"name":{"from":"Erin Renamed","to":"Moderated"}}` {
-		t.Fatalf("audit details %s", got)
-	}
-	e.signIn("erin", nil)
-	e.wantName(user, ptr("Moderated"), "no claim after an operator's edit")
-	e.expect(e.call("PATCH", "/users/"+user, "", `{"name": null}`), 200, "operator clear")
-	e.wantName(user, nil, "operator clear")
+	e.expect(e.call("PATCH", "/users/01jbx9q3t5vk8m2n4p6r7s8t9w", "", nameBody(ptr("X"))), 404, "unknown user")
 	e.signIn("erin", ptr("Erin"))
 	e.wantName(user, ptr("Erin"), "the next claim wins")
 }
@@ -207,21 +205,20 @@ func TestNameShape(t *testing.T) {
 	e.wantName(e.userOf("hal"), &cut, "a long claim cut at a space")
 }
 
-// X-Plat5-User-Id names the person whose edit it is: someone else, or no one,
-// is a malformed request. Without it, an unknown user is a 404.
-func TestNameCaller(t *testing.T) {
+// Identity doesn't read X-Plat5-User-Id on a name edit: the path names the
+// person, whoever sends it.
+func TestNameReadsNoCaller(t *testing.T) {
 	e := setup(t)
 	user, other := e.person("ida"), e.person("jo")
-	e.expect(e.callUser("PATCH", "/users/"+user, other, nameBody(ptr("Ida"))), 400, "another user's header")
-	e.expect(e.callUser("PATCH", "/users/01jbx9q3t5vk8m2n4p6r7s8t9w", "01jbx9q3t5vk8m2n4p6r7s8t9w", nameBody(ptr("Ida"))), 400, "a header naming no one")
+	e.expect(e.callUser("PATCH", "/users/"+user, other, nameBody(ptr("Ida"))), 200, "another user's header")
+	e.expect(e.callUser("PATCH", "/users/"+user, "01jbx9q3t5vk8m2n4p6r7s8t9w", nameBody(ptr("Ida"))), 200, "a header naming no one")
 	e.expect(e.call("PATCH", "/users/01jbx9q3t5vk8m2n4p6r7s8t9w", "", nameBody(ptr("Ida"))), 404, "unknown user")
 	e.expect(e.call("PATCH", "/users/nope", "", nameBody(ptr("Ida"))), 404, "not an id")
 	if _, _, err := e.store.SetStatus(e.ctx, user, StatusSuspended); err != nil {
 		t.Fatal(err)
 	}
-	e.expect(e.callUser("PATCH", "/users/"+user, user, nameBody(ptr("Ida"))), 400, "a suspended person's own edit")
-	e.expect(e.call("PATCH", "/users/"+user, "", nameBody(ptr("Ida"))), 200, "an operator's edit of a suspended person")
-	e.wantName(user, ptr("Ida"), "operator edit")
+	e.expect(e.call("PATCH", "/users/"+user, "", nameBody(ptr("Ida Q"))), 200, "a suspended person's name")
+	e.wantName(user, ptr("Ida Q"), "edits")
 	e.wantName(other, nil, "the other person")
 }
 

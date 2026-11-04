@@ -158,7 +158,9 @@ func TestCreateChildBindsTheCreator(t *testing.T) {
 	if _, err := e.nodes.Delete(e.ctx, e.snap(), folder.ID); err != nil {
 		t.Fatal(err)
 	}
-	e.expect(e.call("POST", "/nodes/"+folder.ID+"/children/project", admin, `{"display_name": "X"}`), 409, "under a deleted node")
+	if r := e.call("POST", "/nodes/"+folder.ID+"/children/project", admin, `{"display_name": "X"}`); r.status != 409 || r.code() != "PARENT_DELETED" || r.details()["parent_id"] != folder.ID {
+		t.Fatalf("under a deleted node: %d %v", r.status, r.body)
+	}
 }
 
 func TestChildLists(t *testing.T) {
@@ -244,6 +246,17 @@ func TestChildLists(t *testing.T) {
 	e.expect(e.call("GET", "/nodes/"+apps.ID+"/children/project", otherAdmin, ""), 400, "caller from another tree")
 	e.expect(e.call("GET", "/nodes/"+apps.ID+"/children/project", "nope", ""), 400, "malformed caller")
 	e.expect(e.call("GET", "/nodes/"+apps.ID+"/children/project?status=gone", admin, ""), 422, "bad status")
+
+	// A kind that can't go under this node is a 422, as on create: unknown,
+	// a root kind, or a kind whose parent is another kind.
+	for _, kind := range []string{"bogus", "organization", "folder"} {
+		for _, caller := range []string{admin, ""} {
+			r := e.call("GET", "/nodes/"+apps.ID+"/children/"+kind, caller, "")
+			if r.status != 422 || r.code() != "VALIDATION_ERROR" || r.message() != "Kind "+kind+" can't go here." {
+				t.Fatalf("children/%s: %d %v", kind, r.status, r.body)
+			}
+		}
+	}
 }
 
 func TestUserNodes(t *testing.T) {

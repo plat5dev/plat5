@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/plat5dev/plat5/identity/internal/apikey"
+	"github.com/plat5dev/plat5/identity/internal/secret"
 )
 
 // POST /internal/admit (docs/reference/api/internal.md#admit): one table, one
@@ -149,7 +149,7 @@ func TestAdmit(t *testing.T) {
 	}
 
 	var saKeyID string
-	if err := e.pool.QueryRow(e.ctx, `SELECT id FROM api_keys WHERE key_hash = $1`, apikey.Hash(saKey)).Scan(&saKeyID); err != nil {
+	if err := e.pool.QueryRow(e.ctx, `SELECT id FROM api_keys WHERE key_hash = $1`, secret.Hash(saKey)).Scan(&saKeyID); err != nil {
 		t.Fatal(err)
 	}
 

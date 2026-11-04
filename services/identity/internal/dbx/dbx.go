@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -112,6 +114,37 @@ func IsUniqueViolation(err error) bool {
 func IsForeignKeyViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
+// Unavailable reports whether err means Postgres couldn't be reached or didn't
+// answer in time: a failed connect, a closed connection, a network
+// error, a timeout, or Postgres refusing connections. Those are 503s
+// (docs/reference/errors.md#which-status); any other failure is a 500.
+func Unavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var connectErr *pgconn.ConnectError
+	var netErr net.Error
+	var pgErr *pgconn.PgError
+	switch {
+	case errors.As(err, &connectErr), errors.As(err, &netErr):
+		return true
+	case errors.Is(err, context.DeadlineExceeded), pgconn.Timeout(err):
+		return true
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, net.ErrClosed):
+		return true
+	case errors.As(err, &pgErr):
+		// Class 08, connection exception; 53300, too many connections;
+		// 57P01 to 57P03, an admin or crash shutdown, or not accepting yet.
+		switch {
+		case len(pgErr.Code) == 5 && pgErr.Code[:2] == "08":
+			return true
+		case pgErr.Code == "53300", pgErr.Code == "57P01", pgErr.Code == "57P02", pgErr.Code == "57P03":
+			return true
+		}
+	}
+	return false
 }
 
 func IsNoRows(err error) bool {

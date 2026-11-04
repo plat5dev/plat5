@@ -58,7 +58,7 @@ type Store struct {
 	now    func() time.Time
 }
 
-// NewStore needs APIKEY_BRAND for the keys it mints and reads.
+// NewStore needs SECRET_BRAND for the keys and invite tokens it mints and reads.
 func NewStore(pool *pgxpool.Pool, nodeStore *nodes.Store, brand string) *Store {
 	return &Store{
 		pool:   pool,

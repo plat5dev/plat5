@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/plat5dev/plat5/identity/internal/auditx"
+	"github.com/plat5dev/plat5/identity/internal/secret"
+	"github.com/plat5dev/plat5/identity/nodes"
 )
 
 func TestCreateInvite(t *testing.T) {
@@ -21,7 +23,8 @@ func TestCreateInvite(t *testing.T) {
 		"grants": [{"node_id": "`+p.ID+`", "role": "viewer"}]}`)
 	e.expect(r, 201, "create")
 	token := r.str("token")
-	if !strings.HasPrefix(token, "inv_") || r.str("token_prefix") != token[:8] || r.str("role") != "member" ||
+	// {brand}-i-1-{secret}: the store's brand is plat5.
+	if !secret.Parse("plat5-i-1-", token) || r.str("token_prefix") != token[:14] || r.str("role") != "member" ||
 		r.str("status") != "active" || r.body["max_uses"] != float64(2) || r.str("expires_at") != e.clock.t.Add(7*24*time.Hour).Format(time.RFC3339) {
 		t.Fatalf("invite %v", r.body)
 	}
@@ -33,21 +36,31 @@ func TestCreateInvite(t *testing.T) {
 	}
 	// Shown once: lists carry the prefix only, and it's stored as a hash.
 	r = e.call("GET", "/nodes/"+org.ID+"/invites", "", "")
-	if inv := r.list("invites"); len(inv) != 1 || inv[0]["token"] != nil || inv[0]["token_prefix"] != token[:8] {
+	if inv := r.list("invites"); len(inv) != 1 || inv[0]["token"] != nil || inv[0]["token_prefix"] != token[:14] {
 		t.Fatalf("list %v", inv)
 	}
 	if e.count(`SELECT count(*) FROM invites WHERE token_hash = encode(sha256($1::bytea), 'hex')`, token) != 1 {
 		t.Fatal("token not stored as its hash")
 	}
 
+	// max_uses: omitted is 1, a number is that many, null is unlimited, on
+	// the wire and in the database.
 	for body, want := range map[string]any{
-		`{"role": "member", "max_uses": "unlimited"}`: "unlimited",
-		`{"role": "member", "max_uses": null}`:        float64(1),
-		`{"role": "member"}`:                          float64(1),
+		`{"role": "member", "max_uses": null}`: nil,
+		`{"role": "member"}`:                   float64(1),
+		`{"role": "member", "max_uses": 5}`:    float64(5),
 	} {
 		r := e.call("POST", "/nodes/"+org.ID+"/invites", "", body)
-		if r.status != 201 || r.body["max_uses"] != want {
+		if v, ok := r.body["max_uses"]; r.status != 201 || !ok || v != want {
 			t.Fatalf("%s: %d max_uses %v, want %v", body, r.status, r.body["max_uses"], want)
+		}
+		stored := e.count(`SELECT coalesce(max_uses, -1) FROM invites WHERE id = $1`, r.str("id"))
+		if (want == nil && stored != -1) || (want != nil && float64(stored) != want) {
+			t.Fatalf("%s: stored %d", body, stored)
+		}
+		listed := e.call("GET", "/nodes/"+org.ID+"/invites?limit=100", "", "").list("invites")
+		if last := listed[len(listed)-1]; last["id"] != r.str("id") || last["max_uses"] != want {
+			t.Fatalf("%s: listed %v", body, last)
 		}
 	}
 	r = e.call("POST", "/nodes/"+org.ID+"/invites", "", `{"role": "member", "expires_in": "8h"}`)
@@ -64,9 +77,11 @@ func TestCreateInvite(t *testing.T) {
 		{org.ID, `{"role": "member", "expires_in": "31d"}`, "Expiry must be between 60 seconds and 30 days."},
 		{org.ID, `{"role": "member", "expires_in": "soon"}`, "Expiry must be between 60 seconds and 30 days."},
 		{org.ID, `{"role": "member", "expires_in": ""}`, "Expiry must be between 60 seconds and 30 days."},
-		{org.ID, `{"role": "member", "max_uses": 0}`, "Max uses must be at least 1, or unlimited."},
-		{org.ID, `{"role": "member", "max_uses": -2}`, "Max uses must be at least 1, or unlimited."},
-		{org.ID, `{"role": "member", "max_uses": "lots"}`, "Max uses must be at least 1, or unlimited."},
+		{org.ID, `{"role": "member", "max_uses": 0}`, "Max uses must be at least 1."},
+		{org.ID, `{"role": "member", "max_uses": -2}`, "Max uses must be at least 1."},
+		{org.ID, `{"role": "member", "max_uses": "lots"}`, "Max uses must be at least 1."},
+		{org.ID, `{"role": "member", "max_uses": "unlimited"}`, "Max uses must be at least 1."},
+		{org.ID, `{"role": "member", "max_uses": 1.5}`, "Max uses must be at least 1."},
 		{p.ID, `{}`, "Choose a role."},
 		{p.ID, `{"role": "viewer", "grants": [{"node_id": "` + p.ID + `", "role": "viewer"}]}`, "Only an invite to the organization can grant more."},
 		{org.ID, `{"role": "member", "grants": [{"node_id": "` + otherFolder.ID + `", "role": "browser"}]}`, "That doesn't look right."},
@@ -141,10 +156,16 @@ func TestRedeemAtARoot(t *testing.T) {
 	// Two uses of two: redeemed.
 	e.expect(e.redeem(e.person("gina"), token), 200, "second use")
 	r = e.redeem(e.person("hal"), token)
-	if r.status != 409 || r.message() != "This invite has already been used." || r.body["error"].(map[string]any)["details"].(map[string]any)["value"] != "redeemed" {
+	if r.status != 409 || r.code() != "INVITE_NOT_REDEEMABLE" || r.message() != "This invite has already been used." || r.details()["reason"] != "redeemed" {
 		t.Fatalf("used up: %d %v", r.status, r.body)
 	}
 	e.expect(e.redeem(frank, "inv_nope"), 404, "unknown token")
+	e.expect(e.redeem(frank, "plat5-i-1-"+strings.Repeat("A", 43)), 404, "a well-formed unknown token")
+	// A token of another brand is unknown, even with a stored hash.
+	acme := NewStore(e.pool, e.nodes, "acme").WithClock(e.clock.now)
+	if _, err := acme.Redeem(e.ctx, frank, token); err == nil || err.Error() != "NOT_FOUND: Resource not found." {
+		t.Fatalf("another brand's redeem: %v", err)
+	}
 	e.expect(e.redeem(member, token), 404, "redeem as a member id")
 }
 
@@ -154,7 +175,7 @@ func TestRedeemBelowARootMakesAGuest(t *testing.T) {
 	org, admin := e.org(dana, "Gruow")
 	f := e.child(org, "folder", "One")
 	p := e.child(f, "project", "One")
-	_, token := e.inviteToken(p.ID, `{"role": "viewer", "max_uses": "unlimited"}`)
+	_, token := e.inviteToken(p.ID, `{"role": "viewer", "max_uses": null}`)
 
 	outsider := e.person("outside")
 	r := e.redeem(outsider, token)
@@ -193,7 +214,7 @@ func TestInviteEndings(t *testing.T) {
 	if r.status != 204 || r.headers[auditx.Header] != "" {
 		t.Fatal("a second revoke changed something")
 	}
-	if r := e.redeem(frank, token); r.status != 409 || r.message() != "This invite is no longer valid." {
+	if r := e.redeem(frank, token); r.status != 409 || r.code() != "INVITE_NOT_REDEEMABLE" || r.details()["reason"] != "revoked" || r.message() != "This invite is no longer valid." {
 		t.Fatalf("revoked: %d %s", r.status, r.message())
 	}
 	e.expect(e.call("DELETE", "/nodes/"+f.ID+"/invites/"+inviteID, "", ""), 404, "revoke on another node")
@@ -201,7 +222,7 @@ func TestInviteEndings(t *testing.T) {
 	// Expired: read as expired at once; the sweeper writes it.
 	inviteID, token = e.inviteToken(org.ID, `{"role": "member", "expires_in": "2m"}`)
 	e.clock.advance(3 * time.Minute)
-	if r := e.redeem(frank, token); r.status != 409 || r.message() != "This invite has expired." {
+	if r := e.redeem(frank, token); r.status != 409 || r.code() != "INVITE_NOT_REDEEMABLE" || r.details()["reason"] != "expired" || r.message() != "This invite has expired." {
 		t.Fatalf("expired: %d %s", r.status, r.message())
 	}
 	if r := e.call("GET", "/nodes/"+org.ID+"/invites", "", ""); r.list("invites")[1]["status"] != "expired" {
@@ -223,7 +244,7 @@ func TestInviteEndings(t *testing.T) {
 	}
 	for _, tok := range []string{rootToken, folderToken} {
 		r := e.redeem(frank, tok)
-		if r.status != 409 || r.body["error"].(map[string]any)["details"].(map[string]any)["field"] != "node" {
+		if r.status != 409 || r.code() != "INVITE_NOT_REDEEMABLE" || r.details()["reason"] != "node_deleted" {
 			t.Fatalf("on a deleted node: %d %v", r.status, r.body)
 		}
 	}
@@ -235,5 +256,61 @@ func TestInviteEndings(t *testing.T) {
 	}
 	for _, tok := range []string{rootToken, folderToken} {
 		e.expect(e.redeem(frank, tok), 200, "after restore")
+	}
+}
+
+// An existing member redeeming a root invite gets what they don't hold yet:
+// the grants, on live nodes; a binding they hold stays as it is. It's a use
+// when it binds anything.
+func TestRedeemAtARootByAMember(t *testing.T) {
+	e := setup(t)
+	org, _ := e.org(e.person("dana"), "Gruow")
+	f := e.child(org, "folder", "One")
+	p := e.child(f, "project", "One")
+	q := e.child(f, "project", "Two")
+	gone := e.child(f, "project", "Gone")
+	erin := e.person("erin")
+	member := e.join(org, "erin", "member")
+	e.bind(q, member, "viewer")
+	inviteID, token := e.inviteToken(org.ID, `{"max_uses": 3, "role": "developer", "grants": [
+		{"node_id": "`+p.ID+`", "role": "viewer"}, {"node_id": "`+q.ID+`", "role": "admin"},
+		{"node_id": "`+gone.ID+`", "role": "admin"}]}`)
+	if _, err := e.nodes.Delete(e.ctx, e.snap(), gone.ID); err != nil {
+		t.Fatal(err)
+	}
+	uses := func() int { return e.count(`SELECT use_count FROM invites WHERE id = $1`, inviteID) }
+
+	before := e.lastEvent()
+	r := e.redeem(erin, token)
+	e.expect(r, 200, "redeem")
+	if r.str("member_id") != member || len(e.eventsAfter(before)) != 0 {
+		t.Fatalf("redeem %v, events %v", r.body, e.eventsAfter(before))
+	}
+	for _, c := range []struct {
+		node *nodes.Node
+		role string
+	}{{org, "member"}, {p, "viewer"}, {q, "viewer"}} {
+		if e.count(`SELECT count(*) FROM bindings WHERE member_id = $1 AND node_id = $2 AND role = $3`, member, c.node.ID, c.role) != 1 {
+			t.Fatalf("binding on %s: want %s", c.node.Kind+" "+c.node.DisplayName, c.role)
+		}
+	}
+	if e.count(`SELECT count(*) FROM bindings WHERE member_id = $1`, member) != 3 {
+		t.Fatal("a grant on a deleted node, or a second binding on a node")
+	}
+	if uses() != 1 {
+		t.Fatalf("uses %d, want 1", uses())
+	}
+
+	// Nothing left to bind: not a use.
+	e.expect(e.redeem(erin, token), 200, "redeem again")
+	if uses() != 1 || e.count(`SELECT count(*) FROM bindings WHERE member_id = $1`, member) != 3 {
+		t.Fatal("a redeem that binds nothing changed something")
+	}
+
+	// Below a root, the same: someone already bound there binds nothing.
+	_, below := e.inviteToken(q.ID, `{"role": "admin"}`)
+	e.expect(e.redeem(erin, below), 200, "redeem below")
+	if e.count(`SELECT count(*) FROM bindings WHERE member_id = $1 AND node_id = $2 AND role = 'viewer'`, member, q.ID) != 1 {
+		t.Fatal("a held binding changed")
 	}
 }

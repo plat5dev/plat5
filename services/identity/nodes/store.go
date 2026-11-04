@@ -148,7 +148,7 @@ func (s *Store) CreateTx(ctx context.Context, tx pgx.Tx, snap *feed.Snapshot, in
 	}
 	kind, ok := snap.Kind(in.Kind)
 	if !ok {
-		return nil, kindNotHere(in.Kind)
+		return nil, KindNotHere(in.Kind)
 	}
 	if in.Slug != nil {
 		if err := checkSlug(snap, *in.Slug); err != nil {
@@ -160,7 +160,7 @@ func (s *Store) CreateTx(ctx context.Context, tx pgx.Tx, snap *feed.Snapshot, in
 	n := &Node{ID: id.New(), Kind: kind.Name, DisplayName: name, Status: StatusActive, CreatedAt: now, UpdatedAt: now}
 	if in.ParentID == "" {
 		if !kind.IsRoot() {
-			return nil, kindNotHere(kind.Name)
+			return nil, KindNotHere(kind.Name)
 		}
 		n.RootID = n.ID
 		if err := LockTrees(ctx, tx, []string{n.ID}); err != nil {
@@ -172,7 +172,7 @@ func (s *Store) CreateTx(ctx context.Context, tx pgx.Tx, snap *feed.Snapshot, in
 			return nil, err
 		}
 		if kind.Parent != parent.Kind {
-			return nil, kindNotHere(kind.Name)
+			return nil, KindNotHere(kind.Name)
 		}
 		if parent.Status != StatusActive {
 			return nil, parentNotLive(parent)
@@ -436,7 +436,7 @@ func (s *Store) Restore(ctx context.Context, nodeID string) (*Node, bool, error)
 	}
 	now := s.now().UTC()
 	if n.Status == StatusPurged || !now.Before(*n.PurgeAfter) {
-		return nil, false, op.Expected("past grace", errors.ConflictError("This can no longer be restored.", "purge_after", n.PurgeAfter))
+		return nil, false, op.Expected("past grace", errors.GraceExpiredError())
 	}
 	var parentStatus, parentKind string
 	if n.ParentID != nil {
@@ -445,8 +445,7 @@ func (s *Store) Restore(ctx context.Context, nodeID string) (*Node, bool, error)
 		}
 	}
 	if n.ParentID != nil && parentStatus != StatusActive {
-		return nil, false, op.Expected("parent deleted", errors.ConflictError(
-			fmt.Sprintf("Restore the %s first.", parentKind), "parent_id", *n.ParentID))
+		return nil, false, op.Expected("parent deleted", errors.ParentDeletedError(parentKind, *n.ParentID))
 	}
 
 	rows, err := tx.Query(ctx, `
@@ -539,7 +538,7 @@ func (s *Store) ReleaseSlug(ctx context.Context, nodeID string) (*string, *Node,
 		return nil, nil, op.Expected("not found", err)
 	}
 	if n.Status != StatusPurged || n.ParentID != nil {
-		return nil, nil, op.Expected("not a purged root", errors.ConflictError("Only a purged root's slug can be released.", "status", n.Status))
+		return nil, nil, op.Expected("not a purged root", errors.SlugNotReleasableError())
 	}
 	freed := n.Slug
 	if freed != nil {
@@ -857,10 +856,12 @@ func slugTaken(slug string) error {
 	return errors.ConflictError("That name is taken.", "slug", slug)
 }
 
-func kindNotHere(kind string) error {
+// KindNotHere is the 422 for a child kind whose parent isn't the node's kind,
+// on a create or a list.
+func KindNotHere(kind string) error {
 	return errors.FieldError("kind", fmt.Sprintf("Kind %s can't go here.", kind))
 }
 
 func parentNotLive(parent *Node) error {
-	return errors.ConflictError(fmt.Sprintf("Restore the %s first.", parent.Kind), "parent_id", parent.ID)
+	return errors.ParentDeletedError(parent.Kind, parent.ID)
 }

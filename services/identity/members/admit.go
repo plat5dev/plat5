@@ -9,9 +9,9 @@ import (
 
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/feed"
-	"github.com/plat5dev/plat5/identity/internal/apikey"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 	"github.com/plat5dev/plat5/identity/internal/id"
+	"github.com/plat5dev/plat5/identity/internal/secret"
 	"github.com/plat5dev/plat5/identity/nodes"
 )
 
@@ -144,7 +144,7 @@ func (s *Store) admitPrincipal(ctx context.Context, sync feed.NameSync, in Admit
 }
 
 func (s *Store) keyPrincipalFor(ctx context.Context, key string) (*admitPrincipal, error) {
-	if _, ok := apikey.Parse(s.brand, key); !ok {
+	if !secret.Parse(secret.KeyPrefix(s.brand), key) {
 		return nil, nil
 	}
 	var p admitPrincipal
@@ -158,7 +158,7 @@ func (s *Store) keyPrincipalFor(ctx context.Context, key string) (*admitPrincipa
 		JOIN principals p ON p.id = k.principal_id
 		LEFT JOIN nodes bn ON bn.id = p.node_id
 		WHERE k.key_hash = $1
-	`, apikey.Hash(key)).Scan(&p.id, &p.kind, &userID, &p.keyID, &status, &revoked, &nodeStatus)
+	`, secret.Hash(key)).Scan(&p.id, &p.kind, &userID, &p.keyID, &status, &revoked, &nodeStatus)
 	if dbx.IsNoRows(err) {
 		return nil, nil
 	}
@@ -224,8 +224,8 @@ func syncs(sync feed.NameSync, current *string, name string) bool {
 // longest name there is. Empty is no name.
 func claimName(raw string) string {
 	name := strings.TrimSpace(raw)
-	if utf8.RuneCountInString(name) > apikey.MaxNameLen {
-		name = strings.TrimSpace(string([]rune(name)[:apikey.MaxNameLen]))
+	if utf8.RuneCountInString(name) > secret.MaxNameLen {
+		name = strings.TrimSpace(string([]rune(name)[:secret.MaxNameLen]))
 	}
 	return name
 }

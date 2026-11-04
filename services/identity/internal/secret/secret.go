@@ -1,4 +1,4 @@
-package apikey
+package secret
 
 import (
 	"crypto/rand"
@@ -19,7 +19,7 @@ const (
 func Generate(prefix string) (string, error) {
 	buf := make([]byte, RandomBytes)
 	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("generate key: %w", err)
+		return "", fmt.Errorf("generate secret: %w", err)
 	}
 	return prefix + base64.RawURLEncoding.EncodeToString(buf), nil
 }

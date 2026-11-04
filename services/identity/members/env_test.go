@@ -350,6 +350,12 @@ func (r response) code() string {
 	return c
 }
 
+func (r response) details() map[string]any {
+	e, _ := r.body["error"].(map[string]any)
+	d, _ := e["details"].(map[string]any)
+	return d
+}
+
 func (r response) message() string {
 	e, _ := r.body["error"].(map[string]any)
 	m, _ := e["message"].(string)

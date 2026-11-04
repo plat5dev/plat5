@@ -140,6 +140,57 @@ func ConflictError(message, field string, value interface{}) *ApiError {
 	}
 }
 
+// StateError is a 409 whose code names the state that refuses the request
+// (docs/reference/errors.md#which-status). CONFLICT is only for something
+// that already exists; each other refusal has its own code.
+func StateError(code, message string, details interface{}) *ApiError {
+	return &ApiError{
+		Type:    "invalid_request_error",
+		Code:    code,
+		Message: message,
+		Details: details,
+		Status:  fiber.StatusConflict,
+		Kind:    KindValidation,
+	}
+}
+
+// The 409 codes for state refusals, each with its fallback message
+// (docs/reference/error-copy.md).
+const (
+	CodeParentDeleted       = "PARENT_DELETED"
+	CodeGraceExpired        = "GRACE_EXPIRED"
+	CodeSlugNotReleasable   = "SLUG_NOT_RELEASABLE"
+	CodeInviteNotRedeemable = "INVITE_NOT_REDEEMABLE"
+	CodeNameOwnedByIdP      = "NAME_OWNED_BY_IDP"
+)
+
+// ParentDeletedError: a restore or a create under a node that isn't live.
+func ParentDeletedError(parentKind, parentID string) *ApiError {
+	return StateError(CodeParentDeleted, fmt.Sprintf("Restore the %s first.", parentKind),
+		map[string]interface{}{"parent_id": parentID})
+}
+
+// GraceExpiredError: a restore past the grace period.
+func GraceExpiredError() *ApiError {
+	return StateError(CodeGraceExpired, "This can no longer be restored.", nil)
+}
+
+// SlugNotReleasableError: a slug release on a node that isn't a purged root.
+func SlugNotReleasableError() *ApiError {
+	return StateError(CodeSlugNotReleasable, "Only a purged root's slug can be released.", nil)
+}
+
+// InviteNotRedeemableError: a redeem of an invite that's redeemed, revoked or
+// expired, or whose node is deleted (reason node_deleted).
+func InviteNotRedeemableError(message, reason string) *ApiError {
+	return StateError(CodeInviteNotRedeemable, message, map[string]interface{}{"reason": reason})
+}
+
+// NameOwnedByIdPError: a name edit under users.name.sync each_sign_in.
+func NameOwnedByIdPError() *ApiError {
+	return StateError(CodeNameOwnedByIdP, "This name comes from the sign-in provider.", nil)
+}
+
 func PayloadTooLargeError(maxSizeBytes int64) *ApiError {
 	return &ApiError{
 		Type:    "invalid_request_error",

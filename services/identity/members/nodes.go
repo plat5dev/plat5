@@ -110,7 +110,8 @@ type listed struct {
 }
 
 // ListChildren is the children of kind under parentID, live or, with
-// deleted, deleted ones. With a caller, only those the caller's member can
+// deleted, deleted ones. A kind whose parent isn't the parent's kind is a 422,
+// as on create. With a caller, only those the caller's member can
 // see; the caller must be an active member of the parent's tree. Without one,
 // the full list.
 func (s *Store) ListChildren(ctx context.Context, snap *feed.Snapshot, parentID, kind, callerID string, deleted bool, limit int, startingAfter string) ([]*nodes.Node, bool, error) {
@@ -121,6 +122,9 @@ func (s *Store) ListChildren(ctx context.Context, snap *feed.Snapshot, parentID,
 	parent, err := s.nodes.Get(ctx, parentID)
 	if err != nil {
 		return nil, false, op.Reject(err, nodes.ErrNotFound)
+	}
+	if k, ok := snap.Kind(kind); !ok || k.Parent != parent.Kind {
+		return nil, false, op.Expected("invalid", nodes.KindNotHere(kind))
 	}
 	if callerID != "" {
 		var active bool

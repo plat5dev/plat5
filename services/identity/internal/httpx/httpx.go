@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/plat5dev/plat5/identity/errors"
+	"github.com/plat5dev/plat5/identity/internal/dbx"
 	"github.com/plat5dev/plat5/identity/internal/id"
 )
 
@@ -106,7 +107,8 @@ type DBErr struct {
 	Message    string
 }
 
-// MapDB maps store sentinels and *errors.ApiError through; logs unexpected errors as INTERNAL.
+// MapDB maps store sentinels and *errors.ApiError through. Anything else is
+// logged: Postgres unavailable is 503 SERVICE_UNAVAILABLE, the rest 500.
 // NotFound always maps when the sentinel matches (Resource defaults to "resource").
 // Conflict maps only when Conflict sentinel is set and matches.
 func MapDB(ctx context.Context, err error, msg string, m DBErr) error {
@@ -128,5 +130,8 @@ func MapDB(ctx context.Context, err error, msg string, m DBErr) error {
 		return errors.ConflictError(m.Message, m.Field, m.FieldValue)
 	}
 	LogError(ctx, msg, err, errors.KindDB)
+	if dbx.Unavailable(err) {
+		return errors.ServiceUnavailableError()
+	}
 	return errors.InternalError()
 }

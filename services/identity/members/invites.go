@@ -2,8 +2,6 @@ package members
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -12,9 +10,9 @@ import (
 
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/feed"
-	"github.com/plat5dev/plat5/identity/internal/apikey"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 	"github.com/plat5dev/plat5/identity/internal/id"
+	"github.com/plat5dev/plat5/identity/internal/secret"
 	"github.com/plat5dev/plat5/identity/nodes"
 )
 
@@ -24,10 +22,8 @@ const (
 	InviteRevoked  = "revoked"
 	InviteExpired  = "expired"
 
-	tokenPrefix      = "inv_"
-	minInviteExpiry  = 60 * time.Second
-	maxInviteExpiry  = 30 * 24 * time.Hour
-	tokenRandomBytes = 32
+	minInviteExpiry = 60 * time.Second
+	maxInviteExpiry = 30 * 24 * time.Hour
 )
 
 // DefaultInviteExpiry is how long a token works when expires_in is omitted.
@@ -120,7 +116,8 @@ func (s *Store) CreateInvite(ctx context.Context, snap *feed.Snapshot, nodeID st
 		return nil, op.Fail(err)
 	}
 
-	token, err := newToken()
+	prefix := secret.InvitePrefix(s.brand)
+	token, err := secret.Generate(prefix)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
@@ -129,8 +126,8 @@ func (s *Store) CreateInvite(ctx context.Context, snap *feed.Snapshot, nodeID st
 		INSERT INTO invites (id, node_id, role, grants, token_hash, token_prefix, status, max_uses, expires_at, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9)
 		RETURNING `+inviteColumns,
-		id.New(), n.ID, in.Role, grantsJSON, apikey.Hash(token),
-		apikey.DisplayPrefix(token, tokenPrefix), in.MaxUses, now.Add(in.ExpiresIn), now))
+		id.New(), n.ID, in.Role, grantsJSON, secret.Hash(token),
+		secret.DisplayPrefix(token, prefix), in.MaxUses, now.Add(in.ExpiresIn), now))
 	if err != nil {
 		return nil, op.Fail(err)
 	}
@@ -147,18 +144,10 @@ func ExpiresInError() error {
 	return errors.FieldError("expires_in", "Expiry must be between 60 seconds and 30 days.")
 }
 
-// MaxUsesError is the 422 for a max_uses that's neither a positive number nor
-// unlimited.
+// MaxUsesError is the 422 for a max_uses that's neither a positive whole
+// number nor null.
 func MaxUsesError() error {
-	return errors.FieldError("max_uses", "Max uses must be at least 1, or unlimited.")
-}
-
-func newToken() (string, error) {
-	buf := make([]byte, tokenRandomBytes)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return tokenPrefix + base64.RawURLEncoding.EncodeToString(buf), nil
+	return errors.FieldError("max_uses", "Max uses must be at least 1.")
 }
 
 // checkGrants checks an invite's grants: only on a root, each on a distinct
@@ -267,7 +256,8 @@ func (s *Store) ExpireInvites(ctx context.Context) (int, error) {
 }
 
 // Redeemed is what a redeem did: the member in the invite's tree, and the
-// node it was for. Binding is nil when nothing changed.
+// node it was for. Binding is the binding made on that node, nil when the
+// member already had one there.
 type Redeemed struct {
 	MemberID      string
 	Node          *nodes.Node
@@ -275,10 +265,11 @@ type Redeemed struct {
 	Binding       *Binding
 }
 
-// Redeem uses an invite for a person, by user id. At a root it makes a member
-// with the invite's role plus each grant on a node still live; below a root
-// it binds the role there, making a guest of someone not in the tree. Someone
-// already bound on the invite's node changes nothing, and that isn't a use.
+// Redeem uses an invite for a person, by user id. It binds what the member
+// doesn't hold yet, new member or existing: the invite's role on its node
+// and, at a root, each grant on a node still live. Below a root, someone not
+// in the tree becomes a guest. A redeem that binds anything is a use; one that
+// binds nothing changes nothing.
 func (s *Store) Redeem(ctx context.Context, userID, token string) (*Redeemed, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "redeem_invite", dbx.DefaultTimeout)
 	defer cancel()
@@ -288,7 +279,10 @@ func (s *Store) Redeem(ctx context.Context, userID, token string) (*Redeemed, er
 	if err != nil {
 		return nil, op.Reject(err, ErrNotFound)
 	}
-	hash := apikey.Hash(token)
+	if !secret.Parse(secret.InvitePrefix(s.brand), token) {
+		return nil, op.Expected("unknown token", errors.NotFoundError("invite", nil))
+	}
+	hash := secret.Hash(token)
 	var nodeID string
 	err = s.pool.QueryRow(ctx, `SELECT node_id FROM invites WHERE token_hash = $1`, hash).Scan(&nodeID)
 	if dbx.IsNoRows(err) {
@@ -318,7 +312,8 @@ func (s *Store) Redeem(ctx context.Context, userID, token string) (*Redeemed, er
 		return nil, op.Expected("unusable", inviteUnusable(inv.Status))
 	}
 	if n.Status != nodes.StatusActive {
-		return nil, op.Expected("node deleted", errors.ConflictError(fmt.Sprintf("This invite's %s was deleted.", n.Kind), "node", nodes.StatusDeleted))
+		return nil, op.Expected("node deleted", errors.InviteNotRedeemableError(
+			fmt.Sprintf("This invite's %s was deleted.", n.Kind), "node_deleted"))
 	}
 
 	out := &Redeemed{Node: n}
@@ -331,24 +326,19 @@ func (s *Store) Redeem(ctx context.Context, userID, token string) (*Redeemed, er
 		}
 		out.MemberCreated = true
 	}
-	var held bool
-	if err := w.tx.QueryRow(ctx, `
-		SELECT EXISTS (SELECT 1 FROM bindings WHERE member_id = $1 AND node_id = $2)
-	`, out.MemberID, n.ID).Scan(&held); err != nil {
+	if out.Binding, err = s.bindIfNotHeld(ctx, w, out.MemberID, n.ID, inv.Role); err != nil {
 		return nil, op.Fail(err)
 	}
-	if held {
+	granted, err := s.applyGrants(ctx, w, out.MemberID, inv.Grants)
+	if err != nil {
+		return nil, op.Fail(err)
+	}
+	if out.Binding == nil && !granted {
 		if err := w.commit(ctx); err != nil {
 			return nil, op.Fail(err)
 		}
 		op.OK("unchanged")
 		return out, nil
-	}
-	if out.Binding, err = s.insertBinding(ctx, w, out.MemberID, n.ID, inv.Role); err != nil {
-		return nil, op.Fail(err)
-	}
-	if err := s.applyGrants(ctx, w, out.MemberID, inv.Grants); err != nil {
-		return nil, op.Fail(err)
 	}
 	if _, err := w.tx.Exec(ctx, `
 		UPDATE invites SET use_count = use_count + 1,
@@ -364,26 +354,44 @@ func (s *Store) Redeem(ctx context.Context, userID, token string) (*Redeemed, er
 	return out, nil
 }
 
+// bindIfNotHeld binds role for the member on the node, unless the member
+// already has a binding there: then it returns nil and changes nothing.
+func (s *Store) bindIfNotHeld(ctx context.Context, w *write, memberID, nodeID, role string) (*Binding, error) {
+	var held bool
+	if err := w.tx.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM bindings WHERE member_id = $1 AND node_id = $2)
+	`, memberID, nodeID).Scan(&held); err != nil {
+		return nil, err
+	}
+	if held {
+		return nil, nil
+	}
+	return s.insertBinding(ctx, w, memberID, nodeID, role)
+}
+
 // applyGrants binds each grant on a node still live where the member has no
-// binding yet. Roles were checked when the invite was made; one removed since
-// binds and grants nothing, like any binding whose role is gone.
-func (s *Store) applyGrants(ctx context.Context, w *write, memberID string, grants []Grant) error {
+// binding yet, and reports whether it bound any. Roles were checked when the
+// invite was made; one removed since binds and grants nothing, like any
+// binding whose role is gone.
+func (s *Store) applyGrants(ctx context.Context, w *write, memberID string, grants []Grant) (bool, error) {
+	bound := false
 	for _, g := range grants {
 		var live, held bool
 		if err := w.tx.QueryRow(ctx, `
 			SELECT EXISTS (SELECT 1 FROM nodes WHERE id = $1 AND status = 'active'),
 			       EXISTS (SELECT 1 FROM bindings WHERE member_id = $2 AND node_id = $1)
 		`, g.NodeID, memberID).Scan(&live, &held); err != nil {
-			return err
+			return false, err
 		}
 		if !live || held {
 			continue
 		}
 		if _, err := s.insertBinding(ctx, w, memberID, g.NodeID, g.Role); err != nil {
-			return err
+			return false, err
 		}
+		bound = true
 	}
-	return nil
+	return bound, nil
 }
 
 func inviteUnusable(status string) error {
@@ -392,5 +400,5 @@ func inviteUnusable(status string) error {
 		InviteRevoked:  "This invite is no longer valid.",
 		InviteExpired:  "This invite has expired.",
 	}[status]
-	return errors.ConflictError(msg, "status", status)
+	return errors.InviteNotRedeemableError(msg, status)
 }

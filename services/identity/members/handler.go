@@ -14,7 +14,7 @@ import (
 )
 
 // The caller, as the front door sends it (docs/reference/headers.md). Only
-// four routes read them (docs/reference/api/identity.md).
+// three routes read them (docs/reference/api/identity.md).
 const (
 	MemberHeader = "X-Plat5-Member-Id"
 	UserHeader   = "X-Plat5-User-Id"
@@ -135,7 +135,7 @@ type InviteResponse struct {
 	NodeID      string  `json:"node_id"`
 	Role        string  `json:"role"`
 	Grants      []Grant `json:"grants"`
-	MaxUses     any     `json:"max_uses"`
+	MaxUses     *int    `json:"max_uses"` // null: unlimited
 	UseCount    int     `json:"use_count"`
 	Status      string  `json:"status"`
 	ExpiresAt   string  `json:"expires_at"`
@@ -158,9 +158,6 @@ type RedeemResponse struct {
 	MemberID string             `json:"member_id"`
 	Node     nodes.NodeResponse `json:"node"`
 }
-
-// unlimited is max_uses with no cap, on the wire.
-const unlimited = "unlimited"
 
 func bindingResponse(b *Binding) BindingResponse {
 	return BindingResponse{
@@ -196,13 +193,9 @@ func keyResponse(k *Key) KeyResponse {
 }
 
 func inviteResponse(inv *Invite) InviteResponse {
-	var maxUses any = unlimited
-	if inv.MaxUses != nil {
-		maxUses = *inv.MaxUses
-	}
 	return InviteResponse{
 		ID: inv.ID, NodeID: inv.NodeID, Role: inv.Role, Grants: inv.Grants,
-		MaxUses: maxUses, UseCount: inv.UseCount, Status: inv.Status, ExpiresAt: httpx.FormatTime(inv.ExpiresAt),
+		MaxUses: inv.MaxUses, UseCount: inv.UseCount, Status: inv.Status, ExpiresAt: httpx.FormatTime(inv.ExpiresAt),
 		TokenPrefix: inv.TokenPrefix, CreatedAt: httpx.FormatTime(inv.CreatedAt), Token: inv.Token,
 	}
 }
@@ -504,7 +497,7 @@ func (h *Handler) GetUser(c fiber.Ctx) error {
 }
 
 // SetName is PATCH /users/{user_id} { name }: a string sets the person's
-// name, null clears it. X-Plat5-User-Id says it's the person's own edit.
+// name, null clears it. It reads no caller header.
 func (h *Handler) SetName(c fiber.Ctx) error {
 	var req struct {
 		Name json.RawMessage `json:"name"`
@@ -520,7 +513,7 @@ func (h *Handler) SetName(c fiber.Ctx) error {
 		return errors.FieldError("name", errors.FallbackValidation)
 	}
 	userID := httpx.PathParam(c, "user_id")
-	before, u, err := h.store.SetName(c.Context(), h.src.Current(), userID, name, header(c, UserHeader))
+	before, u, err := h.store.SetName(c.Context(), h.src.Current(), userID, name)
 	if err != nil {
 		return mapErr(c, err, "failed to set name", "user", userID)
 	}
@@ -727,15 +720,15 @@ type CreateInviteRequest struct {
 	ExpiresIn *string         `json:"expires_in"`
 }
 
-// read is the request with its defaults: max_uses omitted or null is 1,
-// expires_in omitted is 7d.
+// read is the request with its defaults: max_uses omitted is 1, a number is
+// that many and null is unlimited; expires_in omitted is 7d.
 func (r CreateInviteRequest) read() (InviteInput, error) {
 	in := InviteInput{Role: r.Role, Grants: r.Grants, ExpiresIn: DefaultInviteExpiry}
 	switch raw := strings.TrimSpace(string(r.MaxUses)); raw {
-	case "", "null":
+	case "":
 		one := 1
 		in.MaxUses = &one
-	case `"` + unlimited + `"`:
+	case "null":
 	default:
 		var n int
 		if err := json.Unmarshal(r.MaxUses, &n); err != nil || n < 1 {

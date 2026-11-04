@@ -157,7 +157,7 @@ services:
     environment:
       PORT: 3000
       INTERNAL_PORT: 3001
-      APIKEY_BRAND: ${APIKEY_BRAND:-plat5}
+      SECRET_BRAND: ${SECRET_BRAND:-plat5}
       DATABASE_URL: postgres://plat5:plat5@postgres:5432/plat5?sslmode=disable
       CONTROL_PLANE_URL: http://control-plane:5003
       OTEL_SERVICE_NAME: identity

@@ -100,7 +100,7 @@ func TestRoutes(t *testing.T) {
 	if status, _, details := call(t, app, "DELETE", "/nodes/"+org.ID, ""); status != 204 || details != "" {
 		t.Fatalf("delete again: %d %s", status, details)
 	}
-	if status, body, _ := call(t, app, "POST", "/nodes/"+project.ID+"/restore", ""); status != 409 || errorCode(body) != "CONFLICT" {
+	if status, body, _ := call(t, app, "POST", "/nodes/"+project.ID+"/restore", ""); status != 409 || errorCode(body) != "PARENT_DELETED" {
 		t.Fatalf("restore under deleted parent: %d %v", status, body)
 	}
 	status, body, _ = call(t, app, "GET", "/nodes/"+org.ID, "")
@@ -114,7 +114,7 @@ func TestRoutes(t *testing.T) {
 	if status, _, details := call(t, app, "POST", "/nodes/"+org.ID+"/restore", ""); status != 200 || details != "" {
 		t.Fatalf("restore live: %d %s", status, details)
 	}
-	if status, body, _ := call(t, app, "POST", "/nodes/"+org.ID+"/release-slug", ""); status != 409 {
+	if status, body, _ := call(t, app, "POST", "/nodes/"+org.ID+"/release-slug", ""); status != 409 || errorCode(body) != "SLUG_NOT_RELEASABLE" {
 		t.Fatalf("release a live slug: %d %v", status, body)
 	}
 

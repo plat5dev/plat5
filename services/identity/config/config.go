@@ -10,8 +10,8 @@ const (
 	defaultPort         = "3000"
 	defaultInternalPort = "3001"
 	defaultDatabaseURL  = "postgres://plat5:plat5@localhost:5432/plat5?sslmode=disable"
-	defaultAPIKeyBrand  = "plat5"
-	maxAPIKeyBrandLen   = 32
+	defaultSecretBrand  = "plat5"
+	maxSecretBrandLen   = 32
 )
 
 // Config is process-level identity service configuration.
@@ -21,15 +21,16 @@ type Config struct {
 	Port         string
 	InternalPort string
 	DatabaseURL  string
-	// APIKeyBrand starts every key identity mints (docs/reference/api/identity.md#credentials).
-	APIKeyBrand string
+	// SecretBrand starts every secret identity mints, API keys and invite
+	// tokens (docs/reference/api/identity.md#secrets).
+	SecretBrand string
 	// ControlPlaneURL is CONTROL_PLANE_URL: the control plane's internal base
 	// URL, where identity reads the config. Required.
 	ControlPlaneURL string
 }
 
 func Load() (Config, error) {
-	brand, err := apiKeyBrandFromEnv()
+	brand, err := secretBrandFromEnv()
 	if err != nil {
 		return Config{}, err
 	}
@@ -41,7 +42,7 @@ func Load() (Config, error) {
 		Port:            envOr("PORT", defaultPort),
 		InternalPort:    envOr("INTERNAL_PORT", defaultInternalPort),
 		DatabaseURL:     envOr("DATABASE_URL", defaultDatabaseURL),
-		APIKeyBrand:     brand,
+		SecretBrand:     brand,
 		ControlPlaneURL: controlPlane,
 	}, nil
 }
@@ -56,27 +57,27 @@ func parseControlPlaneURL(raw string) (string, error) {
 	return u, nil
 }
 
-func apiKeyBrandFromEnv() (string, error) {
-	raw, ok := os.LookupEnv("APIKEY_BRAND")
+func secretBrandFromEnv() (string, error) {
+	raw, ok := os.LookupEnv("SECRET_BRAND")
 	if !ok {
-		return defaultAPIKeyBrand, nil
+		return defaultSecretBrand, nil
 	}
-	return parseAPIKeyBrand(raw)
+	return parseSecretBrand(raw)
 }
 
-func parseAPIKeyBrand(raw string) (string, error) {
+func parseSecretBrand(raw string) (string, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
-		return "", fmt.Errorf("APIKEY_BRAND is empty")
+		return "", fmt.Errorf("SECRET_BRAND is empty")
 	}
-	if len(s) > maxAPIKeyBrandLen {
-		return "", fmt.Errorf("APIKEY_BRAND longer than %d characters", maxAPIKeyBrandLen)
+	if len(s) > maxSecretBrandLen {
+		return "", fmt.Errorf("SECRET_BRAND longer than %d characters", maxSecretBrandLen)
 	}
 	for i, r := range s {
 		letter := r >= 'a' && r <= 'z'
 		digit := i > 0 && r >= '0' && r <= '9'
 		if !letter && !digit {
-			return "", fmt.Errorf("APIKEY_BRAND must be [a-z][a-z0-9]*, max %d", maxAPIKeyBrandLen)
+			return "", fmt.Errorf("SECRET_BRAND must be [a-z][a-z0-9]*, max %d", maxSecretBrandLen)
 		}
 	}
 	return s, nil

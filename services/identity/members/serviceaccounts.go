@@ -10,9 +10,9 @@ import (
 
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/feed"
-	"github.com/plat5dev/plat5/identity/internal/apikey"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 	"github.com/plat5dev/plat5/identity/internal/id"
+	"github.com/plat5dev/plat5/identity/internal/secret"
 	"github.com/plat5dev/plat5/identity/nodes"
 )
 
@@ -55,7 +55,7 @@ func normalizeName(raw string) (string, error) {
 	if name == "" {
 		return "", errors.FieldError("name", "Name is required.")
 	}
-	if utf8.RuneCountInString(name) > apikey.MaxNameLen {
+	if utf8.RuneCountInString(name) > secret.MaxNameLen {
 		return "", errors.FieldError("name", "Name is too long.")
 	}
 	return name, nil
@@ -313,31 +313,31 @@ func (s *Store) CreateKey(ctx context.Context, owner KeyOwner, name string) (*Ke
 	defer op.End()
 	name = strings.TrimSpace(name)
 	if name == "" {
-		name = apikey.DefaultName
+		name = secret.DefaultName
 	}
-	if utf8.RuneCountInString(name) > apikey.MaxNameLen {
+	if utf8.RuneCountInString(name) > secret.MaxNameLen {
 		return nil, op.Expected("invalid", errors.FieldError("name", "Name is too long."))
 	}
 	principalID, err := s.keyPrincipal(ctx, s.pool, owner)
 	if err != nil {
 		return nil, op.Reject(err, ErrNotFound)
 	}
-	prefix := apikey.Prefix(s.brand)
-	secret, err := apikey.Generate(prefix)
+	prefix := secret.KeyPrefix(s.brand)
+	key, err := secret.Generate(prefix)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
 	k, err := scanKey(s.pool.QueryRow(ctx, `
 		INSERT INTO api_keys (id, principal_id, name, key_prefix, key_hash, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING `+keyColumns, id.New(), principalID, name, apikey.DisplayPrefix(secret, prefix), apikey.Hash(secret), s.now().UTC()))
+		RETURNING `+keyColumns, id.New(), principalID, name, secret.DisplayPrefix(key, prefix), secret.Hash(key), s.now().UTC()))
 	if dbx.IsForeignKeyViolation(err) {
 		return nil, op.Expected("not found", ErrNotFound) // the owner went meanwhile
 	}
 	if err != nil {
 		return nil, op.Fail(err)
 	}
-	k.Secret = secret
+	k.Secret = key
 	op.OK("created")
 	return k, nil
 }

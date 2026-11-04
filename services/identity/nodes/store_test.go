@@ -265,9 +265,9 @@ func TestCreateUnderADeletedParentIsRefused(t *testing.T) {
 	org := e.create(nil, "organization", "Gruow")
 	e.delete(org)
 	_, err := e.store.Create(e.ctx, e.snap, CreateInput{ParentID: org.ID, Kind: "folder", DisplayName: "F"})
-	apiErr := wantAPIError(t, err, 409, "CONFLICT")
-	if apiErr.Message != "Restore the organization first." {
-		t.Fatalf("message %q", apiErr.Message)
+	apiErr := wantAPIError(t, err, 409, "PARENT_DELETED")
+	if apiErr.Message != "Restore the organization first." || apiErr.Details.(map[string]interface{})["parent_id"] != org.ID {
+		t.Fatalf("refusal %q %v", apiErr.Message, apiErr.Details)
 	}
 }
 
@@ -343,7 +343,7 @@ func TestPurgeFreesASlugBelowTheRoot(t *testing.T) {
 	}
 	// A purged node below a root has no slug to release.
 	_, _, err := e.store.ReleaseSlug(e.ctx, old.ID)
-	wantAPIError(t, err, 409, "CONFLICT")
+	wantAPIError(t, err, 409, "SLUG_NOT_RELEASABLE")
 }
 
 func TestPurgedRootSlugsStayTaken(t *testing.T) {
@@ -372,12 +372,12 @@ func TestReleaseSlugOnlyOnAPurgedRoot(t *testing.T) {
 	e := setup(t)
 	org := e.create(nil, "organization", "Gruow")
 	_, _, err := e.store.ReleaseSlug(e.ctx, org.ID)
-	if apiErr := wantAPIError(t, err, 409, "CONFLICT"); apiErr.Message != "Only a purged root's slug can be released." {
+	if apiErr := wantAPIError(t, err, 409, "SLUG_NOT_RELEASABLE"); apiErr.Message != "Only a purged root's slug can be released." {
 		t.Fatalf("message %q", apiErr.Message)
 	}
 	e.delete(org)
 	_, _, err = e.store.ReleaseSlug(e.ctx, org.ID)
-	wantAPIError(t, err, 409, "CONFLICT")
+	wantAPIError(t, err, 409, "SLUG_NOT_RELEASABLE")
 }
 
 func TestDeleteCascadesUnderOneDeletionID(t *testing.T) {
@@ -440,7 +440,7 @@ func TestDeleteRevokesNothing(t *testing.T) {
 	personKey := e.key(person)
 	inviteID := id.New()
 	e.exec(`INSERT INTO invites (id, node_id, role, token_hash, token_prefix, status, max_uses, expires_at)
-		VALUES ($1, $2, 'admin', $1, 'inv_AAAA', 'active', 1, $3)`, inviteID, folder.ID, e.clock.t.Add(24*time.Hour))
+		VALUES ($1, $2, 'admin', $1, 'plat5-i-1-AAAA', 'active', 1, $3)`, inviteID, folder.ID, e.clock.t.Add(24*time.Hour))
 
 	e.delete(folder)
 	kept := func() {
@@ -505,7 +505,7 @@ func TestRestoreConflicts(t *testing.T) {
 	// Parent deleted: 409, and the parent isn't restored for it.
 	e.delete(org)
 	_, _, err = e.store.Restore(e.ctx, folder.ID)
-	if apiErr := wantAPIError(t, err, 409, "CONFLICT"); apiErr.Message != "Restore the organization first." {
+	if apiErr := wantAPIError(t, err, 409, "PARENT_DELETED"); apiErr.Message != "Restore the organization first." {
 		t.Fatalf("message %q", apiErr.Message)
 	}
 	if e.get(org).Status != StatusDeleted {
@@ -519,7 +519,7 @@ func TestRestoreConflicts(t *testing.T) {
 	e.delete(org)
 	e.clock.advance(30 * 24 * time.Hour)
 	_, _, err = e.store.Restore(e.ctx, org.ID)
-	if apiErr := wantAPIError(t, err, 409, "CONFLICT"); apiErr.Message != "This can no longer be restored." {
+	if apiErr := wantAPIError(t, err, 409, "GRACE_EXPIRED"); apiErr.Message != "This can no longer be restored." || apiErr.Details != nil {
 		t.Fatalf("message %q", apiErr.Message)
 	}
 }
@@ -558,7 +558,7 @@ func TestPurgeAfterTheGrace(t *testing.T) {
 	sa, saMember := e.principal("service_account", folder, org, folder, other)
 	e.key(sa)
 	e.exec(`INSERT INTO invites (id, node_id, role, token_hash, token_prefix, status, max_uses, expires_at)
-		VALUES ($1, $2, 'admin', $1, 'inv_AAAA', 'active', 1, $3)`, id.New(), folder.ID, e.clock.t.Add(24*time.Hour))
+		VALUES ($1, $2, 'admin', $1, 'plat5-i-1-AAAA', 'active', 1, $3)`, id.New(), folder.ID, e.clock.t.Add(24*time.Hour))
 	e.delete(folder)
 
 	// Not yet: the grace hasn't passed.

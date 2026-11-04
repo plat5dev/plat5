@@ -65,7 +65,7 @@ func main() {
 		return
 	}
 	nodeStore := nodes.NewStore(pool)
-	memberStore := members.NewStore(pool, nodeStore, cfg.APIKeyBrand)
+	memberStore := members.NewStore(pool, nodeStore, cfg.SecretBrand)
 	sweeper := nodes.NewSweeper(nodeStore, baseLogger)
 	sweeper.Also("expire invites", memberStore.ExpireInvites)
 	go follower.Follow(runCtx)
@@ -82,7 +82,7 @@ func main() {
 	baseLogger.Info().
 		Str("port", cfg.Port).
 		Str("internal_port", cfg.InternalPort).
-		Str("apikey_brand", cfg.APIKeyBrand).
+		Str("secret_brand", cfg.SecretBrand).
 		Int64("revision", src.Current().Revision).
 		Msg("starting identity server")
 
