@@ -27,7 +27,7 @@
           "upstream": "/health",
           "required_permissions": null,
           "rate_limit": [
-            "default"
+            "standard"
           ],
           "audit": false,
           "allow_deleted": false
@@ -55,7 +55,7 @@
             "project:read"
           ],
           "rate_limit": [
-            "default"
+            "standard"
           ],
           "audit": false,
           "allow_deleted": false
@@ -69,7 +69,7 @@
             "catalog:write"
           ],
           "rate_limit": [
-            "default"
+            "standard"
           ],
           "audit": true,
           "allow_deleted": false
@@ -78,25 +78,20 @@
     }
   },
   "rate_limits": {
-    "default": {
-      "requests": 120,
-      "window_seconds": 60
-    },
     "evals-org": {
       "requests": 300,
       "window_seconds": 1,
       "count_at": "organization"
+    },
+    "standard": {
+      "requests": 120,
+      "window_seconds": 60
     }
   },
   "defaults": {
     "rate_limit": [
-      "default"
-    ],
-    "timeouts": {
-      "connect": "5s",
-      "read": "20s"
-    },
-    "max_body_bytes": 2097152
+      "standard"
+    ]
   },
   "cors": {
     "allowed_origins": [

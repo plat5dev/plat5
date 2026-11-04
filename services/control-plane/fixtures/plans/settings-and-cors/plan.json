@@ -2,30 +2,11 @@
   "revision": 7,
   "summary": {
     "add": 1,
-    "change": 8,
+    "change": 7,
     "remove": 0,
     "blocked": 0
   },
   "changes": [
-    {
-      "op": "change",
-      "what": "setting",
-      "name": "defaults",
-      "before": {
-        "timeouts": {
-          "connect": "10s",
-          "read": "30s"
-        },
-        "max_body_bytes": 10485760
-      },
-      "after": {
-        "timeouts": {
-          "connect": "5s",
-          "read": "20s"
-        },
-        "max_body_bytes": 2097152
-      }
-    },
     {
       "op": "change",
       "what": "setting",
@@ -78,17 +59,6 @@
       }
     },
     {
-      "op": "change",
-      "what": "rate_limit",
-      "name": "default",
-      "before": {
-        "requests": 60
-      },
-      "after": {
-        "requests": 120
-      }
-    },
-    {
       "op": "add",
       "what": "rate_limit",
       "name": "evals-org",
@@ -96,6 +66,17 @@
         "requests": 300,
         "window_seconds": 1,
         "count_at": "organization"
+      }
+    },
+    {
+      "op": "change",
+      "what": "rate_limit",
+      "name": "standard",
+      "before": {
+        "requests": 60
+      },
+      "after": {
+        "requests": 120
       }
     },
     {
@@ -140,7 +121,7 @@
           "path": "/orgs/{organization}/plans",
           "before": {
             "rate_limit": [
-              "default"
+              "standard"
             ]
           },
           "after": {

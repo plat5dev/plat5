@@ -19,9 +19,9 @@ roles:
     bindable_at: [organization]
 creator_role: admin
 defaults:
-  rate_limit: [default]
+  rate_limit: [standard]
 rate_limits:
-  default: { requests: 60, window_seconds: 60 }
+  standard: { requests: 60, window_seconds: 60 }
 services:
   e10s:
     url: http://e10s:3000

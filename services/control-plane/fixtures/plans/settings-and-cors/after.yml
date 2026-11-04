@@ -7,11 +7,11 @@ users:
 route_checks:
   path: /v1/route-checks
 defaults:
-  rate_limit: [default]
+  rate_limit: [standard]
   timeouts: { connect: 5s, read: 20s }
   max_body_bytes: 2097152
 rate_limits:
-  default: { requests: 120, window_seconds: 60 }
+  standard: { requests: 120, window_seconds: 60 }
   evals-org: { requests: 300, window_seconds: 1, count_at: organization }
 cors:
   allowed_origins: ["https://app.example.com"]

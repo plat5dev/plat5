@@ -31,7 +31,7 @@
               "billing:read"
             ],
             "rate_limit": [
-              "default"
+              "standard"
             ],
             "audit": false,
             "allow_deleted": false
@@ -69,7 +69,7 @@
             "upstream": "/health",
             "required_permissions": null,
             "rate_limit": [
-              "default"
+              "standard"
             ],
             "audit": false,
             "allow_deleted": false
@@ -86,7 +86,7 @@
               "catalog:write"
             ],
             "rate_limit": [
-              "default"
+              "standard"
             ],
             "audit": false,
             "allow_deleted": false
@@ -103,7 +103,7 @@
               "catalog:write"
             ],
             "rate_limit": [
-              "default"
+              "standard"
             ],
             "audit": true,
             "allow_deleted": false
@@ -149,7 +149,7 @@
             "upstream": "/users/{user.id}/notifications",
             "required_permissions": null,
             "rate_limit": [
-              "default"
+              "standard"
             ],
             "audit": false,
             "allow_deleted": false
@@ -164,7 +164,7 @@
             "upstream": "/users/{user.id}/notifications",
             "required_permissions": null,
             "rate_limit": [
-              "default"
+              "standard"
             ],
             "audit": true,
             "allow_deleted": false

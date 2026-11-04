@@ -201,14 +201,16 @@ pub fn feed_body(revision: i64, body: &Value) -> Value {
 }
 
 /// The body of `GET /internal/gateway`: kinds, every service's routes
-/// expanded, rate limits, `defaults`, CORS, `users` (the IdP name claims) and
-/// `route_checks`, with defaults filled in.
+/// expanded, rate limits, `defaults.rate_limit`, CORS, `users` (the IdP name
+/// claims) and `route_checks`, with defaults filled in. `defaults` carries only
+/// `rate_limit`, the part the gateway reads: each service carries its own
+/// timeouts and body limit, filled in.
 pub fn gateway_body(c: &Config) -> Value {
     json!({
         "kinds": c.kinds,
         "services": expand::expand(c),
         "rate_limits": c.rate_limits,
-        "defaults": c.defaults.filled(),
+        "defaults": { "rate_limit": c.defaults.rate_limit },
         "cors": c.cors,
         "users": c.users,
         "route_checks": c.route_checks,
@@ -283,12 +285,9 @@ mod tests {
         );
         assert_eq!(
             gateway["rate_limits"],
-            json!({ "default": { "requests": 60, "window_seconds": 60 } })
+            json!({ "standard": { "requests": 60, "window_seconds": 60 } })
         );
-        assert_eq!(
-            gateway["defaults"],
-            json!({ "rate_limit": ["default"], "timeouts": { "connect": "10s", "read": "30s" }, "max_body_bytes": 10485760 })
-        );
+        assert_eq!(gateway["defaults"], json!({ "rate_limit": ["standard"] }));
         let users = json!({ "name": { "claims": ["name", "preferred_username"], "sync": "first_sign_in" } });
         assert_eq!(gateway["users"], users);
         assert_eq!(gateway["route_checks"], json!({ "path": "/access/routes" }));
@@ -300,7 +299,7 @@ mod tests {
             json!({
                 "path": "/orgs/{organization}/projects/{project}/plans", "method": "GET",
                 "scope": "project", "upstream": "/projects/{project.id}/plans",
-                "required_permissions": ["project:read"], "rate_limit": ["default"], "audit": false,
+                "required_permissions": ["project:read"], "rate_limit": ["standard"], "audit": false,
                 "allow_deleted": false
             })
         );
@@ -337,7 +336,7 @@ mod tests {
             ),
             (
                 "defaults",
-                json!({ "defaults": { "rate_limit": ["default"], "burst": 1 } }),
+                json!({ "defaults": { "rate_limit": ["standard"], "burst": 1 } }),
             ),
         ] {
             let mut config = base();

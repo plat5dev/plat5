@@ -231,6 +231,7 @@ async fn a_plan_compares_the_stored_bodies_with_new_ones() {
     let after = load(&plans().join("services/after.yml"));
     let mut stored = after.clone();
     stored.gateway["services"]["e10s"]["routes"][0]["rate_limit"] = json!([]);
+    // An older version served the whole of defaults to the gateway.
     stored.gateway["defaults"]["max_body_bytes"] = json!(1);
     let plan = dry_run(7, Some(&stored), &after, &NoCounts).await.unwrap();
     assert_eq!(plan.summary.change, 2, "{plan:?}");
@@ -240,10 +241,11 @@ async fn a_plan_compares_the_stored_bodies_with_new_ones() {
         (What::Setting, "defaults")
     );
     assert_eq!(defaults.before, Some(json!({ "max_body_bytes": 1 })));
+    assert_eq!(defaults.after, None);
     let routes = plan.changes[1].routes.as_ref().unwrap();
     assert_eq!(routes.len(), 1);
     assert_eq!(routes[0].before, Some(json!({ "rate_limit": [] })));
-    assert_eq!(routes[0].after, Some(json!({ "rate_limit": ["default"] })));
+    assert_eq!(routes[0].after, Some(json!({ "rate_limit": ["standard"] })));
     // The same bodies plan nothing.
     let plan = dry_run(7, Some(&after), &after, &NoCounts).await.unwrap();
     assert!(plan.is_empty());

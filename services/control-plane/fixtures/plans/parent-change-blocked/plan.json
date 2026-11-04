@@ -43,7 +43,7 @@
               "environment:read"
             ],
             "rate_limit": [
-              "default"
+              "standard"
             ],
             "audit": false,
             "allow_deleted": false
@@ -60,7 +60,7 @@
               "environment:read"
             ],
             "rate_limit": [
-              "default"
+              "standard"
             ],
             "audit": false,
             "allow_deleted": false

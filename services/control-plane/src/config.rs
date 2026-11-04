@@ -140,8 +140,9 @@ pub struct FilledTimeouts {
     pub read: String,
 }
 
-/// `defaults:` with Plat5's own defaults under it: what the gateway is served.
-#[derive(Clone, Debug, Serialize, PartialEq)]
+/// `defaults:` with Plat5's own defaults under it, filled into each service
+/// and route at expansion.
+#[derive(Clone, Debug, PartialEq)]
 pub struct FilledDefaults {
     pub rate_limit: Vec<String>,
     pub timeouts: FilledTimeouts,
