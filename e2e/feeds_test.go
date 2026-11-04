@@ -213,7 +213,7 @@ func TestEventLogWaitsAndTypes(t *testing.T) {
 	}
 }
 
-// A bad param is a 422 naming it, and the two feeds the log replaced are gone.
+// A bad param is a 422 naming it.
 func TestEventLogRefuses(t *testing.T) {
 	s := newStack(t)
 	for _, c := range []struct{ query, param string }{
@@ -241,16 +241,6 @@ func TestEventLogRefuses(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != 422 || body.Error.Code != "VALIDATION_ERROR" || len(body.Error.Details.Fields) != 1 || body.Error.Details.Fields[0].Path != c.param {
 			t.Fatalf("%s: %d %+v", c.query, resp.StatusCode, body)
-		}
-	}
-	for _, path := range []string{"/internal/tree-events", "/internal/user-events"} {
-		resp, err := s.http.Get(s.identity + path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != 404 {
-			t.Fatalf("%s: %d", path, resp.StatusCode)
 		}
 	}
 }

@@ -581,7 +581,7 @@ func TestUserRoutesKeysInvites(t *testing.T) {
 		Token string `json:"token"`
 	}
 	s.call(owner, "POST", orgPath+"/invites", map[string]string{"role": "member"}, 201, &invite)
-	if !isID(invite.ID) || invite.Role != "member" || !strings.HasPrefix(invite.Token, "inv_") {
+	if !isID(invite.ID) || invite.Role != "member" || !strings.HasPrefix(invite.Token, "plat5-i-1-") {
 		t.Fatalf("invite: %+v", invite)
 	}
 	s.call(friend, "GET", orgPath, nil, 403, nil)

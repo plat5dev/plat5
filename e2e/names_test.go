@@ -33,8 +33,8 @@ func (s *stack) me(who caller) *string {
 // A person's name (docs/reference/idp.md#a-persons-name). Under the e2e
 // config's first_sign_in: no name claim leaves it null, PATCH /user sets it,
 // and a later sign-in with a claim keeps it. Then with users.name.sync
-// each_sign_in applied through the control plane: the claim wins, and the
-// person's own edit is a 409. The e2e config is applied again at the end.
+// each_sign_in applied through the control plane: the claim wins, and an
+// edit is a 409 NAME_OWNED_BY_IDP. The e2e config is applied again at the end.
 //
 // The each_sign_in config is the e2e config with one setting changed, applied
 // in this test, rather than a second stack: the harness applies its config
@@ -97,7 +97,7 @@ func TestNames(t *testing.T) {
 	}
 	var refused apiError
 	s.call(idp, "PATCH", "/user", map[string]any{"name": "Mine"}, 409, &refused)
-	if refused.Error.Code != "CONFLICT" || refused.Error.Details["value"] != "each_sign_in" {
+	if refused.Error.Code != "NAME_OWNED_BY_IDP" || refused.Error.Message != "This name comes from the sign-in provider." {
 		t.Fatalf("own edit under each_sign_in: %+v", refused)
 	}
 	if got := s.me(bare); got == nil || *got != "idp-dana" {
