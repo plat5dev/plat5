@@ -29,7 +29,7 @@ On every request the gateway answers three questions: who is calling (the creden
 
 ## Ids and slugs
 
-Every id of a resource Plat5 stores is a ULID, lowercase, with no type prefix: `01jbx9q3t5vk8m2n4p6r7s8t9w`. Those ids are stored, returned and accepted only in that form; an uppercase id isn't canonical and matches nothing. Other ids take the form that fits them: a lifecycle event's `id` is a number from the log's sequence, a `request_id` is a UUIDv4, and an audit event's `created_id` is whatever the service sent. Secrets keep a prefix so leak scanners can find them: API keys (`{brand}-k-2-…`) and invite tokens (`inv_…`). A principal's id never leaves identity.
+Every id of a resource Plat5 stores is a ULID, lowercase, with no type prefix: `01jbx9q3t5vk8m2n4p6r7s8t9w`. Those ids are stored, returned and accepted only in that form; an uppercase id isn't canonical and matches nothing. Other ids take the form that fits them: a lifecycle event's `id` is a number from the log's sequence, a `request_id` is a UUIDv4, and an audit event's `created_id` is whatever the service sent. Secrets keep a prefix so leak scanners can find them: API keys (`{brand}-k-2-…`) and invite tokens (`{brand}-i-1-…`). A principal's id never leaves identity.
 
 Every node has a slug, fixed at creation. Fixed rules, not config:
 

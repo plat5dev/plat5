@@ -43,7 +43,7 @@ Ready is **503** unless Postgres answers. A fresh control plane has no config un
 | Public port | `3000` (the service API) |
 | Internal port | `3001` (`/health/*`, `/metrics`, admit, plan counts, the lifecycle log, access evaluation) |
 | Database | Plat5 Postgres via `DATABASE_URL`, schema **`identity`** |
-| `APIKEY_BRAND` | Default `plat5` ([credentials](api/identity.md#credentials)) |
+| `SECRET_BRAND` | The brand on every secret identity mints, API keys and invite tokens. Default `plat5` ([secrets](api/identity.md#secrets)) |
 | `CONTROL_PLANE_URL` | Required. Identity doesn't listen until it has its first config ([`reference/api/internal.md`](api/internal.md#control-plane-feeds)) |
 
 Ready fails closed (**503**) when Postgres is unreachable or no config is loaded.

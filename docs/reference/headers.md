@@ -19,7 +19,7 @@ The same values the upstream placeholders use, so a service can read them either
 
 Never sent: a principal id, the caller's permissions or role, or a user id on a kind route.
 
-**Recommended use:** store the member id as an owner or author when a feature needs one, and key per-person data by the user id on user routes; never decide access by the caller ([`concepts/model.md`](../concepts/model.md#where-a-field-goes)).
+**Recommended use:** store the member id as an owner or author when a feature needs one, and key per-person data by the user id on user routes; never decide access by the caller ([`concepts/model.md`](../concepts/model.md#where-a-field-goes)). Access is Plat5's, and the one place Plat5 reads the caller to decide it is identity's child list, filtered to what `X-Plat5-Member-Id` can see: without the header the list is unfiltered, so a front door serving a member sends it ([identity's API](api/identity.md)).
 
 ## Stripped
 

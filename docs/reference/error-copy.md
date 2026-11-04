@@ -33,6 +33,11 @@ Clients show `error.message`. `details.fields` is for multi-field 422s; `message
 | `FORBIDDEN` | 403 | Permission denied, or it may not exist. |
 | `NOT_FOUND` | 404 | Resource not found. |
 | `CONFLICT` | 409 | That already exists. |
+| `PARENT_DELETED` | 409 | Restore the parent first. |
+| `GRACE_EXPIRED` | 409 | This can no longer be restored. |
+| `SLUG_NOT_RELEASABLE` | 409 | Only a purged root's slug can be released. |
+| `INVITE_NOT_REDEEMABLE` | 409 | This invite can't be used. |
+| `NAME_OWNED_BY_IDP` | 409 | This name comes from the sign-in provider. |
 | `PLAN_STALE` | 409 | The deployment changed since this plan was made. Plan again. |
 | `PAYLOAD_TOO_LARGE` | 413 | Request body is too large. |
 | `RATE_LIMITED` | 429 | Too many requests. Try again in a moment. |
@@ -60,6 +65,8 @@ Clients show `error.message`. `details.fields` is for multi-field 422s; `message
 | Create under a deleted node | Restore the {parent kind} first. |
 | Release the slug of a node that isn't a purged root | Only a purged root's slug can be released. |
 
+A slug taken is **409** `CONFLICT` with `{ "field": "slug", "value" }`. A restore or create under a deleted node is **409** `PARENT_DELETED` with `{ "parent_id" }`; a restore past the grace period, **409** `GRACE_EXPIRED`; a release, **409** `SLUG_NOT_RELEASABLE`. The other rows are **422**.
+
 ### Members and bindings
 
 | When | `message` |
@@ -69,6 +76,8 @@ Clients show `error.message`. `details.fields` is for multi-field 422s; `message
 | Direct binding for someone not in the tree | Add this person to the {root kind} first, or invite them. |
 | Already bound on this node | This member already has a role here. |
 | Remove a service account's member | Delete the service account to remove it. |
+
+Already a member and already bound are **409** `CONFLICT`; the others **422**.
 
 ### Roles
 
@@ -87,9 +96,9 @@ All are **422** `VALIDATION_ERROR` with `path` `role`.
 | Name empty | Name is required. |
 | Name > 128 | Name is too long. |
 | PATCH with no name | Nothing to update. |
-| The person's own name edit under `each_sign_in` | Your name comes from your sign-in provider. |
+| Any name edit under `each_sign_in` | This name comes from the sign-in provider. |
 
-The last is **409** `CONFLICT` with `{ "field": "name", "value": "each_sign_in" }`; the others **422** with `path` `name`.
+The last is **409** `NAME_OWNED_BY_IDP`, whoever sends it; the others **422** with `path` `name`.
 
 ### Service accounts
 
@@ -105,7 +114,7 @@ The last is **409** `CONFLICT` with `{ "field": "name", "value": "each_sign_in" 
 | When | `message` |
 |------|-----------|
 | `expires_in` not between `60s` and `30d` | Expiry must be between 60 seconds and 30 days. |
-| `max_uses` 0, negative, or a string other than `unlimited` | Max uses must be at least 1, or unlimited. |
+| `max_uses` 0, negative, or not a whole number or `null` | Max uses must be at least 1. |
 | `grants` on an invite below a root | Only an invite to the {root kind} can grant more. |
 | No `role` | Choose a role. |
 | Redeem of a redeemed invite | This invite has already been used. |
@@ -113,7 +122,7 @@ The last is **409** `CONFLICT` with `{ "field": "name", "value": "each_sign_in" 
 | Redeem of an expired invite | This invite has expired. |
 | Redeem of an invite whose node is deleted | This invite's {kind} was deleted. |
 
-Unknown tokens use the generic **404** `Resource not found.` Redeemed, revoked and expired tokens are **409** `CONFLICT` with `{ "field": "status", "value": "redeemed" | "revoked" | "expired" }`; a token whose node is deleted, with `{ "field": "node", "value": "deleted" }`.
+Unknown tokens use the generic **404** `Resource not found.` The four redeem refusals are **409** `INVITE_NOT_REDEEMABLE` with `{ "reason": "redeemed" | "revoked" | "expired" | "node_deleted" }`.
 
 ### API keys
 

@@ -46,11 +46,31 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `FORBIDDEN` | 403 | `invalid_request_error` | Permission denied, or it may not exist. | `{ required_permissions }`, or `null` on an `any_member` or user route |
 | `NOT_FOUND` | 404 | `invalid_request_error` | Resource not found. | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
+| `PARENT_DELETED` | 409 | `invalid_request_error` | Restore the parent first. | `{ parent_id }` |
+| `GRACE_EXPIRED` | 409 | `invalid_request_error` | This can no longer be restored. | `null` |
+| `SLUG_NOT_RELEASABLE` | 409 | `invalid_request_error` | Only a purged root's slug can be released. | `null` |
+| `INVITE_NOT_REDEEMABLE` | 409 | `invalid_request_error` | This invite can't be used. | `{ reason }` |
+| `NAME_OWNED_BY_IDP` | 409 | `invalid_request_error` | This name comes from the sign-in provider. | `null` |
 | `PLAN_STALE` | 409 | `invalid_request_error` | The deployment changed since this plan was made. Plan again. | `{ precondition, expected, actual }` |
 | `PAYLOAD_TOO_LARGE` | 413 | `invalid_request_error` | Request body is too large. | `{ max_size_bytes }` |
 | `RATE_LIMITED` | 429 | `api_error` | Too many requests. Try again in a moment. | `{ retry_after_seconds }` |
 | `INTERNAL_ERROR` | 500 | `api_error` | An unexpected error occurred. | `null` |
 | `SERVICE_UNAVAILABLE` | 503 | `api_error` | Service temporarily unavailable. | `null` |
+
+Codes are UPPER_SNAKE_CASE and name what refused the request: the thing, then its state (`PLAN_STALE`, `PARENT_DELETED`).
+
+## Which status
+
+One rule for every Plat5 API:
+
+| Status | When |
+|--------|------|
+| **422** `VALIDATION_ERROR` | The input is invalid. That includes an id or name in the request that names nothing the request can use (a role the roles document doesn't have, a member not active in the node's tree, a grant's node that isn't live) and a path naming the wrong kind of thing (a child kind that can't go under the node, a service account's member on a route for people's members) |
+| **409** | The current state refuses the request. `CONFLICT` is only for something that already exists: a slug taken, already a member, a binding already there. Each other state refusal has its own code |
+| **400** `INVALID_REQUEST` | A request malformed before its values are read: a path param that would change the upstream path, a caller header naming no one, a missing body |
+| **503** `SERVICE_UNAVAILABLE` | Something the answer needs is unavailable: a service's Postgres, or the gateway's identity, audit or Valkey. Retry later |
+
+The one exception is identity's [access evaluation](api/internal.md#access-evaluation): every body it can't use is **400** `INVALID_REQUEST`, as AuthZEN's contract asks, where the rest of Plat5 would answer **422**.
 
 ### `FORBIDDEN`
 
@@ -65,6 +85,10 @@ From the gateway: no route matches. From a service's own API, called by id: the 
 ### `UNAUTHORIZED`
 
 Returned by the **gateway**, not downstream services: a missing, malformed, unknown or revoked credential, a suspended person's, or the key of a service account whose node is deleted. A **401** always means the credential itself is bad; a known caller who may not make the request is a **403**. Identity unavailable is **503**. See [admit](api/internal.md#what-the-gateway-answers).
+
+### `INVITE_NOT_REDEEMABLE`
+
+Returned by **identity** on a redeem. `details.reason` is `redeemed`, `revoked`, `expired`, or `node_deleted` when the invite's node is deleted ([invites](api/identity.md#invites)).
 
 ### `PLAN_STALE`
 

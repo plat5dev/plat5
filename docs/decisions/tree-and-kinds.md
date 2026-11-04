@@ -25,7 +25,7 @@ A node has a generated id, a slug fixed at creation, and a display name that can
 | Decision | Why |
 |----------|-----|
 | Ids are bare lowercase ULIDs, with no type prefix, in one form only | One spelling per id: nothing to normalize, nothing to compare twice. The type is known from where the id appears |
-| Secrets keep a prefix: `{brand}-k-2-…` keys and `inv_…` invite tokens | A fixed prefix makes a secret recognizable wherever it leaks: secret scanners and log filters match on it, and a person tells a key from an invite at a glance |
+| Secrets keep a prefix, in one format: `{brand}-k-2-…` keys and `{brand}-i-1-…` invite tokens | A fixed prefix makes a secret recognizable wherever it leaks: secret scanners and log filters match on it, and a person tells a key from an invite at a glance. A deployment's brand is on every secret it hands out, not only on keys |
 | Every node has a slug; slugs route | Machines put slugs in a config file once and they never change; people get readable console URLs; services store ids only, with slug handling once, in Plat5 |
 | Slug shape: lowercase letters, digits and hyphens, starting with a letter, not ending with a hyphen, 3 to 63 characters | Safe in a URL and a DNS label with no escaping, and 63 characters is a DNS label's limit. Lowercase only, so two slugs never differ by case alone. A slug starts with a letter and an id with a digit, so a path segment is never ambiguous |
 | Slugs are unique per parent and kind; roots share one namespace | A person's credential reaches every org they're in, so org slugs must be deployment-wide; project slugs only need to be unique in their org |
@@ -50,3 +50,14 @@ Identity's and audit's public routes are in their service files, written by the 
 | Identity fixes its operations and their upstream paths; the deployment decides where each one sits publicly and what it requires | Identity's API is identity's own, and the public shape and permissions are the deployment's |
 | No service name is reserved. The gateway reaches identity's admit and audit's writer through its env, not through a service file | Plat5's code needs no service file to be identity's or audit's, so their files are read like any other |
 | Identity's own API addresses everything by id: `/nodes/{id}/…`, `/roots/{kind}`, `/users/{id}/…`. A service account is addressed by its member id | Any front door can call it without slugs. Slugs exist only at the gateway |
+
+## Identity's errors
+
+The rule: [`reference/errors.md`](../reference/errors.md#which-status).
+
+| Decision | Why |
+|----------|-----|
+| **409** when the current state refuses a request, **422** when its input is invalid | A client can tell "fix what you sent" from "it can't be done now" by status alone |
+| `CONFLICT` only for something that already exists; each other state refusal has its own code (`PARENT_DELETED`, `GRACE_EXPIRED`, `SLUG_NOT_RELEASABLE`, `INVITE_NOT_REDEEMABLE`, `NAME_OWNED_BY_IDP`) | Clients branch on `code` and status, never on `details`. One code for six refusals made them parse `details.field` |
+| An id that names nothing the request can use, or the wrong kind of thing, is **422**: a binding for a member not active in the tree, a service account's member on the members route, a child list of a kind that can't go there | No change of state makes the same request right: a member id belongs to one tree, removal is final, and a service account's member is never a person's. A list of a kind that can't go there is the same mistake as creating one, so it's the same **422**, not an empty list |
+| Postgres unavailable is **503** `SERVICE_UNAVAILABLE` in every service, identity's lifecycle log and evaluation included | **503** says "retry later", which is what a caller should do; a **500** says there's a bug |

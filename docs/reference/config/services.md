@@ -84,6 +84,7 @@ Unknown fields are **422**.
 - **Kind params.** The kind pieces' params (`{organization}`, `{project}`) take a slug or a node id; the gateway resolves each under the previous node ([`concepts/access.md`](../../concepts/access.md#how-a-request-is-decided)). They never reach a service, so they never appear in an upstream.
 - **The route's own params** are free: letters, digits and `_`, not starting with a digit, at most 64 characters. They can't be a kind name. Each param is a whole segment: `/files/{name}.json` is **422**.
 - **A child kind's collection.** A route in a kind's scope may be exactly a child kind's collection (`/projects` in `organization`), but nothing under it (`/projects/archived` is **422**): a project named `archived` would be shadowed by the literal. Use `/archived-projects`, or `/projects?status=archived`.
+- **Other overlaps** are the config author's to avoid; the rule above covers only literals under a kind's collection. A public `/orgs/pricing` beside a root kind's `/orgs/{organization}` shadows the org whose slug is `pricing`, and root slugs are deployment-wide. A root kind's path under `/user` (`/user/{organization}`) is shadowed by the person's own routes, such as `/user/nodes`.
 
 A user route is for the person's own data, keyed by the user id. Service accounts can't call user routes: their keys are **403** there ([how a request is decided](../../concepts/access.md#how-a-request-is-decided)).
 

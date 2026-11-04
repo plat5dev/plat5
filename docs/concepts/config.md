@@ -24,7 +24,7 @@ These stay out of it, as process env:
 | Wiring: URLs, ports, and `AUDIT_ENABLED` and `AUDIT_URL`, whether and where the gateway writes audit events | Needed to reach the control plane, or to boot, in the first place. Kept out of the config so the admin token can't turn audit off ([audit](audit.md#on-and-off)) |
 | Secrets: `ADMIN_TOKEN` | Not desired state |
 | Trust anchors: `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_ALLOWED_AUDIENCES`, `AUTH_SUBJECT_CLAIM` | Changing the issuer lets you sign in as anyone; `ADMIN_TOKEN` must not be able to |
-| `APIKEY_BRAND`, `ADMIT_CACHE_TTL`, `ADMIT_NEGATIVE_CACHE_TTL` | Set at boot; changing them while running buys nothing |
+| `SECRET_BRAND`, `ADMIT_CACHE_TTL`, `ADMIT_NEGATIVE_CACHE_TTL` | Set at boot; changing them while running buys nothing |
 | Per-tree data | Identity |
 
 ## The config

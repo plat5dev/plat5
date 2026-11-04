@@ -127,7 +127,7 @@ A node that doesn't exist and a node the caller can't reach are both `false`, as
 
 - **Credential.** Any credential a route takes. Missing, malformed, or a JWT refused locally: **401**. Each check admits as its request would: a kind check with its chain, a `user` check with an empty chain; a `public` or unmatched check doesn't admit. Any admit answering `valid: false` (an unknown or revoked key, a suspended person, a service account whose node is deleted) makes the whole call **401**, counted once by the failed-auth limiter. A call that needs no admit never calls identity: it answers whatever the credential, even with identity down. A `false` is never counted by the failed-auth limiter.
 - **Rate limit.** One count of each policy `defaults.rate_limit` names per call, per credential (a key, or a JWT's issuer and subject), before any check, checked and counted together as on a route. A service account refused on a user route spends from the same buckets. `X-RateLimit-*` on the **200** and the **429**, as on a route.
-- **Not audited**, and nothing is forwarded.
+- **Not audited**, and nothing is forwarded. A check that admits is an admit like a request's, so a new person's first route check creates them, like any first request ([subject claim](idp.md#subject-claim)).
 - **CORS** as on any response; its preflight is any `OPTIONS`.
 - **Other methods** on the path match no route: **404**.
 

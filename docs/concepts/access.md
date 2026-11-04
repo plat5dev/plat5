@@ -82,7 +82,7 @@ So the permissions that reach binding routes are as strong as the strongest role
 
 ## Credentials
 
-Every credential is `Authorization: Bearer`. A value of three dot-separated segments is a JWT; anything else is sent to identity as a key, so identity alone owns the key format ([credentials](../reference/api/identity.md#credentials)).
+Every credential is `Authorization: Bearer`. A value of three dot-separated segments is a JWT; anything else is sent to identity as a key, so identity alone owns the key format ([secrets](../reference/api/identity.md#secrets)).
 
 Any credential works on any route in a kind scope: a person's JWT or personal key reaches every tree they're in, and admit picks the member for the tree in the path. A service account key works only in its own tree, and never on user routes.
 

@@ -32,20 +32,18 @@ A person is linked to their IdP subjects, and services hold member and user ids,
 
 ## A person's name
 
-A person has one name across every tree, shown by member lookups and `GET /user`. It's `null` until it's known. Plat5 owns it: a sign-in can seed it from the token, and the person or an operator can set it.
+A person has one name across every tree, shown by member lookups and `GET /user`. It's `null` until it's known. Plat5 stores it, and `users.name.sync` decides who owns it: the IdP, or the person and an operator.
 
 **From the token.** On each admit that reaches identity, the gateway reads every claim in `users.name.claims`, in order, from the verified token, and sends identity the first non-empty one, trimmed. `name` and `preferred_username` are profile claims many IdPs leave out of access tokens, so they're a bonus when present; Plat5 Auth's tokens carry no name at all. A claim longer than 128 characters is cut to 128. `users.name.sync` decides what a claim does:
 
-| `sync` | A sign-in with a non-empty claim | The person's own edit |
-|--------|----------------------------------|-----------------------|
-| `first_sign_in` (the default) | Sets the name only while it's empty. Once it's set, by a claim or by the person, sign-ins never change it | Allowed |
-| `each_sign_in` | Sets the name every time, so a change at the IdP shows up within the gateway's cache TTL | **409**: the IdP owns the name |
+| `sync` | A sign-in with a non-empty claim | Who else sets the name |
+|--------|----------------------------------|------------------------|
+| `first_sign_in` (the default) | Sets the name only while it's empty. Once it's set, by a claim, the person or an operator, sign-ins never change it | The person and an operator, who can each set or clear it |
+| `each_sign_in` | Sets the name every time, so a change at the IdP shows up within the gateway's cache TTL | Nobody: the IdP owns the name. An edit from the person or an operator is **409** `NAME_OWNED_BY_IDP`, and an abusive name is fixed at the IdP |
 
 A sign-in with no name claim, or only empty ones, leaves the name as it is in both modes.
 
-**By the person.** `PATCH /user { name }` on the user scope ([generated routes](config/generated-routes.md#identitys-routes)). `null` clears it, so under `first_sign_in` the next sign-in with a claim sets it again.
-
-**By an operator.** `PATCH /users/{user_id} { name }` on identity's service API ([identity's API](api/identity.md#users)), in both modes, so an operator can always replace or clear an abusive name.
+**By the person or an operator,** under `first_sign_in`: the person with `PATCH /user { name }` on the user scope ([generated routes](config/generated-routes.md#identitys-routes)), an operator with `PATCH /users/{user_id} { name }` on identity's service API ([identity's API](api/identity.md#users)). Both are the same edit; identity doesn't ask who sent it. `null` clears the name, so the next sign-in with a claim sets it again.
 
 An org admin never sets it: the name is the person's in every tree, not one tree's. A name is 1 to 128 characters after trimming ([field limits](api/identity.md#field-limits)). A name change isn't a lifecycle event. Service accounts keep their own names, set by their tree.
 

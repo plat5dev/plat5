@@ -47,7 +47,7 @@ An event is in the log of every node in its chain, so reading a node returns its
 | A kind | When audited | Each node in the chain, and the node a create produced (`created_id`), so a node's log shows its own creation |
 | `user` | When audited | The person's own, by user id. Also each node the service names, on a success |
 
-**The person's log** holds what they did on their own routes: personal keys, account deletion, invite redeems. Only the person and other front doors read it.
+**The person's log** holds what they did on their own routes: personal keys, account deletion, invite redeems. Only the person and other front doors read it. An account deletion is in no other log: an org sees only that the person's member is now `removed`.
 
 **A user route that changes a tree** (creating an org, redeeming an invite) is in that tree's logs too. The tree isn't taken from the path: the service names the chain on `X-Plat5-Audit-Nodes`, and the person's member in that tree on `X-Plat5-Audit-Member` ([below](#named-nodes)). The service is trusted; the caller is not.
 
@@ -95,7 +95,7 @@ Headers on the upstream response. The gateway reads them only on audited routes,
 | `X-Plat5-Audit-Created` | The id a create produced | Any audited route |
 | `X-Plat5-Audit-Nodes`, `X-Plat5-Audit-Member` | The chain of nodes a user route changed, and the member in that tree | Audited user routes, 2xx responses, both or neither |
 
-None of them can create an event, or change its outcome, status, or who acted.
+None of them can create an event, or change its outcome or status. They're trusted as sent: the gateway checks their shape, not what they name.
 
 ### Details
 
@@ -111,9 +111,13 @@ What goes in: what changed, with old and new values where the service has them (
 
 One id: visible ASCII, one path segment, at most 128 bytes. Invalid → ignored, with a warning.
 
+Any id the service returns is added as a log key, unchecked: the event is in the log of whatever node has that id. The service is trusted to return an id from the request's own tree; if it returns another tree's node id, the event goes into that tree's log.
+
 ### Named nodes
 
 `X-Plat5-Audit-Nodes` is the node ids of the chain the route changed, root first, comma-separated, at most 32. `X-Plat5-Audit-Member` is the person's member in that tree. Each id has the same rules as `Created`. On a 2xx to an audited user route, they become `named_node_ids` and `named_member_id`, and the event is in each named node's log too: a read of one returns it, with the named member as the actor and no user id. Anywhere else, or one without the other, they're ignored, with a warning.
+
+So on a user route the service names the chain and the member, and that member is who acted in a read of those nodes' logs. The gateway checks neither that the ids form a chain nor that the member is in that tree: the service is trusted, as it is with `Created`.
 
 The event's fields and the read API: [`reference/api/audit.md`](../reference/api/audit.md). Storage: [`internals/audit-storage.md`](../internals/audit-storage.md).
 
@@ -122,7 +126,7 @@ The event's fields and the read API: [`reference/api/audit.md`](../reference/api
 - Bodies, query strings, permissions, roles, slugs or principal ids in an event
 - Events from `public` routes, or a log chosen by a path param
 - 401s, 429s, or not-found 403s in the log
-- The gateway reading inside details, or a service header creating or re-outcoming an event, or changing who acted
+- The gateway reading inside details, or a service header creating or re-outcoming an event
 - A product feature that reads audit
 - Changing an event after its outcome, or deleting events through an API
 - Audit for some trees or services and not others

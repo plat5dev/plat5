@@ -93,7 +93,7 @@ AUTH_ISSUER=https://auth.example.com
 AUTH_JWKS_URI=https://auth.example.com/.well-known/jwks.json
 AUTH_ALLOWED_AUDIENCES=<same as AUTH_ALLOWED_CLIENTS>   # or * to accept any
 AUTH_SUBJECT_CLAIM=properties.user_id   # Plat5 Auth; the default, sub, suits most other IdPs
-# APIKEY_BRAND=plat5                    # optional; identity only; keys {brand}-k-2-…
+# SECRET_BRAND=plat5                    # optional; identity only; keys {brand}-k-2-…, invites {brand}-i-1-…
 ```
 
 The tree's kinds, the roles and the routes live in the control plane, in `plat5.yml`, which you keep in a repo with the service files it lists ([`concepts/config.md`](../concepts/config.md#the-config)). A fresh stack has no config: identity and the gateway wait until you apply one with `plat5 apply`, which shows the plan first. Later changes go the same way, and identity and the gateway pick them up without a restart. Start from `plat5 init`'s files ([CLI](../reference/cli.md#the-local-stack)). Formats and rules: [`reference/config/kinds.md`](../reference/config/kinds.md), [`concepts/access.md`](../concepts/access.md).

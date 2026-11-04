@@ -4,7 +4,7 @@ A console is a client of the gateway's routes, like a CLI or a script. It holds 
 
 ## Signing in and the person
 
-The console gets an IdP token and sends it as `Authorization: Bearer`. There are no Plat5 sessions: the same token reaches every tree the person is in ([access](../concepts/access.md#credentials)). `GET /user` is the person, with a `name` that's `null` until it's known; `PATCH /user { name }` lets them set it, unless the deployment's IdP owns names, which is a **409** ([a person's name](../reference/idp.md#a-persons-name)). `GET /user/nodes?kind=organization` is every org they can see, for an org switcher. Each node carries its `ancestors`, so the console builds its URLs from the chain.
+The console gets an IdP token and sends it as `Authorization: Bearer`. There are no Plat5 sessions: the same token reaches every tree the person is in ([access](../concepts/access.md#credentials)). `GET /user` is the person, with a `name` that's `null` until it's known; `PATCH /user { name }` lets them set it, unless the deployment's IdP owns names, which is a **409** `NAME_OWNED_BY_IDP` ([a person's name](../reference/idp.md#a-persons-name)). `GET /user/nodes?kind=organization` is every org they can see, for an org switcher. Each node carries its `ancestors`, so the console builds its URLs from the chain.
 
 ## Navigating the tree
 
@@ -50,6 +50,7 @@ A form that creates a node can hold fields that belong to a service, such as a p
 - `GET /orgs/{organization}/members` lists the org's members, guests marked.
 - `GET …/roles` lists the roles bindable at that node, for a role picker ([`reference/api/identity.md`](../reference/api/identity.md#roles)).
 - Binding writes take a member id in the org and a role.
+- Removing a person's last binding in a tree removes their member for good ([members](../concepts/lifecycle.md#members)). To move someone's only access, add the new binding before removing the old one.
 - Adding a member by IdP subject (`POST /orgs/{organization}/members`) isn't a generated route ([generated routes](../reference/config/generated-routes.md#identitys-routes)). Offer it only when a route check for it answers `true`, which it does only where the deployment publishes the route.
 
 ## Inviting

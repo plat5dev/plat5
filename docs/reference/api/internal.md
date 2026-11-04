@@ -100,7 +100,7 @@ A **422** is `VALIDATION_ERROR` in the [error envelope](../errors.md), naming th
 
 Without `after`, the answer is immediate, even with no events. With `after`, identity waits until an event past `after` that matches `types` exists, for up to 25 seconds. Nothing in that time is **204**, and the reader asks again with the same `after`. An `after` past the newest event (identity's database was reset) is answered at once: **200** with no events. An event reaches waiting readers on every identity replica within about a second.
 
-Reads stay off traces and request metrics, like health checks. A 5xx is still logged. Postgres unavailable: **500** `INTERNAL_ERROR`.
+Reads stay off traces and request metrics, like health checks. A 5xx is still logged. Postgres unavailable: **503** `SERVICE_UNAVAILABLE`.
 
 ### Access evaluation
 
@@ -172,7 +172,7 @@ Each item is decided as a single evaluation would decide it. A call resolves eac
 |--------|----------|
 | Answered | **200**, whatever the decisions |
 | A body identity can't read: not a JSON object; a `subject`, `resource` or `action` missing, after defaults; a `subject.type` other than `member`; an id that isn't a lowercase ULID; an empty `resource.type` or `action.name`; a field of the wrong type; an unknown `evaluations_semantic`; more than 100 items | **400** `INVALID_REQUEST`, in the [error envelope](../errors.md). `message` says which field, with its path (`evaluations[2].subject.id`) |
-| Postgres unavailable | **500** `INTERNAL_ERROR`. No decision: the caller acts as if it were `false`, and retries later |
+| Postgres unavailable | **503** `SERVICE_UNAVAILABLE`. No decision: the caller acts as if it were `false`, and retries later |
 
 AuthZEN gives an error status and a message string, with no shape for the body; the message is the envelope's `message`. An `X-Request-ID` on the request comes back on the response, as AuthZEN asks.
 
@@ -182,10 +182,10 @@ On `INTERNAL_PORT`. Each is one read, at one head, in one Postgres snapshot. Eac
 
 | Path | Reader | `200` body |
 |------|--------|------------|
-| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "rate_limits", "defaults", "cors", "users", "route_checks" }`. **404** before the first apply. `defaults` gives the gateway `rate_limit`, the policies it counts route checks and a service account on a user route against. `users` gives it `name.claims`, the JWT claims it reads for the `name` it sends to admit. `route_checks` gives it `path`, where it answers [route checks](../gateway.md#route-checks) |
+| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "rate_limits", "defaults", "cors", "users", "route_checks" }`. **404** before the first apply. `defaults` is `{ "rate_limit" }` only, the part the gateway reads: the policies it counts route checks and a service account on a user route against. `users` gives it `name.claims`, the JWT claims it reads for the `name` it sends to admit. `route_checks` gives it `path`, where it answers [route checks](../gateway.md#route-checks) |
 | `GET /internal/identity` | identity | `{ "revision", "deletion_grace", "reserved_slugs", "users", "kinds", "roles", "creator_role" }`. **404** before the first apply. `users` gives identity `name.sync` |
 
-The gateway's `services` are expanded: each service's `url`, `timeouts` and `max_body_bytes` with `defaults` filled in, and its `routes` as the gateway matches them, one per method:
+The gateway's `services` are expanded: each service's `url`, and its own `timeouts` and `max_body_bytes` with the config's `defaults` filled in, and its `routes` as the gateway matches them, one per method:
 
 ```json
 { "path": "/orgs/{organization}/projects/{project}/plans/{plan_id}/versions", "method": "POST",
