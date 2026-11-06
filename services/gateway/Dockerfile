@@ -50,8 +50,10 @@ RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+# The release this binary reports as service.version (option_env!("VERSION")); dev without one.
+ARG VERSION=dev
 RUN find src -name "*.rs" -exec touch {} + \
-    && cargo build --release
+    && VERSION="${VERSION}" cargo build --release
 
 FROM debian:bookworm-slim AS prod
 

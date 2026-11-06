@@ -139,7 +139,7 @@ impl Gateway {
             .insert_header("X-Request-ID", request_id)
         {
             warn!(
-                error_kind = ErrorKind::Internal.as_str(),
+                error_type = ErrorKind::Internal.as_str(),
                 error_message = %err,
                 "failed to inject X-Request-ID header"
             );
@@ -427,6 +427,24 @@ fn client_ip(session: &Session, trusted: &TrustedProxies) -> String {
     ip.to_string()
 }
 
+/// `url.scheme` for the request's span ([`TrustedProxies::url_scheme`]).
+fn url_scheme(session: &Session, trusted: &TrustedProxies) -> &'static str {
+    let peer = session
+        .client_addr()
+        .and_then(|addr| addr.as_inet())
+        .map(|sock| sock.ip());
+    let tls = session
+        .digest()
+        .is_some_and(|digest| digest.ssl_digest.is_some());
+    let forwarded_proto = session
+        .req_header()
+        .headers
+        .get_all("x-forwarded-proto")
+        .iter()
+        .filter_map(|v| v.to_str().ok());
+    trusted.url_scheme(peer, tls, forwarded_proto)
+}
+
 /// The intent for an audited request: the chain and who acted. Chain params'
 /// values are slugs or ids as typed, so they stay out of `params`: their nodes are
 /// in `nodes`.
@@ -605,7 +623,9 @@ impl ProxyHttp for Gateway {
             .get("origin")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let root_span = ctx.ensure_root_span(&path, &method);
+        let query = session.req_header().uri.query().map(str::to_string);
+        let scheme = url_scheme(session, &self.trusted_proxies);
+        let root_span = ctx.ensure_root_span(&method, scheme, &path, query.as_deref());
         let _root_guard = root_span.enter();
 
         let span = tracing::info_span!("gateway.request_filter");
@@ -839,11 +859,11 @@ impl ProxyHttp for Gateway {
         if let Some(ref span) = ctx.root_span {
             span.record("http.response.status_code", status);
             if e.is_some() {
-                span.record("error.kind", "network");
+                span.record("error.type", "network");
                 span.set_status(Status::error(""));
             } else if matches!(status, 500..=599) {
                 let kind = if status == 503 { "network" } else { "internal" };
-                span.record("error.kind", kind);
+                span.record("error.type", kind);
                 span.set_status(Status::error(""));
             }
         }

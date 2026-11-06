@@ -128,7 +128,7 @@ impl JwtValidatorState {
             Err(err) => {
                 warn!(
                     jwks_uri = %self.jwks_uri,
-                    error_kind = crate::error::ErrorKind::Network.as_str(),
+                    error_type = crate::error::ErrorKind::Network.as_str(),
                     error_message = %err,
                     "jwks startup fetch failed; will retry in background"
                 );
@@ -160,14 +160,14 @@ impl JwtValidatorState {
                         if state.is_ready() {
                             warn!(
                                 jwks_uri = %state.jwks_uri,
-                                error_kind = crate::error::ErrorKind::Network.as_str(),
+                                error_type = crate::error::ErrorKind::Network.as_str(),
                                 error_message = %err,
                                 "jwks background refresh failed"
                             );
                         } else {
                             warn!(
                                 jwks_uri = %state.jwks_uri,
-                                error_kind = crate::error::ErrorKind::Network.as_str(),
+                                error_type = crate::error::ErrorKind::Network.as_str(),
                                 error_message = %err,
                                 "jwks retry fetch failed"
                             );

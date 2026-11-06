@@ -360,7 +360,7 @@ mod tests {
     }
 
     #[test]
-    fn test_error_kind_as_str() {
+    fn test_error_type_as_str() {
         assert_eq!(ErrorKind::Auth.as_str(), "auth");
         assert_eq!(ErrorKind::Network.as_str(), "network");
         assert_eq!(ErrorKind::Db.as_str(), "db");

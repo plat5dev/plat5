@@ -13,7 +13,10 @@ use pingora::server::configuration::Opt;
 use pingora::server::Server;
 
 fn main() {
-    let _telemetry_guard = telemetry::init_telemetry().expect("failed to initialize telemetry");
+    let _telemetry_guard = telemetry::init_telemetry().unwrap_or_else(|err| {
+        eprintln!("failed to init telemetry: {err}");
+        std::process::exit(1);
+    });
     metrics::register_process_metrics();
 
     let cfg = GatewayConfig::from_env().unwrap_or_else(|e| {

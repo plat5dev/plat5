@@ -331,7 +331,7 @@ impl Audit {
         }
 
         error!(
-            error_kind = ErrorKind::Network.as_str(),
+            error_type = ErrorKind::Network.as_str(),
             error_message = %last_error,
             request_id = %intent.request_id,
             "audit intent not written; not forwarding"
@@ -443,7 +443,7 @@ async fn write_background(
             }
             Ok(status @ 400..=499) => {
                 error!(
-                    error_kind = ErrorKind::Internal.as_str(),
+                    error_type = ErrorKind::Internal.as_str(),
                     status,
                     request_id,
                     write = label,
@@ -456,7 +456,7 @@ async fn write_background(
         }
         let Some(wait) = waits.next() else {
             error!(
-                error_kind = ErrorKind::Network.as_str(),
+                error_type = ErrorKind::Network.as_str(),
                 request_id,
                 write = label,
                 "audit write not taken; giving up"

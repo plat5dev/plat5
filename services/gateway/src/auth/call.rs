@@ -34,7 +34,7 @@ impl AuthCallTimer {
         match err {
             InternalHttpError::Network(msg) => {
                 warn!(
-                    error_kind = ErrorKind::Network.as_str(),
+                    error_type = ErrorKind::Network.as_str(),
                     error_message = %msg,
                     "{op} failed"
                 );
@@ -42,14 +42,14 @@ impl AuthCallTimer {
             }
             InternalHttpError::HttpStatus { status } => {
                 warn!(
-                    error_kind = ErrorKind::Network.as_str(),
+                    error_type = ErrorKind::Network.as_str(),
                     status, "{op} returned error status"
                 );
                 format!("{op} returned status {status}")
             }
             InternalHttpError::Decode(msg) => {
                 warn!(
-                    error_kind = ErrorKind::Internal.as_str(),
+                    error_type = ErrorKind::Internal.as_str(),
                     error_message = %msg,
                     "failed to parse {op} response"
                 );

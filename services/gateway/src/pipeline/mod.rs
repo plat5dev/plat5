@@ -399,7 +399,7 @@ impl Presented {
 fn unauthorized(err: AuthError, auth_type: Option<AuthType>, scope: &str) -> Rejection {
     if !err.is_client_error() {
         warn!(
-            error_kind = ErrorKind::Network.as_str(),
+            error_type = ErrorKind::Network.as_str(),
             error_message = err.as_str(),
             "authentication infrastructure unavailable"
         );
@@ -408,7 +408,6 @@ fn unauthorized(err: AuthError, auth_type: Option<AuthType>, scope: &str) -> Rej
     let auth_type = auth_type.map_or("none", AuthType::as_str);
     metrics::record_auth_failure(auth_type, err.as_str());
     info!(
-        error_kind = ErrorKind::Auth.as_str(),
         auth_type,
         error_message = err.as_str(),
         scope,

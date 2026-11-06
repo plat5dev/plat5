@@ -35,10 +35,10 @@ The pipeline tests (`src/pipeline/tests.rs`) run every route of the catalog fixt
 | `AUDIT_URL` | (required unless audit is off) | Audit's internal base URL, e.g. `http://audit:3003` ([`docs/concepts/audit.md`](../../docs/concepts/audit.md)) |
 | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` | `60` | Failed-auth IP limiter. `0` = off |
 | `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` | `60` | Failed-auth IP window |
-| `TRUSTED_PROXIES` | (empty) | Comma-separated addresses and CIDRs of proxies in front of the gateway. Their `X-Forwarded-For` names the client. Empty = the TCP peer is the client ([`docs/reference/gateway.md`](../../docs/reference/gateway.md#client-ip)) |
+| `TRUSTED_PROXIES` | (empty) | Comma-separated addresses and CIDRs of proxies in front of the gateway, whose forwarded headers it believes: [client IP](../../docs/reference/gateway.md#client-ip) and the spans' [`url.scheme`](../../docs/reference/telemetry.md#http-server-spans) |
 | `OTEL_SERVICE_NAME` | `gateway` | Resource `service.name` |
 | `OTEL_SERVICE_NAMESPACE` | `edge` | Resource `service.namespace` |
-| `OTEL_SERVICE_VERSION` | crate version | Resource `service.version` |
+| `OTEL_SERVICE_VERSION` | the build's `VERSION`, else `dev` | Resource `service.version` |
 | `OTEL_SERVICE_INSTANCE_ID` | hostname | Resource `service.instance.id`, and the replica id reported to the control plane |
 | `DEPLOYMENT_ENV` / `OTEL_DEPLOYMENT_ENV` | `development` | Resource `deployment.environment` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP base URL. Unset → no OTLP |
@@ -46,7 +46,7 @@ The pipeline tests (`src/pipeline/tests.rs`) run every route of the catalog fixt
 | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | unset | Optional full metrics URL |
 | `OTEL_TRACES_EXPORTER` | `otlp` when endpoint set | Include `otlp` to push traces |
 | `OTEL_METRICS_EXPORTER` | `otlp` when endpoint set | Set `prometheus` to push-off; `/metrics` always on |
-| `OTEL_METRIC_EXPORT_INTERVAL` | SDK default | ms (OTLP metrics only) |
+| `OTEL_METRIC_EXPORT_INTERVAL` | `60000` | ms (OTLP metrics only) |
 | `OTEL_TRACES_SAMPLER_RATIO` | `1` | Trace sampling ratio |
 | `OTEL_SDK_DISABLED` | unset | `true` → no OTLP; stdout + `/metrics` remain |
 
@@ -56,7 +56,7 @@ Rate limits: a route's policies are checked together in one Valkey round trip an
 
 ## Telemetry
 
-Contract: [`docs/reference/telemetry.md`](../../docs/reference/telemetry.md).
+Contract: [`docs/reference/telemetry.md`](../../docs/reference/telemetry.md). A variable set but invalid stops the service at boot ([invalid values](../../docs/reference/telemetry.md#invalid-values)).
 
 | Signal | Path |
 |--------|------|
@@ -87,4 +87,4 @@ Routes, rate limits and CORS come from the **control plane**. The gateway waits 
 ## Span Status
 
 - **Client errors** (400, 401, 403, 404, 413, 429): span status unset.
-- **Unexpected failures** (5xx, proxy/network errors): span status `Error`, set `error.kind`.
+- **Unexpected failures** (5xx, proxy/network errors): span status `Error`, set `error.type` ([HTTP server spans](../../docs/reference/telemetry.md#http-server-spans)).

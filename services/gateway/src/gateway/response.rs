@@ -19,11 +19,11 @@ pub fn apply_error_span_status(span: &Span, status: u16) {
     span.record("http.response.status_code", status);
     match status {
         503 => {
-            span.record("error.kind", "network");
+            span.record("error.type", "network");
             span.set_status(Status::error(""));
         }
         500..=599 => {
-            span.record("error.kind", "internal");
+            span.record("error.type", "internal");
             span.set_status(Status::error(""));
         }
         _ => {}
@@ -174,5 +174,83 @@ mod tests {
         assert_eq!(get("X-Frame-Options"), "SAMEORIGIN");
         assert_eq!(get("X-Content-Type-Options"), "nosniff");
         assert_eq!(get("Referrer-Policy"), "strict-origin-when-cross-origin");
+    }
+
+    mod root_span {
+        use super::super::GatewayContext;
+        use super::apply_error_span_status;
+        use opentelemetry::trace::{Status, TracerProvider};
+        use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
+        use std::collections::HashMap;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        /// The gateway's root span for one request that ends with `status`.
+        fn root_span(scheme: &str, path: &str, query: Option<&str>, status: u16) -> SpanData {
+            let exporter = InMemorySpanExporter::default();
+            let provider = SdkTracerProvider::builder()
+                .with_simple_exporter(exporter.clone())
+                .build();
+            let subscriber = tracing_subscriber::registry()
+                .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+            tracing::subscriber::with_default(subscriber, || {
+                let mut ctx = GatewayContext::new();
+                let span = ctx.ensure_root_span("GET", scheme, path, query);
+                apply_error_span_status(&span, status);
+                drop(span);
+                ctx.finish_root_span();
+            });
+            provider.force_flush().unwrap();
+            let mut spans = exporter.get_finished_spans().unwrap();
+            assert_eq!(spans.len(), 1);
+            spans.remove(0)
+        }
+
+        fn attrs(span: &SpanData) -> HashMap<String, String> {
+            span.attributes
+                .iter()
+                .map(|kv| (kv.key.to_string(), kv.value.to_string()))
+                .collect()
+        }
+
+        #[test]
+        fn url_query_is_redacted() {
+            let span = root_span(
+                "https",
+                "/orgs/acme/files",
+                Some("sig=abc123&page=2&X-Amz-Signature=s3&X-Amz-Credential=c"),
+                200,
+            );
+            let a = attrs(&span);
+            assert_eq!(
+                a["url.query"],
+                "sig=REDACTED&page=2&X-Amz-Signature=REDACTED&X-Amz-Credential=REDACTED"
+            );
+            assert_eq!(a["url.scheme"], "https");
+            assert_eq!(a["url.path"], "/orgs/acme/files");
+            assert_eq!(a["http.request.method"], "GET");
+        }
+
+        #[test]
+        fn no_query_no_url_query() {
+            for query in [None, Some("")] {
+                let a = attrs(&root_span("http", "/health", query, 200));
+                assert!(!a.contains_key("url.query"), "{a:?}");
+                assert_eq!(a["url.scheme"], "http");
+            }
+        }
+
+        #[test]
+        fn error_type_on_5xx_only() {
+            let span = root_span("http", "/x", None, 500);
+            assert_eq!(attrs(&span)["error.type"], "internal");
+            assert_eq!(span.status, Status::error(""));
+            let span = root_span("http", "/x", None, 503);
+            assert_eq!(attrs(&span)["error.type"], "network");
+
+            let span = root_span("http", "/x", None, 404);
+            assert!(!attrs(&span).contains_key("error.type"));
+            assert_eq!(span.status, Status::Unset);
+            assert_eq!(attrs(&span)["http.response.status_code"], "404");
+        }
     }
 }

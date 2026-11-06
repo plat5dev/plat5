@@ -3,6 +3,8 @@ use std::time::{Instant, SystemTime};
 use pingora::upstreams::peer::HttpPeer;
 use tracing::Span;
 
+use crate::telemetry::redact_query;
+
 pub struct GatewayContext {
     pub start: Instant,
     /// Wall clock at arrival: an audit event's `occurred_at`.
@@ -62,7 +64,17 @@ impl GatewayContext {
         self.method.as_deref().unwrap_or("UNKNOWN")
     }
 
-    pub fn ensure_root_span(&mut self, path: &str, method: &str) -> Span {
+    /// The request's HTTP server span. `query` is the raw query (`None` without
+    /// one), redacted into `url.query`; `scheme` is the client's ([`url_scheme`]).
+    ///
+    /// [`url_scheme`]: super::client_ip::TrustedProxies::url_scheme
+    pub fn ensure_root_span(
+        &mut self,
+        method: &str,
+        scheme: &str,
+        path: &str,
+        query: Option<&str>,
+    ) -> Span {
         if let Some(ref span) = self.root_span {
             return span.clone();
         }
@@ -72,7 +84,9 @@ impl GatewayContext {
             otel.kind = "server",
             otel.name = %method,
             http.request.method = %method,
+            url.scheme = %scheme,
             url.path = %path,
+            url.query = tracing::field::Empty,
             http.route = tracing::field::Empty,
             plat5.member_id = tracing::field::Empty,
             plat5.user_id = tracing::field::Empty,
@@ -81,8 +95,11 @@ impl GatewayContext {
             request_id = tracing::field::Empty,
             http.response.status_code = tracing::field::Empty,
             jwt.kid = tracing::field::Empty,
-            error.kind = tracing::field::Empty,
+            error.type = tracing::field::Empty,
         );
+        if let Some(query) = query.filter(|q| !q.is_empty()) {
+            span.record("url.query", redact_query(query).as_str());
+        }
         self.root_span = Some(span.clone());
         span
     }

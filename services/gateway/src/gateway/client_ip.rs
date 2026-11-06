@@ -106,6 +106,31 @@ impl TrustedProxies {
         }
         client
     }
+
+    /// `url.scheme`: the last entry of `X-Forwarded-Proto` when `peer` is a
+    /// trusted proxy and that entry is `http` or `https`; otherwise the scheme of
+    /// the connection the gateway accepted (`https` when `tls`).
+    pub fn url_scheme<'a>(
+        &self,
+        peer: Option<IpAddr>,
+        tls: bool,
+        forwarded_proto: impl IntoIterator<Item = &'a str>,
+    ) -> &'static str {
+        let accepted = if tls { "https" } else { "http" };
+        if !peer.is_some_and(|p| self.trusts(p.to_canonical())) {
+            return accepted;
+        }
+        let last = forwarded_proto
+            .into_iter()
+            .flat_map(|v| v.split(','))
+            .last()
+            .map(str::trim);
+        match last {
+            Some(p) if p.eq_ignore_ascii_case("https") => "https",
+            Some(p) if p.eq_ignore_ascii_case("http") => "http",
+            _ => accepted,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -223,5 +248,39 @@ mod tests {
         assert!(TrustedProxies::parse("10.0.0.0/x").is_err());
         assert!(TrustedProxies::parse("").unwrap().0.is_empty());
         assert_eq!(trusted(" 10.0.0.1 , ").0.len(), 1);
+    }
+
+    #[test]
+    fn url_scheme_takes_a_trusted_proxys_last_forwarded_proto() {
+        let t = trusted("10.0.0.0/8");
+        let proxy = Some(ip("10.0.0.2"));
+        assert_eq!(t.url_scheme(proxy, false, ["https"]), "https");
+        // The client sent "http"; the proxy appended what it saw.
+        assert_eq!(t.url_scheme(proxy, false, ["http, https"]), "https");
+        assert_eq!(t.url_scheme(proxy, false, ["https", "http"]), "http");
+        assert_eq!(t.url_scheme(proxy, true, ["HTTP"]), "http");
+        // Not http or https, or no header: the accepted connection's scheme.
+        assert_eq!(t.url_scheme(proxy, false, ["https, ws"]), "http");
+        assert_eq!(t.url_scheme(proxy, true, ["gopher"]), "https");
+        assert_eq!(t.url_scheme(proxy, false, []), "http");
+    }
+
+    #[test]
+    fn url_scheme_ignores_an_untrusted_peers_forwarded_proto() {
+        let t = trusted("10.0.0.0/8");
+        assert_eq!(
+            t.url_scheme(Some(ip("203.0.113.7")), false, ["https"]),
+            "http"
+        );
+        assert_eq!(
+            t.url_scheme(Some(ip("203.0.113.7")), true, ["http"]),
+            "https"
+        );
+        assert_eq!(t.url_scheme(None, false, ["https"]), "http");
+        let none = TrustedProxies::default();
+        assert_eq!(
+            none.url_scheme(Some(ip("10.0.0.2")), false, ["https"]),
+            "http"
+        );
     }
 }

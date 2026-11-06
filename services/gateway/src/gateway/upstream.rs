@@ -76,7 +76,7 @@ pub async fn build_and_store_upstream_peer(
     for (name, value) in forward.headers {
         if let Err(err) = req.insert_header(name, value) {
             warn!(
-                error_kind = ErrorKind::Internal.as_str(),
+                error_type = ErrorKind::Internal.as_str(),
                 error_message = %err,
                 "failed to set a caller header"
             );
@@ -91,7 +91,7 @@ pub async fn build_and_store_upstream_peer(
         .build()
         .map_err(|err| {
             warn!(
-                error_kind = ErrorKind::Internal.as_str(),
+                error_type = ErrorKind::Internal.as_str(),
                 error_message = %err,
                 "failed to build upstream URI"
             );
