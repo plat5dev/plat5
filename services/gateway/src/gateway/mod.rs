@@ -29,8 +29,8 @@ use crate::error::{ApiError, ErrorKind};
 use crate::internal_http::InternalHttpClient;
 use crate::metrics;
 use crate::pipeline::{
-    authorize, forward, parse_checks, Admitted, Caller, GatewayPipeline, Limit, Pipeline,
-    Rejection, RequestCredential, MAX_CHECKS_BODY,
+    forward, parse_checks, Admitted, Caller, GatewayPipeline, Limit, Pipeline, Refused, Rejection,
+    RequestCredential, MAX_CHECKS_BODY,
 };
 use crate::rate_limit::RateLimiter;
 use crate::route_map::{Matched, Required, Route, Scope};
@@ -166,7 +166,7 @@ impl Gateway {
         // request_filter has entered the root span: a JWT's kid is recorded on it.
         let decided = self
             .pipeline
-            .admit_and_limit(
+            .decide(
                 matched,
                 &snapshot.default_policies,
                 &ip,
@@ -174,37 +174,44 @@ impl Gateway {
                 &mut ctx.credential,
             )
             .await;
+        let audited = self.audit.enabled() && route.audit;
         let passed = match decided {
             Ok(passed) => passed,
-            Err(rejection) => {
-                return response::write_rejection(&self.cors(), session, ctx, route, rejection)
-                    .await
-            }
-        };
-        ctx.rate_limit = passed.rate_limit;
-        let admitted = passed.admitted;
-        upstream::record_admission_span(ctx, &admitted);
-        let caller = match &admitted {
-            Admitted::Caller(c) => Some(c),
-            Admitted::Public => None,
-        };
-        let audited = self.audit.enabled() && route.audit;
-
-        // After the limiter, so a denied request still spends budget.
-        let forwarding = authorize(route, &admitted).and_then(|()| forward(matched, &admitted));
-        let forwarding = match forwarding {
-            Ok(f) => f,
-            Err(rejection) => {
-                if let Some(caller) = caller {
-                    if rejection == Rejection::Denied {
-                        log_permission_denied(ctx, route, caller);
-                    }
+            Err(Refused { rejection, caller }) => {
+                if let Some(caller) = &caller {
+                    upstream::record_admission_span(ctx, caller);
+                }
+                if let (Rejection::Denied, Some(caller)) = (&rejection, &caller) {
+                    log_permission_denied(ctx, route, caller);
                     // A refusal after admit is one background event.
                     if audited {
                         let intent = audit_intent(session, ctx, matched, caller, request_id, &ip);
                         self.audit
                             .send_rejected(intent, rejection.status(), request_context(ctx));
                     }
+                }
+                return response::write_rejection(&self.cors(), session, ctx, route, rejection)
+                    .await;
+            }
+        };
+        ctx.rate_limit = passed.rate_limit;
+        let admitted = passed.admitted;
+        let caller = match &admitted {
+            Admitted::Caller(c) => Some(c),
+            Admitted::Public => None,
+        };
+        if let Some(caller) = caller {
+            upstream::record_admission_span(ctx, caller);
+        }
+
+        let forwarding = match forward(matched, &admitted) {
+            Ok(f) => f,
+            Err(rejection) => {
+                // A refusal after admit is one background event.
+                if let (Some(caller), true) = (caller, audited) {
+                    let intent = audit_intent(session, ctx, matched, caller, request_id, &ip);
+                    self.audit
+                        .send_rejected(intent, rejection.status(), request_context(ctx));
                 }
                 return response::write_rejection(&self.cors(), session, ctx, route, rejection)
                     .await;

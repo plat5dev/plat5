@@ -9,7 +9,7 @@ use tracing::{debug, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::error::ErrorKind;
-use crate::pipeline::{path_and_query, Admitted, Forward};
+use crate::pipeline::{path_and_query, Caller, Forward};
 use crate::route_map::Route;
 
 use super::context::GatewayContext;
@@ -33,8 +33,9 @@ pub fn strip_plat5_headers(req: &mut RequestHeader) {
     }
 }
 
-pub fn record_admission_span(ctx: &GatewayContext, admitted: &Admitted) {
-    let (Some(span), Admitted::Caller(caller)) = (&ctx.root_span, admitted) else {
+/// The admitted caller on the request span, forwarded or refused after admit.
+pub fn record_admission_span(ctx: &GatewayContext, caller: &Caller) {
+    let Some(span) = &ctx.root_span else {
         return;
     };
     if let Some(member) = &caller.member_id {

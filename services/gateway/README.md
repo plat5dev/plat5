@@ -14,7 +14,7 @@ cargo clippy --all-targets -- -Dwarnings
 cargo test --all-targets
 ```
 
-The pipeline tests (`src/pipeline/tests.rs`) run every route of the catalog fixture, `../control-plane/fixtures/catalog/gateway-feed.json`, through match, admit, limits, the permission check and the upstream fill. `control_plane::tests::every_accepted_fixture_feed_builds` builds every feed the control plane's fixtures accept (the catalog and each plan case), so a config apply accepts is one the gateway can build.
+The pipeline tests (`src/pipeline/tests.rs`) run every route of the catalog fixture, `../control-plane/fixtures/catalog/gateway-feed.json`, through match, admit, the permission check, limits and the upstream fill. `control_plane::tests::every_accepted_fixture_feed_builds` builds every feed the control plane's fixtures accept (the catalog and each plan case), so a config apply accepts is one the gateway can build.
 
 ## Environment Variables
 

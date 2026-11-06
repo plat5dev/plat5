@@ -1,6 +1,6 @@
 //! How the gateway decides a request (docs/concepts/access.md#how-a-request-is-decided),
-//! apart from the proxy around it: authenticate and admit, rate limit, the
-//! permission check, and the upstream fill. The proxy writes the audit intent after
+//! apart from the proxy around it: authenticate and admit, the permission
+//! check, rate limit, and the upstream fill. The proxy writes the audit intent after
 //! the fill, and turns a [`Rejection`] into a response.
 
 mod checks;
@@ -101,6 +101,23 @@ pub struct Passed {
     pub rate_limit: Option<RateLimitInfo>,
 }
 
+/// A request the pipeline answers instead of forwarding, and the caller when it
+/// was admitted: a permission **403** is logged and audited in their tree.
+#[derive(Debug)]
+pub struct Refused {
+    pub rejection: Rejection,
+    pub caller: Option<Box<Caller>>,
+}
+
+impl From<Rejection> for Refused {
+    fn from(rejection: Rejection) -> Self {
+        Refused {
+            rejection,
+            caller: None,
+        }
+    }
+}
+
 /// Who presented the request, for the request log, as far as the gateway got.
 /// Never a secret.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -120,9 +137,9 @@ pub struct RequestCredential {
 pub enum Rejection {
     /// **401**. `details` is a bad JWT's reason.
     Unauthorized(AuthError),
-    /// **403** before the rate limit: no such node, or no member in its tree.
+    /// **403** at admit: no such node, or no member in its tree.
     NotFound,
-    /// **403** after the rate limit: no route permission held.
+    /// **403** at the permission check: no route permission held.
     Denied,
     /// **403** before the rate limit: a service account on a user route.
     ServiceAccount,
@@ -183,24 +200,44 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         }
     }
 
-    /// Authenticate and admit, then rate limit. `presented` is what
-    /// [`crate::auth::Authenticator::present`] found. `cred` is filled as far as it gets.
-    /// `defaults` are the policies `defaults.rate_limit` names, counted per
-    /// credential for a service account refused on a user route.
-    pub async fn admit_and_limit(
+    /// Authenticate and admit, the permission check, then rate limit.
+    /// `presented` is what [`crate::auth::Authenticator::present`] found. `cred`
+    /// is filled as far as it gets. `defaults` are the policies
+    /// `defaults.rate_limit` names, counted per credential for a service
+    /// account refused on a user route.
+    pub async fn decide(
         &self,
         matched: &Matched,
         defaults: &[Policy],
         ip: &str,
         presented: Result<Presented, AuthError>,
         cred: &mut RequestCredential,
-    ) -> Result<Passed, Rejection> {
+    ) -> Result<Passed, Refused> {
         let route = &matched.route;
         let admitted = match &route.scope {
             Scope::Public => Admitted::Public,
             _ => Admitted::Caller(self.admit(matched, defaults, ip, presented, cred).await?),
         };
-        let rate_limit = self.limit(route, ip, &admitted).await?;
+        let caller = || match &admitted {
+            Admitted::Caller(c) => Some(Box::new(c.clone())),
+            Admitted::Public => None,
+        };
+        // Before the rate limit, so only callers the route lets through spend
+        // its budgets. Counted with admit's 403, so the two stay one answer.
+        if let Err(denied) = authorize(route, &admitted) {
+            let rejection = self.count_refusal(ip).await.unwrap_or(denied);
+            return Err(Refused {
+                rejection,
+                caller: caller(),
+            });
+        }
+        let rate_limit = self
+            .limit(route, ip, &admitted)
+            .await
+            .map_err(|rejection| Refused {
+                rejection,
+                caller: caller(),
+            })?;
         Ok(Passed {
             admitted,
             rate_limit,
@@ -250,7 +287,6 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
             return Err(Rejection::ServiceAccount);
         }
         if answer.refused(&req) {
-            // Before the rate limit, so a caller outside a tree can't spend its budget.
             return Err(self.count_refusal(ip).await.unwrap_or(Rejection::NotFound));
         }
         let caller = Caller {
@@ -271,8 +307,8 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         Ok(caller)
     }
 
-    /// The failed-auth IP limiter, on what identity refused. Some(rejection) when
-    /// it answers instead.
+    /// The failed-auth IP limiter, on what admit refused and on the permission
+    /// **403**. Some(rejection) when it answers instead.
     async fn count_refusal(&self, ip: &str) -> Option<Rejection> {
         if self.auth_failure.requests == 0 {
             return None;

@@ -1,6 +1,6 @@
 //! The pipeline against the catalog fixture
 //! (services/control-plane/fixtures/catalog/gateway-feed.json): every route through
-//! match, admit, limits, the permission check and the fill, and every row of the
+//! match, admit, the permission check, limits and the fill, and every row of the
 //! admit table (docs/reference/gateway.md#admit).
 
 use std::collections::{BTreeMap, HashMap};
@@ -178,19 +178,19 @@ impl Harness {
         let mut cred = RequestCredential::default();
         let r = self
             .pipeline
-            .admit_and_limit(matched, &self.defaults, IP, presented, &mut cred)
-            .await;
+            .decide(matched, &self.defaults, IP, presented, &mut cred)
+            .await
+            .map_err(|refused| refused.rejection);
         (r, cred)
     }
 
-    /// The whole decision: admit and limit, the permission check, and the fill.
+    /// The whole decision: admit, the permission check and limit, then the fill.
     async fn decide(
         &self,
         matched: &Matched,
         presented: Result<Presented, AuthError>,
     ) -> Result<(Admitted, Forward), Rejection> {
         let passed = self.run(matched, presented).await.0?;
-        authorize(&matched.route, &passed.admitted)?;
         let fwd = forward(matched, &passed.admitted)?;
         Ok((passed.admitted, fwd))
     }
@@ -430,7 +430,6 @@ fn project_read(snapshot: &Snapshot) -> Matched {
 async fn admit_table() {
     let snapshot = catalog();
     let read = project_read(&snapshot);
-    let route_bucket = format!("standard:{}:{MEMBER}", node_id("project"));
     let ok = || answer_for(&read.route, &["project:read"]);
 
     // valid: false → 401, counted on the failed-auth limiter, before the rate limit.
@@ -480,14 +479,24 @@ async fn admit_table() {
         "the tree's budget isn't spent"
     );
 
-    // No route permission → passes the rate limit (spending it), then 403.
+    // No route permission → 403 before the rate limit, counted like admit's.
     let h = harness(Ok(answer_for(&read.route, &["project:write"])));
-    let (r, cred) = h.run(&read, Ok(key())).await;
-    let passed = r.unwrap();
-    assert_eq!(h.counter.buckets(), vec![route_bucket.clone()]);
+    let mut cred = RequestCredential::default();
+    let refused = h
+        .pipeline
+        .decide(&read, &h.defaults, IP, Ok(key()), &mut cred)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.rejection, Rejection::Denied);
     assert_eq!(
-        authorize(&read.route, &passed.admitted),
-        Err(Rejection::Denied)
+        refused.caller.map(|c| c.member_id),
+        Some(Some(MEMBER.into())),
+        "the caller, to log and audit the denial in its tree"
+    );
+    assert_eq!(
+        h.counter.buckets(),
+        vec![IP_BUCKET],
+        "the route's budget isn't spent"
     );
     assert_eq!(
         cred,
@@ -615,6 +624,97 @@ async fn the_failed_auth_limiter_answers_once_exceeded() {
     let (r, _) = h.run(&read, Ok(key())).await;
     assert_eq!(r.err().map(|r| r.status()), Some(401));
     assert!(h.counter.buckets().is_empty());
+}
+
+#[tokio::test]
+async fn a_full_failed_auth_bucket_answers_missing_and_forbidden_alike() {
+    let snapshot = catalog();
+    let missing = find(&snapshot, "GET", "/orgs/acme/projects/nope");
+    let forbidden = project_read(&snapshot);
+    let limit = Limit {
+        requests: 3,
+        window_seconds: 30,
+    };
+
+    // Under the limit: one 403, one body.
+    let h = harness_with(Ok(not_in_tree()), limit);
+    let (m, _) = h.run(&missing, Ok(key())).await;
+    h.set_answer(answer_for(&forbidden.route, &["project:write"]));
+    let (f, _) = h.run(&forbidden, Ok(key())).await;
+    let (m, f) = (m.unwrap_err(), f.unwrap_err());
+    assert_eq!((m.status(), f.status()), (403, 403));
+    assert_eq!(
+        m.body(&missing.route).to_json_bytes(Some("r")),
+        f.body(&forbidden.route).to_json_bytes(Some("r"))
+    );
+    assert_eq!(h.counter.count(IP_BUCKET), 2, "both counted by the IP");
+
+    // Fill the IP's bucket with missing slugs: then a missing node and a
+    // forbidden one get the same 429, Retry-After only.
+    let h = harness_with(Ok(not_in_tree()), limit);
+    for slug in ["a-1", "a-2", "a-3"] {
+        let path = format!("/orgs/acme/projects/{slug}");
+        let (r, _) = h.run(&find(&snapshot, "GET", &path), Ok(key())).await;
+        assert_eq!(r.err(), Some(Rejection::NotFound));
+    }
+    let (m, _) = h.run(&missing, Ok(key())).await;
+    h.set_answer(answer_for(&forbidden.route, &["project:write"]));
+    let (f, _) = h.run(&forbidden, Ok(key())).await;
+    let limited = || {
+        Some(Rejection::RateLimited {
+            retry_after: 30,
+            info: None,
+        })
+    };
+    assert_eq!(m.err(), limited());
+    assert_eq!(f.err(), limited());
+    assert!(
+        h.counter.buckets().iter().all(|b| b == IP_BUCKET),
+        "no route bucket: neither reached the rate limit, so neither carries X-RateLimit-*"
+    );
+
+    // A permitted caller isn't counted by the IP's bucket: it passes.
+    h.set_answer(answer_for(&forbidden.route, &["project:read"]));
+    assert!(h.decide(&forbidden, Ok(jwt())).await.is_ok());
+}
+
+#[tokio::test]
+async fn refused_callers_spend_no_count_at_budget() {
+    let limits = json!({
+        "evals-caller": { "requests": 3, "window_seconds": 1 },
+        "evals-org": { "requests": 2, "window_seconds": 10, "count_at": "project" }
+    });
+    let snapshot = snapshot_with(e10s(), limits);
+    let check = find(&snapshot, "POST", "/orgs/acme/projects/web/check");
+    let project_bucket = format!("evals-org:{}", node_id("project"));
+
+    // A member of the tree with no permission on the project, then a caller
+    // outside the tree: 403s, again and again, and the project's budget untouched.
+    let h = harness(Ok(answer_for(&check.route, &["project:read"])));
+    for _ in 0..5 {
+        let (r, _) = h.run(&check, Ok(key())).await;
+        assert_eq!(r.err(), Some(Rejection::Denied));
+    }
+    h.set_answer(not_in_tree());
+    for _ in 0..5 {
+        let (r, _) = h.run(&check, Ok(jwt())).await;
+        assert_eq!(r.err(), Some(Rejection::NotFound));
+    }
+    assert_eq!(h.counter.count(&project_bucket), 0);
+    assert!(h.counter.buckets().iter().all(|b| b == IP_BUCKET));
+    assert_eq!(h.counter.count(IP_BUCKET), 10);
+
+    // The project's own callers still have its whole budget.
+    let h2 = harness(Ok(answer_for(&check.route, &["check"])));
+    let passed = h2.run(&check, Ok(key())).await.0.unwrap();
+    assert_eq!(
+        passed.rate_limit,
+        Some(RateLimitInfo {
+            limit: 2,
+            remaining: 1,
+            reset_epoch: 10
+        })
+    );
 }
 
 #[tokio::test]
@@ -1097,6 +1197,25 @@ async fn a_service_account_is_false_on_user_checks() {
     .await
     .unwrap();
     assert_eq!(got, vec![false, true, false]);
+    assert_eq!(counter.count(IP_BUCKET), 0, "a false is no failed auth");
+}
+
+#[tokio::test]
+async fn route_checks_answer_denied_and_missing_false_uncounted() {
+    let snapshot = catalog();
+    let identity = ByChain::with(&[("acme/web", project(&["project:write"]))]);
+    let (p, counter) = checks_pipeline(identity, AUTH_FAILURE);
+    let checks = [
+        ("GET", "/orgs/acme/projects/web"),
+        ("PATCH", "/orgs/acme/projects/web"),
+        ("GET", "/orgs/acme/projects/nope"),
+    ];
+    for _ in 0..3 {
+        let got = run_checks(&p, &snapshot, &key_credential(), &checks)
+            .await
+            .unwrap();
+        assert_eq!(got, vec![false, true, false]);
+    }
     assert_eq!(counter.count(IP_BUCKET), 0, "a false is no failed auth");
 }
 
