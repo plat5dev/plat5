@@ -42,12 +42,14 @@ Identity resolves `chain` by kind name only and doesn't check it against its kin
 
 | Admit result | Status |
 |--------------|--------|
-| `valid: false` | **401**, counted by the failed-auth limiter |
-| `principal: "service_account"` on a user route | **403**, after one count of each `defaults.rate_limit` policy per credential ([rate limits](../gateway.md#rate-limits)), not counted by the failed-auth limiter |
-| `member_id: null` on a kind route | **403**, before the rate limit, counted by the failed-auth limiter |
-| `permissions` share none with the route, and the route isn't `any_member` | **403**, after the rate limit |
+| `valid: false` | **401** |
+| `principal: "service_account"` on a user route | **403**, after one count of each `defaults.rate_limit` policy per credential ([rate limits](../gateway.md#rate-limits)) |
+| `member_id: null` on a kind route | **403** |
+| `permissions` share none with the route, and the route isn't `any_member` | **403** |
 | Otherwise | Forwarded |
 | Transport error, non-2xx, missing fields | **503** |
+
+The order of these steps, and which answers the failed-auth IP limiter counts: [access](../../concepts/access.md#how-a-request-is-decided).
 
 ### Plan counts
 
@@ -171,7 +173,7 @@ Each item is decided as a single evaluation would decide it. A call resolves eac
 | Result | Response |
 |--------|----------|
 | Answered | **200**, whatever the decisions |
-| A body identity can't read: not a JSON object; a `subject`, `resource` or `action` missing, after defaults; a `subject.type` other than `member`; an id that isn't a lowercase ULID; an empty `resource.type` or `action.name`; a field of the wrong type; an unknown `evaluations_semantic`; more than 100 items | **400** `INVALID_REQUEST`, in the [error envelope](../errors.md). `message` says which field, with its path (`evaluations[2].subject.id`) |
+| A body identity can't read: not sent as `application/json`, or not a JSON object; a `subject`, `resource` or `action` missing, after defaults; a `subject.type` other than `member`; an id that isn't a lowercase ULID; an empty `resource.type` or `action.name`; a field of the wrong type; an unknown `evaluations_semantic`; more than 100 items | **400** `INVALID_REQUEST`, in the [error envelope](../errors.md). `message` says which field, with its path (`evaluations[2].subject.id`) |
 | Postgres unavailable | **503** `SERVICE_UNAVAILABLE`. No decision: the caller acts as if it were `false`, and retries later |
 
 AuthZEN gives an error status and a message string, with no shape for the body; the message is the envelope's `message`. An `X-Request-ID` on the request comes back on the response, as AuthZEN asks.

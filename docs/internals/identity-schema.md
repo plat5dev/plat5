@@ -55,7 +55,8 @@ CREATE TABLE members (                                -- one per principal per t
     principal     TEXT NOT NULL CHECK (principal IN ('person', 'service_account')),  -- outlives the principal
     root_id       TEXT NOT NULL REFERENCES nodes (id),
     removed_at    TIMESTAMPTZ,                         -- set once; never cleared
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (removed_at IS NOT NULL OR principal_id IS NOT NULL)  -- an active member always has its principal
 );
 CREATE UNIQUE INDEX members_active_uidx ON members (principal_id, root_id) WHERE removed_at IS NULL;
 
@@ -121,11 +122,12 @@ Ids are lowercase ULIDs with no prefix ([ids](../concepts/model.md#ids-and-slugs
 
 The rules themselves are in the concept docs ([access](../concepts/access.md), [lifecycle](../concepts/lifecycle.md)). What the tables hold to:
 
-- **Members.** At most one active member per principal per tree (`members_active_uidx`). `removed_at` is set once and never cleared.
+- **Members.** At most one active member per principal per tree (`members_active_uidx`). `removed_at` is set once and never cleared. An active member always has its principal (the `CHECK`): only a removed member's `principal_id` is ever `NULL`.
 - **Guests.** Not stored; read from the bindings.
 - **Closed world.** A binding's node is under its member's root. A service account's member is in the tree of its `node_id`.
 - **Roles.** A binding's `role` is kept as written. A role that's missing, or not bindable at the binding's kind, grants nothing.
 - **Deletions.** Each delete stamps one `deletion_id` on every node it soft-deletes; restore matches on it. A node already deleted keeps its own id.
 - **Purge.** Purge sets `status = 'purged'` and keeps the row. Below a root it sets `slug` to `NULL`, freeing it; a purged root keeps its slug until an operator releases it.
 - **Writes that touch members** take the tree's lock, so "one active member" and "removed when left with no bindings" can't race.
+- **Account deletion** removes the members it found with their trees locked, then locks the principal row `FOR UPDATE`, removes any member that a join inserted meanwhile (the join's foreign key held the row, so the lock waited for it), and deletes the principal. A join that inserts after the lock waits on the row and then fails the foreign key.
 - **Events.** A change writes its events after every other write. Each event write takes the log's one advisory lock, held to commit, so ids commit in order, a reader never sees a later id before an earlier one commits, and a transaction's events are adjacent. A person's row and its `user.created` are written together, as are the principal's deletion and its `user.deleted`.

@@ -116,7 +116,7 @@ Lists are [paginated](../lists.md) under the plural key. Times are RFC 3339, UTC
 
 #### Node
 
-`{ id, kind, parent_id, root_id, slug, display_name, status, deleted_at, purge_after, created_at, updated_at, ancestors }`, on every response that returns a node. `status` is `active`, `deleted` or `purged`. `purge_after` is when a deleted node is purged, `null` while live. `ancestors` is `[{ id, kind, slug, display_name }]`, root first, without the node itself; `[]` on a root. A console builds its own URLs from it.
+`{ id, kind, parent_id, root_id, slug, display_name, status, deleted_at, purge_after, created_at, updated_at, ancestors }`, on every response that returns a node. `status` is `active`, `deleted` or `purged`. `purge_after` is when a deleted node is purged, `null` while live. `slug` is `null` once it's freed: on a purged node below a root, and on a root whose slug was [released](#slug-release), here and in `ancestors`. `ancestors` is `[{ id, kind, slug, display_name }]`, root first, without the node itself; `[]` on a root. A console builds its own URLs from it.
 
 #### Binding
 

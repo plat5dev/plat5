@@ -18,7 +18,7 @@ A service never creates a node in its own tables first: it creates it through th
 
 - **A delete revokes nothing.** While a node is deleted, nothing works on it or below: the gateway refuses it, the keys of service accounts that belong there are refused, and its invites can't be redeemed. Bindings, service accounts, keys and invites are all kept. To kill a key you think leaked, revoke it or delete its service account.
 
-- **What a deleted node grants.** Nothing on it or below, except on an `allow_deleted` route (restore). Listing deleted nodes counts its own bindings ([lists](access.md#lists)).
+- **What a deleted node grants.** Nothing on it or below, except the node itself on an `allow_deleted` route (restore). Listing deleted nodes counts its own bindings ([lists](access.md#lists)). So through the gateway, restoring a node whose parent is deleted, or creating one under a deleted parent, is the usual **403**: the parent is in the chain. **409** `PARENT_DELETED` is identity's answer to other front doors.
 
 - **Restore.** Before `purge_after`, by anyone who could delete the node: a full undo. The node and the descendants its delete cascaded to come back, with their bindings, service accounts, keys and unexpired invites. A node whose parent is deleted can't be restored until the parent is (**409**); parents are never restored for it. Restoring a live node succeeds and changes nothing.
 
@@ -40,7 +40,7 @@ A kind is removed, or changes parent, only while it has no nodes, deleted ones i
 
 ### Deleting an account
 
-`DELETE /users/{user_id}`, in one transaction: every member of the person in every tree is removed (bindings deleted, `member.removed` per tree), personal keys and IdP links are deleted, and the principal is deleted, with `user.deleted`. Removed member rows stay, with no name. Nothing blocks it: an org left with no admin is recovered through an operator plane.
+`DELETE /users/{user_id}`, in one transaction: every member of the person in every tree is removed (bindings deleted, `member.removed` per tree), personal keys and IdP links are deleted, and the principal is deleted, with `user.deleted`. Removed member rows stay, with no name. Nothing blocks it: an org left with no admin is recovered through an operator plane. A join racing it (a redeem, an admin add, a root create) either lands first, and its member is removed with the rest, or acts as it would once the account is gone: a redeem or root create is refused as for a deleted user ([identity's errors](../reference/api/identity.md#errors)), and an admin add finds the subject new and creates the person.
 
 ## Lifecycle events
 

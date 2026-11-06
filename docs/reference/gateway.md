@@ -6,7 +6,7 @@ The Plat5 gateway (`services/gateway/`). How it decides a request: [access](../c
 
 | Layer | Responsibility |
 |-------|---------------|
-| **Gateway** | Routing, authentication (JWT, API key), resolving the path's slugs to nodes, admission, rate limits, the permission check, upstream fill, audit intent and outcome, route checks, CORS, security headers, body limits, trace propagation |
+| **Gateway** | Routing, authentication (JWT, API key), resolving the path's slugs to nodes, admission, the permission check, rate limits, upstream fill, audit intent and outcome, route checks, CORS, security headers, body limits, trace propagation |
 | **Edge / load balancer** | TLS termination |
 | **Identity** | Admit: the member and permissions for a credential on a node chain |
 | **Services** | Business logic, data access, and state rules over the node ids they're given |
@@ -69,7 +69,7 @@ Counters live in **Valkey**; replicas share one budget. `VALKEY_URL` is required
 | Admitted headers | On limited routes (2xx and 429): `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, for the tightest policy |
 | Keys | Under a fixed `plat5:rl:` prefix |
 | A service account on a user route | One count of each policy `defaults.rate_limit` names, per credential (its key), the same buckets as [route checks](#route-checks), before the **403**, whatever the route's own `rate_limit`. Over budget, **429** with `X-RateLimit-*` instead; the **403** carries none |
-| Failed-auth IP | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60; `0` = off). Counts only what identity refused: `valid: false` and `member_id: null`. A JWT refused locally, an unmatched route and a service account on a user route don't count. **429** sets `Retry-After`; no `X-RateLimit-*` |
+| Failed-auth IP | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60; `0` = off). What it counts: [access](../concepts/access.md#how-a-request-is-decided). **429** sets `Retry-After`; no `X-RateLimit-*` |
 
 ## Audit
 
@@ -125,7 +125,7 @@ Other fields are ignored. Each `allowed` is what the gateway would decide for th
 
 A node that doesn't exist and a node the caller can't reach are both `false`, as both are the same **403** on the request. Rate limits, body limits, the param check of the fill and the upstream aren't evaluated, so `true` doesn't promise the request succeeds. Each admit comes from the [cache](#cache), as a request's would.
 
-- **Credential.** Any credential a route takes. Missing, malformed, or a JWT refused locally: **401**. Each check admits as its request would: a kind check with its chain, a `user` check with an empty chain; a `public` or unmatched check doesn't admit. Any admit answering `valid: false` (an unknown or revoked key, a suspended person, a service account whose node is deleted) makes the whole call **401**, counted once by the failed-auth limiter. A call that needs no admit never calls identity: it answers whatever the credential, even with identity down. A `false` is never counted by the failed-auth limiter.
+- **Credential.** Any credential a route takes. Missing, malformed, or a JWT refused locally: **401**. Each check admits as its request would: a kind check with its chain, a `user` check with an empty chain; a `public` or unmatched check doesn't admit. Any admit answering `valid: false` (an unknown or revoked key, a suspended person, a service account whose node is deleted) makes the whole call **401**, counted once by the [failed-auth limiter](../concepts/access.md#how-a-request-is-decided). A call that needs no admit never calls identity: it answers whatever the credential, even with identity down.
 - **Rate limit.** One count of each policy `defaults.rate_limit` names per call, per credential (a key, or a JWT's issuer and subject), before any check, checked and counted together as on a route. A service account refused on a user route spends from the same buckets. `X-RateLimit-*` on the **200** and the **429**, as on a route.
 - **Not audited**, and nothing is forwarded. A check that admits is an admit like a request's, so a new person's first route check creates them, like any first request ([subject claim](idp.md#subject-claim)).
 - **CORS** as on any response; its preflight is any `OPTIONS`.

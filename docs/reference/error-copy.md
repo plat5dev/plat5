@@ -114,7 +114,7 @@ The last is **409** `NAME_OWNED_BY_IDP`, whoever sends it; the others **422** wi
 | When | `message` |
 |------|-----------|
 | `expires_in` not between `60s` and `30d` | Expiry must be between 60 seconds and 30 days. |
-| `max_uses` 0, negative, or not a whole number or `null` | Max uses must be at least 1. |
+| `max_uses` that isn't a whole number of at least 1 or `null`: `0`, `-1`, `1.5`, `"unlimited"` | Max uses must be a number of at least 1, or null for unlimited. |
 | `grants` on an invite below a root | Only an invite to the {root kind} can grant more. |
 | No `role` | Choose a role. |
 | Redeem of a redeemed invite | This invite has already been used. |

@@ -111,7 +111,7 @@ Apply-time **422**:
 
 Permissions follow role hygiene: `[a-z0-9:._-]+`, max 64 chars, max 32 per route, unique. Permissions are opaque: `catalog:write` does not imply `project:read`.
 
-After the rate limit, the caller's permissions on the node (the union of the roles of its bindings on the node and its ancestors) must hold `*` or one of the route's, or the gateway answers **403** "permission denied, or it may not exist". `[a, b]` means a or b. `any_member` admits any member of the tree, guests included: to keep guests out of an org-level route, require a permission at the org, such as `organization:read`, since a guest's bindings sit only below the root. A route can't require `*` itself. `[]` is **422**: write `any_member`. Roles and bindings: [`concepts/access.md`](../../concepts/access.md).
+After admit, and before the rate limit, the caller's permissions on the node (the union of the roles of its bindings on the node and its ancestors) must hold `*` or one of the route's, or the gateway answers **403** "permission denied, or it may not exist". `[a, b]` means a or b. `any_member` admits any member of the tree, guests included: to keep guests out of an org-level route, require a permission at the org, such as `organization:read`, since a guest's bindings sit only below the root. A route can't require `*` itself. `[]` is **422**: write `any_member`. Roles and bindings: [`concepts/access.md`](../../concepts/access.md).
 
 A route permission that no role grants is legal: only `*` grants it, which is deliberate for routes meant for admins alone.
 

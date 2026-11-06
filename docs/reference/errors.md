@@ -67,7 +67,7 @@ One rule for every Plat5 API:
 |--------|------|
 | **422** `VALIDATION_ERROR` | The input is invalid. That includes an id or name in the request that names nothing the request can use (a role the roles document doesn't have, a member not active in the node's tree, a grant's node that isn't live) and a path naming the wrong kind of thing (a child kind that can't go under the node, a service account's member on a route for people's members) |
 | **409** | The current state refuses the request. `CONFLICT` is only for something that already exists: a slug taken, already a member, a binding already there. Each other state refusal has its own code |
-| **400** `INVALID_REQUEST` | A request malformed before its values are read: a path param that would change the upstream path, a caller header naming no one, a missing body |
+| **400** `INVALID_REQUEST` | A request malformed before its values are read: a path param that would change the upstream path, a caller header naming no one, a missing body, a body not sent as `application/json` |
 | **503** `SERVICE_UNAVAILABLE` | Something the answer needs is unavailable: a service's Postgres, or the gateway's identity, audit or Valkey. Retry later |
 
 The one exception is identity's [access evaluation](api/internal.md#access-evaluation): every body it can't use is **400** `INVALID_REQUEST`, as AuthZEN's contract asks, where the rest of Plat5 would answer **422**.
@@ -86,6 +86,10 @@ From the gateway: no route matches. From a service's own API, called by id: the 
 
 Returned by the **gateway**, not downstream services: a missing, malformed, unknown or revoked credential, a suspended person's, or the key of a service account whose node is deleted. A **401** always means the credential itself is bad; a known caller who may not make the request is a **403**. Identity unavailable is **503**. See [admit](api/internal.md#what-the-gateway-answers).
 
+### `PARENT_DELETED`
+
+Returned by **identity** when the parent of a node being created or restored is deleted or purged. What the gateway answers instead: [lifecycle](../concepts/lifecycle.md#deleting-restoring-and-purging).
+
 ### `INVITE_NOT_REDEEMABLE`
 
 Returned by **identity** on a redeem. `details.reason` is `redeemed`, `revoked`, `expired`, or `node_deleted` when the invite's node is deleted ([invites](api/identity.md#invites)).
@@ -98,10 +102,10 @@ Returned by the **control plane** when an apply's preconditions fail: `precondit
 
 Returned by the **gateway**. `Retry-After` (seconds) is the same value as `details.retry_after_seconds`. Two independent Valkey limiters; Valkey error or timeout → **503**. Admitted limited routes set `X-RateLimit-Limit` / `Remaining` / `Reset` on 2xx and 429; the failed-auth limiter sets `Retry-After` only.
 
-| Limiter | When | Key |
-|---------|------|-----|
-| Admitted route | After admission, before the permission check | The policy and its bucket ([rate limits](config/rate-limits.md#buckets)) |
-| Failed-auth IP | What identity refused: **401** for an invalid key or `valid: false`, and not-found **403**s. Not a service account's **403** on a user route. Not per-route | Client IP. `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` (default 60/60). `0` = off |
+| Limiter | What it counts |
+|---------|----------------|
+| A route's policies | [Rate limits](config/rate-limits.md#buckets) |
+| Failed-auth IP | [Access](../concepts/access.md#how-a-request-is-decided). Its env: [gateway](gateway.md#rate-limits) |
 
 ## Principles
 

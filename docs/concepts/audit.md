@@ -53,13 +53,13 @@ An event is in the log of every node in its chain, so reading a node returns its
 
 Method decides the default: `POST`, `PUT`, `PATCH`, `DELETE` audited; `GET`, `HEAD` not. The route `audit` field overrides it.
 
-An event exists once the gateway knows the actor and the node, the request got past the rate limit, and the route is audited:
+An event exists once the gateway knows the actor and the node, and the route is audited:
 
 | Gateway result | Event |
 |----------------|-------|
 | **401** | None. There's no trusted actor |
-| **403** before the rate limit (node not found, not in the tree) | None. There's no tree to log into |
-| **429** | None. Nothing ran |
+| **403** at admit (node not found, not in the tree) | None. There's no tree to log into |
+| **429** | None. Nothing ran, including a **429** from the failed-auth IP limiter in place of a permission **403** |
 | **403** permission check | `rejected`, one background write |
 | **400** on a param | `rejected`, one background write |
 | **503**, intent not written | None, or `rejected` if the intent landed unseen ([delivery](#delivery)) |
@@ -67,7 +67,7 @@ An event exists once the gateway knows the actor and the node, the request got p
 
 ## Request order
 
-Audit runs inside the gateway's pipeline ([access](access.md#how-a-request-is-decided)): the intent is written after the permission check and before forward, and the outcome after the service answers. So during an audit outage a **503** comes only after the permission check, and never says whether a node exists. The rate limit running before the permission check bounds how many events a member without the permissions can cause.
+Audit runs inside the gateway's pipeline ([access](access.md#how-a-request-is-decided)): the intent is written after the permission check and before forward, and the outcome after the service answers. So during an audit outage a **503** comes only after the permission check, and never says whether a node exists. The failed-auth IP limiter counts the permission **403** ([access](access.md#how-a-request-is-decided)), which bounds how many `rejected` events a member without the permissions can cause.
 
 ## Delivery
 
