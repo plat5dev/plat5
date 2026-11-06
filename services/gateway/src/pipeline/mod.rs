@@ -409,7 +409,7 @@ fn unauthorized(err: AuthError, auth_type: Option<AuthType>, scope: &str) -> Rej
     metrics::record_auth_failure(auth_type, err.as_str());
     info!(
         auth_type,
-        error_message = err.as_str(),
+        reason = err.as_str(),
         scope,
         "authentication failed"
     );

@@ -504,6 +504,20 @@ struct RequestLog<'a> {
     trace_id: Option<&'a str>,
     span_id: Option<&'a str>,
     credential: &'a RequestCredential,
+    /// Set on a 5xx only ([`request_error_type`]).
+    error_type: Option<&'static str>,
+}
+
+/// `error_type` for a request that ended with `status`: on a 5xx only
+/// (docs/reference/telemetry.md#error-fields-5xx-only), for the root span's
+/// `error.type` and the request line. `network` when the proxy failed or on a 503,
+/// `internal` on any other 5xx.
+fn request_error_type(status: u16, failed: bool) -> Option<&'static str> {
+    match status {
+        500..=599 if failed || status == 503 => Some("network"),
+        500..=599 => Some("internal"),
+        _ => None,
+    }
 }
 
 /// `[a,b]`: a permission list as one log field.
@@ -553,6 +567,7 @@ fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
         trace_id,
         span_id,
         credential,
+        error_type,
     } = log;
     let auth_type = credential.auth_type.map(|t| t.as_str());
     let key_id = credential.key_id.as_deref();
@@ -579,7 +594,8 @@ fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
                 node_id,
                 member_id,
                 user_id,
-                error = %err,
+                error_type,
+                error_message = error_type.map(|_| tracing::field::display(err)),
                 "request failed"
             );
         }
@@ -599,6 +615,7 @@ fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
                 node_id,
                 member_id,
                 user_id,
+                error_type,
                 "request completed"
             );
         }
@@ -856,14 +873,14 @@ impl ProxyHttp for Gateway {
         let route = ctx.route_label().to_string();
         let method = ctx.method_label().to_string();
 
+        let error_type = request_error_type(status, e.is_some());
         if let Some(ref span) = ctx.root_span {
             span.record("http.response.status_code", status);
-            if e.is_some() {
-                span.record("error.type", "network");
-                span.set_status(Status::error(""));
-            } else if matches!(status, 500..=599) {
-                let kind = if status == 503 { "network" } else { "internal" };
+            if let Some(kind) = error_type {
                 span.record("error.type", kind);
+                span.set_status(Status::error(""));
+            } else if e.is_some() && !(400..500).contains(&status) {
+                // A failure with no HTTP status to show for it, such as a client gone.
                 span.set_status(Status::error(""));
             }
         }
@@ -882,6 +899,7 @@ impl ProxyHttp for Gateway {
                 trace_id: trace_id.as_deref(),
                 span_id: span_id.as_deref(),
                 credential: &ctx.credential,
+                error_type,
             },
             e,
         );
@@ -894,5 +912,71 @@ impl ProxyHttp for Gateway {
         }
 
         ctx.finish_root_span();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request_line(status: u16, error: Option<&pingora::Error>) -> serde_json::Value {
+        let credential = RequestCredential::default();
+        let mut lines = crate::telemetry::logged(|| {
+            log_request_outcome(
+                RequestLog {
+                    request_id: "req-1",
+                    route: "/orgs/{organization}",
+                    method: "GET",
+                    status,
+                    duration_ms: 2.5,
+                    trace_id: None,
+                    span_id: None,
+                    credential: &credential,
+                    error_type: request_error_type(status, error.is_some()),
+                },
+                error,
+            )
+        });
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        lines.remove(0)
+    }
+
+    /// The request line carries `error_type`, and `error_message` when the proxy
+    /// failed, on a 5xx only (docs/reference/telemetry.md#error-fields-5xx-only).
+    #[test]
+    fn request_line_error_fields_on_5xx_only() {
+        let refused = pingora::Error::new(ErrorType::ConnectRefused);
+        let line = request_line(502, Some(&refused));
+        assert_eq!(line["message"], "request failed");
+        assert_eq!(line["level"], "warn");
+        assert_eq!(line["error_type"], "network");
+        assert!(
+            line["error_message"]
+                .as_str()
+                .unwrap()
+                .contains("ConnectRefused"),
+            "{line}"
+        );
+
+        let line = request_line(500, None);
+        assert_eq!(line["message"], "request completed");
+        assert_eq!(line["level"], "info");
+        assert_eq!(line["error_type"], "internal");
+        assert!(line.get("error_message").is_none(), "{line}");
+        assert_eq!(request_line(503, None)["error_type"], "network");
+
+        let closed = pingora::Error::new(ErrorType::ReadError);
+        for (status, error) in [
+            (400, Some(&*closed)),
+            (413, Some(&*closed)),
+            (0, Some(&*closed)),
+            (401, None),
+            (200, None),
+        ] {
+            let line = request_line(status, error);
+            assert!(line.get("error_type").is_none(), "{status}: {line}");
+            assert!(line.get("error_message").is_none(), "{status}: {line}");
+            assert!(line.get("error").is_none(), "{status}: {line}");
+        }
     }
 }

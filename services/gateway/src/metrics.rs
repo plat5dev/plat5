@@ -14,7 +14,7 @@ pub fn register_process_metrics() {
     let collector = ProcessCollector::for_self();
     if let Err(err) = prometheus::register(Box::new(collector)) {
         tracing::warn!(
-            ?err,
+            error = ?err,
             "failed to register process collector (may already be registered)"
         );
     }

@@ -1508,3 +1508,32 @@ fn the_route_checks_credential_is_any_a_route_takes() {
         Err(Rejection::Unavailable)
     );
 }
+
+/// A 401's line says why in `reason`, as the auth-failure metric does; the error
+/// fields are for 5xx only (docs/reference/telemetry.md#gateway-authentication-failed-line).
+#[test]
+fn authentication_failed_line() {
+    let lines = crate::telemetry::logged(|| {
+        unauthorized(
+            AuthError::InvalidToken {
+                reason: "token_expired",
+            },
+            Some(AuthType::Jwt),
+            "organization",
+        );
+        unauthorized(AuthError::MissingAuthorization, None, "user");
+    });
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    for (line, (auth_type, reason, scope)) in lines.iter().zip([
+        ("jwt", "token_expired", "organization"),
+        ("none", "missing_authorization", "user"),
+    ]) {
+        assert_eq!(line["level"], "info");
+        assert_eq!(line["message"], "authentication failed");
+        assert_eq!(line["auth_type"], auth_type);
+        assert_eq!(line["reason"], reason);
+        assert_eq!(line["scope"], scope);
+        assert!(line.get("error_message").is_none(), "{line}");
+        assert!(line.get("error_type").is_none(), "{line}");
+    }
+}

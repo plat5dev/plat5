@@ -24,7 +24,7 @@ pub async fn validate_token(
     })
     .await
     .map_err(|join_err| {
-        tracing::warn!(?join_err, "jwt validation task panicked");
+        tracing::warn!(error = ?join_err, "jwt validation task panicked");
         JwtError::from(jsonwebtoken::errors::ErrorKind::InvalidToken)
     })?
 }
@@ -68,7 +68,7 @@ fn validate_token_sync(
         }
         Err(err) => {
             metrics::record_auth_validation("jwt", "error", duration);
-            debug!(kid = %kid, ?err, "jwt validation failed");
+            debug!(kid = %kid, error = ?err, "jwt validation failed");
         }
     }
 

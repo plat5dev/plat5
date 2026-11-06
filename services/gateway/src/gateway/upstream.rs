@@ -158,19 +158,19 @@ impl Injector for RequestHeaderInjector<'_> {
         let header_name = match HeaderName::from_bytes(key.as_bytes()) {
             Ok(name) => name,
             Err(err) => {
-                warn!(key = %key, ?err, "failed to parse propagation header name");
+                warn!(key = %key, error = ?err, "failed to parse propagation header name");
                 return;
             }
         };
         let header_value = match HeaderValue::from_str(&value) {
             Ok(val) => val,
             Err(err) => {
-                warn!(key = %key, ?err, "failed to parse propagation header value");
+                warn!(key = %key, error = ?err, "failed to parse propagation header value");
                 return;
             }
         };
         if let Err(err) = self.headers.insert_header(header_name, header_value) {
-            warn!(key = %key, ?err, "failed to inject propagation header");
+            warn!(key = %key, error = ?err, "failed to inject propagation header");
         }
     }
 }

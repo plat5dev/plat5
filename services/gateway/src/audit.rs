@@ -444,7 +444,7 @@ async fn write_background(
             Ok(status @ 400..=499) => {
                 error!(
                     error_type = ErrorKind::Internal.as_str(),
-                    status,
+                    upstream_status = status,
                     request_id,
                     write = label,
                     "audit refused the write"
