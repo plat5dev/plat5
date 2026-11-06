@@ -183,10 +183,24 @@ The gateway writes one `request completed` (or `request failed`) line per reques
 | `principal` | Admitted | `person` or `service_account` |
 | `root_id`, `node_id`, `member_id`, `user_id` | Admitted | As above. Never a principal id |
 
-The key or token itself, and a JWT, are never logged. The request line has no permissions or role; a permission-denied 403 adds the [permission-denied line](#gateway-permission-denied-line).
+The key or token itself, and a JWT, are never logged. The request line has no permissions or role; a 401 adds the [authentication-failed line](#gateway-authentication-failed-line), and a permission-denied 403 the [permission-denied line](#gateway-permission-denied-line). A 5xx adds the [error fields](#error-fields-5xx-only): `error_type`, and `error_message` when the gateway failed to proxy.
 
 ```json
 {"timestamp":"2026-10-08T18:30:00Z","level":"info","message":"request completed","request_id":"…","route":"/widgets","method":"GET","status":403,"duration_ms":3.1,"auth_type":"apikey","key_id":"01jbz…","principal":"service_account","root_id":"01jbw…","node_id":"01jbx…","member_id":"01jby…"}
+```
+
+### Gateway authentication-failed line
+
+A **401** also writes one `info` line, `authentication failed`, before the request line. It says why:
+
+| Field | Value |
+|-------|-------|
+| `auth_type` | `jwt`, `apikey`, or `none` when no credential was sent |
+| `reason` | `missing_authorization`, `invalid_authorization`, `missing_subject`, `invalid_credential`, or a JWT's `details.reason` |
+| `scope` | The route's scope: its kind, `user` or `public` |
+
+```json
+{"timestamp":"2026-10-20T14:02:11Z","level":"info","message":"authentication failed","auth_type":"jwt","reason":"token_expired","scope":"organization"}
 ```
 
 ### Gateway permission-denied line

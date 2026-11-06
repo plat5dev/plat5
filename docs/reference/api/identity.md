@@ -23,7 +23,7 @@ Each is optional: without it, nobody is bound, and the list is the full list. A 
 | `DELETE` | `/nodes/{node_id}` | Soft delete. Cascades to descendants, parents before children. Revokes nothing. **204**. Already deleted or purged: **204**, no change |
 | `POST` | `/nodes/{node_id}/restore` | Within `deletion_grace`. Restores the node and the descendants its delete cascaded to (same `deletion_id`). Returns the node. A live node: **200**, no change. **409** `PARENT_DELETED` if the parent is deleted, **409** `GRACE_EXPIRED` if the grace has passed |
 | `GET` | `/nodes/{node_id}/children/{kind}` | Nodes. [Filtered](../../concepts/access.md#lists) when `X-Plat5-Member-Id` is sent. `?status=deleted` for deleted ones. **422** if `{kind}` isn't a kind whose parent is this node's kind |
-| `POST` | `/nodes/{node_id}/children/{kind}` | `{ display_name, slug? }`. **422** if `{kind}` isn't a kind whose parent is this node's kind. **409** `PARENT_DELETED` if this node is deleted or purged. Returns the node, **201** |
+| `POST` | `/nodes/{node_id}/children/{kind}` | `{ display_name, slug? }`. **422** if `{kind}` isn't a kind whose parent is this node's kind. **409** `PARENT_DELETED` if this node is deleted. Returns the node, **201** |
 | `POST` | `/roots/{kind}` | `{ display_name, slug? }`. A root kind. Returns the node, **201** |
 | `GET` | `/nodes` | Every node, unfiltered: `?kind=`, `?parent_id=`, `?status=`. For other front doors |
 | `POST` | `/nodes/{node_id}/release-slug` | <a id="slug-release"></a>On a purged root: frees its slug for a new root. **409** `SLUG_NOT_RELEASABLE` on a node that isn't a purged root. For an operator plane |
@@ -158,8 +158,6 @@ Product sentences for each: [`reference/error-copy.md`](../error-copy.md#identit
 
 ## Errors
 
-| Case | Status |
-|------|--------|
 The status rule is [errors.md's](../errors.md#which-status).
 
 | Case | Status |
@@ -173,9 +171,10 @@ The status rule is [errors.md's](../errors.md#which-status).
 | `X-Plat5-Member-Id` naming no active member of the node's tree, or `X-Plat5-User-Id` naming no active user | **400** |
 | An invite without `role`, or below a root with `grants` | **422** |
 | Removing a service account's member through the members route | **422**: a service account's member is never a person's; delete the service account |
-| Restore with a deleted parent; create under a deleted or purged node | **409** `PARENT_DELETED` |
+| Restore with a deleted parent; create under a deleted node | **409** `PARENT_DELETED` |
 | Restore past `deletion_grace` | **409** `GRACE_EXPIRED` |
 | Release the slug of a node that isn't a purged root | **409** `SLUG_NOT_RELEASABLE` |
+| Any write to a purged node or to what hangs off it ([lifecycle](../../concepts/lifecycle.md#deleting-restoring-and-purging)): `PATCH`, a child create, adding or changing a binding, member or service account, creating or revoking a service account's key or an invite. Not a slug release, and not a delete that finds nothing left (**204**) | **409** `NODE_PURGED` |
 | Redeem of an invite that's redeemed, revoked or expired, or whose node is deleted | **409** `INVITE_NOT_REDEEMABLE` |
 | A `name` edit under `users.name.sync: each_sign_in` | **409** `NAME_OWNED_BY_IDP` |
 | Postgres unavailable | **503** `SERVICE_UNAVAILABLE` |

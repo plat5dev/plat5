@@ -48,6 +48,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `CONFLICT` | 409 | `invalid_request_error` | That already exists. | `{ field, value }` |
 | `PARENT_DELETED` | 409 | `invalid_request_error` | Restore the parent first. | `{ parent_id }` |
 | `GRACE_EXPIRED` | 409 | `invalid_request_error` | This can no longer be restored. | `null` |
+| `NODE_PURGED` | 409 | `invalid_request_error` | This was permanently deleted. | `null` |
 | `SLUG_NOT_RELEASABLE` | 409 | `invalid_request_error` | Only a purged root's slug can be released. | `null` |
 | `INVITE_NOT_REDEEMABLE` | 409 | `invalid_request_error` | This invite can't be used. | `{ reason }` |
 | `NAME_OWNED_BY_IDP` | 409 | `invalid_request_error` | This name comes from the sign-in provider. | `null` |
@@ -88,7 +89,11 @@ Returned by the **gateway**, not downstream services: a missing, malformed, unkn
 
 ### `PARENT_DELETED`
 
-Returned by **identity** when the parent of a node being created or restored is deleted or purged. What the gateway answers instead: [lifecycle](../concepts/lifecycle.md#deleting-restoring-and-purging).
+Returned by **identity** when the parent of a node being created or restored is deleted. A purged parent is [`NODE_PURGED`](#node_purged). What the gateway answers instead: [lifecycle](../concepts/lifecycle.md#deleting-restoring-and-purging).
+
+### `NODE_PURGED`
+
+Returned by **identity** on a write to a purged node or to what hangs off it ([lifecycle](../concepts/lifecycle.md#deleting-restoring-and-purging)).
 
 ### `INVITE_NOT_REDEEMABLE`
 

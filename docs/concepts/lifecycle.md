@@ -24,6 +24,8 @@ A service never creates a node in its own tables first: it creates it through th
 
 - **Purge.** Once `purge_after` has passed, the purge sweeper sets `status = 'purged'` on the node and the deleted nodes below it, even those whose own `purge_after` is later, and deletes everything that hung off them: bindings, invites, and service accounts that belong there (principal and keys; the member removed with `member.removed`). A person's member it leaves with no bindings, a guest included, is removed with `member.removed`, and a purged root removes all its members. The node rows are kept. A purged node below a root frees its slug; a purged root keeps its slug as a tombstone ([ids and slugs](model.md#ids-and-slugs)).
 
+- **A purged node is read-only.** Every write to it, or to what hangs off it, is **409** `NODE_PURGED`: renaming it, creating children under it, adding or changing its bindings, members and service accounts, and creating or revoking its service accounts' keys and its invites. Two writes are allowed: releasing a purged root's slug ([slug release](../reference/api/identity.md#slug-release)), and the deletes that find nothing left (the node, a binding, a member, a service account), which answer **204** and change nothing. A restore past the grace is **409** `GRACE_EXPIRED`, purged or not. A deleted node that isn't purged yet takes every write a live node does, since it can still be restored.
+
 - **Background work** checks node state and access itself, through identity's evaluation API ([access](access.md#outside-a-request)); the gateway only guards requests.
 
 ## Kinds

@@ -35,6 +35,7 @@ Clients show `error.message`. `details.fields` is for multi-field 422s; `message
 | `CONFLICT` | 409 | That already exists. |
 | `PARENT_DELETED` | 409 | Restore the parent first. |
 | `GRACE_EXPIRED` | 409 | This can no longer be restored. |
+| `NODE_PURGED` | 409 | This was permanently deleted. |
 | `SLUG_NOT_RELEASABLE` | 409 | Only a purged root's slug can be released. |
 | `INVITE_NOT_REDEEMABLE` | 409 | This invite can't be used. |
 | `NAME_OWNED_BY_IDP` | 409 | This name comes from the sign-in provider. |
@@ -64,8 +65,9 @@ Clients show `error.message`. `details.fields` is for multi-field 422s; `message
 | Restore past the grace period | This can no longer be restored. |
 | Create under a deleted node | Restore the {parent kind} first. |
 | Release the slug of a node that isn't a purged root | Only a purged root's slug can be released. |
+| Any write to a purged node, or to what hangs off it | This {kind} was permanently deleted. |
 
-A slug taken is **409** `CONFLICT` with `{ "field": "slug", "value" }`. A restore or create under a deleted node is **409** `PARENT_DELETED` with `{ "parent_id" }`; a restore past the grace period, **409** `GRACE_EXPIRED`; a release, **409** `SLUG_NOT_RELEASABLE`. The other rows are **422**.
+A slug taken is **409** `CONFLICT` with `{ "field": "slug", "value" }`. A restore or create under a deleted node is **409** `PARENT_DELETED` with `{ "parent_id" }`; a restore past the grace period, **409** `GRACE_EXPIRED`; a release, **409** `SLUG_NOT_RELEASABLE`. A write to a purged node, its members, bindings, service accounts, keys or invites included, is **409** `NODE_PURGED` with `null` details, `{kind}` the purged node's. The other rows are **422**.
 
 ### Members and bindings
 
