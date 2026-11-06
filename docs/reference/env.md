@@ -19,7 +19,7 @@ Internal ports (`INTERNAL_PORT`) take no token. Keep them inside the deployment'
 | `RATE_LIMIT_AUTH_FAILURE_REQUESTS`, `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` | The [failed-auth IP limiter](../concepts/access.md#how-a-request-is-decided). Default 60/60; `0` = off ([rate limits](gateway.md#rate-limits)) |
 | `AUDIT_ENABLED` | Whether the gateway writes audit events. Default `true`. Independent of whether `services/audit.yml` publishes audit's read routes ([`concepts/audit.md`](../concepts/audit.md#on-and-off)) |
 | `AUDIT_URL` | Audit's internal base URL, where the gateway writes events, e.g. `http://audit:3003`. Required unless `AUDIT_ENABLED=false` |
-| `TRUSTED_PROXIES` | [Client IP](gateway.md#client-ip) |
+| `TRUSTED_PROXIES` | [Client IP](gateway.md#client-ip), and the client's scheme on spans ([telemetry](telemetry.md#http-server-spans)) |
 | `OTEL_SERVICE_INSTANCE_ID` | The replica id it reports to the control plane; default the hostname ([telemetry](telemetry.md)) |
 
 ## Control plane

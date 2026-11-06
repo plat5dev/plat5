@@ -31,4 +31,4 @@ A thin platform runtime for multi-tenant APIs: a gateway, identity (the tree of 
 
 ### Siblings
 
-Wire or boot changes aren't done in this repo alone. They also update the `cli` (its embedded compose and control-plane client track HEAD), the `template-*` repos (the API starters and the two consoles), `toolbox`, and the `operator` repo. Run HEAD with `plat5 init --source plat5=../plat5`.
+Wire or boot changes aren't done in this repo alone. They also update the `cli` (its embedded compose and control-plane client track HEAD), the `template-*` repos (the API starters and the two consoles), and the `operator` repo. Clone them beside this one with [`scripts/clone-siblings`](scripts/clone-siblings), then run every checkout at HEAD with `plat5 init --sources ..` (and `--project-id <id>` to keep a scratch project apart).

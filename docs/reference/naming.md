@@ -101,7 +101,7 @@ Tree routes: `X-Plat5-<Kind>-Id` per node in the chain (title case, `_` → `-`)
 ## Log Fields
 
 - Format: `snake_case`
-- Common: `request_id`, `root_id`, `node_id`, `member_id`, `user_id`, `duration_ms`, `error_kind`
+- Common: `request_id`, `root_id`, `node_id`, `member_id`, `user_id`, `duration_ms`, `error_type`
 - Credential (gateway request line): `auth_type`, `key_id` (never the key). See [`reference/telemetry.md`](telemetry.md#gateway-request-line)
 - Service-specific fields should be namespaced: `auth_provider`, `db_operation`
 

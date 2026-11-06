@@ -83,6 +83,8 @@ The TCP peer, unless the peer is in `TRUSTED_PROXIES` (comma-separated addresses
 
 `TRUSTED_PROXIES` empty (the default): `X-Forwarded-For` is ignored. Behind a tunnel or load balancer, list it, or every request has the edge's IP.
 
+The same list decides whose `X-Forwarded-Proto` the gateway's spans take as the client's scheme ([`url.scheme`](telemetry.md#http-server-spans)).
+
 ## Paths
 
 A param value of `.` or `..`, or one holding `/`, `?` or `#` once decoded, is **400**: it would change the path the upstream sees. The query string is forwarded as sent.

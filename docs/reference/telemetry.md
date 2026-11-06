@@ -83,6 +83,8 @@ OTEL_RESOURCE_ATTRIBUTES=service.namespace=edge,service.version=1.2.3,service.in
 
 If both `OTEL_RESOURCE_ATTRIBUTES` and a convenience var set the same attribute, the convenience var wins. Prefer `OTEL_RESOURCE_ATTRIBUTES` for portable operator config; convenience vars are fine for our compose defaults. All services honor both.
 
+`service.version` is the release the image was built for: the build's `VERSION` argument, compiled into the binary. A build without one reports `dev`. `OTEL_SERVICE_VERSION` overrides it, and so does `service.version` in `OTEL_RESOURCE_ATTRIBUTES`; nothing else sets it.
+
 `DEPLOYMENT_ENV` only sets this telemetry attribute; it does not change Auth behavior. Auth's dev-only conveniences (`POST /dev/token`, logging login codes without SMTP) are enabled only by `AUTH_DEV_MODE=true`.
 
 ### Other
@@ -93,6 +95,23 @@ If both `OTEL_RESOURCE_ATTRIBUTES` and a convenience var set the same attribute,
 | `OTEL_METRIC_EXPORT_INTERVAL` | OTLP metric export interval (ms) |
 
 Default Plat5 compose does **not** set `OTEL_EXPORTER_OTLP_ENDPOINT`.
+
+### Invalid values
+
+Every service parses its telemetry variables strictly. A variable that is set but invalid stops the service at boot, with an error naming the variable:
+
+| Variable | Valid |
+|----------|-------|
+| `OTEL_TRACES_EXPORTER` | A comma-separated list of `otlp`, `none` |
+| `OTEL_METRICS_EXPORTER` | A comma-separated list of `otlp`, `prometheus`, `none` |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` (and `_TRACES_`, `_METRICS_`) | `http/protobuf` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` (and `_TRACES_`, `_METRICS_`) | An `http://` or `https://` URL |
+| `OTEL_TRACES_SAMPLER_RATIO` | A number from `0` to `1` |
+| `OTEL_METRIC_EXPORT_INTERVAL` | A positive number |
+| `OTEL_SDK_DISABLED` | `true` or `false` |
+| `OTEL_RESOURCE_ATTRIBUTES` | `key=value` entries, comma-separated |
+
+An empty variable is unset. Once running, a failed export never stops the service: it's logged as one JSON line on stdout, like every other [log line](#logs).
 
 ## Operator recipes
 
@@ -191,10 +210,10 @@ The gateway sees permissions, never roles or bindings, so the line has neither; 
 
 | Field | Description |
 |-------|-------------|
-| `error_kind` | `auth`, `network`, `db`, `io`, `internal`, `validation` |
+| `error_type` | `auth`, `network`, `db`, `io`, `internal`, `validation` |
 | `error_message` | Human-readable message |
 
-Do not include `error_kind` for 4xx.
+Do not include `error_type` for 4xx.
 
 ## Traces
 
@@ -210,12 +229,22 @@ Do not include `error_kind` for 4xx.
 |---|---|
 | Kind | `SERVER` |
 | Name | `{method} {http.route}` when a route template exists; otherwise `{method}` only. Never the raw URI. |
-| Attributes | `http.request.method`, `url.path`, `http.route` (template only, when matched), `http.response.status_code` (when known) |
+| Attributes | `http.request.method`, `url.path`, `url.scheme`, `url.query` (when the request has one), `http.route` (template only, when matched), `http.response.status_code` (when known), `error.type` (5xx only) |
 | Status | Unset on 4xx. `Error` on 5xx with **no** description. Unset on 1xx/2xx/3xx unless a non-HTTP error occurred. |
 
 `http.route` is the matched template (`/orgs/{organization}/projects/{project}/subscribers`). Do not put the raw path there. `url.path` is the actual path (IDs allowed).
 
-Do not set `url.query`, `url.scheme`, or `error.type`. Frameworks may add extra stable HTTP attributes; do not copy those onto other services.
+`url.scheme` is the client's scheme as the service knows it. At the gateway: the last entry of `X-Forwarded-Proto` when the TCP peer is a trusted proxy (`TRUSTED_PROXIES`, [client IP](gateway.md#client-ip)) and that entry is `http` or `https`; otherwise the scheme of the connection the gateway accepted. A service behind the gateway reports the scheme of the request it received.
+
+`url.query` is the query string without the leading `?`, redacted as the standard says: the value of each of these keys becomes `REDACTED`, and the key is kept:
+
+`sig`, `Signature`, `AWSAccessKeyId`, `X-Amz-Signature`, `X-Amz-Credential`, `X-Amz-Security-Token`, `X-Goog-Signature`
+
+Keys match exactly (case-sensitive). Every other key and value is kept as sent. A request without a query has no `url.query`.
+
+`error.type` is on 5xx spans only, with the same values as the `error_type` [log field](#error-fields-5xx-only): `auth`, `network`, `db`, `io`, `internal`, `validation`. A 4xx is a normal business outcome: no `error.type`, and the span isn't marked failed.
+
+Frameworks may add extra stable HTTP attributes; do not copy those onto other services.
 
 Gateway creates the root span **before** route match: name starts as `{method}`, then becomes `{method} {template}` after match. Unmatched stays `{method}`. Internal child spans (`gateway.request_filter`) are not HTTP server spans.
 
@@ -223,8 +252,6 @@ Gateway creates the root span **before** route match: name starts as `{method}`,
 
 - `request_id` on HTTP request spans (if present). Do not rename it to `request.id`.
 - `plat5.member_id`, `plat5.user_id`, `plat5.root_id` and `plat5.node_id` on HTTP request spans once admitted, and `jwt.kid` for a JWT, set at the gateway for ops. Never a principal id. A service sets only ids it was given.
-- `error.kind` on **error spans** (5xx only): `auth`, `network`, `db`, `io`, `internal`, `validation`
-- 4xx responses are normal business outcomes — do not set `error.kind` and do not mark the span as failed
 - Record exceptions via `span.recordException(err)` / `span.record_exception(err)`
 
 Logs and Prometheus metrics are **not** HTTP spans: log fields stay `snake_case` (`request_id`, `method`, `status`); metric names stay `http_requests_total` / `http_request_duration_seconds`.

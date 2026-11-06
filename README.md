@@ -20,6 +20,7 @@ Start with the [CLI](https://github.com/plat5dev/cli): `plat5 init` writes a pro
 | `services/audit/` | Audit log store and read API, per root and by node (Go) |
 | `compose/` | Self-contained Plat5 stack, waiting for its first `plat5 apply` |
 | `docs/` | Contracts |
+| `scripts/clone-siblings` | Clones the sibling repos (CLI, auth, operator, templates) beside this one |
 
 ## Documentation
 

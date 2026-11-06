@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# Clone the plat5dev sibling repos next to this plat5 checkout.
+# Usage (from anywhere):
+#   plat5/scripts/clone-siblings
+#   plat5/scripts/clone-siblings --pull   # also git pull --ff-only on existing clones
+set -euo pipefail
+
+ORG="${PLAT5_ORG:-plat5dev}"
+# Prefer SSH; override with PLAT5_GIT_BASE=https://github.com/plat5dev
+GIT_BASE="${PLAT5_GIT_BASE:-git@github.com:${ORG}}"
+
+REPOS=(
+  auth
+  cli
+  operator
+  template-bun-effect-api
+  template-customer-console
+  template-go-fiber-api
+  template-node-fastify-api
+  template-operator-console
+)
+
+PULL=0
+for arg in "$@"; do
+  case "$arg" in
+    --pull|-p) PULL=1 ;;
+    -h|--help)
+      cat <<'EOF'
+clone-siblings — clone the plat5dev sibling repos next to plat5/
+
+  mkdir plat5dev && cd plat5dev
+  git clone git@github.com:plat5dev/plat5.git
+  ./plat5/scripts/clone-siblings
+
+Then run every checkout at HEAD: plat5 init --sources ..
+
+Options:
+  --pull, -p   git pull --ff-only on repos that already exist
+  -h, --help   this help
+
+Env:
+  PLAT5_ORG        GitHub org (default: plat5dev)
+  PLAT5_GIT_BASE   clone base URL (default: git@github.com:plat5dev)
+EOF
+      exit 0
+      ;;
+    *)
+      printf 'error: unknown arg: %s (try --help)\n' "$arg" >&2
+      exit 1
+      ;;
+  esac
+done
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEV_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+command -v git >/dev/null 2>&1 || { printf 'error: git required\n' >&2; exit 1; }
+
+log() { printf '→ %s\n' "$*"; }
+ok()  { printf '  %s\n' "$*"; }
+
+log "dev root: $DEV_ROOT"
+log "remote:   ${GIT_BASE}/<repo>.git"
+printf '\n'
+
+cloned=0
+skipped=0
+pulled=0
+failed=0
+
+for name in "${REPOS[@]}"; do
+  dest="$DEV_ROOT/$name"
+  url="${GIT_BASE}/${name}.git"
+
+  if [[ -d "$dest/.git" ]]; then
+    if [[ "$PULL" -eq 1 ]]; then
+      log "pull $name"
+      if git -C "$dest" pull --ff-only; then
+        pulled=$((pulled + 1))
+      else
+        printf '  failed: pull %s\n' "$name" >&2
+        failed=$((failed + 1))
+      fi
+    else
+      ok "skip $name (exists)"
+      skipped=$((skipped + 1))
+    fi
+    continue
+  fi
+
+  if [[ -e "$dest" ]]; then
+    printf 'error: %s exists but is not a git repo\n' "$dest" >&2
+    failed=$((failed + 1))
+    continue
+  fi
+
+  log "clone $name"
+  if git clone "$url" "$dest"; then
+    cloned=$((cloned + 1))
+  else
+    printf '  failed: clone %s\n' "$name" >&2
+    failed=$((failed + 1))
+  fi
+done
+
+printf '\n'
+log "done: cloned=$cloned skipped=$skipped pulled=$pulled failed=$failed"
+log "layout:"
+printf '  %s/\n' "$DEV_ROOT"
+for name in plat5 "${REPOS[@]}"; do
+  if [[ -d "$DEV_ROOT/$name" ]]; then
+    printf '    %s/\n' "$name"
+  fi
+done
+
+[[ "$failed" -eq 0 ]] || exit 1
