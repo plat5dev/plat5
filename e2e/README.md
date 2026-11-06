@@ -4,11 +4,11 @@ Tests that run against a running Plat5 stack through the gateway. Opt-in: they
 skip unless `PLAT5_E2E=1`.
 
 A fresh stack has no config, so the tests apply theirs first:
-[`testdata/config.json`](testdata/config.json), the CLI's init files loaded
-flat as the CLI sends them (`services` as a map): kinds organization → project
-→ environment, the example roles, and `services/identity.yml` and `audit.yml`
-as `plat5 routes generate` writes them, less the routes init leaves out. The
-CLI's `TestInitFilesMatchPlat5` keeps the two the same.
+[`testdata/config.json`](testdata/config.json), a config loaded flat as the
+CLI sends it (`services` as a map): kinds organization → project →
+environment, a set of example roles, and identity's and audit's routes as
+`plat5 routes generate` writes them, less a few the tests leave out. It's the
+tests' own tree, not any template's.
 They dry-run it through the control plane's admin API and apply it with the
 plan's revision as `expect`; a plan with no changes applies nothing, so a rerun
 leaves the stack as it is. The config is the same with audit off: the

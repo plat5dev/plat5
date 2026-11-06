@@ -24,7 +24,7 @@ roles:
 creator_role: admin
 ```
 
-This is the example role set the CLI's templates ship ([`plat5 init`](../cli.md#the-local-stack)), for organization > project > environment, where an environment's routes require `project:*` permissions and its `list_permission` is `project:read` ([kinds](kinds.md)). It's honest about grants: whoever holds `bindings:write` can grant any role, so the one role that holds it is `admin`, with `*`. `admin` also shapes the tree, creating and deleting projects and environments; `developer` and `viewer` work inside it.
+An example role set for organization > project > environment, where an environment's routes require `project:*` permissions and its `list_permission` is `project:read` ([kinds](kinds.md)). It's honest about grants: whoever holds `bindings:write` can grant any role, so the one role that holds it is `admin`, with `*`. `admin` also shapes the tree, creating and deleting projects and environments; `developer` and `viewer` work inside it.
 
 <!-- generated from schema: roles.json#/properties/roles roles.json#/$defs/role_slug roles.json#/$defs/role/properties roles.json#/properties/creator_role -->
 | Field | Rule |

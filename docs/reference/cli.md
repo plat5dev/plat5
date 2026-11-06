@@ -45,8 +45,8 @@ Regenerate after adding or removing a kind, or changing a kind's `path` or `list
 | Command | Does |
 |---------|------|
 | `plat5 init [dir]` | Ask for a starter and the modules. `-y` takes `--template none` and every module. `--no-auth`, `--no-observability` and `--no-operator` turn a module off |
-| `plat5 init [dir] --template none` | Write a project: a `plat5.yml` with `organization`, `project` and `environment` kinds and the example roles, `services/identity.yml` and `services/audit.yml` from the [generator](#generating-identitys-and-audits-routes) less init's choices (no service-account routes on projects; no invite routes and no binding `POST` on environments), `operator.routes.yml` from operator's shipped route list, and `plat5.dev.yml` |
-| `plat5 init [dir] --template <starter>` | The same, plus an API from a starter, a customer console and an operator console ([starters](#starters)) |
+| `plat5 init [dir] --template none` | Write Plat5 alone: a `plat5.yml` with one kind, `organization`, and the roles `admin` and `member`; `services/identity.yml` and `services/audit.yml` as the [generator](#generating-identitys-and-audits-routes) writes them; `operator.routes.yml` from operator's shipped route list; and `plat5.dev.yml`. A `plat5.yml`, service file or `operator.routes.yml` already there is kept |
+| `plat5 init [dir] --template <starter>` | Write a project from a starter instead: its config and API, a customer console and an operator console ([starters](#starters)) |
 | `plat5 init [dir] --project-id <id>` | Write `<id>` as `plat5.dev.yml`'s `project_id`, instead of the directory's name as docker compose makes it a project name: lowercased, other characters dropped, no leading `-` or `_`. The id is lowercase letters, digits, `-` and `_`, starting with a letter or digit, at most 64; another is refused, naming the id it would be |
 | `plat5 init [dir] --sources <dir>` | Run each checkout in `<dir>`, found by its repo's folder name: the modules `plat5`, `auth` and `operator` are built from theirs (`plat5.dev.yml`'s `source`), and the starter and consoles are copied from theirs (`template-<name>`). One without a checkout is its release image or download, and init says so on its line |
 | `plat5 start` | Run the stack, apply `plat5.yml`, seed the dev person, print links and keys. Running it again updates the stack in place |
@@ -67,17 +67,18 @@ Regenerate after adding or removing a kind, or changing a kind's `path` or `list
 
 ### Starters
 
-The starters are `go-fiber-api`, `node-fastify-api` and `bun-effect-api`, the repos `plat5dev/template-<name>`: one API, tasks inside an environment and the person's profile, in Go with Fiber, Node with Fastify, and Bun with Effect. `--template` also takes `owner/repo` on GitHub or a `.tar.gz` URL. A starter adds these to `--template none`'s files:
+The first-party starters are `go-fiber-api`, `node-fastify-api` and `bun-effect-api`, the repos `plat5dev/template-<name>`. `--template` also takes `owner/repo` on GitHub or a `.tar.gz` URL. A starter owns its config: the CLI copies its `plat5.yml` and the service files it lists as they are, kinds, roles and routes, and adds only the customer console's origin. What a starter's API does is in its own README. A starter writes:
 
 | File | What |
 |------|------|
-| `services/<service>.yml` | The starter's service file, listed in `plat5.yml`'s `services` |
+| `plat5.yml` | The starter's, with the customer console's origin, `http://localhost:3001`, in `cors.allowed_origins`, so the browser can call the gateway ([CORS](config/cors.md)). `plat5.dev.yml`'s `app.web` is the same origin. A starter's `plat5.yml` that sets `cors` itself is refused |
+| `services/*.yml` | The service files the starter's `plat5.yml` lists, at the same paths |
 | `api/` | The starter |
-| `customer-console/` | The customer console, `plat5dev/template-customer-console`, which works with every starter. `--no-customer-console` leaves it out, and its origin with it |
-| `plat5.yml` `cors.allowed_origins` | The console's origin, `http://localhost:3001`, so the browser can call the gateway ([CORS](config/cors.md)). `plat5.dev.yml`'s `app.web` is the same origin |
+| `customer-console/` | The customer console, `plat5dev/template-customer-console`, written for the first-party starters. `--no-customer-console` leaves it out, and its origin with it |
 | `operator-console/` | The operator console, `plat5dev/template-operator-console`. `start` runs it with the operator module. `--no-operator-console` leaves it out |
 | `docker-compose.yml` | Includes each app's own compose file. `plat5.dev.yml`'s `app.compose` points at it, so `start` runs the apps |
 | `operator.routes.yml` | Operator's shipped route list, with the starter's operator routes added under its `services`. `start`'s operator gateway mounts it as its `ROUTES_FILE`, as an operator gateway you deploy does |
-| `README.md` | What's in the project, and how to extend it |
+| `README.md` | What's in the project, and how to run it |
+| `plat5.dev.yml` | As with `--template none` |
 
 A starter refuses a directory that has any of these files, before writing anything. Where templates are fetched from, and their manifest: [CLI README](https://github.com/plat5dev/cli#starters).
