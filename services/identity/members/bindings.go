@@ -85,7 +85,7 @@ func (s *Store) CreateBinding(ctx context.Context, snap *feed.Snapshot, nodeID, 
 		return nil, op.Fail(err)
 	}
 	defer w.rollback(ctx)
-	n, err := s.nodes.LockedNode(ctx, w.tx, nodeID)
+	n, err := s.nodes.LockedWritable(ctx, w.tx, nodeID)
 	if err != nil {
 		return nil, op.Reject(err, nodes.ErrNotFound)
 	}
@@ -156,7 +156,7 @@ func (s *Store) PatchBinding(ctx context.Context, snap *feed.Snapshot, nodeID, b
 		return nil, nil, op.Fail(err)
 	}
 	defer w.rollback(ctx)
-	n, err := s.nodes.LockedNode(ctx, w.tx, nodeID)
+	n, err := s.nodes.LockedWritable(ctx, w.tx, nodeID)
 	if err != nil {
 		return nil, nil, op.Reject(err, nodes.ErrNotFound)
 	}

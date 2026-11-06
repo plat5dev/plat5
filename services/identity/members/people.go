@@ -159,6 +159,9 @@ func (s *Store) addMember(ctx context.Context, snap *feed.Snapshot, rootID strin
 	if err != nil {
 		return nil, nil, op.Reject(err, nodes.ErrNotFound)
 	}
+	if err := nodes.Writable(root); err != nil {
+		return nil, nil, op.Reject(err)
+	}
 	if err := checkRole(snap, in.Role, root.Kind, "role"); err != nil {
 		return nil, nil, op.Expected("invalid", err)
 	}

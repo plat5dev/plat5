@@ -159,6 +159,7 @@ func StateError(code, message string, details interface{}) *ApiError {
 const (
 	CodeParentDeleted       = "PARENT_DELETED"
 	CodeGraceExpired        = "GRACE_EXPIRED"
+	CodeNodePurged          = "NODE_PURGED"
 	CodeSlugNotReleasable   = "SLUG_NOT_RELEASABLE"
 	CodeInviteNotRedeemable = "INVITE_NOT_REDEEMABLE"
 	CodeNameOwnedByIdP      = "NAME_OWNED_BY_IDP"
@@ -173,6 +174,11 @@ func ParentDeletedError(parentKind, parentID string) *ApiError {
 // GraceExpiredError: a restore past the grace period.
 func GraceExpiredError() *ApiError {
 	return StateError(CodeGraceExpired, "This can no longer be restored.", nil)
+}
+
+// NodePurgedError: a write to a purged node, or to what hangs off it.
+func NodePurgedError(kind string) *ApiError {
+	return StateError(CodeNodePurged, fmt.Sprintf("This %s was permanently deleted.", kind), nil)
 }
 
 // SlugNotReleasableError: a slug release on a node that isn't a purged root.

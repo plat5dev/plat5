@@ -100,7 +100,7 @@ func (s *Store) CreateInvite(ctx context.Context, snap *feed.Snapshot, nodeID st
 		return nil, op.Fail(err)
 	}
 	defer w.rollback(ctx)
-	n, err := s.nodes.LockedNode(ctx, w.tx, nodeID)
+	n, err := s.nodes.LockedWritable(ctx, w.tx, nodeID)
 	if err != nil {
 		return nil, op.Reject(err, nodes.ErrNotFound)
 	}
@@ -219,11 +219,19 @@ func (s *Store) RevokeInvite(ctx context.Context, nodeID, inviteID string) (bool
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "revoke_invite", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
+	w, err := s.begin(ctx)
+	if err != nil {
+		return false, op.Fail(err)
+	}
+	defer w.rollback(ctx)
+	if _, err := s.nodes.LockedWritable(ctx, w.tx, nodeID); err != nil {
+		return false, op.Reject(err, nodes.ErrNotFound)
+	}
 	if !id.Valid(inviteID) {
 		return false, op.Expected("not found", ErrNotFound)
 	}
 	var exists, changed bool
-	err := s.pool.QueryRow(ctx, `
+	err = w.tx.QueryRow(ctx, `
 		WITH target AS (SELECT id FROM invites WHERE id = $1 AND node_id = $2),
 		     revoked AS (
 		         UPDATE invites SET status = 'revoked'
@@ -236,6 +244,9 @@ func (s *Store) RevokeInvite(ctx context.Context, nodeID, inviteID string) (bool
 	}
 	if !exists {
 		return false, op.Expected("not found", ErrNotFound)
+	}
+	if err := w.commit(ctx); err != nil {
+		return false, op.Fail(err)
 	}
 	op.OK("ok")
 	return changed, nil

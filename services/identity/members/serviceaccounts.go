@@ -77,7 +77,7 @@ func (s *Store) CreateServiceAccount(ctx context.Context, snap *feed.Snapshot, n
 		return nil, nil, op.Fail(err)
 	}
 	defer w.rollback(ctx)
-	n, err := s.nodes.LockedNode(ctx, w.tx, nodeID)
+	n, err := s.nodes.LockedWritable(ctx, w.tx, nodeID)
 	if err != nil {
 		return nil, nil, op.Reject(err, nodes.ErrNotFound)
 	}
@@ -167,6 +167,9 @@ func (s *Store) RenameServiceAccount(ctx context.Context, nodeID, memberID, name
 		return "", nil, op.Fail(err)
 	}
 	defer w.rollback(ctx)
+	if _, err := s.nodes.LockedWritable(ctx, w.tx, nodeID); err != nil {
+		return "", nil, op.Reject(err, nodes.ErrNotFound)
+	}
 	before, principalID, err := s.serviceAccount(ctx, w.tx, nodeID, memberID)
 	if err != nil {
 		return "", nil, op.Reject(err, ErrNotFound)
@@ -281,6 +284,17 @@ func (s *Store) keyPrincipal(ctx context.Context, q dbx.Querier, owner KeyOwner)
 	return principalID, err
 }
 
+// lockedKeyPrincipal is keyPrincipal for a write: a service account's keys
+// are what hangs off its node, so the node is locked and must not be purged.
+func (s *Store) lockedKeyPrincipal(ctx context.Context, w *write, owner KeyOwner) (string, error) {
+	if owner.UserID == "" {
+		if _, err := s.nodes.LockedWritable(ctx, w.tx, owner.NodeID); err != nil {
+			return "", err
+		}
+	}
+	return s.keyPrincipal(ctx, w.tx, owner)
+}
+
 // ListKeys is the owner's keys, revoked ones included, id ascending.
 func (s *Store) ListKeys(ctx context.Context, owner KeyOwner, limit int, startingAfter string) ([]*Key, bool, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_keys", dbx.DefaultTimeout)
@@ -318,16 +332,21 @@ func (s *Store) CreateKey(ctx context.Context, owner KeyOwner, name string) (*Ke
 	if utf8.RuneCountInString(name) > secret.MaxNameLen {
 		return nil, op.Expected("invalid", errors.FieldError("name", "Name is too long."))
 	}
-	principalID, err := s.keyPrincipal(ctx, s.pool, owner)
+	w, err := s.begin(ctx)
 	if err != nil {
-		return nil, op.Reject(err, ErrNotFound)
+		return nil, op.Fail(err)
+	}
+	defer w.rollback(ctx)
+	principalID, err := s.lockedKeyPrincipal(ctx, w, owner)
+	if err != nil {
+		return nil, op.Reject(err, ErrNotFound, nodes.ErrNotFound)
 	}
 	prefix := secret.KeyPrefix(s.brand)
 	key, err := secret.Generate(prefix)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
-	k, err := scanKey(s.pool.QueryRow(ctx, `
+	k, err := scanKey(w.tx.QueryRow(ctx, `
 		INSERT INTO api_keys (id, principal_id, name, key_prefix, key_hash, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING `+keyColumns, id.New(), principalID, name, secret.DisplayPrefix(key, prefix), secret.Hash(key), s.now().UTC()))
@@ -335,6 +354,9 @@ func (s *Store) CreateKey(ctx context.Context, owner KeyOwner, name string) (*Ke
 		return nil, op.Expected("not found", ErrNotFound) // the owner went meanwhile
 	}
 	if err != nil {
+		return nil, op.Fail(err)
+	}
+	if err := w.commit(ctx); err != nil {
 		return nil, op.Fail(err)
 	}
 	k.Secret = key
@@ -348,16 +370,21 @@ func (s *Store) RevokeKey(ctx context.Context, owner KeyOwner, keyID string) (*K
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "revoke_key", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
-	principalID, err := s.keyPrincipal(ctx, s.pool, owner)
+	w, err := s.begin(ctx)
+	if err != nil {
+		return nil, false, op.Fail(err)
+	}
+	defer w.rollback(ctx)
+	principalID, err := s.lockedKeyPrincipal(ctx, w, owner)
 	if err == nil && !id.Valid(keyID) {
 		err = ErrNotFound
 	}
 	if err != nil {
-		return nil, false, op.Reject(err, ErrNotFound)
+		return nil, false, op.Reject(err, ErrNotFound, nodes.ErrNotFound)
 	}
 	var k Key
 	var changed bool
-	err = s.pool.QueryRow(ctx, `
+	err = w.tx.QueryRow(ctx, `
 		UPDATE api_keys k SET revoked_at = COALESCE(k.revoked_at, $3)
 		FROM (SELECT id, revoked_at FROM api_keys WHERE id = $1 AND principal_id = $2 FOR UPDATE) old
 		WHERE k.id = old.id
@@ -367,6 +394,9 @@ func (s *Store) RevokeKey(ctx context.Context, owner KeyOwner, keyID string) (*K
 		return nil, false, op.Expected("not found", ErrNotFound)
 	}
 	if err != nil {
+		return nil, false, op.Fail(err)
+	}
+	if err := w.commit(ctx); err != nil {
 		return nil, false, op.Fail(err)
 	}
 	op.OK("ok")

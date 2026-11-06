@@ -167,7 +167,7 @@ func (s *Store) CreateTx(ctx context.Context, tx pgx.Tx, snap *feed.Snapshot, in
 			return nil, err
 		}
 	} else {
-		parent, err := s.LockedNode(ctx, tx, in.ParentID)
+		parent, err := s.LockedWritable(ctx, tx, in.ParentID)
 		if err != nil {
 			return nil, err
 		}
@@ -336,14 +336,11 @@ func (s *Store) UpdateDisplayName(ctx context.Context, nodeID, name string) (str
 		return "", nil, op.Fail(err)
 	}
 	defer tx.Rollback(ctx)
-	var before string
-	err = tx.QueryRow(ctx, `SELECT display_name FROM nodes WHERE id = $1 FOR UPDATE`, nodeID).Scan(&before)
-	if dbx.IsNoRows(err) {
-		return "", nil, op.Expected("not found", ErrNotFound)
-	}
+	locked, err := s.LockedWritable(ctx, tx, nodeID)
 	if err != nil {
-		return "", nil, op.Fail(err)
+		return "", nil, op.Reject(err, ErrNotFound)
 	}
+	before := locked.DisplayName
 	n, err := scanNode(tx.QueryRow(ctx, `
 		UPDATE nodes SET display_name = $2, updated_at = CASE WHEN display_name = $2 THEN updated_at ELSE $3 END
 		WHERE id = $1 RETURNING `+nodeColumns, nodeID, name, s.now().UTC()))
@@ -782,6 +779,29 @@ func (s *Store) LockedNode(ctx context.Context, tx pgx.Tx, nodeID string, alsoLo
 		return nil, err
 	}
 	return scanNode(tx.QueryRow(ctx, `SELECT `+nodeColumns+` FROM nodes WHERE id = $1`, nodeID))
+}
+
+// LockedWritable is LockedNode for a write to the node or to what hangs off
+// it: a purged node is read-only, 409 NODE_PURGED
+// (docs/concepts/lifecycle.md#deleting-restoring-and-purging). Purge holds the
+// tree's lock, so the status read here can't change before the write commits.
+func (s *Store) LockedWritable(ctx context.Context, tx pgx.Tx, nodeID string, alsoLock ...string) (*Node, error) {
+	n, err := s.LockedNode(ctx, tx, nodeID, alsoLock...)
+	if err != nil {
+		return nil, err
+	}
+	if err := Writable(n); err != nil {
+		return nil, err
+	}
+	return n, nil
+}
+
+// Writable refuses a write to a purged node, read under its tree's lock.
+func Writable(n *Node) error {
+	if n.Status == StatusPurged {
+		return errors.NodePurgedError(n.Kind)
+	}
+	return nil
 }
 
 // LockTrees takes the per-tree locks in a fixed order, so two writers never
