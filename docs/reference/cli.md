@@ -47,7 +47,7 @@ Regenerate after adding or removing a kind, or changing a kind's `path` or `list
 | `plat5 init [dir]` | Ask for a starter and the modules. `-y` takes `--template none` and every module. `--no-auth`, `--no-observability` and `--no-operator` turn a module off |
 | `plat5 init [dir] --template none` | Write a project: a `plat5.yml` with `organization`, `project` and `environment` kinds and the example roles, `services/identity.yml` and `services/audit.yml` from the [generator](#generating-identitys-and-audits-routes) less init's choices (no service-account routes on projects; no invite routes and no binding `POST` on environments), `operator.routes.yml` from operator's shipped route list, and `plat5.dev.yml` |
 | `plat5 init [dir] --template <starter>` | The same, plus an API from a starter, a customer console and an operator console ([starters](#starters)) |
-| `plat5 init [dir] --project-id <id>` | Write `<id>` as `plat5.dev.yml`'s `project_id`, instead of the directory's name. The id is lowercase letters, digits, `-` and `_`, at most 64; another is refused, naming the id it would be |
+| `plat5 init [dir] --project-id <id>` | Write `<id>` as `plat5.dev.yml`'s `project_id`, instead of the directory's name as docker compose makes it a project name: lowercased, other characters dropped, no leading `-` or `_`. The id is lowercase letters, digits, `-` and `_`, starting with a letter or digit, at most 64; another is refused, naming the id it would be |
 | `plat5 init [dir] --sources <dir>` | Run each checkout in `<dir>`, found by its repo's folder name: the modules `plat5`, `auth` and `operator` are built from theirs (`plat5.dev.yml`'s `source`), and the starter and consoles are copied from theirs (`template-<name>`). One without a checkout is its release image or download, and init says so on its line |
 | `plat5 start` | Run the stack, apply `plat5.yml`, seed the dev person, print links and keys. Running it again updates the stack in place |
 | `plat5 stop` | Stop the stack and your app. Data is kept |
@@ -55,7 +55,7 @@ Regenerate after adding or removing a kind, or changing a kind's `path` or `list
 
 `init` prints where Plat5, each module and each app came from: a checkout's path, a module's release image tag, or a template's repo, ref and commit.
 
-**Project id.** It names the compose project, its volumes and the CLI's state for the project, and every command reads it from `plat5.dev.yml`'s `project_id`. One folder per id, and how the CLI refuses another: [CLI README](https://github.com/plat5dev/cli#state).
+**Project id.** It names the compose projects, Plat5's and your app's, their volumes and the CLI's state for the project, and every command reads it from `plat5.dev.yml`'s `project_id`. One folder per id, and how the CLI refuses another: [CLI README](https://github.com/plat5dev/cli#state).
 
 `plat5.dev.yml` holds how `start` runs the project on your machine: image versions, modules, your app's compose file, the operator module's route file and console, ports. A deployment never reads it, and it holds nothing that's in `plat5.yml`. Its shape is the CLI's: [CLI README](https://github.com/plat5dev/cli#plat5devyml).
 
