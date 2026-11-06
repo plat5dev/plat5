@@ -86,7 +86,12 @@ func (s *Store) CreateRoot(ctx context.Context, snap *feed.Snapshot, in nodes.Cr
 
 	var memberID string
 	if k, _ := snap.Kind(n.Kind); u != nil && k.BindCreator {
-		if memberID, err = s.insertMember(ctx, w, u.principalID, PrincipalPerson, n.ID); err != nil {
+		memberID, err = s.insertMember(ctx, w, u.principalID, PrincipalPerson, n.ID)
+		if err == errPrincipalGone {
+			// The account was deleted meanwhile: the header names no active user.
+			return nil, "", op.Expected("bad caller", ErrBadCaller)
+		}
+		if err != nil {
 			return nil, "", op.Fail(err)
 		}
 		if _, err := s.insertBinding(ctx, w, memberID, n.ID, snap.CreatorRole); err != nil {

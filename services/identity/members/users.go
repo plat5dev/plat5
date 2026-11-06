@@ -179,6 +179,24 @@ func (s *Store) SetName(ctx context.Context, snap *feed.Snapshot, userID string,
 	return before, u, nil
 }
 
+// removeMembers removes each active member of memberIDs, whose trees the
+// caller has locked.
+func (s *Store) removeMembers(ctx context.Context, w *write, memberIDs []string) error {
+	for _, mid := range memberIDs {
+		row, err := s.lockedMember(ctx, w, mid)
+		if err != nil {
+			return err
+		}
+		if row.removed {
+			continue
+		}
+		if err := s.removeMember(ctx, w, row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // DeleteAccount deletes a person (docs/concepts/lifecycle.md#deleting-an-account):
 // every member they have is removed, with member.removed per tree, and the
 // principal goes with its IdP links and personal keys, with user.deleted.
@@ -223,12 +241,41 @@ func (s *Store) DeleteAccount(ctx context.Context, userID string) (bool, error) 
 	if err != nil {
 		return false, op.Fail(err)
 	}
-	for _, mid := range memberIDs {
-		row, err := s.lockedMember(ctx, w, mid)
-		if err != nil {
+	if err := s.removeMembers(ctx, w, memberIDs); err != nil {
+		return false, op.Fail(err)
+	}
+	// A join into a tree not locked above can still insert a member. Locking
+	// the principal waits for any join that already inserted one (its foreign
+	// key holds the row), and makes any later join wait and then fail the
+	// foreign key once this commits. Members that appeared meanwhile are
+	// removed too, with their trees locked.
+	if _, err := w.tx.Exec(ctx, `SELECT 1 FROM principals WHERE id = $1 FOR UPDATE`, u.principalID); err != nil {
+		return false, op.Fail(err)
+	}
+	rows, err = w.tx.Query(ctx, `
+		SELECT root_id, id FROM members WHERE principal_id = $1 AND removed_at IS NULL ORDER BY id
+	`, u.principalID)
+	if err != nil {
+		return false, op.Fail(err)
+	}
+	late, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) ([2]string, error) {
+		var out [2]string
+		err := r.Scan(&out[0], &out[1])
+		return out, err
+	})
+	if err != nil {
+		return false, op.Fail(err)
+	}
+	if len(late) > 0 {
+		lateRoots := make([]string, len(late))
+		lateIDs := make([]string, len(late))
+		for i, m := range late {
+			lateRoots[i], lateIDs[i] = m[0], m[1]
+		}
+		if err := nodes.LockTrees(ctx, w.tx, lateRoots); err != nil {
 			return false, op.Fail(err)
 		}
-		if err := s.removeMember(ctx, w, row); err != nil {
+		if err := s.removeMembers(ctx, w, lateIDs); err != nil {
 			return false, op.Fail(err)
 		}
 	}

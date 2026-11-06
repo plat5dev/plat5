@@ -57,7 +57,9 @@ CREATE TABLE members (
     principal     TEXT NOT NULL CHECK (principal IN ('person', 'service_account')),
     root_id       TEXT NOT NULL REFERENCES nodes (id),
     removed_at    TIMESTAMPTZ,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Only a removed member loses its principal: an active one always has one.
+    CHECK (removed_at IS NOT NULL OR principal_id IS NOT NULL)
 );
 CREATE UNIQUE INDEX members_active_uidx ON members (principal_id, root_id) WHERE removed_at IS NULL;
 CREATE INDEX members_root_idx ON members (root_id) WHERE removed_at IS NULL;

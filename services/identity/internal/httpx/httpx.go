@@ -3,6 +3,7 @@ package httpx
 import (
 	"context"
 	stderrors "errors"
+	"mime"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,32 @@ const (
 	DefaultListLimit = 50
 	MaxListLimit     = 100
 )
+
+// IsJSON reports whether the request says its body is JSON: a Content-Type
+// of application/json, with or without parameters such as charset.
+func IsJSON(c fiber.Ctx) bool {
+	mediaType, _, err := mime.ParseMediaType(string(c.Request().Header.ContentType()))
+	return err == nil && mediaType == fiber.MIMEApplicationJSON
+}
+
+// Body decodes a required JSON body into out. A body not sent as
+// application/json, an empty one, or one that isn't JSON is 400
+// INVALID_REQUEST (docs/reference/errors.md#which-status).
+func Body(c fiber.Ctx, out any) error {
+	if !IsJSON(c) || len(c.Body()) == 0 {
+		return errors.InvalidRequestError()
+	}
+	return c.Bind().Body(out)
+}
+
+// OptionalBody is Body for a route whose body may be left out: an empty body
+// leaves out as it is, whatever the Content-Type.
+func OptionalBody(c fiber.Ctx, out any) error {
+	if len(c.Body()) == 0 {
+		return nil
+	}
+	return Body(c, out)
+}
 
 // PathParam copies a route parameter. Fiber's param strings alias the request
 // buffer, which is reused on the next request.

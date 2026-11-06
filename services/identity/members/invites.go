@@ -147,7 +147,7 @@ func ExpiresInError() error {
 // MaxUsesError is the 422 for a max_uses that's neither a positive whole
 // number nor null.
 func MaxUsesError() error {
-	return errors.FieldError("max_uses", "Max uses must be at least 1.")
+	return errors.FieldError("max_uses", "Max uses must be a number of at least 1, or null for unlimited.")
 }
 
 // checkGrants checks an invite's grants: only on a root, each on a distinct
@@ -321,7 +321,13 @@ func (s *Store) Redeem(ctx context.Context, userID, token string) (*Redeemed, er
 		return nil, op.Fail(err)
 	}
 	if out.MemberID == "" {
-		if out.MemberID, err = s.insertMember(ctx, w, u.principalID, PrincipalPerson, n.RootID); err != nil {
+		out.MemberID, err = s.insertMember(ctx, w, u.principalID, PrincipalPerson, n.RootID)
+		if err == errPrincipalGone {
+			// The account was deleted meanwhile: the user is gone, as if it
+			// had been before the redeem.
+			return nil, op.Expected("account deleted", ErrNotFound)
+		}
+		if err != nil {
 			return nil, op.Fail(err)
 		}
 		out.MemberCreated = true

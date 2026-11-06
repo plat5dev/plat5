@@ -44,6 +44,9 @@ var (
 	// naming no active member of the tree, or no active user: a malformed
 	// request.
 	ErrBadCaller = stderrors.New("the caller header names no active member or user")
+	// errPrincipalGone is a member insert whose principal was deleted while
+	// the insert waited on it: an account deletion committed first.
+	errPrincipalGone = stderrors.New("the principal was deleted")
 )
 
 // Store writes everything about who can reach a node. Writes that touch a
@@ -157,6 +160,11 @@ func (s *Store) insertMember(ctx context.Context, w *write, principalID, princip
 	if _, err := w.tx.Exec(ctx, `
 		INSERT INTO members (id, principal_id, principal, root_id, created_at) VALUES ($1, $2, $3, $4, $5)
 	`, memberID, principalID, principal, rootID, s.now().UTC()); err != nil {
+		// The tree is locked, so the foreign key that can fail is the
+		// principal's: DeleteAccount held it and deleted it.
+		if dbx.IsForeignKeyViolation(err) {
+			return "", errPrincipalGone
+		}
 		return "", err
 	}
 	w.event(lifecycle.MemberEvent(lifecycle.TypeMemberCreated, memberID, rootID, principal))

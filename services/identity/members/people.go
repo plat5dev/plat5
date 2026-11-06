@@ -132,6 +132,16 @@ type AddMemberInput struct {
 // AddMember makes the person behind an IdP subject a member of a root, with
 // role bound at the root. The person is created if the subject is new.
 func (s *Store) AddMember(ctx context.Context, snap *feed.Snapshot, rootID string, in AddMemberInput) (*Member, *Binding, error) {
+	m, b, err := s.addMember(ctx, snap, rootID, in)
+	if err == errPrincipalGone {
+		// The person's account was deleted while this add waited on it, and
+		// its IdP link went with it: the subject is new again.
+		m, b, err = s.addMember(ctx, snap, rootID, in)
+	}
+	return m, b, err
+}
+
+func (s *Store) addMember(ctx context.Context, snap *feed.Snapshot, rootID string, in AddMemberInput) (*Member, *Binding, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "add_member", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
@@ -164,6 +174,9 @@ func (s *Store) AddMember(ctx context.Context, snap *feed.Snapshot, rootID strin
 		return nil, nil, op.Expected("exists", errors.ConflictError("This person is already a member.", "member_id", existing))
 	}
 	memberID, err := s.insertMember(ctx, w, principalID, PrincipalPerson, root.ID)
+	if err == errPrincipalGone {
+		return nil, nil, op.Expected("account deleted", err)
+	}
 	if err != nil {
 		return nil, nil, op.Fail(err)
 	}

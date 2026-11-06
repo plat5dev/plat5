@@ -240,7 +240,7 @@ type CreateNodeRequest struct {
 
 func (h *Handler) CreateChild(c fiber.Ctx) error {
 	var req CreateNodeRequest
-	if err := c.Bind().Body(&req); err != nil {
+	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
 	in := nodes.CreateInput{Kind: httpx.PathParam(c, "kind"), DisplayName: req.DisplayName, Slug: req.Slug}
@@ -259,7 +259,7 @@ func (h *Handler) CreateChild(c fiber.Ctx) error {
 
 func (h *Handler) CreateRoot(c fiber.Ctx) error {
 	var req CreateNodeRequest
-	if err := c.Bind().Body(&req); err != nil {
+	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
 	in := nodes.CreateInput{Kind: httpx.PathParam(c, "kind"), DisplayName: req.DisplayName, Slug: req.Slug}
@@ -340,7 +340,7 @@ func (h *Handler) ListBindings(c fiber.Ctx) error {
 
 func (h *Handler) CreateBinding(c fiber.Ctx) error {
 	var req CreateBindingRequest
-	if err := c.Bind().Body(&req); err != nil {
+	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
 	b, err := h.store.CreateBinding(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"),
@@ -355,7 +355,7 @@ func (h *Handler) CreateBinding(c fiber.Ctx) error {
 
 func (h *Handler) PatchBinding(c fiber.Ctx) error {
 	var req PatchBindingRequest
-	if err := c.Bind().Body(&req); err != nil {
+	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
 	bindingID := httpx.PathParam(c, "binding_id")
@@ -418,7 +418,7 @@ func (h *Handler) ListMembers(c fiber.Ctx) error {
 
 func (h *Handler) AddMember(c fiber.Ctx) error {
 	var req AddMemberRequest
-	if err := c.Bind().Body(&req); err != nil {
+	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
 	in := AddMemberInput{Role: req.Role}
@@ -502,7 +502,7 @@ func (h *Handler) SetName(c fiber.Ctx) error {
 	var req struct {
 		Name json.RawMessage `json:"name"`
 	}
-	if err := c.Bind().Body(&req); err != nil {
+	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
 	if req.Name == nil {
@@ -541,7 +541,7 @@ func (h *Handler) SetStatus(c fiber.Ctx) error {
 	var req struct {
 		Status string `json:"status"`
 	}
-	if err := c.Bind().Body(&req); err != nil {
+	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
 	userID := httpx.PathParam(c, "user_id")
@@ -597,7 +597,7 @@ func (h *Handler) ListServiceAccounts(c fiber.Ctx) error {
 
 func (h *Handler) CreateServiceAccount(c fiber.Ctx) error {
 	var req CreateServiceAccountRequest
-	if err := c.Bind().Body(&req); err != nil {
+	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
 	sa, b, err := h.store.CreateServiceAccount(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), req.Name, req.Role)
@@ -622,7 +622,7 @@ func (h *Handler) RenameServiceAccount(c fiber.Ctx) error {
 	var req struct {
 		Name *string `json:"name"`
 	}
-	if err := c.Bind().Body(&req); err != nil {
+	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
 	if req.Name == nil {
@@ -683,10 +683,8 @@ func (h *Handler) CreateKey(c fiber.Ctx) error {
 	var req struct {
 		Name string `json:"name"`
 	}
-	if len(c.Body()) > 0 {
-		if err := c.Bind().Body(&req); err != nil {
-			return err
-		}
+	if err := httpx.OptionalBody(c, &req); err != nil {
+		return err
 	}
 	k, err := h.store.CreateKey(c.Context(), keyOwner(c), req.Name)
 	if err != nil {
@@ -764,7 +762,7 @@ func (h *Handler) ListInvites(c fiber.Ctx) error {
 
 func (h *Handler) CreateInvite(c fiber.Ctx) error {
 	var req CreateInviteRequest
-	if err := c.Bind().Body(&req); err != nil {
+	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
 	in, err := req.read()
@@ -798,7 +796,7 @@ func (h *Handler) Redeem(c fiber.Ctx) error {
 	var req struct {
 		Token string `json:"token"`
 	}
-	if err := c.Bind().Body(&req); err != nil {
+	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
 	userID := httpx.PathParam(c, "user_id")

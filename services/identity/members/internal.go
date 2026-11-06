@@ -45,7 +45,7 @@ type AdmitResponse struct {
 
 func (h *Handler) Admit(c fiber.Ctx) error {
 	var req AdmitRequest
-	if err := c.Bind().Body(&req); err != nil {
+	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
 	in := AdmitInput{Credential: req.Credential, AllowDeleted: req.AllowDeleted}

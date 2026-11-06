@@ -73,7 +73,7 @@ func (h *Handler) MountInternal(r fiber.Router) {
 
 func (h *Handler) PlanCounts(c fiber.Ctx) error {
 	var req PlanRequest
-	if err := c.Bind().Body(&req); err != nil {
+	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
 	out, err := h.store.PlanCounts(c.Context(), req)

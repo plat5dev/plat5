@@ -275,7 +275,13 @@ func FromError(err error) *ApiError {
 	case *ApiError:
 		apiErr = e
 	case *fiber.BindError:
-		apiErr = FieldError(e.Field, FallbackValidation)
+		// A field of the wrong type is invalid input; a body that can't be
+		// read at all names no field and is malformed.
+		if e.Field == "" {
+			apiErr = InvalidRequestError()
+		} else {
+			apiErr = FieldError(e.Field, FallbackValidation)
+		}
 	case *fiber.Error:
 		switch e.Code {
 		case fiber.StatusBadRequest:
@@ -293,7 +299,11 @@ func FromError(err error) *ApiError {
 		case fiber.StatusServiceUnavailable:
 			apiErr = ServiceUnavailableError()
 		default:
-			apiErr = InternalError()
+			// A client error is never a 500: any other 4xx from Fiber, such as
+			// its 422 for a body it can't bind, is a malformed request.
+			if e.Code >= 400 && e.Code < 500 {
+				apiErr = InvalidRequestError()
+			}
 		}
 	}
 	return apiErr

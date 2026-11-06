@@ -40,7 +40,7 @@ type evaluationsResponse struct {
 // Evaluation is POST /access/v1/evaluation: one decision.
 func (h *Handler) Evaluation(c fiber.Ctx) error {
 	echoRequestID(c)
-	body, err := readObject(c.Body())
+	body, err := readBody(c)
 	if err != nil {
 		return err
 	}
@@ -55,7 +55,7 @@ func (h *Handler) Evaluation(c fiber.Ctx) error {
 // subject, action and resource as defaults. Without items it's one decision.
 func (h *Handler) Evaluations(c fiber.Ctx) error {
 	echoRequestID(c)
-	body, err := readObject(c.Body())
+	body, err := readBody(c)
 	if err != nil {
 		return err
 	}
@@ -277,6 +277,15 @@ func readItems(raw json.RawMessage) ([]json.RawMessage, error) {
 }
 
 // readObject reads a request body that must be a JSON object.
+// readBody reads the request body as a JSON object. A body not sent as
+// application/json isn't one.
+func readBody(c fiber.Ctx) (map[string]json.RawMessage, error) {
+	if !httpx.IsJSON(c) {
+		return nil, badRequest("The body must be a JSON object.")
+	}
+	return readObject(c.Body())
+}
+
 func readObject(body []byte) (map[string]json.RawMessage, error) {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(body, &obj); err != nil || obj == nil {

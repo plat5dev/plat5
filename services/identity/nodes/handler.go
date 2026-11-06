@@ -148,7 +148,7 @@ func (h *Handler) Update(c fiber.Ctx) error {
 	ctx := c.Context()
 	nodeID := httpx.PathParam(c, "node_id")
 	var req UpdateRequest
-	if err := c.Bind().Body(&req); err != nil {
+	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
 	if req.DisplayName == nil {
