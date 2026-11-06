@@ -25,6 +25,11 @@ made for these tests and trusted nowhere else. Nothing else may listen on `5401`
 route and a public route, which route checks match but never call, and applies
 the e2e config again when it ends.
 
+[`compose.yml`](compose.yml) runs the gateway's failed-auth IP limiter at 20
+requests per 5 seconds. `TestDeniedAndMissingAnswerAlike` fills it with missing
+slugs, checks that a forbidden project and a missing one then answer alike, and
+waits the window out, so the tests after it start with an empty bucket.
+
 `TestEvaluations` (the evaluation API), and `TestUserRoutesKeysInvites` and
 the `TestEventLog` tests (the lifecycle log) call identity's internal port
 directly, as a service on the private network would. [`compose.yml`](compose.yml) publishes it for the

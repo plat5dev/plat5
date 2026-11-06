@@ -1,9 +1,14 @@
 # For the e2e only: publishes identity's internal port on loopback, so the
 # tests can call its evaluation API and lifecycle log as a service on the
-# private network would.
+# private network would, and runs the failed-auth IP limiter low and short, so
+# a test can fill it and wait it out.
 # Internal ports are never published in a deployment
 # (docs/reference/api/internal.md).
 services:
   identity:
     ports:
       - "127.0.0.1:5404:3001"
+  gateway:
+    environment:
+      RATE_LIMIT_AUTH_FAILURE_REQUESTS: "20"
+      RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS: "5"
