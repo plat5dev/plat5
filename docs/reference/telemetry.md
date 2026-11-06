@@ -85,7 +85,7 @@ If both `OTEL_RESOURCE_ATTRIBUTES` and a convenience var set the same attribute,
 
 `service.version` is the release the image was built for: the build's `VERSION` argument, compiled into the binary. A build without one reports `dev`. `OTEL_SERVICE_VERSION` overrides it, and so does `service.version` in `OTEL_RESOURCE_ATTRIBUTES`; nothing else sets it.
 
-`DEPLOYMENT_ENV` only sets this telemetry attribute; it does not change Auth behavior. Auth's dev-only conveniences (`POST /dev/token`, logging login codes without SMTP) are enabled only by `AUTH_DEV_MODE=true`.
+`DEPLOYMENT_ENV` only sets this telemetry attribute; it changes no service's behavior. What turns on Auth's dev conveniences is Auth's: [Auth `docs/env.md`](https://github.com/plat5dev/auth/blob/master/docs/env.md).
 
 ### Other
 
