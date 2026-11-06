@@ -6,7 +6,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use opentelemetry::trace::Status;
+use opentelemetry::trace::{Status, TraceContextExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing::Instrument;
@@ -116,12 +116,15 @@ async fn http_observability(request: Request, next: Next) -> Response {
         metrics::record_request(route_label, &method, status, duration_secs);
 
         tracing::Span::current().record("http.response.status_code", status);
+        let (trace_id, span_id) = trace_ids();
 
         if status >= 500 {
             let error_type = if status == 503 { "network" } else { "internal" };
             tracing::Span::current().record("error.type", error_type);
             tracing::Span::current().set_status(Status::error(""));
             tracing::error!(
+                trace_id = trace_id.as_deref(),
+                span_id = span_id.as_deref(),
                 route = %route_label,
                 method = %method,
                 status = status,
@@ -133,6 +136,8 @@ async fn http_observability(request: Request, next: Next) -> Response {
             );
         } else {
             tracing::info!(
+                trace_id = trace_id.as_deref(),
+                span_id = span_id.as_deref(),
                 route = %route_label,
                 method = %method,
                 status = status,
@@ -146,6 +151,20 @@ async fn http_observability(request: Request, next: Next) -> Response {
     }
     .instrument(span)
     .await
+}
+
+/// The current span's `trace_id` and `span_id`, when it's in a trace
+/// (docs/reference/telemetry.md#common-fields).
+fn trace_ids() -> (Option<String>, Option<String>) {
+    let cx = tracing::Span::current().context();
+    let sc = cx.span().span_context().clone();
+    if !sc.is_valid() {
+        return (None, None);
+    }
+    (
+        Some(sc.trace_id().to_string()),
+        Some(sc.span_id().to_string()),
+    )
 }
 
 /// A feed read is a long-poll: up to 25 seconds, over and over, per reader. As a
@@ -585,6 +604,52 @@ mod span_tests {
     async fn no_query_no_url_query() {
         let a = attrs(&serve("/ok").await);
         assert!(!a.contains_key("url.query"), "{a:?}");
+    }
+
+    /// The request line, inside a trace: its ids, and the error fields on a 5xx only.
+    async fn request_line(uri: &str) -> (serde_json::Value, SpanData) {
+        let buf = crate::telemetry::tests::Buffer::default();
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = tracing_subscriber::registry()
+            .with(crate::telemetry::json_layer(buf.clone()))
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let app = Router::new()
+            .route("/ok", get(|| async { StatusCode::OK }))
+            .route(
+                "/broken",
+                get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+            )
+            .route_layer(middleware::from_fn(http_observability));
+        app.oneshot(Request::get(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        provider.force_flush().unwrap();
+        let mut spans = exporter.get_finished_spans().unwrap();
+        let out = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 1, "{out}");
+        (serde_json::from_str(lines[0]).unwrap(), spans.remove(0))
+    }
+
+    #[tokio::test]
+    async fn request_line_fields() {
+        let (line, span) = request_line("/ok").await;
+        assert_eq!(line["level"], "info");
+        assert_eq!(line["message"], "request completed");
+        assert_eq!(line["route"], "/ok");
+        assert_eq!(line["status"], 200);
+        assert_eq!(line["trace_id"], span.span_context.trace_id().to_string());
+        assert_eq!(line["span_id"], span.span_context.span_id().to_string());
+        assert!(line.get("error_type").is_none(), "{line}");
+
+        let (line, _) = request_line("/broken").await;
+        assert_eq!(line["level"], "error");
+        assert_eq!(line["status"], 500);
+        assert_eq!(line["error_type"], "internal");
     }
 
     #[tokio::test]

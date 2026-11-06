@@ -12,9 +12,16 @@ use opentelemetry_sdk::Resource;
 use std::env;
 use std::time::Duration;
 
+use serde_json::Value;
+use std::fmt;
+use tracing::field::{Field, Visit};
+use tracing::{Event, Level, Subscriber};
 use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::fmt::format::Writer;
+use tracing_subscriber::fmt::time::{FormatTime, SystemTime};
+use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, MakeWriter};
 use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 
@@ -54,17 +61,114 @@ impl Drop for TelemetryGuard {
 }
 
 /// The JSON log layer: one JSON object per line, on `writer`.
-fn json_layer<W>(writer: W) -> impl Layer<Registry> + Send + Sync
+pub(crate) fn json_layer<W>(writer: W) -> impl Layer<Registry> + Send + Sync
 where
     W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
 {
     tracing_subscriber::fmt::layer()
-        .json()
-        .with_target(false)
-        .with_current_span(false)
-        .with_span_list(false)
-        .flatten_event(true)
+        .event_format(JsonLine)
         .with_writer(writer)
+}
+
+/// A log line as docs/reference/telemetry.md#logs has it: `timestamp`, `level`
+/// (`debug`, `info`, `warn` or `error`), `message`, then the event's fields in the
+/// order they were written.
+struct JsonLine;
+
+impl<S, N> FormatEvent<S, N> for JsonLine
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        _ctx: &FmtContext<'_, S, N>,
+        mut writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> fmt::Result {
+        let mut timestamp = String::new();
+        SystemTime.format_time(&mut Writer::new(&mut timestamp))?;
+        let mut fields = LineFields::default();
+        event.record(&mut fields);
+        let mut line = vec![
+            ("timestamp", Value::String(timestamp)),
+            (
+                "level",
+                Value::String(level(event.metadata().level()).into()),
+            ),
+        ];
+        if let Some(message) = fields.message {
+            line.push(("message", Value::String(message)));
+        }
+        line.extend(fields.rest);
+        let mut out = String::from("{");
+        for (i, (key, value)) in line.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str(&Value::String((*key).to_string()).to_string());
+            out.push(':');
+            out.push_str(&value.to_string());
+        }
+        out.push('}');
+        writeln!(writer, "{out}")
+    }
+}
+
+/// The contract's four levels. A trace event, below the default filter, is `debug`.
+fn level(level: &Level) -> &'static str {
+    match *level {
+        Level::ERROR => "error",
+        Level::WARN => "warn",
+        Level::INFO => "info",
+        _ => "debug",
+    }
+}
+
+#[derive(Default)]
+struct LineFields {
+    message: Option<String>,
+    rest: Vec<(&'static str, Value)>,
+}
+
+impl LineFields {
+    fn put(&mut self, field: &Field, value: Value) {
+        if field.name() == "message" {
+            self.message = Some(match value {
+                Value::String(s) => s,
+                other => other.to_string(),
+            });
+        } else {
+            self.rest.push((field.name(), value));
+        }
+    }
+}
+
+impl Visit for LineFields {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.put(field, Value::String(value.to_string()));
+    }
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.put(field, Value::Bool(value));
+    }
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.put(field, value.into());
+    }
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.put(field, value.into());
+    }
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        self.put(
+            field,
+            serde_json::Number::from_f64(value).map_or(Value::Null, Value::Number),
+        );
+    }
+    fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
+        self.put(field, Value::String(value.to_string()));
+    }
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        self.put(field, Value::String(format!("{value:?}")));
+    }
 }
 
 /// Init tracing + optional OTLP per docs/reference/telemetry.md.
@@ -440,7 +544,7 @@ fn exporter_includes_otlp(list: Option<&[String]>, default_when_unset: bool) -> 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -578,7 +682,7 @@ mod tests {
     }
 
     #[derive(Clone, Default)]
-    struct Buffer(Arc<Mutex<Vec<u8>>>);
+    pub(crate) struct Buffer(pub(crate) Arc<Mutex<Vec<u8>>>);
 
     impl std::io::Write for Buffer {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -608,6 +712,45 @@ mod tests {
         }
     }
 
+    /// Each line is one JSON object: `timestamp`, the level in lowercase, `message`,
+    /// then the fields as written (docs/reference/telemetry.md#logs).
+    #[test]
+    fn lines_have_the_contract_fields_and_lowercase_levels() {
+        let buf = Buffer::default();
+        let subscriber = tracing_subscriber::registry().with(json_layer(buf.clone()));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::error!(status = 503u16, route = %"/orgs/{organization}", "e");
+            tracing::warn!(error = %"refused", "w");
+            tracing::info!(duration_ms = 1.5, absent = None::<&str>, "i");
+            tracing::debug!("d");
+        });
+        let out = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 4, "{out}");
+        let parsed: Vec<serde_json::Value> = lines
+            .iter()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let levels: Vec<&str> = parsed
+            .iter()
+            .map(|l| l["level"].as_str().unwrap())
+            .collect();
+        assert_eq!(levels, ["error", "warn", "info", "debug"]);
+        assert!(lines[0].starts_with(r#"{"timestamp":""#), "{}", lines[0]);
+        assert!(
+            lines[0].contains(
+                r#""level":"error","message":"e","status":503,"route":"/orgs/{organization}"}"#
+            ),
+            "{}",
+            lines[0]
+        );
+        let ts = parsed[0]["timestamp"].as_str().unwrap();
+        assert!(ts.ends_with('Z') && ts.contains('T'), "{ts}");
+        assert_eq!(parsed[1]["error"], "refused");
+        assert_eq!(parsed[2]["duration_ms"], 1.5);
+        assert!(parsed[2].get("absent").is_none(), "{}", lines[2]);
+    }
+
     /// A failed export is one JSON line on the service's log.
     #[tokio::test]
     async fn failed_export_is_a_json_line() {
@@ -622,7 +765,7 @@ mod tests {
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines.len(), 1, "{out}");
         let line: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
-        assert_eq!(line["level"], "ERROR");
+        assert_eq!(line["level"], "error");
         assert_eq!(line["message"], "telemetry export failed");
         assert_eq!(line["signal"], "traces");
         assert_eq!(
