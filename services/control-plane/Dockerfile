@@ -55,7 +55,9 @@ COPY --from=schema . /schema
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
 COPY migrations ./migrations
-RUN cargo build --release
+# The release this binary reports as service.version (option_env!("VERSION")); dev without one.
+ARG VERSION=dev
+RUN VERSION="${VERSION}" cargo build --release
 
 FROM debian:bookworm-slim AS prod
 

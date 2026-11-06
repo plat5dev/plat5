@@ -20,6 +20,7 @@ use crate::error::AppError;
 use crate::metrics;
 use crate::schema;
 use crate::store::{Reader, Report};
+use crate::telemetry::redact_query;
 use crate::AppState;
 
 /// How long an internal read with `after` waits for a newer revision.
@@ -67,6 +68,14 @@ async fn http_observability(request: Request, next: Next) -> Response {
     let start = Instant::now();
     let method = request.method().as_str().to_string();
     let path = request.uri().path().to_string();
+    // The scheme of the request this service received: plain HTTP from the
+    // gateway, unless the URI says otherwise.
+    let scheme = request.uri().scheme_str().unwrap_or("http").to_string();
+    let query = request
+        .uri()
+        .query()
+        .filter(|q| !q.is_empty())
+        .map(redact_query);
     let route = request
         .extensions()
         .get::<MatchedPath>()
@@ -82,14 +91,19 @@ async fn http_observability(request: Request, next: Next) -> Response {
         otel.kind = "server",
         otel.name = %span_name,
         http.request.method = %method,
+        url.scheme = %scheme,
         url.path = %path,
+        url.query = tracing::field::Empty,
         http.route = tracing::field::Empty,
         request_id = %request_id,
         http.response.status_code = tracing::field::Empty,
-        error.kind = tracing::field::Empty,
+        error.type = tracing::field::Empty,
     );
     if let Some(ref r) = route {
         span.record("http.route", r.as_str());
+    }
+    if let Some(ref q) = query {
+        span.record("url.query", q.as_str());
     }
 
     async move {
@@ -104,8 +118,8 @@ async fn http_observability(request: Request, next: Next) -> Response {
         tracing::Span::current().record("http.response.status_code", status);
 
         if status >= 500 {
-            let error_kind = if status == 503 { "network" } else { "internal" };
-            tracing::Span::current().record("error.kind", error_kind);
+            let error_type = if status == 503 { "network" } else { "internal" };
+            tracing::Span::current().record("error.type", error_type);
             tracing::Span::current().set_status(Status::error(""));
             tracing::error!(
                 route = %route_label,
@@ -113,7 +127,7 @@ async fn http_observability(request: Request, next: Next) -> Response {
                 status = status,
                 duration_ms = duration_ms,
                 request_id = %request_id,
-                error_kind = error_kind,
+                error_type = error_type,
                 error_message = "request failed",
                 "request completed"
             );
@@ -146,13 +160,13 @@ async fn feed_observability(request: Request, next: Next) -> Response {
     let response = next.run(request).await;
     let status = response.status().as_u16();
     if status >= 500 {
-        let error_kind = if status == 503 { "network" } else { "internal" };
+        let error_type = if status == 503 { "network" } else { "internal" };
         tracing::error!(
             route = %route.as_deref().unwrap_or("unmatched"),
             method = "GET",
             status = status,
             request_id = %request_id,
-            error_kind = error_kind,
+            error_type = error_type,
             error_message = "request failed",
             "request completed"
         );
@@ -504,4 +518,83 @@ async fn identity_feed(
     headers: axum::http::HeaderMap,
 ) -> Result<Response, AppError> {
     feed(state, query.after, &headers, Reader::Identity).await
+}
+
+#[cfg(test)]
+mod span_tests {
+    use super::http_observability;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::middleware;
+    use axum::routing::get;
+    use axum::Router;
+    use opentelemetry::trace::{Status, TracerProvider};
+    use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
+    use std::collections::HashMap;
+    use tower::ServiceExt;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    /// The HTTP server span for one request through `http_observability`.
+    async fn serve(uri: &str) -> SpanData {
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let app = Router::new()
+            .route("/ok", get(|| async { StatusCode::OK }))
+            .route("/missing", get(|| async { StatusCode::NOT_FOUND }))
+            .route(
+                "/broken",
+                get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+            )
+            .route_layer(middleware::from_fn(http_observability));
+        app.oneshot(Request::get(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        provider.force_flush().unwrap();
+        let mut spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 1);
+        spans.remove(0)
+    }
+
+    fn attrs(span: &SpanData) -> HashMap<String, String> {
+        span.attributes
+            .iter()
+            .map(|kv| (kv.key.to_string(), kv.value.to_string()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn url_query_is_redacted() {
+        let a = attrs(&serve("/ok?sig=abc&page=2&X-Goog-Signature=g").await);
+        assert_eq!(
+            a["url.query"],
+            "sig=REDACTED&page=2&X-Goog-Signature=REDACTED"
+        );
+        assert_eq!(a["url.scheme"], "http");
+        assert_eq!(a["url.path"], "/ok");
+        assert_eq!(a["http.route"], "/ok");
+    }
+
+    #[tokio::test]
+    async fn no_query_no_url_query() {
+        let a = attrs(&serve("/ok").await);
+        assert!(!a.contains_key("url.query"), "{a:?}");
+    }
+
+    #[tokio::test]
+    async fn error_type_on_5xx_only() {
+        let span = serve("/broken").await;
+        assert_eq!(attrs(&span)["error.type"], "internal");
+        assert_eq!(span.status, Status::error(""));
+
+        let span = serve("/missing").await;
+        assert!(!attrs(&span).contains_key("error.type"));
+        assert_eq!(span.status, Status::Unset);
+    }
 }

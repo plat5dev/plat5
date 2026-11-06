@@ -44,7 +44,7 @@ Other services' tests read these, so the control plane's tests keep them fresh: 
 
 ## Telemetry
 
-Contract: [`../../docs/reference/telemetry.md`](../../docs/reference/telemetry.md).
+Contract: [`../../docs/reference/telemetry.md`](../../docs/reference/telemetry.md). A variable set but invalid stops the service at boot ([invalid values](../../docs/reference/telemetry.md#invalid-values)).
 
 | Signal | Path |
 |--------|------|
@@ -57,7 +57,7 @@ Contract: [`../../docs/reference/telemetry.md`](../../docs/reference/telemetry.m
 |-----|---------|---------|
 | `OTEL_SERVICE_NAME` | `control-plane` | Resource `service.name` |
 | `OTEL_SERVICE_NAMESPACE` | `edge` | Resource `service.namespace` |
-| `OTEL_SERVICE_VERSION` | crate version | Resource `service.version` |
+| `OTEL_SERVICE_VERSION` | the build's `VERSION`, else `dev` | Resource `service.version` |
 | `OTEL_SERVICE_INSTANCE_ID` | hostname / pid | Resource `service.instance.id` |
 | `DEPLOYMENT_ENV` / `OTEL_DEPLOYMENT_ENV` | `development` | Resource `deployment.environment` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP base URL. Unset → no OTLP |
@@ -65,7 +65,7 @@ Contract: [`../../docs/reference/telemetry.md`](../../docs/reference/telemetry.m
 | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | unset | Optional full metrics URL |
 | `OTEL_TRACES_EXPORTER` | `otlp` when endpoint set | Include `otlp` to push traces |
 | `OTEL_METRICS_EXPORTER` | `otlp` when endpoint set | Set `prometheus` to push-off; `/metrics` always on |
-| `OTEL_METRIC_EXPORT_INTERVAL` | SDK default | ms (OTLP metrics only) |
+| `OTEL_METRIC_EXPORT_INTERVAL` | `60000` | ms (OTLP metrics only) |
 | `OTEL_TRACES_SAMPLER_RATIO` | `1` | Trace sampling ratio |
 | `OTEL_SDK_DISABLED` | unset | `true` → no OTLP; stdout + `/metrics` remain |
 
