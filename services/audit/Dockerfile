@@ -25,8 +25,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 COPY . .
 
+# The release this binary reports as service.version; dev without one.
+ARG VERSION=dev
 RUN --mount=type=cache,target=/go/pkg/mod \
-    CGO_ENABLED=0 GOOS=linux go build -o server ./
+    CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags "-X github.com/plat5dev/plat5/audit/telemetry.Version=${VERSION}" \
+    -o server ./
 
 # ======================================================================
 # Prod Stage

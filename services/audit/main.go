@@ -69,7 +69,7 @@ func main() {
 	defer stop()
 
 	go store.MaintainPartitions(runCtx, partitionInterval, func(err error) {
-		baseLogger.Error().Str("error_kind", apierrors.KindDB.String()).Err(err).Msg("audit partition maintenance failed")
+		baseLogger.Error().Str("error_type", apierrors.KindDB.String()).Err(err).Msg("audit partition maintenance failed")
 	})
 
 	errCh := make(chan error, 2)
@@ -113,7 +113,7 @@ func newPublicApp(telem *telemetry.Telemetry, handler *events.Handler) *fiber.Ap
 	})
 	app.Use(recover.New())
 	app.Use(otel.Middleware(
-		otel.WithTracerProvider(telem.TracerProvider()),
+		otel.WithTracerProvider(middleware.HTTPServerTracerProvider(telem.TracerProvider())),
 		otel.WithPropagators(telem.Propagator()),
 		otel.WithoutMetrics(true),
 		otel.WithSpanNameFormatter(middleware.HTTPSpanName),
@@ -153,7 +153,7 @@ func newInternalApp(
 	// deployment's network (docs/reference/api/internal.md).
 	internalAPI := app.Group("/internal",
 		otel.Middleware(
-			otel.WithTracerProvider(telem.TracerProvider()),
+			otel.WithTracerProvider(middleware.HTTPServerTracerProvider(telem.TracerProvider())),
 			otel.WithPropagators(telem.Propagator()),
 			otel.WithoutMetrics(true),
 			otel.WithSpanNameFormatter(middleware.HTTPSpanName),

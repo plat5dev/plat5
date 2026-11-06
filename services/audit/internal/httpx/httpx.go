@@ -35,13 +35,13 @@ func LogError(ctx context.Context, msg string, err error, kind errors.ErrorKind)
 	if span.IsRecording() {
 		span.SetStatus(codes.Error, msg)
 		span.SetAttributes(
-			attribute.String("error.kind", kind.String()),
+			attribute.String("error.type", kind.String()),
 			attribute.String("error.message", err.Error()),
 		)
 		span.RecordError(err)
 	}
 	Logger(ctx).Error().
-		Str("error_kind", kind.String()).
+		Str("error_type", kind.String()).
 		Str("error_message", err.Error()).
 		Msg(msg)
 }

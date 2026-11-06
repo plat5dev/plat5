@@ -127,7 +127,7 @@ func newPublicApp(telem *telemetry.Telemetry, nodeHandler *nodes.Handler, member
 	})
 	app.Use(recover.New())
 	app.Use(otel.Middleware(
-		otel.WithTracerProvider(telem.TracerProvider()),
+		otel.WithTracerProvider(middleware.HTTPServerTracerProvider(telem.TracerProvider())),
 		otel.WithPropagators(telem.Propagator()),
 		otel.WithoutMetrics(true),
 		otel.WithSpanNameFormatter(middleware.HTTPSpanName),
@@ -176,7 +176,7 @@ func newInternalApp(
 	traced := func(prefix string) fiber.Router {
 		return app.Group(prefix,
 			otel.Middleware(
-				otel.WithTracerProvider(telem.TracerProvider()),
+				otel.WithTracerProvider(middleware.HTTPServerTracerProvider(telem.TracerProvider())),
 				otel.WithPropagators(telem.Propagator()),
 				otel.WithoutMetrics(true),
 				otel.WithSpanNameFormatter(middleware.HTTPSpanName),
