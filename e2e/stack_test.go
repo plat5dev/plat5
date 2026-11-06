@@ -32,6 +32,7 @@ type stack struct {
 	gateway      string
 	controlPlane string
 	identity     string // identity's internal port, as a service reaches it
+	identityAPI  string // identity's service API, as another front door reaches it
 	adminToken   string
 	issuer       string
 	key          *rsa.PrivateKey
@@ -71,6 +72,7 @@ func newStack(t *testing.T) *stack {
 		gateway:      strings.TrimRight(env("GATEWAY_URL", "http://localhost:5400"), "/"),
 		controlPlane: strings.TrimRight(env("CONTROL_PLANE_URL", "http://localhost:5402"), "/"),
 		identity:     strings.TrimRight(env("IDENTITY_INTERNAL_URL", "http://localhost:5404"), "/"),
+		identityAPI:  strings.TrimRight(env("IDENTITY_URL", "http://localhost:5405"), "/"),
 		adminToken:   env("ADMIN_TOKEN", "dev-admin-token"),
 		issuer:       env("AUTH_ISSUER", "http://localhost:5401"),
 		key:          parsed.(*rsa.PrivateKey),
@@ -281,6 +283,7 @@ type node struct {
 	Slug        string  `json:"slug"`
 	DisplayName string  `json:"display_name"`
 	Status      string  `json:"status"`
+	DeletedAt   *string `json:"deleted_at"`
 	PurgeAfter  *string `json:"purge_after"`
 	Ancestors   []struct {
 		ID   string `json:"id"`
