@@ -74,8 +74,9 @@ func (s *stack) feed(cursor string) ([]event, string) {
 	}
 }
 
-// head is the log's cursor now, "" when it's empty: where a reader starts to
-// see only what follows. Read from the first event, which never waits.
+// head is the log's cursor now: where a reader starts to see only what
+// follows. Read from the first event: the log here is never empty, so it
+// doesn't wait.
 func (s *stack) head() string {
 	s.t.Helper()
 	_, events, more := s.read(s.http, "limit=100")
@@ -207,9 +208,21 @@ func TestEventLogWaitsAndTypes(t *testing.T) {
 		t.Fatalf("waiting for user.deleted: %d %v", status, deleted)
 	}
 
-	// An after past the head answers at once, with no events.
-	if status, events, more := s.read(s.http, "after=999999999999"); status != 200 || len(events) != 0 || more {
-		t.Fatalf("past the head: %d %v %v", status, events, more)
+	// An after past the head (the log was reset) is 409 CURSOR_AHEAD, at once.
+	resp, err := s.http.Get(s.identity + "/internal/events?after=999999999999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var past struct {
+		Error struct {
+			Code    string `json:"code"`
+			Details any    `json:"details"`
+		} `json:"error"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&past)
+	resp.Body.Close()
+	if resp.StatusCode != 409 || past.Error.Code != "CURSOR_AHEAD" || past.Error.Details != nil {
+		t.Fatalf("past the head: %d %+v", resp.StatusCode, past)
 	}
 }
 

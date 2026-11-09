@@ -77,6 +77,7 @@ Binding changes and suspension aren't events: they're access, which is asked for
 - **Read from the first event.** Keep a cursor, the last id acted on, and save it after acting.
 - **Keep the cursor with the data it cleans up,** in the same database, so a restore from backup rewinds both together and the replay redoes exactly the deletes the backup is missing.
 - **Make every handler safe to run twice.**
+- **Start over on `CURSOR_AHEAD`.** A cursor past the log's newest event means identity's log was reset. Clear the cursor and read from the first event; the handlers being safe to run twice makes that correct.
 - **Replay to reconcile.** To recover a lost or restored database, or to fix a handler bug, move the cursor back, to the start if needed, and read again. There is no other reconcile.
 
 Three events carry a duty, for a service that keeps the data they name:

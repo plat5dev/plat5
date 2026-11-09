@@ -156,11 +156,13 @@ func TestEventsShape(t *testing.T) {
 	}
 }
 
-// Without after, an empty log answers at once, with an empty array.
-func TestEmptyIsArray(t *testing.T) {
-	status, body := get(t, testApp(newTestHandler(&fakeStore{}, time.Hour)), "")
-	if events, ok := body["events"].([]any); status != 200 || !ok || len(events) != 0 || body["has_more"] != false {
-		t.Fatalf("status %d: %v", status, body)
+// Without after, an empty log waits like any read with nothing to answer,
+// then answers 204: a 200 always has an event.
+func TestEmptyLogWaits(t *testing.T) {
+	start := time.Now()
+	status, raw := do(t, testApp(newTestHandler(&fakeStore{}, 100*time.Millisecond)), Path)
+	if status != 204 || len(raw) != 0 || time.Since(start) < 100*time.Millisecond {
+		t.Fatalf("status %d after %v: %q", status, time.Since(start), raw)
 	}
 }
 
@@ -206,9 +208,10 @@ func TestTypes(t *testing.T) {
 	if status, raw := do(t, app, Path+"?types=node.deleted,member.removed&after=2"); status != 204 {
 		t.Fatalf("none left of those types: %d %s", status, raw)
 	}
+	// Every type is taken: its events, or for a type with none, a wait and 204.
 	for _, typ := range Types {
-		if status, _ := get(t, app, "?types="+typ); status != 200 {
-			t.Fatalf("%s: %d", typ, status)
+		if status, raw := do(t, app, Path+"?types="+typ); status != 200 && status != 204 {
+			t.Fatalf("%s: %d %s", typ, status, raw)
 		}
 	}
 }
@@ -252,16 +255,19 @@ func urlEscape(v string) string {
 	return out
 }
 
-// An after past the head (identity's database was reset) answers at once.
+// An after past the head (identity's log was reset) is 409 CURSOR_AHEAD,
+// at once, with null details.
 func TestAfterPastHead(t *testing.T) {
-	app := testApp(newTestHandler(sample(), time.Hour))
-	start := time.Now()
-	status, body := get(t, app, "?after=5")
-	if status != 200 || len(body["events"].([]any)) != 0 || body["has_more"] != false || time.Since(start) > time.Second {
-		t.Fatalf("status %d after %v: %v", status, time.Since(start), body)
-	}
-	if status, _ := get(t, testApp(newTestHandler(&fakeStore{}, time.Hour)), "?after=1"); status != 200 {
-		t.Fatalf("empty log: %d", status)
+	for _, store := range []*fakeStore{sample(), {}} {
+		start := time.Now()
+		status, body := get(t, testApp(newTestHandler(store, time.Hour)), "?after=5")
+		e, _ := body["error"].(map[string]any)
+		if status != 409 || e["code"] != "CURSOR_AHEAD" || e["details"] != nil || time.Since(start) > time.Second {
+			t.Fatalf("status %d after %v: %v", status, time.Since(start), body)
+		}
+		if e["message"] != "The log has no event at this cursor. Read from its first event." {
+			t.Fatalf("message %q", e["message"])
+		}
 	}
 }
 

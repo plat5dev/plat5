@@ -163,6 +163,7 @@ const (
 	CodeSlugNotReleasable   = "SLUG_NOT_RELEASABLE"
 	CodeInviteNotRedeemable = "INVITE_NOT_REDEEMABLE"
 	CodeNameOwnedByIdP      = "NAME_OWNED_BY_IDP"
+	CodeCursorAhead         = "CURSOR_AHEAD"
 )
 
 // ParentDeletedError: a restore or a create under a node that isn't live.
@@ -195,6 +196,12 @@ func InviteNotRedeemableError(message, reason string) *ApiError {
 // NameOwnedByIdPError: a name edit under users.name.sync each_sign_in.
 func NameOwnedByIdPError() *ApiError {
 	return StateError(CodeNameOwnedByIdP, "This name comes from the sign-in provider.", nil)
+}
+
+// CursorAheadError: a lifecycle read whose after is past the log's newest
+// event. The log was reset; the reader starts over from the first event.
+func CursorAheadError() *ApiError {
+	return StateError(CodeCursorAhead, "The log has no event at this cursor. Read from its first event.", nil)
 }
 
 func PayloadTooLargeError(maxSizeBytes int64) *ApiError {

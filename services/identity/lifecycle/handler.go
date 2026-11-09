@@ -14,8 +14,8 @@ import (
 	"github.com/plat5dev/plat5/identity/internal/httpx"
 )
 
-// LongPollWait is how long a read with after waits for a newer event before
-// answering 204.
+// LongPollWait is how long a read with nothing to answer waits for a newer
+// event before answering 204.
 const LongPollWait = 25 * time.Second
 
 type eventStore interface {
@@ -29,8 +29,8 @@ type Handler struct {
 	wait  time.Duration
 }
 
-// NewHandler serves the log from store. A read with after waits up to wait;
-// Follow must run for waiting readers to wake.
+// NewHandler serves the log from store. A read with nothing to answer waits
+// up to wait; Follow must run for waiting readers to wake.
 func NewHandler(store *Store, wait time.Duration) *Handler {
 	return &Handler{store: store, head: NewHead(), wait: wait}
 }
@@ -71,14 +71,8 @@ func (h *Handler) List(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if !q.hasAfter {
-		events, more, err := h.store.List(ctx, 0, q.limit, q.types)
-		if err != nil {
-			return httpx.MapDB(ctx, err, "failed to list events", httpx.DBErr{})
-		}
-		return c.JSON(response(events, more))
-	}
-
+	// With or without after, nothing to answer is a wait, then 204: a 200
+	// always has an event, so a reader asks again at once whatever came.
 	wait, cancel := context.WithTimeout(ctx, h.wait)
 	defer cancel()
 	for {
@@ -90,8 +84,9 @@ func (h *Handler) List(c fiber.Ctx) error {
 		}
 		h.head.Advance(head)
 		if q.after > head {
-			// Past the newest event: identity's database was reset.
-			return c.JSON(response(nil, false))
+			// Past the newest event: identity's log was reset, and its new
+			// events have ids below the cursor. The reader starts over.
+			return errors.CursorAheadError()
 		}
 		events, more, err := h.store.List(ctx, q.after, q.limit, q.types)
 		if err != nil {
@@ -125,8 +120,7 @@ func response(events []*Event, more bool) ListResponse {
 }
 
 type query struct {
-	after    int64
-	hasAfter bool
+	after    int64 // 0: from the first event
 	limit    int
 	types    []string // nil: every type
 }
@@ -144,7 +138,7 @@ func parseQuery(c fiber.Ctx) (query, error) {
 		if !ok {
 			return q, errors.FieldError("after", errors.FallbackValidation)
 		}
-		q.after, q.hasAfter = after, true
+		q.after = after
 	}
 	if args.Has("types") {
 		for _, t := range strings.Split(string(args.Peek("types")), ",") {

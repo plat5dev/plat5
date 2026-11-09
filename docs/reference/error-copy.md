@@ -36,6 +36,7 @@ Clients show `error.message`. `details.fields` is for multi-field 422s; `message
 | `PARENT_DELETED` | 409 | Restore the parent first. |
 | `GRACE_EXPIRED` | 409 | This can no longer be restored. |
 | `NODE_PURGED` | 409 | This was permanently deleted. |
+| `CURSOR_AHEAD` | 409 | The log has no event at this cursor. Read from its first event. |
 | `SLUG_NOT_RELEASABLE` | 409 | Only a purged root's slug can be released. |
 | `INVITE_NOT_REDEEMABLE` | 409 | This invite can't be used. |
 | `NAME_OWNED_BY_IDP` | 409 | This name comes from the sign-in provider. |

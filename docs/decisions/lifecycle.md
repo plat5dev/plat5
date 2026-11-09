@@ -59,7 +59,8 @@ A node delete is soft for `deletion_grace`, 30 days by default, restorable, then
 | Every event is kept for the life of the deployment | A new service, or one restoring a backup, reads from the start with nothing else to ask for. Pruning would need a second way to catch up |
 | Replaying from an earlier cursor is the reconcile: no sweeps, no batch status API | One mechanism covers a new service, a lost or restored database and a handler bug. The cursor lives with the data it cleans up, so a restore rewinds both together |
 | `types` filters the log, and only a matching event ends a wait | A service that acts on three types doesn't wake for the other five |
-| It long-polls like the control plane's feeds: immediate without `after`, a wait of up to 25 seconds with it, then **204** | An ending reaches services within about a second without a tight poll loop, and readers of Plat5's feeds all work one way |
+| It long-polls: with or without `after`, nothing to answer is a wait of up to 25 seconds, then **204**. Unlike the control plane's feeds, a read without `after` isn't answered at once | An ending reaches services within about a second without a tight poll loop. A config reader needs the current state at boot; a log reader needs nothing at once, and with every 200 carrying an event and every empty answer a wait, a reader asks again at once whatever came, with no pacing of its own |
+| A cursor past the newest event is **409** `CURSOR_AHEAD`, and the reader starts over from the first event | It means identity's log was reset, and its new events have ids below the cursor: answering "nothing yet" would leave the reader waiting past every event it should act on, silently. Starting over is safe because every handler runs twice safely |
 
 ## Stored data
 

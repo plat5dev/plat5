@@ -96,11 +96,13 @@ A field an event doesn't carry is absent, not `null`. A node or member event nev
 | `limit` | Optional. Default **50**, max **100**; over the max is clamped. Below 1, or not an integer: **422** |
 | `types` | Optional. A comma-separated list of types; only those are answered, and only those end a wait. Omitted, every type. A type not in the list above, or an empty item: **422** |
 
-A **422** is `VALIDATION_ERROR` in the [error envelope](../errors.md), naming the param.
+A **422** is `VALIDATION_ERROR` in the [error envelope](../errors.md), naming the param. A **409** `CURSOR_AHEAD` has `null` details.
 
 `events` are in `id` order, ascending, which is commit order. Ids increase but can skip numbers: don't do arithmetic on an id. `has_more` is `true` when more events matching `types` follow the last one in `events`; ask again at once with its `id` as `after`.
 
-Without `after`, the answer is immediate, even with no events. With `after`, identity waits until an event past `after` that matches `types` exists, for up to 25 seconds. Nothing in that time is **204**, and the reader asks again with the same `after`. An `after` past the newest event (identity's database was reset) is answered at once: **200** with no events. An event reaches waiting readers on every identity replica within about a second.
+With or without `after`, a read with nothing to answer waits until an event past `after` (or any event, without one) that matches `types` exists, for up to 25 seconds. Nothing in that time is **204**, and the reader asks again with the same `after`. So a **200** always has at least one event, and a reader needs no pacing of its own: after a 200 or a 204 it asks again at once. An event reaches waiting readers on every identity replica within about a second.
+
+An `after` past the newest event is **409** `CURSOR_AHEAD`, at once: identity's log was reset (its database restored or replaced), so the events the reader saved a cursor past no longer exist. The reader starts over from the log's first event ([lifecycle](../../concepts/lifecycle.md#following-the-log)).
 
 Reads stay off traces and request metrics, like health checks. A 5xx is still logged. Postgres unavailable: **503** `SERVICE_UNAVAILABLE`.
 

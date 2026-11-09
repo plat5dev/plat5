@@ -49,6 +49,7 @@ The **Fallback message** column is used only when nothing more specific applies.
 | `PARENT_DELETED` | 409 | `invalid_request_error` | Restore the parent first. | `{ parent_id }` |
 | `GRACE_EXPIRED` | 409 | `invalid_request_error` | This can no longer be restored. | `null` |
 | `NODE_PURGED` | 409 | `invalid_request_error` | This was permanently deleted. | `null` |
+| `CURSOR_AHEAD` | 409 | `invalid_request_error` | The log has no event at this cursor. Read from its first event. | `null` |
 | `SLUG_NOT_RELEASABLE` | 409 | `invalid_request_error` | Only a purged root's slug can be released. | `null` |
 | `INVITE_NOT_REDEEMABLE` | 409 | `invalid_request_error` | This invite can't be used. | `{ reason }` |
 | `NAME_OWNED_BY_IDP` | 409 | `invalid_request_error` | This name comes from the sign-in provider. | `null` |
