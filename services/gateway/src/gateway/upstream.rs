@@ -9,7 +9,7 @@ use tracing::{debug, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::error::ErrorKind;
-use crate::pipeline::{path_and_query, Caller, Forward};
+use crate::pipeline::{Caller, Forward};
 use crate::route_map::Route;
 
 use super::context::GatewayContext;
@@ -128,6 +128,13 @@ pub async fn build_and_store_upstream_peer(
     Ok(())
 }
 
+fn path_and_query(path: &str, query: Option<&str>) -> String {
+    match query {
+        Some(q) if !q.is_empty() => format!("{path}?{q}"),
+        _ => path.to_string(),
+    }
+}
+
 /// Gateway peers are host:port. Strip accidental scheme/path from route config.
 pub fn peer_address(base_url: &str) -> String {
     let s = base_url.trim();
@@ -239,5 +246,14 @@ mod tests {
                 .and_then(|v| v.to_str().ok()),
             Some("req-2")
         );
+    }
+
+    #[test]
+    fn preserves_query() {
+        assert_eq!(
+            path_and_query("/users/01u/nodes", Some("kind=project")),
+            "/users/01u/nodes?kind=project"
+        );
+        assert_eq!(path_and_query("/users/01u", None), "/users/01u");
     }
 }

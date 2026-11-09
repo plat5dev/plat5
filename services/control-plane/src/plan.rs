@@ -11,11 +11,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use crate::apply::Served;
 use crate::config::{RouteChecks, Users, DEFAULT_DELETION_GRACE};
 use crate::counts::{Counts, CountsRequest, CountsResponse};
 use crate::expand;
 use crate::schema::FieldError;
+use crate::served::Served;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]

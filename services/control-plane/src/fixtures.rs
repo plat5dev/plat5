@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::apply;
+use crate::{apply, served};
 
 pub fn dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures")
@@ -83,10 +83,10 @@ fn catalog_feeds_are_fresh() {
     };
     check_json(
         &dir.join("gateway-feed.json"),
-        &apply::feed_body(1, &apply::gateway_body(&config)),
+        &served::feed_body(1, &served::gateway_body(&config)),
     );
     check_json(
         &dir.join("identity-feed.json"),
-        &apply::feed_body(1, &apply::identity_body(&config)),
+        &served::feed_body(1, &served::identity_body(&config)),
     );
 }

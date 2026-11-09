@@ -10,9 +10,12 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::config::parse_duration;
+use crate::duration::parse_duration;
 use crate::kinds::Kinds;
-use crate::pipeline::Upstream;
+
+mod upstream;
+
+pub use upstream::{BadParam, Upstream, Values};
 
 /// A service in the gateway feed: its settings with defaults filled in, and its
 /// expanded routes.

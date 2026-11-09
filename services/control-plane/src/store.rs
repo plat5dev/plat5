@@ -9,7 +9,7 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Postgres, Transaction};
 use tracing::info;
 
-use crate::apply::Served;
+use crate::served::Served;
 
 const SCHEMA: &str = "control_plane";
 const MIGRATIONS: &[(&str, &str)] = &[("001_init", include_str!("../migrations/001_init.sql"))];

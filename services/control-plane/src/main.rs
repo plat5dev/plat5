@@ -15,6 +15,7 @@ mod metrics;
 mod plan;
 mod rules;
 mod schema;
+mod served;
 mod store;
 mod telemetry;
 

@@ -19,6 +19,7 @@ use crate::apply::{self, Failure};
 use crate::error::AppError;
 use crate::metrics;
 use crate::schema;
+use crate::served;
 use crate::store::{Reader, Report};
 use crate::telemetry::redact_query;
 use crate::AppState;
@@ -508,7 +509,7 @@ async fn feed(
     let Some((revision, body)) = current else {
         return Err(AppError::not_found(request_id, "config", "head"));
     };
-    Ok(Json(apply::feed_body(revision, &body)).into_response())
+    Ok(Json(served::feed_body(revision, &body)).into_response())
 }
 
 async fn gateway_feed(

@@ -67,7 +67,7 @@ impl GatewayContext {
     /// The request's HTTP server span. `query` is the raw query (`None` without
     /// one), redacted into `url.query`; `scheme` is the client's ([`url_scheme`]).
     ///
-    /// [`url_scheme`]: super::client_ip::TrustedProxies::url_scheme
+    /// [`url_scheme`]: crate::client_ip::TrustedProxies::url_scheme
     pub fn ensure_root_span(
         &mut self,
         method: &str,

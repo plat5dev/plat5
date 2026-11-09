@@ -1,7 +1,10 @@
 pub mod audit;
 pub mod auth;
+pub mod client_ip;
 pub mod config;
 pub mod control_plane;
+pub mod cors;
+pub mod duration;
 pub mod error;
 pub mod gateway;
 pub mod health;

@@ -1,17 +1,17 @@
 //! One path for every apply: split off `expect`, check the schema and the
-//! rules, expand, plan the head's stored bodies against the new ones, and
-//! write the source and the bodies if the precondition holds. The feeds serve
+//! rules, build the served bodies, plan the head's stored bodies against the
+//! new ones, and write the source and the bodies if the precondition holds. The feeds serve
 //! the stored bodies; nothing here runs on a feed read.
 
 use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 
 use crate::config::{Config, APPLY_ONLY_KEYS};
 use crate::counts::Counts;
-use crate::expand;
 use crate::plan::{self, Expect, Plan, Refused, Summary};
 use crate::rules;
 use crate::schema::{self, FieldError};
+use crate::served::Served;
 use crate::store::{Store, StoreError};
 
 /// Why an apply or a dry run didn't happen.
@@ -104,25 +104,6 @@ pub fn read(sent: &Value) -> Result<Config, Failure> {
         .map_err(|e| Failure::Invalid(vec![FieldError::new("", e.to_string())]))
 }
 
-/// What a revision serves: the gateway's and identity's feed bodies, expanded
-/// with defaults filled in, without their revision. Stored with the revision
-/// at apply; the feeds serve them as stored, and the plan compares them.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Served {
-    pub gateway: Value,
-    pub identity: Value,
-}
-
-impl Served {
-    /// The bodies the running version serves for `config`.
-    pub fn of(config: &Config) -> Self {
-        Self {
-            gateway: gateway_body(config),
-            identity: identity_body(config),
-        }
-    }
-}
-
 /// A dry run's answer: the plan, and every service of the planned config as
 /// the gateway feed would serve it.
 #[derive(Serialize)]
@@ -185,54 +166,10 @@ pub async fn apply(
     })
 }
 
-/// A stored body as a feed serves it: `revision` first, then the body.
-pub fn feed_body(revision: i64, body: &Value) -> Value {
-    let mut out = Map::new();
-    out.insert("revision".into(), json!(revision));
-    if let Value::Object(fields) = body {
-        out.extend(
-            fields
-                .iter()
-                .filter(|(k, _)| *k != "revision")
-                .map(|(k, v)| (k.clone(), v.clone())),
-        );
-    }
-    Value::Object(out)
-}
-
-/// The body of `GET /internal/gateway`: kinds, every service's routes
-/// expanded, rate limits, `defaults.rate_limit`, CORS, `users` (the IdP name
-/// claims) and `route_checks`, with defaults filled in. `defaults` carries only
-/// `rate_limit`, the part the gateway reads: each service carries its own
-/// timeouts and body limit, filled in.
-pub fn gateway_body(c: &Config) -> Value {
-    json!({
-        "kinds": c.kinds,
-        "services": expand::expand(c),
-        "rate_limits": c.rate_limits,
-        "defaults": { "rate_limit": c.defaults.rate_limit },
-        "cors": c.cors,
-        "users": c.users,
-        "route_checks": c.route_checks,
-    })
-}
-
-/// The body of `GET /internal/identity`: the settings, kinds and roles, with
-/// defaults filled in. Roles as written, with their includes.
-pub fn identity_body(c: &Config) -> Value {
-    json!({
-        "deletion_grace": c.deletion_grace,
-        "reserved_slugs": c.reserved_slugs,
-        "users": c.users,
-        "kinds": c.kinds,
-        "roles": c.roles,
-        "creator_role": c.creator_role,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn base() -> Value {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -265,64 +202,6 @@ mod tests {
             panic!()
         };
         assert_eq!(errs[0].path, "");
-    }
-
-    fn gateway_feed(revision: i64, config: &Value) -> Value {
-        feed_body(revision, &gateway_body(&check(config).unwrap()))
-    }
-
-    fn identity_feed(revision: i64, config: &Value) -> Value {
-        feed_body(revision, &identity_body(&check(config).unwrap()))
-    }
-
-    #[test]
-    fn feeds_fill_defaults_and_expand_routes() {
-        let gateway = gateway_feed(4, &base());
-        assert_eq!(gateway["revision"], json!(4));
-        assert_eq!(
-            gateway["cors"],
-            json!({ "allowed_origins": [], "allowed_headers": [] })
-        );
-        assert_eq!(
-            gateway["rate_limits"],
-            json!({ "standard": { "requests": 60, "window_seconds": 60 } })
-        );
-        assert_eq!(gateway["defaults"], json!({ "rate_limit": ["standard"] }));
-        let users = json!({ "name": { "claims": ["name", "preferred_username"], "sync": "first_sign_in" } });
-        assert_eq!(gateway["users"], users);
-        assert_eq!(gateway["route_checks"], json!({ "path": "/access/routes" }));
-        let e10s = &gateway["services"]["e10s"];
-        assert_eq!(e10s["timeouts"], json!({ "connect": "10s", "read": "30s" }));
-        assert_eq!(e10s["max_body_bytes"], json!(10485760));
-        assert_eq!(
-            e10s["routes"][2],
-            json!({
-                "path": "/orgs/{organization}/projects/{project}/plans", "method": "GET",
-                "scope": "project", "upstream": "/projects/{project.id}/plans",
-                "required_permissions": ["project:read"], "rate_limit": ["standard"], "audit": false,
-                "allow_deleted": false
-            })
-        );
-        assert_eq!(e10s["routes"][0]["required_permissions"], Value::Null);
-        let identity = identity_feed(4, &base());
-        assert_eq!(identity["deletion_grace"], json!("30d"));
-        assert_eq!(identity["reserved_slugs"], json!([]));
-        assert_eq!(identity["users"], users);
-        assert!(identity.get("services").is_none());
-        assert!(identity.get("route_checks").is_none());
-    }
-
-    #[test]
-    fn users_name_fills_each_field_on_its_own() {
-        let mut config = base();
-        config["users"] = json!({ "name": { "sync": "each_sign_in" } });
-        let want =
-            json!({ "name": { "claims": ["name", "preferred_username"], "sync": "each_sign_in" } });
-        assert_eq!(gateway_feed(1, &config)["users"], want);
-        assert_eq!(identity_feed(1, &config)["users"], want);
-        config["users"] = json!({ "name": { "claims": ["profile.name"] } });
-        let want = json!({ "name": { "claims": ["profile.name"], "sync": "first_sign_in" } });
-        assert_eq!(identity_feed(1, &config)["users"], want);
     }
 
     // Unknown fields fail wherever a config is read, nested ones included.

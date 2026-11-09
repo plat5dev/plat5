@@ -4,7 +4,6 @@
 //! the fill, and turns a [`Rejection`] into a response.
 
 mod checks;
-mod fill;
 mod permissions;
 
 use std::future::Future;
@@ -19,12 +18,11 @@ use crate::error::{ApiError, ErrorKind};
 use crate::kinds::id_header;
 use crate::metrics;
 use crate::rate_limit::{Bucket, RateLimitInfo, RateLimiter, Unavailable, Verdict};
-use crate::route_map::{Matched, Policy, Route, Scope};
+use crate::route_map::{BadParam, Matched, Policy, Route, Scope, Values};
 
 pub use checks::{
     parse_checks, BadField, Check, CheckRefused, Checked, MAX_CHECKS, MAX_CHECKS_BODY,
 };
-pub use fill::{path_and_query, BadParam, Upstream, Values};
 pub use permissions::permitted;
 
 pub const MEMBER_ID_HEADER: &str = "X-Plat5-Member-Id";

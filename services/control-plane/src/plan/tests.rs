@@ -84,7 +84,10 @@ async fn fixture_configs_plan() {
             .await
             .unwrap_or_else(|e| panic!("{name}: {e:?}"));
         fixtures::check_json(&plan_file, &serde_json::to_value(&plan).unwrap());
-        fixtures::check_json(&feed_file, &apply::feed_body(revision + 1, &after.gateway));
+        fixtures::check_json(
+            &feed_file,
+            &crate::served::feed_body(revision + 1, &after.gateway),
+        );
     }
 }
 

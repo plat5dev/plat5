@@ -23,7 +23,8 @@ Contract: [`../../docs/concepts/config.md`](../../docs/concepts/config.md), [`..
 | `src/rules.rs` | The rules at apply and the route rules, over the expanded routes |
 | `src/plan.rs` | The plan over the served bodies, line by line with before and after, and the apply's precondition |
 | `src/counts.rs` | Identity's plan counts |
-| `src/apply.rs`, `src/store.rs` | Apply with the head locked; the feed bodies; revisions (source and bodies) and gateway replica reports in Postgres |
+| `src/served.rs` | The feed bodies a revision serves, built from a checked config |
+| `src/apply.rs`, `src/store.rs` | Apply with the head locked; revisions (source and bodies) and gateway replica reports in Postgres |
 | `src/feed.rs` | The head readers long-poll |
 | `src/fixtures.rs`, `fixtures/` | The fixtures, below |
 | `src/docgen.rs` | Test: `docs/reference/config/` field tables match the schema |

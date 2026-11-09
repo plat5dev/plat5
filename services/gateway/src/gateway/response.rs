@@ -6,13 +6,13 @@ use pingora::Result;
 use tracing::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::cors::CorsPolicy;
 use crate::error::ApiError;
 use crate::pipeline::Rejection;
 use crate::rate_limit::RateLimitInfo;
 use crate::route_map::Route;
 
 use super::context::GatewayContext;
-use super::cors::CorsPolicy;
 
 /// 5xx → span Error (no description). 4xx stay unset.
 pub fn apply_error_span_status(span: &Span, status: u16) {

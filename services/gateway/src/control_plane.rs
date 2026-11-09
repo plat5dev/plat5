@@ -18,7 +18,7 @@ use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 use crate::auth::{parse_claim_path, NameClaims};
-use crate::gateway::CorsPolicy;
+use crate::cors::CorsPolicy;
 use crate::kinds::{KindDoc, Kinds};
 use crate::metrics;
 use crate::route_map::{Policy, PolicyDoc, RouteMap, ServiceDoc};

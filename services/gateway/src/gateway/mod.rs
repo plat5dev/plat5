@@ -1,6 +1,4 @@
-mod client_ip;
 mod context;
-mod cors;
 mod response;
 mod upstream;
 
@@ -23,8 +21,10 @@ use crate::audit::{self, Audit, AuditState};
 use crate::auth::admit::{AdmitCache, HttpAdmit};
 use crate::auth::jwt::JwtValidatorState;
 use crate::auth::{AuthError, Authenticator};
+use crate::client_ip::TrustedProxies;
 use crate::config::GatewayConfig;
 use crate::control_plane::Snapshot;
+use crate::cors::CorsPolicy;
 use crate::error::{ApiError, ErrorKind};
 use crate::internal_http::InternalHttpClient;
 use crate::metrics;
@@ -35,9 +35,7 @@ use crate::pipeline::{
 use crate::rate_limit::RateLimiter;
 use crate::route_map::{Matched, Required, Route, Scope};
 
-pub use client_ip::TrustedProxies;
 pub use context::GatewayContext;
-pub use cors::CorsPolicy;
 
 pub struct Gateway {
     authenticator: Authenticator,

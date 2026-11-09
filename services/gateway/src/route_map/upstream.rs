@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::route_map::Scope;
+use super::Scope;
 
 #[derive(Debug, PartialEq, Eq)]
 enum Part {
@@ -125,13 +125,6 @@ fn percent_decode(raw: &[u8]) -> Vec<u8> {
     out
 }
 
-pub fn path_and_query(path: &str, query: Option<&str>) -> String {
-    match query {
-        Some(q) if !q.is_empty() => format!("{path}?{q}"),
-        _ => path.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,14 +215,5 @@ mod tests {
         for ok in ["a.b", "...", "%41", "a%2", "%zz", "a%20b"] {
             assert_eq!(fill(ok), Ok(format!("/w/{ok}")), "{ok}");
         }
-    }
-
-    #[test]
-    fn preserves_query() {
-        assert_eq!(
-            path_and_query("/users/01u/nodes", Some("kind=project")),
-            "/users/01u/nodes?kind=project"
-        );
-        assert_eq!(path_and_query("/users/01u", None), "/users/01u");
     }
 }
