@@ -232,7 +232,7 @@ Do not include `error_type` for 4xx.
 ## Traces
 
 - Export via **OTLP** only (no Jaeger/Zipkin native APIs from the app).
-- Propagate **W3C Trace Context** only (no Baggage).
+- Propagate **W3C Trace Context** (`traceparent`) on every downstream call.
 - Resource attributes on every export: `service.name`, `service.namespace`, `service.instance.id`, `service.version`, `deployment.environment`.
 
 ### HTTP server spans
@@ -244,7 +244,7 @@ Do not include `error_type` for 4xx.
 | Kind | `SERVER` |
 | Name | `{method} {http.route}` when a route template exists; otherwise `{method}` only. Never the raw URI. |
 | Attributes | `http.request.method`, `url.path`, `url.scheme`, `url.query` (when the request has one), `http.route` (template only, when matched), `http.response.status_code` (when known), `error.type` (5xx only) |
-| Status | Unset on 4xx. `Error` on 5xx with **no** description. Unset on 1xx/2xx/3xx unless a non-HTTP error occurred. |
+| Status | `Error` on 5xx. Never `Error` on 4xx: a 4xx is a normal outcome. |
 
 `http.route` is the matched template (`/orgs/{organization}/projects/{project}/subscribers`). Do not put the raw path there. `url.path` is the actual path (IDs allowed).
 
