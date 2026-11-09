@@ -120,9 +120,9 @@ func response(events []*Event, more bool) ListResponse {
 }
 
 type query struct {
-	after    int64 // 0: from the first event
-	limit    int
-	types    []string // nil: every type
+	after int64 // 0: from the first event
+	limit int
+	types []string // nil: every type
 }
 
 func parseQuery(c fiber.Ctx) (query, error) {
