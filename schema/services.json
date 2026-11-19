@@ -111,7 +111,7 @@
         },
         "rate_limit": {
           "title": "rate_limit",
-          "description": "Policies from `rate_limits` ([rate limits](rate-limits.md)). Omitted: the policies `defaults.rate_limit` names. `false`: none.",
+          "description": "Policies from `rate_limits` ([rate limits](rate-limits.md)). Omitted: `defaults.rate_limit` if set, else unlimited. `false`: unlimited.",
           "$ref": "#/$defs/rate_limit"
         },
         "audit": {

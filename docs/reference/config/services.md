@@ -1,8 +1,8 @@
 # Services
 
-Each service is one file, listed in `plat5.yml`'s `services` ([config](../../concepts/config.md#the-config)). The file's one top-level key is the service's name; under it sit the service's own settings and its routes, grouped by scope. How the gateway uses them: [access](../../concepts/access.md#how-a-request-is-decided), [`reference/gateway.md`](../gateway.md).
+Each service in the control-plane config sits under `services` keyed by its name, holding its upstream URL, settings and routes grouped by scope ([config](../../concepts/config.md#the-config-shape)). How the gateway uses them: [access](../../concepts/access.md#how-a-request-is-decided), [`reference/gateway.md`](../gateway.md).
 
-Identity's and audit's files are service files like any other, written by `plat5 routes generate` ([generated routes](generated-routes.md)).
+Identity and audit are ordinary entries under `services` ([reference routes](generated-routes.md)).
 
 ## Format
 
@@ -66,7 +66,7 @@ With the kinds in [kinds](kinds.md), the versions route is `GET` and `POST /orgs
 | `upstream` | `string?` | A full upstream template, replacing `upstream_prefix` plus `path` |
 | `methods` | `array<string> \| map<string, null \| method>` | The verbs: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`. A list is a map with no overrides. In a map, each verb's `required_permissions`, `rate_limit` and `audit` override the route's |
 | `required_permissions` | `array<string> \| "any_member"?` | Any one of these permissions admits. `any_member` admits any member of the tree, guests included. Required for every verb in a kind scope, from the route or the verb. Not in `user` or `public` |
-| `rate_limit` | `array<string> \| false?` | Policies from `rate_limits` ([rate limits](rate-limits.md)). Omitted: the policies `defaults.rate_limit` names. `false`: none |
+| `rate_limit` | `array<string> \| false?` | Policies from `rate_limits` ([rate limits](rate-limits.md)). Omitted: `defaults.rate_limit` if set, else unlimited. `false`: unlimited |
 | `audit` | `bool?` | Omitted: the method default. Not in `public` |
 | `allow_deleted` | `bool?` | Default `false`. `true` lets the route's node be deleted (not purged); its own bindings are kept until purge and still count here, so whoever managed the node can restore it. For identity's restore route ([`reference/api/internal.md`](../api/internal.md#admit)). Kind scopes only |
 <!-- end generated -->
@@ -133,7 +133,7 @@ The gateway matches the expanded public paths of every service. Two routes with 
 
 `OPTIONS` isn't a route method (**422**): the gateway answers every `OPTIONS` as a CORS preflight.
 
-No route may match `route_checks.path` ([settings](settings.md)), in any method: the gateway answers [route checks](../gateway.md#route-checks) there. A route that does is **422** at apply, naming it.
+No route may match `/access/routes`, in any method: the gateway answers [route checks](../gateway.md#route-checks) there. A route that does is **422** at apply, naming it.
 
 ## Validation
 

@@ -130,5 +130,5 @@ The event's fields and the read API: [`reference/api/audit.md`](../reference/api
 - A product feature that reads audit
 - Changing an event after its outcome, or deleting events through an API
 - Audit for some trees or services and not others
-- Retention and purge (deferred, [`TODO.md`](../../TODO.md))
+- Retention and purge
 - Other front doors' events. Each keeps its own log

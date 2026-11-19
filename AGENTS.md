@@ -1,34 +1,18 @@
 # Plat5: agent contract
 
-`docs/` is law. If code and a contract disagree, fix the one that's wrong, usually the code. Don't invent a third story in chat.
+Plat5 is a standalone, thin platform runtime for multi-tenant APIs: gateway, identity, audit, and control plane. Sibling repos (`cli`, `operator`, `auth`, `template-*`) are optional modules or clients built on top of Plat5's documented APIs.
 
-How I decide: `my-principles` skill. This file is how to work here, not what Plat5 is; it restates no rules, so it can't drift from them.
+## Where truth lives
 
-## What this is
-
-A thin platform runtime for multi-tenant APIs: a gateway, identity (the tree of nodes, principals, members, bindings, keys), audit, and a control plane for the deployment's kinds, roles, routes and CORS origins.
-
-## Where the rules live
-
-| What | Where |
-|------|-------|
-| The model and its principles | [`docs/concepts/model.md`](docs/concepts/model.md) |
-| The rules, one concept per doc | [`docs/concepts/`](docs/concepts/): access, lifecycle, config, audit |
-| What Plat5 won't do (stop conditions) | [`docs/concepts/boundaries.md`](docs/concepts/boundaries.md#not-in-plat5) |
-| Shapes: config documents, APIs, headers, env | [`docs/reference/`](docs/reference/) |
-| How Plat5 stores things | [`docs/internals/`](docs/internals/) |
-| Why each decision was made, by topic | [`docs/decisions/`](docs/decisions/README.md) |
-| The map of all of it | [`docs/README.md`](docs/README.md) |
-| What's next, and deferred work and when it's ready | [`TODO.md`](TODO.md) |
+- **Hard law (model, invariants, wire & config shapes):** `docs/concepts/`, `schema/`, and `docs/reference/` (`gateway`, `headers`, `env`, `idp`, `config/*`, `api/*`).
+- **Opt-in standards for user services:** `docs/reference/{errors,lists,telemetry}.md` and `docs/guides/write-a-service.md` — Plat5's own services follow them; user services can follow them for the documented benefits, never forced.
+- **Internals:** `docs/internals/` (storage schemas and module map).
+- **Index:** [`docs/README.md`](docs/README.md).
 
 ## Working here
 
-1. Read `docs/concepts/model.md`, then the concept and reference docs for the area you're touching, before editing.
-2. Don't implement past the contract. If the work needs a contract change, stop and propose the doc change first.
-3. A change that touches a principle in `concepts/model.md` or an item under "Not in Plat5" in `concepts/boundaries.md` needs explicit sign-off. Say which one, and why, before writing code.
-4. A rule belongs in exactly one concept doc, a shape in exactly one reference doc. Guides link to both and restate neither. Don't restate anything here.
+1. Read `docs/concepts/model.md` and the relevant concept/reference doc before editing.
+2. Don't implement past the contract. If code and contract disagree, fix the wrong one — and propose doc changes first for any principle in `concepts/model.md` or item under `Not in Plat5` in `concepts/boundaries.md`.
+3. One place per rule or shape; link instead of restating. Describe the current contract, not past shapes or migrations.
+4. Keep `plat5` self-contained: don't couple runtime docs or code to optional siblings (`cli`, `operator`, `auth`, `template-*`).
 5. Don't commit unless asked.
-
-### Siblings
-
-Wire or boot changes aren't done in this repo alone. They also update the `cli` (its embedded compose and control-plane client track HEAD), the `template-*` repos (the API starters and the two consoles), and the `operator` repo. Clone them beside this one with [`scripts/clone-siblings`](scripts/clone-siblings), then run every checkout at HEAD with `plat5 init --sources ..` (and `--project-id <id>` to keep a scratch project apart).

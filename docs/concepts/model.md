@@ -1,6 +1,6 @@
 # Model
 
-> The concepts and principles everything else builds on. When another doc disagrees with this page, the other doc is wrong. Why each decision was made: [decisions](../decisions/README.md), by topic.
+> The concepts and principles everything else builds on. When another doc disagrees with this page, the other doc is wrong.
 
 Plat5 is the front door for multi-tenant APIs. It owns a tree of nodes whose kinds the deployment declares, the principals who can reach each node, and the check at the gateway. Services own everything inside a node.
 
@@ -39,7 +39,7 @@ Every node has a slug, fixed at creation. Fixed rules, not config:
 | Uniqueness | Per parent and kind. Roots share one namespace, so org slugs are deployment-wide |
 | Reuse | A node's slug is free again once the node is purged. A root's slug never is: a purged root keeps its row as a tombstone (slug, id, kind). An operator can release a purged root's slug ([slug release](../reference/api/identity.md#slug-release)) |
 | Generation | Omitted on create: generated from the display name, lowercased, with each run of other characters as `-`, trimmed. Prefixed with the kind name when it would start with a digit or be too short (`project-42`). `-2`, `-3` on collision; reserved slugs and root tombstones count as taken |
-| Reserved | `reserved_slugs` in `plat5.yml`. **422** |
+| Reserved | `reserved_slugs` in config. **422** |
 
 A path segment that starts with a digit is read as a node id, anything else as a slug. Both resolve under the previous node.
 
@@ -64,7 +64,7 @@ A path segment that starts with a digit is read as a node id, anything else as a
 | May they call this route on this node? | The gateway: the route's permissions against the union of the member's bindings on the node and its ancestors |
 | Does this member hold this permission on this node, outside a request or for someone other than the caller? | Identity, asked by the service, from the same bindings ([access](access.md#outside-a-request)) |
 | Which nodes can they see? | Plat5, filtering node lists by each kind's `list_permission` |
-| May they touch this record inside a node? | The service's state rules today; identity's evaluation API extended below nodes later ([`TODO.md`](../../TODO.md)) |
+| May they touch this record inside a node? | The service's state rules |
 | Is this valid for the resource's current state? | The service |
 | Who did it? | The record, when logic needs it (the member id as author or owner); audit otherwise |
 

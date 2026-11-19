@@ -26,17 +26,17 @@ Start with the [CLI](https://github.com/plat5dev/cli): `plat5 init` writes a pro
 
 | Doc | Contents |
 |-----|----------|
-| [`docs/README.md`](docs/README.md) | **Start here.** The map, by what you're doing |
+| [`docs/README.md`](docs/README.md) | **Start here.** The map of concepts, reference, guides, and internals |
 | [`docs/concepts/model.md`](docs/concepts/model.md) | Kinds, nodes, principals, members, bindings, the principles |
 | [`docs/concepts/access.md`](docs/concepts/access.md) | Who can do what, and how a request is decided |
-| [`docs/guides/deploy.md`](docs/guides/deploy.md) | Production: images, TLS, attach an app |
-| [`docs/guides/write-a-service.md`](docs/guides/write-a-service.md) | What a service behind Plat5 receives and must not do |
-| [`docs/reference/`](docs/reference/) | Config documents, APIs, headers, env, errors, telemetry |
-| [`AGENTS.md`](AGENTS.md) | How to work in this repo (for agents) |
+| [`docs/guides/deploy.md`](docs/guides/deploy.md) | Self-hosting: images, TLS, optional modules, attaching services |
+| [`docs/guides/write-a-service.md`](docs/guides/write-a-service.md) | What a service behind Plat5 must do, and optional standards to follow |
+| [`docs/reference/`](docs/reference/) | Config shapes, APIs, headers, env, errors, telemetry |
+| [`AGENTS.md`](AGENTS.md) | How to work in this repo |
 
 ## Telemetry
 
-Stdout logs + `/metrics` always. OTLP opt-in (traces and metrics both on when endpoint set). [`docs/reference/telemetry.md`](docs/reference/telemetry.md).
+Stdout JSON logs + `/metrics` always. OTLP opt-in via standard `OTEL_*` env vars. [`docs/reference/telemetry.md`](docs/reference/telemetry.md).
 
 ## License
 

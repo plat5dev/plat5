@@ -1,9 +1,8 @@
 # CORS document
 
-The origins and request headers the gateway allows, in `plat5.yml`. Request-time behavior: [`reference/gateway.md`](../gateway.md#cors).
+The origins and request headers the gateway allows, in the control-plane config. Request-time behavior: [`reference/gateway.md`](../gateway.md#cors).
 
 ```yaml
-# in plat5.yml
 cors:
   allowed_origins: ["https://app.example.com", "http://localhost:5173"]
   allowed_headers: [idempotency-key]

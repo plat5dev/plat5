@@ -1,9 +1,8 @@
 # Kinds document
 
-The tree's levels, in `plat5.yml`. Every node in identity is one of these kinds. Concept: [the model](../../concepts/model.md), [config](../../concepts/config.md).
+The tree's levels, in the control-plane config. Every node in identity is one of these kinds. Concept: [the model](../../concepts/model.md), [config](../../concepts/config.md).
 
 ```yaml
-# in plat5.yml
 kinds:
   organization:
     path: /orgs/{organization}
@@ -26,8 +25,8 @@ kinds:
 | `bind_creator` | Whether creating a node of this kind gives its creator `creator_role` on it ([assigning](../../concepts/access.md#assigning)). Default `true`. Off, the creator reaches the node through bindings above it; on a root kind, a new root has no member until a front door such as an operator plane adds one |
 <!-- end generated -->
 
-Plat5 derives no permission names from a kind: routes name theirs literally. A kind reached through another kind's permissions says so in its routes and its `list_permission`, as `environment` does above with `project:*`. `plat5 routes generate` takes its permission prefix from `list_permission` ([CLI](../cli.md#generating-identitys-and-audits-routes)).
+Plat5 derives no permission names from a kind: routes name theirs literally. A kind reached through another kind's permissions says so in its routes and its `list_permission`, as `environment` does above with `project:*`.
 
 Each kind has one chain of kinds, so each node has one public path. Slugs are unique only within their parent, which is why the pieces nest in parent order. The kind's param, `{project}`, takes a slug or an id; it never reaches a service.
 
-The other settings beside `kinds` in `plat5.yml`: [settings](settings.md). Slug shape, uniqueness and reuse are fixed rules, not config ([`concepts/model.md`](../../concepts/model.md#ids-and-slugs)).
+Other top-level settings: [settings](settings.md). Slug shape, uniqueness and reuse are fixed rules, not config ([`concepts/model.md`](../../concepts/model.md#ids-and-slugs)).

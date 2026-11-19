@@ -34,7 +34,7 @@ Do not add these because they would be convenient:
 - Login UI, passwords or JWKS. That's the IdP
 - HSTS at the gateway. TLS is the edge's
 - Last-owner guards. An org without an admin is recovered by an operator plane
-- Names per tree. A person has one name, seeded from the IdP and then theirs or the IdP's (`users.name.sync`)
+- Names per tree. A person has one name, seeded from the IdP on first sign-in and editable by the person or an operator
 - Lifecycle events derived from audit
 
 ## Extension points
@@ -49,7 +49,7 @@ None of these touches nodes, the ancestor rule, slugs, or what services see; the
 | Moving a project to another org | Refused | Cross-org move with a `node.moved` event |
 | A kind optional in the middle (a project under an org or a folder) | One parent per kind | A list of parents, additive |
 | Access per folder, with folders inside folders | Folders are service data inside a node, nested as deep as the service likes; access is decided at the node | A kind allowed as its own parent, with a depth cap |
-| Permissions on one record inside a node | Service state rules | Identity's evaluation API, answered below nodes by an engine ([`TODO.md`](../../TODO.md)) |
+| Permissions on one record inside a node | Service state rules | Identity's evaluation API, answered below nodes by an engine |
 
 ## Costs accepted knowingly
 

@@ -27,7 +27,7 @@ POST /internal/admit
 }
 ```
 
-1. **Principal.** Hash the key, or look up the IdP link. A new IdP subject creates the person. `name`, the first non-empty claim of `users.name.claims`, sets the person's name as `users.name.sync` says ([a person's name](../idp.md#a-persons-name)). `valid` means only that the credential is good: a known, unrevoked key, or an IdP subject, of an active principal. A suspended person, an unknown or revoked key, a key identity can't read, or a service account whose node is deleted is `valid: false`, on any chain.
+1. **Principal.** Hash the key, or look up the IdP link. A new IdP subject creates the person. `name`, the first non-empty claim of `AUTH_NAME_CLAIMS`, sets the person's name if it is currently empty ([a person's name](../idp.md#a-persons-name)). `valid` means only that the credential is good: a known, unrevoked key, or an IdP subject, of an active principal. A suspended person, an unknown or revoked key, a key identity can't read, or a service account whose node is deleted is `valid: false`, on any chain.
 2. **Nodes.** Resolve each `ref` (slug or id) under the previous node, by kind. A missing, purged or deleted node ends here. With `allow_deleted`, the last node may be deleted (not purged), and its own bindings still count. Nothing else ever counts a deleted node's bindings.
 3. **Member.** The principal's active member in the chain's tree.
 4. **Permissions.** The union of the roles of that member's bindings on any node in the chain, includes resolved ([`concepts/access.md`](../../concepts/access.md#resolution)).
@@ -43,7 +43,7 @@ Identity resolves `chain` by kind name only and doesn't check it against its kin
 | Admit result | Status |
 |--------------|--------|
 | `valid: false` | **401** |
-| `principal: "service_account"` on a user route | **403**, after one count of each `defaults.rate_limit` policy per credential ([rate limits](../gateway.md#rate-limits)) |
+| `principal: "service_account"` on a user route | **403** |
 | `member_id: null` on a kind route | **403** |
 | `permissions` share none with the route, and the route isn't `any_member` | **403** |
 | Otherwise | Forwarded |
@@ -186,8 +186,8 @@ On `INTERNAL_PORT`. Each is one read, at one head, in one Postgres snapshot. Eac
 
 | Path | Reader | `200` body |
 |------|--------|------------|
-| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "rate_limits", "defaults", "cors", "users", "route_checks" }`. **404** before the first apply. `defaults` is `{ "rate_limit" }` only, the part the gateway reads: the policies it counts route checks and a service account on a user route against. `users` gives it `name.claims`, the JWT claims it reads for the `name` it sends to admit. `route_checks` gives it `path`, where it answers [route checks](../gateway.md#route-checks) |
-| `GET /internal/identity` | identity | `{ "revision", "deletion_grace", "reserved_slugs", "users", "kinds", "roles", "creator_role" }`. **404** before the first apply. `users` gives identity `name.sync` |
+| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "rate_limits", "defaults", "cors" }`. **404** before the first apply. `defaults` is `{ "rate_limit" }` (empty array when `defaults.rate_limit` is unset), used to rate-limit `POST /access/routes` |
+| `GET /internal/identity` | identity | `{ "revision", "deletion_grace", "reserved_slugs", "kinds", "roles", "creator_role" }`. **404** before the first apply |
 
 The gateway's `services` are expanded: each service's `url`, and its own `timeouts` and `max_body_bytes` with the config's `defaults` filled in, and its `routes` as the gateway matches them, one per method:
 
@@ -197,7 +197,7 @@ The gateway's `services` are expanded: each service's `url`, and its own `timeou
   "required_permissions": ["catalog:write"], "rate_limit": ["standard"], "audit": true, "allow_deleted": false }
 ```
 
-`rate_limit` is resolved (`defaults.rate_limit` for a route that names none, `[]` for `false`), `audit` is the method default filled in (`false` in `public`, which is never audited), and `required_permissions` is a list or `"any_member"` (`null` outside a kind scope). Roles are served as written, with `includes`; identity resolves them. Kinds are served with `list_permission` filled in. Other keys are the config's own ([config](../../concepts/config.md#the-config)), with defaults filled in: `deletion_grace` `30d`, `reserved_slugs` `[]`, `users` `{ "name": { "claims": ["name", "preferred_username"], "sync": "first_sign_in" } }` (each field filled in on its own), `route_checks` `{ "path": "/access/routes" }`, and `cors` `{ "allowed_origins": [], "allowed_headers": [] }` when the config has none.
+`rate_limit` is resolved (`defaults.rate_limit` for a route that names none, or `[]` when `defaults.rate_limit` is unset or the route says `false`), `audit` is the method default filled in (`false` in `public`, which is never audited), and `required_permissions` is a list or `"any_member"` (`null` outside a kind scope). Roles are served as written, with `includes`; identity resolves them. Kinds are served with `list_permission` filled in. Other keys have defaults filled in: `deletion_grace` `30d`, `reserved_slugs` `[]`, `rate_limits` `{}`, and `cors` `{ "allowed_origins": [], "allowed_headers": [] }` when omitted.
 
 Without `after`, the answer is immediate. With `?after={revision}`, the control plane waits until the head is past `after`, for up to 25 seconds. Nothing newer in that time is **204**, and the reader asks again. A cursor ahead of the head (the store was reset) is answered at once.
 
@@ -207,7 +207,7 @@ The gateway reports where it stands on each poll:
 GET /internal/gateway?after=42&replica=gw-1&loaded=42&refused=43&reason=…
 ```
 
-`replica` is the replica's id (`OTEL_SERVICE_INSTANCE_ID`, else the hostname), `loaded` the revision it serves (`0` before its first), and `refused` and `reason`, sent while the newest revision it was served is one it refused, why. The control plane keeps the latest report per replica for [`GET /status`](control-plane.md#reader-status).
+`replica` is the replica's id (`service.instance.id` from `OTEL_RESOURCE_ATTRIBUTES`, else the hostname), `loaded` the revision it serves (`0` before its first), and `refused` and `reason`, sent while the newest revision it was served is one it refused, why. The control plane keeps the latest report per replica for [`GET /status`](control-plane.md#reader-status).
 
 Feed reads stay off traces and request metrics, like health checks. A 5xx is still logged. Each control-plane process polls the head in Postgres every second, so an apply through any replica reaches readers of every replica within about a second.
 

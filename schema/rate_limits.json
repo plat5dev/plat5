@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://plat5.com/schema/rate_limits.json",
   "title": "Rate limits",
-  "description": "Named policies shared by every route that names them: the rate_limits part of plat5.yml.",
+  "description": "Named policies shared by every route that names them.",
   "type": "object",
   "properties": {
     "rate_limits": {
@@ -24,7 +24,7 @@
       "title": "policy",
       "type": "object",
       "additionalProperties": false,
-      "required": ["requests", "window_seconds"],
+      "required": ["requests", "window"],
       "properties": {
         "requests": {
           "title": "requests",
@@ -32,11 +32,10 @@
           "type": "integer",
           "minimum": 1
         },
-        "window_seconds": {
-          "title": "window_seconds",
-          "description": "Required. Greater than 0.",
-          "type": "integer",
-          "minimum": 1
+        "window": {
+          "title": "window",
+          "description": "Required. Fixed window length as a duration (`60s`, `1m`).",
+          "$ref": "settings.json#/$defs/duration"
         },
         "count_at": {
           "title": "count_at",

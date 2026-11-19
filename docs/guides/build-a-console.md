@@ -1,22 +1,24 @@
 # Build a console
 
-A console is a client of the gateway's routes, like a CLI or a script. It holds the person's IdP token and calls routes by slug. The routes below are the generated ones ([generated routes](../reference/config/generated-routes.md)); `plat5 routes list` shows a deployment's own.
+A console is a client of the gateway's routes, like a CLI or a script. It holds the person's IdP token and calls routes by slug. The paths below follow identity's [reference routes](../reference/config/generated-routes.md).
 
 ## Signing in and the person
 
-The console gets an IdP token and sends it as `Authorization: Bearer`. There are no Plat5 sessions: the same token reaches every tree the person is in ([access](../concepts/access.md#credentials)). `GET /user` is the person, with a `name` that's `null` until it's known; `PATCH /user { name }` lets them set it, unless the deployment's IdP owns names, which is a **409** `NAME_OWNED_BY_IDP` ([a person's name](../reference/idp.md#a-persons-name)). `GET /user/nodes?kind=organization` is every org they can see, for an org switcher. Each node carries its `ancestors`, so the console builds its URLs from the chain.
+Send the IdP's access token as `Authorization: Bearer`. There are no Plat5 sessions: the same token reaches every tree the person is in ([access](../concepts/access.md#credentials)).
+
+- `GET /user` returns the person (`name` is `null` until known).
+- `PATCH /user { name }` sets or clears their name ([a person's name](../reference/idp.md#a-persons-name)).
+- `GET /user/nodes?kind=organization` lists every org they can see, for an org switcher. Each node carries its `ancestors`, so the console builds its own URLs from the chain.
 
 ## Navigating the tree
 
-Paths carry slugs: `/orgs/acme/projects/web/…`. Lists show only what the caller can see, so a project-only member sees their projects, not a 403 ([lists](../concepts/access.md#lists)). A filtered page can be short with `has_more: true`; keep walking ([`reference/lists.md`](../reference/lists.md)).
+Paths carry slugs: `/orgs/acme/projects/web/…`. Lists return only what the caller can see, so a project-only member sees their projects rather than a 403 ([lists](../concepts/access.md#lists)). A filtered page can return fewer than `limit` items with `has_more: true`; keep walking until `has_more` is `false` ([`reference/lists.md`](../reference/lists.md)).
 
 ## What to show
 
-Each page names its main call: the one request it can't work without, such as `GET /orgs/{organization}/bindings` for an org's access page. A page is hidden, with its links, when its main call isn't allowed; a button is hidden when its request isn't.
+Each page or action maps to the request it needs. Ask the gateway once per page or navigation in a single batch at `POST /access/routes`:
 
-Ask the gateway once per page or navigation, in one batch: every main call the page links to and every button's request, by method and path, sent to the deployment's `route_checks.path` (`POST /access/routes` by default). The answers come back in order ([route checks](../reference/gateway.md#route-checks)):
-
-```
+```json
 POST /access/routes
 { "checks": [
   { "method": "GET", "path": "/orgs/acme/bindings" },
@@ -26,43 +28,35 @@ POST /access/routes
 → { "checks": [ { "allowed": false }, { "allowed": true }, { "allowed": false } ] }
 ```
 
-Ask by route, not by permission name: the deployment names permissions and can rename them. Up to 100 checks a call.
+Ask by route rather than permission name so permission renames in config don't break the UI (up to 100 checks per call, [`reference/gateway.md`](../reference/gateway.md#route-checks)).
 
-`GET …/membership` on a node says who the caller is there: their member id, the bindings that count, and the permissions they grant. A console shows "Admin" or "Guest" from it, and marks "you" in member lists.
+`GET …/membership` on a node returns the caller's member id, active bindings, and permissions — use it to show "Admin" or "Guest" and mark "you" in member lists.
 
-Both answers are advisory ([what a UI shows](../concepts/access.md#what-a-ui-shows)). The request is still decided when it's made, so a page shown on a stale answer gets a **403**, shown like any other.
+Both answers are advisory: the gateway still enforces every request when it is made.
 
 ## Errors
 
-Show `error.message` ([`reference/errors.md`](../reference/errors.md)). A 403 never says whether a node exists, so the console shouldn't either: "Permission denied, or it may not exist." On a route that needs permissions, `details.required_permissions` says which would have worked, for an "ask an admin for…" hint ([`FORBIDDEN`](../reference/errors.md#forbidden)).
+Display `error.message` ([`reference/errors.md`](../reference/errors.md)). Through the gateway, a missing node and a denied one return the same **403**; on permission-gated routes, `details.required_permissions` lists which permissions would have admitted the call.
 
 ## Nodes with service fields
 
-A form that creates a node can hold fields that belong to a service, such as a project's region ([write a service](write-a-service.md#nodes-with-service-fields)).
-
-**Usually, two requests from one form.** Create the node through identity's route (`POST /orgs/acme/projects { display_name }`), then send the service's fields to its route for the new node with `PUT`, built from the node the create returned. If the second fails, the node exists with the service's defaults: show one error, keep the form, and retry the `PUT`, which is safe to repeat, never the create.
-
-**When the service owns the create**, the deployment gives it the same path: one `POST` with identity's fields and the service's together. Send an idempotency key, such as `Idempotency-Key`, so a retry after a timeout doesn't make a second node.
+When a creation form includes product-specific fields owned by one of your services, submit in two steps: create the node through identity (`POST /orgs/acme/projects { display_name }`), then `PUT` the service's fields to your service's route for the new node. If the second call fails, keep the form open and retry only the idempotent `PUT`.
 
 ## Who has access
 
-- `GET …/bindings` lists every binding that counts at the node, each with where it sits and whether it's inherited; guests are marked.
+- `GET …/bindings` lists every binding that counts at the node, with `inherited` and `guest` flags.
 - `GET /orgs/{organization}/members` lists the org's members, guests marked.
-- `GET …/roles` lists the roles bindable at that node, for a role picker ([`reference/api/identity.md`](../reference/api/identity.md#roles)).
-- Binding writes take a member id in the org and a role.
-- Removing a person's last binding in a tree removes their member for good ([members](../concepts/lifecycle.md#members)). To move someone's only access, add the new binding before removing the old one.
-- Adding a member by IdP subject (`POST /orgs/{organization}/members`) isn't a generated route ([generated routes](../reference/config/generated-routes.md#identitys-routes)). Offer it only when a route check for it answers `true`, which it does only where the deployment publishes the route.
+- `GET …/roles` lists roles bindable at that node, for role pickers.
+- Removing a person's last binding in a tree permanently removes their member ([members](../concepts/lifecycle.md#members)). To move someone's only access, add the new binding before removing the old one.
+- Adding a member by IdP subject (`POST /orgs/{organization}/members`) is not exposed in the default routes; offer it only when `POST /access/routes` answers `true` for it.
 
 ## Inviting
 
-- To the org: `POST /orgs/{organization}/invites`, with `role` and `grants` for projects bound on redeem.
-- To one project, which can bring in a guest: `POST …/projects/{project}/invites`, if the deployment turned guests on.
-- The invitee redeems with `POST /user/invites/redeem`; the answer has the node to go to. Plat5 sends no email; the console does.
+- To the org: `POST /orgs/{organization}/invites`, with `role` and optional `grants` for child nodes.
+- To one child node (can admit a guest): `POST …/projects/{project}/invites`, when `guests:write` is granted.
+- The invitee redeems with `POST /user/invites/redeem`; the response returns the target node with its ancestors. Plat5 sends no email.
 
-## Deleting and restoring
+## Deleting, restoring, and leaving
 
-Node deletes are soft for the deployment's grace period. A deleted node's `purge_after` says until when it can be restored. `?status=deleted` on a list shows deleted nodes, and `POST …/restore` brings one back ([lifecycle](../concepts/lifecycle.md#deleting-restoring-and-purging)). A deleted org is found with `GET /user/nodes?kind=organization&status=deleted`.
-
-## Leaving
-
-`DELETE /orgs/{organization}/membership` leaves the org. `DELETE /user` deletes the account.
+- Node deletes are soft until `purge_after`. List deleted nodes with `?status=deleted`, and restore with `POST …/restore` ([lifecycle](../concepts/lifecycle.md#deleting-restoring-and-purging)). Find deleted orgs with `GET /user/nodes?kind=organization&status=deleted`.
+- `DELETE /orgs/{organization}/membership` leaves an org. `DELETE /user` deletes the account.

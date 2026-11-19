@@ -1,6 +1,6 @@
 # Environment
 
-Every service's environment variables: wiring, secrets, trust anchors and boot settings. Config that changes while the deployment runs is in the control plane instead ([config](../concepts/config.md#what-it-holds)).
+Every Plat5 service's environment variables: wiring, secrets, trust anchors, module switches and boot settings. Desired state that changes while running lives in the control plane ([config](../concepts/config.md#what-it-holds)). Telemetry env vars follow standard OpenTelemetry conventions ([`reference/telemetry.md`](telemetry.md)).
 
 Internal ports (`INTERNAL_PORT`) take no token. Keep them inside the deployment's network, never exposed outside it.
 
@@ -8,19 +8,23 @@ Internal ports (`INTERNAL_PORT`) take no token. Keep them inside the deployment'
 
 | Variable | |
 |----------|--|
-| `CONTROL_PLANE_URL` | Required. The control plane's internal base URL, e.g. `http://control-plane:5003` |
-| `IDENTITY_INTERNAL_URL` | Required. Identity's internal base URL, e.g. `http://identity:3001`; admit is at `/internal/admit` |
+| `PORT` / `INTERNAL_PORT` | Public proxy port (default `5001`) and internal `/health/*` + `/metrics` port (default `8000`) |
+| `CONTROL_PLANE_URL` | Required. Control plane's internal base URL, e.g. `http://control-plane:5003` |
+| `IDENTITY_INTERNAL_URL` | Required. Identity's internal base URL, e.g. `http://identity:3001` |
 | `AUTH_ISSUER`, `AUTH_JWKS_URI` | Required. [`reference/idp.md`](idp.md) |
 | `AUTH_ALLOWED_AUDIENCES` | Required. Comma-separated; `*` accepts any audience |
-| `AUTH_SUBJECT_CLAIM` | Default `sub` |
-| `ADMIT_CACHE_TTL` | A duration. Default `5m` ([cache](gateway.md#cache)) |
-| `ADMIT_NEGATIVE_CACHE_TTL` | A duration. Default `10s` |
-| `VALKEY_URL` | Required |
-| `RATE_LIMIT_AUTH_FAILURE_REQUESTS`, `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` | The [failed-auth IP limiter](../concepts/access.md#how-a-request-is-decided). Default 60/60; `0` = off ([rate limits](gateway.md#rate-limits)) |
-| `AUDIT_ENABLED` | Whether the gateway writes audit events. Default `true`. Independent of whether `services/audit.yml` publishes audit's read routes ([`concepts/audit.md`](../concepts/audit.md#on-and-off)) |
-| `AUDIT_URL` | Audit's internal base URL, where the gateway writes events, e.g. `http://audit:3003`. Required unless `AUDIT_ENABLED=false` |
-| `TRUSTED_PROXIES` | [Client IP](gateway.md#client-ip), and the client's scheme on spans ([telemetry](telemetry.md#http-server-spans)) |
-| `OTEL_SERVICE_INSTANCE_ID` | The replica id it reports to the control plane; default the hostname ([telemetry](telemetry.md)) |
+| `AUTH_SUBJECT_CLAIM` | Dotted claim path for the person's stable IdP subject. Default `sub` |
+| `AUTH_NAME_CLAIMS` | Comma-separated dotted claim paths for seeding a person's display name on first sign-in. Default `name,preferred_username` |
+| `ADMIT_CACHE_TTL` | Duration. Default `5m` ([cache](gateway.md#cache)) |
+| `ADMIT_NEGATIVE_CACHE_TTL` | Duration. Default `10s` |
+| `RATE_LIMIT_ENABLED` | Default `true`. Set `false` to run without Valkey or rate limiting ([rate limits](gateway.md#rate-limits)) |
+| `VALKEY_URL` | Required unless `RATE_LIMIT_ENABLED=false` |
+| `RATE_LIMIT_AUTH_FAILURE_REQUESTS`, `RATE_LIMIT_AUTH_FAILURE_WINDOW` | Failed-auth IP limiter (active when `RATE_LIMIT_ENABLED=true`). Default `60` and `60s`; `0` requests = off |
+| `AUDIT_ENABLED` | Default `true`. Set `false` to run without writing audit events ([audit](../concepts/audit.md#on-and-off)) |
+| `AUDIT_URL` | Audit's internal base URL, e.g. `http://audit:3003`. Required unless `AUDIT_ENABLED=false` |
+| `TRUSTED_PROXIES` | Comma-separated IPs/CIDRs trusted for `X-Forwarded-For` and `X-Forwarded-Proto` ([client IP](gateway.md#client-ip)) |
+
+The replica id reported to the control plane is `service.instance.id` from `OTEL_RESOURCE_ATTRIBUTES`, falling back to `HOSTNAME`.
 
 ## Control plane
 
@@ -29,27 +33,27 @@ Internal ports (`INTERNAL_PORT`) take no token. Keep them inside the deployment'
 | `PORT` | `5002` | Admin API |
 | `INTERNAL_PORT` | `5003` | Feeds, health, metrics |
 | `DATABASE_URL` | required | Postgres; schema `control_plane` |
-| `ADMIN_TOKEN` | required | Bearer token |
-| `IDENTITY_INTERNAL_URL` | required | Identity's internal base URL, for plan counts, e.g. `http://identity:3001` |
+| `ADMIN_TOKEN` | required | Bearer token for Admin API |
+| `IDENTITY_INTERNAL_URL` | required | Identity's internal base URL, for plan counts |
 
-Ready is **503** unless Postgres answers. A fresh control plane has no config until the first `plat5 apply`.
+Ready is **503** unless Postgres answers.
 
 ## Identity
 
-| | |
-|--|--|
-| Directory | `services/identity/` |
-| `service.name` / `service.namespace` | `identity` / `identity` |
-| Public port | `3000` (the service API) |
-| Internal port | `3001` (`/health/*`, `/metrics`, admit, plan counts, the lifecycle log, access evaluation) |
-| Database | Plat5 Postgres via `DATABASE_URL`, schema **`identity`** |
-| `SECRET_BRAND` | The brand on every secret identity mints, API keys and invite tokens. Default `plat5` ([secrets](api/identity.md#secrets)) |
-| `CONTROL_PLANE_URL` | Required. Identity doesn't listen until it has its first config ([`reference/api/internal.md`](api/internal.md#control-plane-feeds)) |
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PORT` | `3000` | Service API |
+| `INTERNAL_PORT` | `3001` | `/health/*`, `/metrics`, admit, plan counts, lifecycle log, access evaluation |
+| `DATABASE_URL` | required | Postgres; schema `identity` |
+| `CONTROL_PLANE_URL` | required | Identity doesn't listen until it has its first config |
+| `SECRET_BRAND` | `plat5` | Prefix on minted API keys (`{brand}-k-2-…`) and invite tokens (`{brand}-i-1-…`); empty-but-set refuses boot |
 
 Ready fails closed (**503**) when Postgres is unreachable or no config is loaded.
 
 ## Audit
 
-| Variable | |
-|----------|--|
-| `DATABASE_URL` | Plat5 Postgres, schema `audit` |
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PORT` | `3002` | Read API |
+| `INTERNAL_PORT` | `3003` | `/health/*`, `/metrics`, internal event writes |
+| `DATABASE_URL` | required | Postgres; schema `audit` |

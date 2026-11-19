@@ -1,361 +1,46 @@
-# Telemetry contract
+# Telemetry
 
-Logs, traces, and metrics for Plat5 services. Plat5 does **not** ship a collector. Operators bring any OTLP-compatible collector (or scrape Prometheus) — Alloy, otel-collector, Grafana Cloud OTLP, etc.
+How Plat5's runtime services emit logs, metrics, and traces — and what your services get if they follow the same trace and request-id headers.
 
-## Standard (summary)
+Plat5 does not ship a collector. Bring any OTLP-compatible collector or Prometheus scraper.
 
-| Signal | Always | Opt-in |
-|--------|--------|--------|
-| **Logs** | JSON to **stdout** | — (no OTLP logs) |
-| **Metrics scrape** | Prometheus **`/metrics`** on the internal port | — |
-| **Traces OTLP** | — | When endpoint is set and traces exporter includes `otlp` |
-| **Metrics OTLP** | — | When endpoint is set **and** metrics exporter includes `otlp` |
+## What Plat5 services emit
 
-**Defaults when an OTLP endpoint is set:**
+| Signal | Always on | Opt-in (when OTLP endpoint is set) |
+|--------|-----------|------------------------------------|
+| **Logs** | JSON to stdout | — (no OTLP log export) |
+| **Metrics** | Prometheus `/metrics` on `INTERNAL_PORT` | OTLP push (`/v1/metrics`) unless opted out |
+| **Traces** | W3C `traceparent` propagation | OTLP push (`/v1/traces`) |
 
-- Traces → OTLP on (`OTEL_TRACES_EXPORTER` unset defaults to `otlp`)
-- Metrics → OTLP on (`OTEL_METRICS_EXPORTER` unset defaults to `otlp`)
-- `/metrics` scrape → still on
+### Configuration (standard OpenTelemetry env vars)
 
-Set `OTEL_METRICS_EXPORTER=prometheus` (or `none`) to push traces only and scrape metrics.
+All Plat5 services use standard OpenTelemetry environment variables:
 
-**Do not** scrape `/metrics` into the same backend you also feed via OTLP metrics for the same series.
-
-## Configuration
-
-Prefer standard OpenTelemetry environment variables for exporters and destinations. Do not invent project-specific exporter endpoint vars as the primary API.
-
-### Destination
-
-| Variable | Purpose |
-|----------|---------|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector base URL (e.g. `http://localhost:4318`). Unset = no OTLP destination. |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Optional full traces URL (overrides base + `/v1/traces`) |
-| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Optional full metrics URL (overrides base + `/v1/metrics`) |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` | **`http/protobuf` only** (OTLP/HTTP). `grpc` is not supported. |
-| `OTEL_EXPORTER_OTLP_HEADERS` | Optional headers (e.g. Grafana Cloud auth). Honored by the OTLP exporter SDKs. |
-| `OTEL_EXPORTER_OTLP_*_HEADERS` | Per-signal header overrides when needed |
-
-Endpoint = **where** to send OTLP. When set, traces and metrics both default to OTLP push.
-
-### Exporter selection
-
-| Variable | Default | Meaning |
-|----------|---------|---------|
-| `OTEL_TRACES_EXPORTER` | `otlp` if endpoint set, else effectively `none` | Comma-separated. OTLP traces only if value includes `otlp` **and** a traces destination exists. |
-| `OTEL_METRICS_EXPORTER` | `otlp` if endpoint set | Comma-separated. OTLP metrics only if value includes `otlp` **and** a metrics destination exists. `/metrics` stays up regardless (see below). |
-| `OTEL_SDK_DISABLED` | unset | `true` → no OTLP export. Stdout logs and `/metrics` remain. |
-
-| `OTEL_METRICS_EXPORTER` | OTLP metrics | `/metrics` |
-|------------------------|--------------|------------|
-| unset (default) | on (needs endpoint) | on |
-| `otlp` | on (needs endpoint) | on |
-| `otlp,prometheus` | on | on |
-| `prometheus` | off | on |
-| `none` | off | on |
-
-`none` means no metrics **push**, not “disable scrape.”
-
-### Resource identity
-
-**Standard OTel** ([SDK env spec](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/)):
-
-| Variable | Purpose |
-|----------|---------|
-| `OTEL_SERVICE_NAME` | Resource `service.name` (takes precedence over the same key in `OTEL_RESOURCE_ATTRIBUTES`) |
-| `OTEL_RESOURCE_ATTRIBUTES` | Comma-separated `key=value` resource attributes |
-
-Example:
-
-```bash
-OTEL_SERVICE_NAME=gateway
-OTEL_RESOURCE_ATTRIBUTES=service.namespace=edge,service.version=1.2.3,service.instance.id=gw-1,deployment.environment=dev
-```
-
-**Project convenience** (not dedicated OTel env vars; services also read these and map them onto the same resource attributes — useful in compose):
-
-| Variable | Maps to |
-|----------|---------|
-| `OTEL_SERVICE_NAMESPACE` | `service.namespace` |
-| `OTEL_SERVICE_VERSION` | `service.version` |
-| `OTEL_SERVICE_INSTANCE_ID` | `service.instance.id` (fallback: `HOSTNAME`) |
-| `DEPLOYMENT_ENV` / `OTEL_DEPLOYMENT_ENV` | `deployment.environment` |
-
-If both `OTEL_RESOURCE_ATTRIBUTES` and a convenience var set the same attribute, the convenience var wins. Prefer `OTEL_RESOURCE_ATTRIBUTES` for portable operator config; convenience vars are fine for our compose defaults. All services honor both.
-
-`service.version` is the release the image was built for: the build's `VERSION` argument, compiled into the binary. A build without one reports `dev`. `OTEL_SERVICE_VERSION` overrides it, and so does `service.version` in `OTEL_RESOURCE_ATTRIBUTES`; nothing else sets it.
-
-`DEPLOYMENT_ENV` only sets this telemetry attribute; it changes no service's behavior. What turns on Auth's dev conveniences is Auth's: [Auth `docs/env.md`](https://github.com/plat5dev/auth/blob/master/docs/env.md).
-
-### Other
-
-| Variable | Purpose |
-|----------|---------|
-| `OTEL_TRACES_SAMPLER_RATIO` | Trace sampling ratio when simple ratio sampler is used |
+| Variable | Default / notes |
+|----------|-----------------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector base URL (e.g. `http://collector:4318`). Unset = no OTLP push |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `_METRICS_ENDPOINT` | Optional per-signal URL overrides |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` (OTLP/HTTP) |
+| `OTEL_EXPORTER_OTLP_HEADERS` (and `_TRACES_` / `_METRICS_`) | Optional collector auth headers |
+| `OTEL_TRACES_EXPORTER` | `otlp` when endpoint is set; set `none` to disable trace push |
+| `OTEL_METRICS_EXPORTER` | `otlp` when endpoint is set; set `prometheus` or `none` to push traces only and scrape `/metrics` (don't both push and scrape into the same backend) |
+| `OTEL_SDK_DISABLED` | `true` disables all OTLP export; stdout logs and `/metrics` remain |
+| `OTEL_SERVICE_NAME` | Resource `service.name` |
+| `OTEL_RESOURCE_ATTRIBUTES` | Standard comma-separated `key=value` attributes (e.g. `service.namespace=edge,deployment.environment=prod,service.instance.id=gw-1`) |
+| `OTEL_TRACES_SAMPLER_RATIO` | Sampling ratio `0`–`1` |
 | `OTEL_METRIC_EXPORT_INTERVAL` | OTLP metric export interval (ms) |
 
-Default Plat5 compose does **not** set `OTEL_EXPORTER_OTLP_ENDPOINT`.
+Invalid values for `OTEL_*` variables fail boot with an error naming the variable. Once running, export failures are logged and never stop the service.
 
-### Invalid values
+### What's on logs, traces, and metrics
 
-Every service parses its telemetry variables strictly. A variable that is set but invalid stops the service at boot, with an error naming the variable:
+- **Logs:** Structured JSON on stdout (`timestamp`, `level`, `message`, `request_id`, `trace_id`, `span_id`, `route`, `method`, `status`, `duration_ms`, plus admitted ids like `root_id`, `node_id`, `member_id`, `user_id` — never secrets, tokens, or principal ids).
+- **Traces:** Standard OTel HTTP server spans (`http.request.method`, `http.route`, `url.path`, `url.scheme`, `http.response.status_code`), with `request_id` and admitted `plat5.*` ids attached at the gateway. 4xx responses are normal outcomes (not span errors); 5xx mark the span as `Error`.
+- **Metrics:** Prometheus format at `/metrics` on `INTERNAL_PORT`: HTTP request counters and latency histograms (`http_requests_total`, `http_request_duration_seconds`), DB operation metrics, process metrics, and key platform gauges/counters (`gateway_config_revision`, `gateway_config_refused_total`, `audit_writes_total`, `node_operations_total`, `access_evaluations_total`). High-cardinality ids never appear as metric labels.
 
-| Variable | Valid |
-|----------|-------|
-| `OTEL_TRACES_EXPORTER` | A comma-separated list of `otlp`, `none` |
-| `OTEL_METRICS_EXPORTER` | A comma-separated list of `otlp`, `prometheus`, `none` |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` (and `_TRACES_`, `_METRICS_`) | `http/protobuf` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` (and `_TRACES_`, `_METRICS_`) | An `http://` or `https://` URL |
-| `OTEL_TRACES_SAMPLER_RATIO` | A number from `0` to `1` |
-| `OTEL_METRIC_EXPORT_INTERVAL` | A positive number |
-| `OTEL_SDK_DISABLED` | `true` or `false` |
-| `OTEL_RESOURCE_ATTRIBUTES` | `key=value` entries, comma-separated |
+## For your services (opt-in)
 
-An empty variable is unset. Once running, a failed export never stops the service: it's logged as one JSON line on stdout, like every other [log line](#logs).
+The gateway sets `X-Request-ID` and `traceparent` on every forwarded request. Your services can follow two lightweight conventions to get end-to-end observability across the gateway and your code:
 
-## Operator recipes
-
-### Full OTLP push (e.g. Grafana Cloud / local LGTM kit)
-
-```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-# traces + metrics OTLP on by default when endpoint is set
-# Do not also scrape /metrics into the same metrics backend
-```
-
-### Traces push + metrics scrape (no double count)
-
-```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-export OTEL_METRICS_EXPORTER=prometheus   # opt out of metrics push
-# scrape http://<host>:<internal_port>/metrics
-```
-
-### Scrape only (no traces)
-
-Leave `OTEL_EXPORTER_OTLP_ENDPOINT` unset. Scrape `/metrics`. Collect stdout logs in the platform.
-
-### Local all-in-one collector
-
-```bash
-docker run --rm -p 3000:3000 -p 4317:4317 -p 4318:4318 \
-  --name otel-lgtm grafana/otel-lgtm:latest
-```
-
-Point services at `http://localhost:4318` (host) or `http://host.docker.internal:4318` (containers → host). Any OTLP collector on `:4318` works (not part of this product).
-
-## Logs
-
-Write **JSON** to stdout always (including when OTLP is enabled). No OTLP log export.
-
-```json
-{"timestamp":"2024-01-15T10:30:00Z","level":"info","message":"request completed","route":"/widgets","method":"GET","status":200,"duration_ms":12.5}
-```
-
-### Common fields
-
-| Field | Description |
-|-------|-------------|
-| `timestamp` | ISO8601 |
-| `level` | debug, info, warn, error |
-| `message` | Log message |
-| `route` | HTTP route pattern |
-| `method` | HTTP method |
-| `status` | HTTP status code the client received (for a returned error, the status the error handler writes) |
-| `duration_ms` | Request duration |
-| `request_id` | Correlation ID |
-| `trace_id` / `span_id` | When a span is active |
-| `root_id` | The tree's root node id (when admitted on a kind route) |
-| `node_id` | The route's node id (when admitted on a kind route) |
-| `member_id` | The caller's member id in that tree (kind routes) |
-| `user_id` | The caller's user id (user routes) |
-
-Field names: [`reference/naming.md`](naming.md).
-
-### Gateway request line
-
-The gateway writes one `request completed` (or `request failed`) line per request. On top of the common fields it says who presented the request. Each field is present only when known:
-
-| Field | When | Value |
-|-------|------|-------|
-| `auth_type` | A credential was presented | `jwt`, `apikey` |
-| `key_id` | Admit recognized a key | The key's id, the same `id` as on identity's key list and `actor.key_id` in audit |
-| `principal` | Admitted | `person` or `service_account` |
-| `root_id`, `node_id`, `member_id`, `user_id` | Admitted | As above. Never a principal id |
-
-The key or token itself, and a JWT, are never logged. The request line has no permissions or role; a 401 adds the [authentication-failed line](#gateway-authentication-failed-line), and a permission-denied 403 the [permission-denied line](#gateway-permission-denied-line). A 5xx adds the [error fields](#error-fields-5xx-only): `error_type`, and `error_message` when the gateway failed to proxy.
-
-```json
-{"timestamp":"2026-10-08T18:30:00Z","level":"info","message":"request completed","request_id":"…","route":"/widgets","method":"GET","status":403,"duration_ms":3.1,"auth_type":"apikey","key_id":"01jbz…","principal":"service_account","root_id":"01jbw…","node_id":"01jbx…","member_id":"01jby…"}
-```
-
-### Gateway authentication-failed line
-
-A **401** also writes one `info` line, `authentication failed`, before the request line. It says why:
-
-| Field | Value |
-|-------|-------|
-| `auth_type` | `jwt`, `apikey`, or `none` when no credential was sent |
-| `reason` | `missing_authorization`, `invalid_authorization`, `missing_subject`, `invalid_credential`, or a JWT's `details.reason` |
-| `scope` | The route's scope: its kind, `user` or `public` |
-
-```json
-{"timestamp":"2026-10-20T14:02:11Z","level":"info","message":"authentication failed","auth_type":"jwt","reason":"token_expired","scope":"organization"}
-```
-
-### Gateway permission-denied line
-
-A **403** `FORBIDDEN` from the permission check also writes one `warn` line, `required_permissions denied`, before the request line. It says why:
-
-| Field | Value |
-|-------|-------|
-| `request_id`, `route`, `method`, `status` | As on the request line. `route` is the route's path pattern |
-| `auth_type`, `key_id`, `principal`, `root_id`, `node_id`, `member_id` | As on the request line |
-| `required_permissions` | The route's list, e.g. `[subscribers:write]`. Any one would have admitted |
-| `permissions` | The caller's permissions on the node, from its bindings there and above, e.g. `[subscribers:read]`. `[]` when none |
-
-The gateway sees permissions, never roles or bindings, so the line has neither; look them up with `GET /nodes/{node_id}/bindings` or `GET /nodes/{node_id}/memberships/{member_id}`. The caller's permissions go to this log line only, never to the 403 body or a service. A not-found **403** writes no permission-denied line: there's no node to report.
-
-```json
-{"timestamp":"2026-10-20T14:02:11Z","level":"warn","message":"required_permissions denied","request_id":"…","route":"/orgs/{organization}/projects/{project}/subscribers","method":"POST","status":403,"auth_type":"apikey","key_id":"01jbz…","principal":"service_account","root_id":"01jbw…","node_id":"01jbx…","member_id":"01jby…","required_permissions":"[subscribers:write]","permissions":"[subscribers:read]"}
-```
-
-### Error fields (5xx only)
-
-| Field | Description |
-|-------|-------------|
-| `error_type` | `auth`, `network`, `db`, `io`, `internal`, `validation` |
-| `error_message` | Human-readable message |
-
-Do not include `error_type` for 4xx.
-
-## Traces
-
-- Export via **OTLP** only (no Jaeger/Zipkin native APIs from the app).
-- Propagate **W3C Trace Context** (`traceparent`) on every downstream call.
-- Resource attributes on every export: `service.name`, `service.namespace`, `service.instance.id`, `service.version`, `deployment.environment`.
-
-### HTTP server spans
-
-[HTTP span conventions](https://opentelemetry.io/docs/specs/semconv/http/http-spans/) for the names we emit. Do **not** emit deprecated names (`http.method`, `http.status_code`, `http.target`, `http.url`, `http.scheme`). Do **not** dual-write old and new.
-
-| | |
-|---|---|
-| Kind | `SERVER` |
-| Name | `{method} {http.route}` when a route template exists; otherwise `{method}` only. Never the raw URI. |
-| Attributes | `http.request.method`, `url.path`, `url.scheme`, `url.query` (when the request has one), `http.route` (template only, when matched), `http.response.status_code` (when known), `error.type` (5xx only) |
-| Status | `Error` on 5xx. Never `Error` on 4xx: a 4xx is a normal outcome. |
-
-`http.route` is the matched template (`/orgs/{organization}/projects/{project}/subscribers`). Do not put the raw path there. `url.path` is the actual path (IDs allowed).
-
-`url.scheme` is the client's scheme as the service knows it. At the gateway: the last entry of `X-Forwarded-Proto` when the TCP peer is a trusted proxy (`TRUSTED_PROXIES`, [client IP](gateway.md#client-ip)) and that entry is `http` or `https`; otherwise the scheme of the connection the gateway accepted. A service behind the gateway reports the scheme of the request it received.
-
-`url.query` is the query string without the leading `?`, redacted as the standard says: the value of each of these keys becomes `REDACTED`, and the key is kept:
-
-`sig`, `Signature`, `AWSAccessKeyId`, `X-Amz-Signature`, `X-Amz-Credential`, `X-Amz-Security-Token`, `X-Goog-Signature`
-
-Keys match exactly (case-sensitive). Every other key and value is kept as sent. A request without a query has no `url.query`.
-
-`error.type` is on 5xx spans only, with the same values as the `error_type` [log field](#error-fields-5xx-only): `auth`, `network`, `db`, `io`, `internal`, `validation`. A 4xx is a normal business outcome: no `error.type`, and the span isn't marked failed.
-
-Frameworks may add extra stable HTTP attributes; do not copy those onto other services.
-
-Gateway creates the root span **before** route match: name starts as `{method}`, then becomes `{method} {template}` after match. Unmatched stays `{method}`. Internal child spans (`gateway.request_filter`) are not HTTP server spans.
-
-### Plat5 span attributes (not HTTP semconv)
-
-- `request_id` on HTTP request spans (if present). Do not rename it to `request.id`.
-- `plat5.member_id`, `plat5.user_id`, `plat5.root_id` and `plat5.node_id` on HTTP request spans once admitted, and `jwt.kid` for a JWT, set at the gateway for ops. Never a principal id. A service sets only ids it was given.
-- Record exceptions via `span.recordException(err)` / `span.record_exception(err)`
-
-Logs and Prometheus metrics are **not** HTTP spans: log fields stay `snake_case` (`request_id`, `method`, `status`); metric names stay `http_requests_total` / `http_request_duration_seconds`.
-
-## Metrics
-
-### Scrape (always)
-
-Expose Prometheus text format at **`/metrics`** on the **internal** port (not public ingress). See [`reference/health.md`](health.md) / service READMEs for ports. Optional discovery labels: [`reference/container-labels.md`](container-labels.md) (`metrics.port`, `metrics.path`).
-
-### OTLP (default when endpoint set)
-
-When a metrics destination is set and `OTEL_METRICS_EXPORTER` is unset or includes `otlp`, push the **same logical series** via OTLP (same base endpoint → `/v1/metrics` unless overridden).
-
-### Cardinality
-
-**Never** put high-cardinality values in metric labels (user IDs, request IDs, emails). Those belong on spans and logs.
-
-### Naming
-
-- `snake_case`
-- Prefix by domain: `http_`, `db_`, `process_`, `auth_`
-- Suffix by type: `_total`, `_seconds`, `_bytes`
-
-| Metric | Type | Labels |
-|--------|------|--------|
-| `http_requests_total` | Counter | route, method, status |
-| `http_request_duration_seconds` | Histogram | route, method |
-| `db_operations_total` | Counter | db_system_name, db_operation_name, db_namespace |
-| `db_operation_errors_total` | Counter | db_system_name, db_operation_name, db_namespace |
-| `db_operation_duration_seconds` | Histogram | db_system_name, db_operation_name, db_namespace |
-
-Gateway config ([gateway](gateway.md#control-plane)): `gateway_config_revision` (gauge, the revision the replica serves) and `gateway_config_refused_total` (counter, label `revision`).
-
-Gateway audit writes ([`concepts/audit.md`](../concepts/audit.md)):
-
-| Metric | Type | Labels |
-|--------|------|--------|
-| `audit_writes_total` | Counter | write (`intent`, `outcome`, `rejected`), result (`ok`, `failed`, `not_found`, `dropped`) |
-| `audit_intent_duration_seconds` | Histogram | result (`ok`, `failed`). Time an audited request waited on its intent, retries included |
-
-Audit service: `audit_intents_total` (result `created`, `existing`) and `audit_outcomes_total` (result `applied`, `already_final`, `not_found`).
-
-Identity: `node_operations_total` (operation `created`, `deleted`, `restored`, `purged`; one per node changed) and `access_evaluations_total` (decision `true`, `false`; one per evaluation answered, so a batch that stops early counts only what it answered) ([access evaluation](api/internal.md#access-evaluation)).
-
-An outcome `dropped` or `failed` leaves its event `pending`.
-
-**Histogram buckets** (same across all services):
-
-| Metric | Boundaries (seconds) |
-|--------|----------------------|
-| `http_request_duration_seconds` | `0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5` |
-| `db_operation_duration_seconds` | `0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1` |
-
-Do not include `service_name` / `service_namespace` in metric series if your collector already adds them from resource attributes or container labels.
-
-### Process metrics (minimum)
-
-Always emit on the scrape path (language standard collectors preferred):
-
-| Metric | Notes |
-|--------|--------|
-| `process_resident_memory_bytes` | RSS |
-| `process_cpu_seconds_total` | Cumulative user+system CPU |
-| `process_start_time_seconds` | Unix epoch start time |
-
-When OTLP metrics are enabled, the same series should appear there too. Extra process/runtime series (heap, FDs, etc.) are optional.
-
-## Service expectations
-
-| Service | Namespace | Notes |
-|---------|-----------|--------|
-| gateway | `edge` | Internal `/metrics`; gateway sets edge span identity attrs |
-| control-plane | `edge` | Internal `/metrics` |
-| identity | `identity` | Internal `/metrics` |
-| audit | `audit` | Internal `/metrics` |
-
-## Non-goals
-
-- Shipping or requiring a collector / Alloy config as part of the product
-- OTLP log export from apps
-- App push to Loki, Tempo, or Mimir **native** APIs
-- Public exposure of `/metrics`
-- Custom non-`OTEL_*` env vars as the primary telemetry API
-- HTTP **metric** semconv (`http.server.request.duration`) — scrape/OTLP series stay `http_requests_total` / `http_request_duration_seconds`
-
-## References
-
-- [OTel SDK environment variables](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/)
-- [OTLP exporter configuration](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/)
-- [HTTP span semantic conventions](https://opentelemetry.io/docs/specs/semconv/http/http-spans/)
-- [Semantic conventions](https://opentelemetry.io/docs/specs/semconv/)
-- [grafana/otel-lgtm](https://github.com/grafana/docker-otel-lgtm)
+- **Log `X-Request-ID` as `request_id`** → tie a single request together across gateway logs, audit events, error responses, and your service logs.
+- **Read and propagate `traceparent`** (via any OpenTelemetry SDK) → see a single distributed trace from the edge through the gateway and into your handlers and databases.

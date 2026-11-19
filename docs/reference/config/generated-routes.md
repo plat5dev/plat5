@@ -1,8 +1,8 @@
-# Generated routes
+# Identity and audit routes
 
-The routes `plat5 routes generate` writes into `services/identity.yml` and `services/audit.yml`: identity's and audit's public routes, for every kind in `plat5.yml`. What the generator reads and how it names permissions: [CLI](../cli.md#generating-identitys-and-audits-routes). Concept: [access](../../concepts/access.md).
+Reference routes for exposing `identity` and `audit` through the gateway (which the [`plat5` CLI](https://github.com/plat5dev/cli)'s `plat5 routes generate` scaffolds for every kind). Concept: [access](../../concepts/access.md).
 
-The two files are ordinary [service files](services.md). Once written, they are the truth: the control plane serves what they say, and nothing is added to them at apply. Generating is scaffolding: drop a route by deleting it, move one by editing its `path`, change what one requires by editing its permissions. Regenerating overwrites both files ([when to](../cli.md#generating-identitys-and-audits-routes)).
+These are ordinary [service definitions](services.md). The control plane adds no hidden routes to them at apply: drop a route by removing it, move one by editing its `path`, or change what it requires by editing its permissions.
 
 ## The files
 
@@ -70,7 +70,7 @@ The generator sets no `rate_limit` or `audit`, so the [defaults](services.md#rou
 
 ## Identity's routes
 
-For a kind `K` with parent `P`. `<p>` is `K`'s permission prefix ([CLI](../cli.md#generating-identitys-and-audits-routes)): `K`'s name, unless its `list_permission` names another. `<collection>` is the literal in `K`'s `path` (`/projects` for `/projects/{project}`). Paths are relative to the scope's node.
+For a kind `K` with parent `P`. `<p>` is `K`'s permission prefix (`K`'s name, or its `list_permission` without `:read` when it ends in `:read`). `<collection>` is the literal in `K`'s `path` (`/projects` for `/projects/{project}`). Paths are relative to the scope's node.
 
 | Scope | Path | Methods and permissions | Upstream on identity |
 |---|---|---|---|

@@ -86,7 +86,7 @@ Every credential is `Authorization: Bearer`. A value of three dot-separated segm
 
 Any credential works on any route in a kind scope: a person's JWT or personal key reaches every tree they're in, and admit picks the member for the tree in the path. A service account key works only in its own tree, and never on user routes.
 
-**JWT.** A signed JWT access token from the configured issuer, verified against its JWKS ([`reference/idp.md`](../reference/idp.md)). The gateway reads the issuer, the subject claim (`AUTH_SUBJECT_CLAIM`) and the first non-empty name claim of `users.name.claims`, and sends them to admit as `idp`.
+**JWT.** A signed JWT access token from the configured issuer, verified against its JWKS ([`reference/idp.md`](../reference/idp.md)). The gateway reads the issuer, the subject claim (`AUTH_SUBJECT_CLAIM`) and the first non-empty name claim of `AUTH_NAME_CLAIMS`, and sends them to admit as `idp`.
 
 **Key.** Sent to admit as `credential`, as presented.
 
@@ -95,17 +95,17 @@ Any credential works on any route in a kind scope: a person's JWT or personal ke
 Every route, in order:
 
 1. **Match.** Unmatched → **404**. Take the chain params from the path, root first (`{organization}`, `{project}`).
-2. **Authenticate and admit.** Verify the JWT, or take the key; then admit, from cache when possible ([admit](../reference/api/internal.md#what-the-gateway-answers)). A JWT refused locally → **401**. `valid: false` (the credential itself is bad) → **401**. On a user route, a service account → **403** "Service accounts can't use this route.": the caller is known, and a user route is a person's own. It has no user to count under, so it spends the policies `defaults.rate_limit` names per credential first (**429** over budget). On a kind route, `member_id: null` (the node doesn't exist, or the caller isn't in its tree) → **403** "permission denied, or it may not exist".
+2. **Authenticate and admit.** Verify the JWT, or take the key; then admit, from cache when possible ([admit](../reference/api/internal.md#what-the-gateway-answers)). A JWT refused locally → **401**. `valid: false` (the credential itself is bad) → **401**. On a user route, a service account → **403** "Service accounts can't use this route." On a kind route, `member_id: null` (the node doesn't exist, or the caller isn't in its tree) → **403** "permission denied, or it may not exist".
 3. **Permissions.** On a kind route, the caller's permissions share none with the route's (and the route isn't `any_member`) → **403** "permission denied, or it may not exist", with `required_permissions` in `details`. `*` matches any permission.
-4. **Rate limit.** Every policy on the route is checked at once, and counted only if all pass ([rate limits](../reference/config/rate-limits.md)). Otherwise **429**.
+4. **Rate limit.** When rate limiting is enabled and the route has policies, every policy on the route is checked at once and counted only if all pass ([rate limits](../reference/config/rate-limits.md)). Otherwise **429**.
 5. **Fill.** Substitute the placeholders in `upstream`. A param value of `.` or `..`, or one holding `/`, `?` or `#`, is **400**.
 6. **Audit intent**, on an audited route with audit on → **503** if it can't be written ([`concepts/audit.md`](audit.md#request-order)). The gateway's own **403**s, **400**s and **500**s after admit are recorded as one background event.
 7. **Forward** with the caller's headers ([`reference/headers.md`](../reference/headers.md)). Slugs never reach a service.
 8. **Outcome**, in the background, then respond.
 
-Both **403**s on a kind route, admit finding no member and no permission held, take one path: the same body, `details.required_permissions` included, both counted by the failed-auth IP limiter, and over its budget the same **429**, with only `Retry-After`. So no answer says whether a node exists, not even once the limiter's bucket is full. An `any_member` route names no permissions: its only **403** is the admit one, the caller not in the tree. Both come before the rate limit, so only callers the route lets through spend its budgets: a member with no permission on a project can't drain its `count_at: project` budget. Probing permissions is bounded like probing nodes, by the failed-auth IP limiter. The intent is written after the permission check, so during an audit outage a **503** never says whether a node exists.
+Both **403**s on a kind route, admit finding no member and no permission held, take one path: the same body, `details.required_permissions` included, both counted by the failed-auth IP limiter (when rate limiting is enabled), and over its budget the same **429**, with only `Retry-After`. So no answer says whether a node exists, not even once the limiter's bucket is full. An `any_member` route names no permissions: its only **403** is the admit one, the caller not in the tree. Both come before the rate limit, so only callers the route lets through spend its budgets: a member with no permission on a project can't drain its `count_at: project` budget. Probing permissions is bounded like probing nodes, by the failed-auth IP limiter. The intent is written after the permission check, so during an audit outage a **503** never says whether a node exists.
 
-**The failed-auth IP limiter** counts, per [client IP](../reference/gateway.md#client-ip), the **401** for `valid: false` and both **403**s on a kind route. Nothing else is counted: not a JWT refused locally, an unmatched route, a service account's **403** on a user route, or a route check's `false`. Over its budget, a counted answer is **429** instead ([numbers and headers](../reference/gateway.md#rate-limits)).
+**The failed-auth IP limiter** (active when rate limiting is enabled) counts, per [client IP](../reference/gateway.md#client-ip), the **401** for `valid: false` and both **403**s on a kind route. Nothing else is counted: not a JWT refused locally, an unmatched route, a service account's **403** on a user route, or a route check's `false`. Over its budget, a counted answer is **429** instead ([numbers and headers](../reference/gateway.md#rate-limits)).
 
 On a `public` route, authenticate and admit is skipped and there is no caller. On a user route, the chain is empty and the caller is the person's user id.
 
@@ -134,7 +134,7 @@ Checking is the service's job. Plat5 can't see what a service sends or to whom, 
 
 `/nodes/{node_id}/children/{kind}` and `/users/{user_id}/nodes` return only the nodes the caller can see.
 
-- **Which permission.** The kind's `list_permission`, from `plat5.yml`.
+- **Which permission.** The kind's `list_permission`, from config.
 - **Where.** At each listed node, from the union of the caller's bindings on it and its ancestors ([resolution](#resolution)).
 - **Who.** On a child list, the member in `X-Plat5-Member-Id`, which the gateway sends; without the header the list is the full list, so any front door can list. On `/users/{user_id}/nodes`, that user's members in every tree.
 - **Deleted.** `?status=deleted` uses the same permission, counting the deleted node's own bindings too: they're kept until purge. That includes a deleted org, which has nothing above it: `GET /user/nodes?kind=organization&status=deleted` is how a person finds one. As at admit, only the deleted node's own bindings count beside live ones: a node whose ancestor is deleted too isn't listed, since it can't be restored before that ancestor. Restoring still needs the restore route's permission.
@@ -145,7 +145,7 @@ This is why child list routes require `any_member`: anyone in the tree may ask, 
 
 A UI hides what the caller can't use, and shows who the caller is on a node. Two answers, both for the caller only:
 
-- **Route checks**, for hiding. The UI sends the gateway a batch of requests it might make, by method and public path, and the gateway answers whether each would be allowed: the route match, admit and the permission check, the same steps as a request ([route checks](../reference/gateway.md#route-checks)). The UI asks by route, never by permission name: permissions are the deployment's, and roles can change them with an apply. A node the caller can't reach answers `false`, so a check tells no more than a **403** would.
+- **Route checks**, for hiding. The UI sends `POST /access/routes` to the gateway with a batch of requests it might make, by method and public path, and the gateway answers whether each would be allowed: the route match, admit and the permission check, the same steps as a request ([route checks](../reference/gateway.md#route-checks)). The UI asks by route, never by permission name: permissions are the deployment's, and roles can change them with an apply. A node the caller can't reach answers `false`, so a check tells no more than a **403** would.
 - **`GET …/membership`**, for who the caller is: their member id on the node, the bindings that count there, and the permissions they grant. A UI shows "Admin" or "Guest" from it, and marks "you".
 
 Both are advisory. The gateway decides every request when it's made, so a page shown on a stale answer gets the usual **403**, and a check can't grant anything.
