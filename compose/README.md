@@ -54,7 +54,7 @@ Rate limits are optional policies in config ([`../docs/reference/config/rate-lim
 
 ## Telemetry
 
-Optional `OTEL_EXPORTER_OTLP_ENDPOINT` (empty = no OTLP). When set, traces and metrics both default to OTLP; `/metrics` scrape stays on. CLI: `otel.endpoint` in `plat5.dev.yml`. See [`../docs/reference/telemetry.md`](../docs/reference/telemetry.md).
+Optional `OTEL_EXPORTER_OTLP_ENDPOINT` (empty = no OTLP). When set, traces and metrics both default to OTLP; `/metrics` scrape stays on. CLI: `otel.endpoint` in `plat5.local.yml`. See [`../docs/reference/telemetry.md`](../docs/reference/telemetry.md).
 
 ## Prod
 
