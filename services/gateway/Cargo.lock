@@ -942,7 +942,6 @@ dependencies = [
  "http",
  "jsonwebtoken",
  "moka",
- "once_cell",
  "opentelemetry",
  "opentelemetry-http",
  "opentelemetry-otlp",

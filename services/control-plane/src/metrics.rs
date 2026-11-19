@@ -1,4 +1,4 @@
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use opentelemetry::metrics::{Counter, Histogram};
 use opentelemetry::{global, KeyValue};
 use prometheus::{
@@ -23,7 +23,7 @@ pub fn register_process_metrics() {
 #[cfg(not(target_os = "linux"))]
 pub fn register_process_metrics() {}
 
-static HTTP_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+static HTTP_REQUESTS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     register_int_counter_vec!(
         "http_requests_total",
         "Total HTTP requests processed by control-plane",
@@ -32,7 +32,7 @@ static HTTP_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     .expect("failed to register http_requests_total")
 });
 
-static HTTP_REQUEST_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+static HTTP_REQUEST_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
     let opts = histogram_opts!(
         "http_request_duration_seconds",
         "HTTP request latency as observed by control-plane",
@@ -48,7 +48,7 @@ struct OtelInstruments {
     http_duration: Histogram<f64>,
 }
 
-static OTEL: Lazy<OtelInstruments> = Lazy::new(|| {
+static OTEL: LazyLock<OtelInstruments> = LazyLock::new(|| {
     let meter = global::meter("control-plane");
     OtelInstruments {
         http_requests: meter
@@ -67,13 +67,13 @@ static OTEL: Lazy<OtelInstruments> = Lazy::new(|| {
 
 /// Ensure prometheus series exist before the first scrape.
 pub fn init() {
-    Lazy::force(&HTTP_REQUESTS_TOTAL);
-    Lazy::force(&HTTP_REQUEST_DURATION_SECONDS);
+    LazyLock::force(&HTTP_REQUESTS_TOTAL);
+    LazyLock::force(&HTTP_REQUEST_DURATION_SECONDS);
 }
 
 /// Force OTel instrument creation after MeterProvider is installed.
 pub fn init_otel_instruments() {
-    Lazy::force(&OTEL);
+    LazyLock::force(&OTEL);
 }
 
 pub fn record_request(route: &str, method: &str, status: u16, duration_secs: f64) {

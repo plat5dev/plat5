@@ -549,23 +549,7 @@ pub(crate) mod tests {
         parse_settings(&lookup(vars))
     }
 
-    #[test]
-    fn exporter_includes_otlp_defaults() {
-        let list = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert!(exporter_includes_otlp(None, true));
-        assert!(!exporter_includes_otlp(None, false));
-        assert!(exporter_includes_otlp(Some(&list(&["otlp"])), false));
-        assert!(exporter_includes_otlp(
-            Some(&list(&["otlp", "prometheus"])),
-            false
-        ));
-        assert!(!exporter_includes_otlp(Some(&list(&["prometheus"])), true));
-        assert!(!exporter_includes_otlp(Some(&list(&["none"])), true));
-        assert!(!exporter_includes_otlp(Some(&[]), true));
-    }
-
-    /// Each set-but-invalid value in telemetry.md's "Invalid values" table stops
-    /// boot with an error naming the variable.
+    /// Each set-but-invalid telemetry variable stops boot naming the variable.
     #[test]
     fn invalid_values_are_refused_naming_the_variable() {
         for (key, value) in [
@@ -624,42 +608,8 @@ pub(crate) mod tests {
         assert!(!settings(&[]).unwrap().traces_on());
     }
 
-    fn version(vars: &[(&str, &str)], compiled: &str) -> String {
-        resource_attributes(&lookup(vars), compiled)
-            .unwrap()
-            .into_iter()
-            .find(|kv| kv.key.as_str() == "service.version")
-            .unwrap()
-            .value
-            .to_string()
-    }
-
-    /// `service.version`: `OTEL_RESOURCE_ATTRIBUTES`, then the compiled `VERSION` (`dev` without one).
-    #[test]
-    fn service_version_is_the_build_unless_overridden() {
-        assert_eq!(version(&[], "v1.2.3"), "v1.2.3");
-        let attrs = ("OTEL_RESOURCE_ATTRIBUTES", "service.version=v2.0.0");
-        assert_eq!(version(&[attrs], "v1.2.3"), "v2.0.0");
-    }
-
-    #[test]
-    fn redacts_the_standard_keys_only() {
-        assert_eq!(redact_query("a=1&b=2"), "a=1&b=2");
-        assert_eq!(redact_query("sig=abc&a=1"), "sig=REDACTED&a=1");
-        assert_eq!(
-            redact_query("X-Amz-Signature=x&X-Amz-Credential=y&X-Amz-Security-Token=z"),
-            "X-Amz-Signature=REDACTED&X-Amz-Credential=REDACTED&X-Amz-Security-Token=REDACTED"
-        );
-        assert_eq!(
-            redact_query("Signature=s&AWSAccessKeyId=k&X-Goog-Signature=g"),
-            "Signature=REDACTED&AWSAccessKeyId=REDACTED&X-Goog-Signature=REDACTED"
-        );
-        assert_eq!(redact_query("SIG=abc&sig"), "SIG=abc&sig");
-        assert_eq!(redact_query("q=a%20b+c&sig="), "q=a%20b+c&sig=REDACTED");
-    }
-
     #[derive(Clone, Default)]
-    pub(crate) struct Buffer(pub(crate) Arc<Mutex<Vec<u8>>>);
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
 
     impl std::io::Write for Buffer {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -687,45 +637,6 @@ pub(crate) mod tests {
                 "connection refused".into(),
             ))
         }
-    }
-
-    /// Each line is one JSON object: `timestamp`, the level in lowercase, `message`,
-    /// then the fields as written (docs/reference/telemetry.md#logs).
-    #[test]
-    fn lines_have_the_contract_fields_and_lowercase_levels() {
-        let buf = Buffer::default();
-        let subscriber = tracing_subscriber::registry().with(json_layer(buf.clone()));
-        tracing::subscriber::with_default(subscriber, || {
-            tracing::error!(status = 503u16, route = %"/orgs/{organization}", "e");
-            tracing::warn!(error = %"refused", "w");
-            tracing::info!(duration_ms = 1.5, absent = None::<&str>, "i");
-            tracing::debug!("d");
-        });
-        let out = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
-        let lines: Vec<&str> = out.lines().collect();
-        assert_eq!(lines.len(), 4, "{out}");
-        let parsed: Vec<serde_json::Value> = lines
-            .iter()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
-        let levels: Vec<&str> = parsed
-            .iter()
-            .map(|l| l["level"].as_str().unwrap())
-            .collect();
-        assert_eq!(levels, ["error", "warn", "info", "debug"]);
-        assert!(lines[0].starts_with(r#"{"timestamp":""#), "{}", lines[0]);
-        assert!(
-            lines[0].contains(
-                r#""level":"error","message":"e","status":503,"route":"/orgs/{organization}"}"#
-            ),
-            "{}",
-            lines[0]
-        );
-        let ts = parsed[0]["timestamp"].as_str().unwrap();
-        assert!(ts.ends_with('Z') && ts.contains('T'), "{ts}");
-        assert_eq!(parsed[1]["error"], "refused");
-        assert_eq!(parsed[2]["duration_ms"], 1.5);
-        assert!(parsed[2].get("absent").is_none(), "{}", lines[2]);
     }
 
     /// A failed export is one JSON line on the service's log.

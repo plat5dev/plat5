@@ -1,4 +1,4 @@
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use opentelemetry::metrics::{Counter, Gauge, Histogram};
 use opentelemetry::{global, KeyValue};
 use prometheus::{
@@ -24,7 +24,7 @@ pub fn register_process_metrics() {
 #[cfg(not(target_os = "linux"))]
 pub fn register_process_metrics() {}
 
-pub static HTTP_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+pub static HTTP_REQUESTS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     register_int_counter_vec!(
         "http_requests_total",
         "Total HTTP requests processed by the gateway",
@@ -33,7 +33,7 @@ pub static HTTP_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     .expect("failed to register http_requests_total")
 });
 
-pub static HTTP_REQUEST_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+pub static HTTP_REQUEST_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
     let opts = histogram_opts!(
         "http_request_duration_seconds",
         "HTTP request latency as observed by the gateway",
@@ -43,7 +43,7 @@ pub static HTTP_REQUEST_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
         .expect("failed to register http_request_duration_seconds")
 });
 
-pub static AUTH_FAILURES_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+pub static AUTH_FAILURES_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     register_int_counter_vec!(
         "auth_failures_total",
         "Authentication failures observed by the gateway",
@@ -52,7 +52,7 @@ pub static AUTH_FAILURES_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     .expect("failed to register auth_failures_total")
 });
 
-pub static AUTH_VALIDATION_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+pub static AUTH_VALIDATION_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
     let opts = histogram_opts!(
         "auth_validation_duration_seconds",
         "Latency of authentication validation operations",
@@ -62,7 +62,7 @@ pub static AUTH_VALIDATION_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
         .expect("failed to register auth_validation_duration_seconds")
 });
 
-pub static AUTH_CACHE_HITS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+pub static AUTH_CACHE_HITS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     register_int_counter_vec!(
         "auth_cache_hits_total",
         "Authentication cache hits",
@@ -71,7 +71,7 @@ pub static AUTH_CACHE_HITS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     .expect("failed to register auth_cache_hits_total")
 });
 
-pub static AUTH_CACHE_MISSES_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+pub static AUTH_CACHE_MISSES_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     register_int_counter_vec!(
         "auth_cache_misses_total",
         "Authentication cache misses",
@@ -80,7 +80,7 @@ pub static AUTH_CACHE_MISSES_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     .expect("failed to register auth_cache_misses_total")
 });
 
-pub static AUDIT_WRITES_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+pub static AUDIT_WRITES_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     register_int_counter_vec!(
         "audit_writes_total",
         "Audit writes to the audit service by write (intent, outcome, rejected) and result",
@@ -89,7 +89,7 @@ pub static AUDIT_WRITES_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     .expect("failed to register audit_writes_total")
 });
 
-pub static AUDIT_INTENT_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+pub static AUDIT_INTENT_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
     let opts = histogram_opts!(
         "audit_intent_duration_seconds",
         "Time an audited request waited on its intent write, retries included",
@@ -99,7 +99,7 @@ pub static AUDIT_INTENT_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
         .expect("failed to register audit_intent_duration_seconds")
 });
 
-pub static GATEWAY_CONFIG_REVISION: Lazy<IntGauge> = Lazy::new(|| {
+pub static GATEWAY_CONFIG_REVISION: LazyLock<IntGauge> = LazyLock::new(|| {
     register_int_gauge!(
         "gateway_config_revision",
         "The control-plane revision this replica serves"
@@ -107,7 +107,7 @@ pub static GATEWAY_CONFIG_REVISION: Lazy<IntGauge> = Lazy::new(|| {
     .expect("failed to register gateway_config_revision")
 });
 
-pub static GATEWAY_CONFIG_REFUSED_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+pub static GATEWAY_CONFIG_REFUSED_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     register_int_counter_vec!(
         "gateway_config_refused_total",
         "Control-plane snapshots this replica refused, by revision",
@@ -130,7 +130,7 @@ struct OtelInstruments {
     config_refused: Counter<u64>,
 }
 
-static OTEL: Lazy<OtelInstruments> = Lazy::new(|| {
+static OTEL: LazyLock<OtelInstruments> = LazyLock::new(|| {
     let meter = global::meter("gateway");
     OtelInstruments {
         http_requests: meter
@@ -187,7 +187,7 @@ static OTEL: Lazy<OtelInstruments> = Lazy::new(|| {
 
 /// Force OTEL instrument creation after MeterProvider is installed.
 pub fn init_otel_instruments() {
-    Lazy::force(&OTEL);
+    LazyLock::force(&OTEL);
 }
 
 pub fn record_request(route: &str, method: &str, status: u16, duration_secs: f64) {

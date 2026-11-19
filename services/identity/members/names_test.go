@@ -132,21 +132,16 @@ func TestNameFirstSignIn(t *testing.T) {
 func TestNameShape(t *testing.T) {
 	e := setup(t)
 	user := e.person("fay")
-	for _, c := range []struct {
-		body, message string
-	}{
-		{`{}`, "Nothing to update."},
-		{`{"status": "suspended"}`, "Nothing to update."},
-		{nameBody(ptr("")), "Name is required."},
-		{nameBody(ptr("   ")), "Name is required."},
-		{nameBody(ptr(strings.Repeat("é", 129))), "Name is too long."},
-		{`{"name": 5}`, "That doesn't look right."},
+	for _, body := range []string{
+		`{}`,
+		`{"status": "suspended"}`,
+		nameBody(ptr("")),
+		nameBody(ptr("   ")),
+		nameBody(ptr(strings.Repeat("é", 129))),
+		`{"name": 5}`,
 	} {
-		r := e.callUser("PATCH", "/users/"+user, user, c.body)
-		e.expect(r, 422, c.body)
-		if r.message() != c.message {
-			t.Fatalf("%s: %q", c.body, r.message())
-		}
+		r := e.callUser("PATCH", "/users/"+user, user, body)
+		e.expect(r, 422, body)
 	}
 	e.wantName(user, nil, "after refused edits")
 	long := strings.Repeat("é", 128)

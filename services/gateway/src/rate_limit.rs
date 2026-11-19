@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{Client, RedisError, Script};
 use tracing::{info, warn};
@@ -202,7 +202,7 @@ end
 return out
 "#;
 
-static CHECK: Lazy<Script> = Lazy::new(|| Script::new(CHECK_SCRIPT));
+static CHECK: LazyLock<Script> = LazyLock::new(|| Script::new(CHECK_SCRIPT));
 
 /// The verdict from the script's counts and TTLs (`counts` is `{count, ttl}` per bucket).
 fn verdict(buckets: &[Bucket], allowed: bool, counts: &[i64], now: u64) -> Verdict {

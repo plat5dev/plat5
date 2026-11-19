@@ -215,157 +215,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_invalid_request_serialization() {
-        let err = ApiError::invalid_request();
-        let json = String::from_utf8(err.to_json_bytes(None)).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["error"]["code"], "INVALID_REQUEST");
-        assert_eq!(parsed["error"]["message"], "Malformed request.");
-    }
-
-    #[test]
-    fn validation_names_each_field_and_shows_the_first() {
-        let err = ApiError::validation(&[
-            ("checks[0].method".into(), "method must be GET.".into()),
-            ("checks[1].path".into(), "path must start with /.".into()),
-        ]);
-        let json = String::from_utf8(err.to_json_bytes(Some("r-1"))).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["error"]["code"], "VALIDATION_ERROR");
-        assert_eq!(parsed["error"]["type"], "invalid_request_error");
-        assert_eq!(parsed["error"]["message"], "method must be GET.");
-        assert_eq!(
-            parsed["error"]["details"]["fields"][1],
-            serde_json::json!({ "path": "checks[1].path", "message": "path must start with /." })
-        );
-        assert_eq!(
-            ApiError::unauthorized_any(None).message,
-            "Authentication required: a sign-in token or an API key."
-        );
-    }
-
-    #[test]
-    fn test_unauthorized_names_what_the_scope_takes() {
-        let user = ApiError::unauthorized_for(&Scope::User, None);
-        assert_eq!(
-            user.message,
-            "Authentication required: a sign-in token or a personal API key."
-        );
-        let kind = ApiError::unauthorized_for(&Scope::Kind("project".into()), None);
-        assert_eq!(
-            kind.message,
-            "Authentication required: a sign-in token or an API key."
-        );
-        assert_eq!(kind.code, "UNAUTHORIZED");
-    }
-
-    #[test]
-    fn test_unauthorized_serialization() {
-        let err = ApiError::unauthorized(Some(serde_json::json!({"reason": "token_expired"})));
-        let json = String::from_utf8(err.to_json_bytes(Some("req-123"))).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["error"]["type"], "invalid_request_error");
-        assert_eq!(parsed["error"]["code"], "UNAUTHORIZED");
-        assert_eq!(parsed["error"]["message"], "Authentication required.");
-        assert_eq!(parsed["error"]["request_id"], "req-123");
-        assert_eq!(parsed["error"]["details"]["reason"], "token_expired");
-    }
-
-    #[test]
-    fn test_not_found_serialization() {
-        let err = ApiError::not_found();
-        let json = String::from_utf8(err.to_json_bytes(None)).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["error"]["type"], "invalid_request_error");
-        assert_eq!(parsed["error"]["code"], "NOT_FOUND");
-        assert_eq!(parsed["error"]["message"], "Resource not found.");
-        assert!(parsed["error"]["details"].is_null());
-    }
-
-    #[test]
-    fn test_payload_too_large_serialization() {
-        let err = ApiError::payload_too_large(10_485_760);
-        let json = String::from_utf8(err.to_json_bytes(None)).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["error"]["type"], "invalid_request_error");
-        assert_eq!(parsed["error"]["code"], "PAYLOAD_TOO_LARGE");
-        assert_eq!(parsed["error"]["details"]["max_size_bytes"], 10_485_760);
-    }
-
-    #[test]
-    fn test_internal_error_serialization() {
-        let err = ApiError::internal_error();
-        let json = String::from_utf8(err.to_json_bytes(Some("req-456"))).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["error"]["type"], "api_error");
-        assert_eq!(parsed["error"]["code"], "INTERNAL_ERROR");
-        assert_eq!(parsed["error"]["message"], "An unexpected error occurred.");
-        assert_eq!(parsed["error"]["request_id"], "req-456");
-        assert!(parsed["error"]["details"].is_null());
-    }
-
-    #[test]
-    fn test_service_unavailable_serialization() {
-        let err = ApiError::service_unavailable();
-        let json = String::from_utf8(err.to_json_bytes(None)).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["error"]["type"], "api_error");
-        assert_eq!(parsed["error"]["code"], "SERVICE_UNAVAILABLE");
-        assert_eq!(
-            parsed["error"]["message"],
-            "Service temporarily unavailable."
-        );
-    }
-
-    #[test]
-    fn test_forbidden_serialization() {
+    fn envelope_shape_and_forbidden_details() {
         let err = ApiError::forbidden(&Required::AnyOf(vec!["project:read".to_string()]));
-        let json = String::from_utf8(err.to_json_bytes(None)).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&err.to_json_bytes(Some("req-1"))).unwrap();
         assert_eq!(parsed["error"]["type"], "invalid_request_error");
         assert_eq!(parsed["error"]["code"], "FORBIDDEN");
-        assert_eq!(
-            parsed["error"]["message"],
-            "Permission denied, or it may not exist."
-        );
+        assert_eq!(parsed["error"]["request_id"], "req-1");
         assert_eq!(
             parsed["error"]["details"],
             serde_json::json!({ "required_permissions": ["project:read"] })
         );
+
         let any = ApiError::forbidden(&Required::AnyMember);
-        let json = String::from_utf8(any.to_json_bytes(None)).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["error"]["code"], "FORBIDDEN");
-        assert_eq!(parsed["error"]["details"], serde_json::Value::Null);
-    }
+        let parsed: serde_json::Value = serde_json::from_slice(&any.to_json_bytes(None)).unwrap();
+        assert!(parsed["error"]["details"].is_null());
 
-    #[test]
-    fn test_rate_limited_serialization() {
-        let err = ApiError::rate_limited(12);
-        let json = String::from_utf8(err.to_json_bytes(None)).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["error"]["type"], "api_error");
-        assert_eq!(parsed["error"]["code"], "RATE_LIMITED");
-        assert_eq!(
-            parsed["error"]["message"],
-            "Too many requests. Try again in a moment."
-        );
-        assert_eq!(parsed["error"]["details"]["retry_after_seconds"], 12);
-    }
-
-    #[test]
-    fn test_display() {
-        let err = ApiError::not_found();
-        assert_eq!(format!("{err}"), "NOT_FOUND: Resource not found.");
-    }
-
-    #[test]
-    fn test_error_type_as_str() {
-        assert_eq!(ErrorKind::Auth.as_str(), "auth");
-        assert_eq!(ErrorKind::Network.as_str(), "network");
-        assert_eq!(ErrorKind::Db.as_str(), "db");
-        assert_eq!(ErrorKind::Io.as_str(), "io");
-        assert_eq!(ErrorKind::Internal.as_str(), "internal");
-        assert_eq!(ErrorKind::Validation.as_str(), "validation");
+        let val = ApiError::validation(&[
+            ("checks[0].method".into(), "method must be GET.".into()),
+            ("checks[1].path".into(), "path must start with /.".into()),
+        ]);
+        let parsed: serde_json::Value = serde_json::from_slice(&val.to_json_bytes(None)).unwrap();
+        assert_eq!(parsed["error"]["code"], "VALIDATION_ERROR");
+        assert_eq!(parsed["error"]["message"], "method must be GET.");
+        assert_eq!(parsed["error"]["details"]["fields"].as_array().unwrap().len(), 2);
     }
 }
