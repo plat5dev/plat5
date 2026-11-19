@@ -12,4 +12,4 @@ services:
   gateway:
     environment:
       RATE_LIMIT_AUTH_FAILURE_REQUESTS: "20"
-      RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS: "5"
+      RATE_LIMIT_AUTH_FAILURE_WINDOW: "5s"

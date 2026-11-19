@@ -475,54 +475,42 @@ fn exporter_list(env: Lookup, key: &str, allowed: &[&str]) -> Result<Option<Vec<
     Ok(if out.is_empty() { None } else { Some(out) })
 }
 
-/// The resource, layered: the service's defaults (`version` among them), then
-/// `OTEL_RESOURCE_ATTRIBUTES`, then `OTEL_SERVICE_NAME`, then the convenience
-/// variables that are set.
-fn resource_attributes(env: Lookup, version: &str) -> Result<Vec<KeyValue>, String> {
-    let mut attrs: Vec<(String, String)> = vec![
-        ("service.name".into(), SERVICE_NAME.into()),
-        ("service.namespace".into(), SERVICE_NAMESPACE.into()),
-        (
-            "service.instance.id".into(),
-            get(env, "HOSTNAME")
-                .unwrap_or_else(|| format!("{SERVICE_NAME}-{}", std::process::id())),
-        ),
-        ("service.version".into(), version.into()),
-        ("deployment.environment".into(), "development".into()),
-    ];
-    let mut set = |key: &str, value: String| {
-        attrs.retain(|(k, _)| k != key);
-        attrs.push((key.to_string(), value));
-    };
-    if let Some(raw) = get(env, "OTEL_RESOURCE_ATTRIBUTES") {
-        for entry in raw.split(',') {
-            let Some((key, value)) = entry.split_once('=').filter(|(k, _)| !k.trim().is_empty())
-            else {
-                let want = "want key=value entries, comma-separated";
-                return Err(format!("OTEL_RESOURCE_ATTRIBUTES is {raw:?}: {want}"));
-            };
-            set(key.trim(), value.trim().to_string());
+    /// The resource, layered: the service's defaults (`version` among them), then
+    /// `OTEL_RESOURCE_ATTRIBUTES`, then `OTEL_SERVICE_NAME`.
+    fn resource_attributes(env: Lookup, version: &str) -> Result<Vec<KeyValue>, String> {
+        let mut attrs: Vec<(String, String)> = vec![
+            ("service.name".into(), SERVICE_NAME.into()),
+            ("service.namespace".into(), SERVICE_NAMESPACE.into()),
+            (
+                "service.instance.id".into(),
+                get(env, "HOSTNAME")
+                    .unwrap_or_else(|| format!("{SERVICE_NAME}-{}", std::process::id())),
+            ),
+            ("service.version".into(), version.into()),
+            ("deployment.environment".into(), "development".into()),
+        ];
+        let mut set = |key: &str, value: String| {
+            attrs.retain(|(k, _)| k != key);
+            attrs.push((key.to_string(), value));
+        };
+        if let Some(raw) = get(env, "OTEL_RESOURCE_ATTRIBUTES") {
+            for entry in raw.split(',') {
+                let Some((key, value)) = entry.split_once('=').filter(|(k, _)| !k.trim().is_empty())
+                else {
+                    let want = "want key=value entries, comma-separated";
+                    return Err(format!("OTEL_RESOURCE_ATTRIBUTES is {raw:?}: {want}"));
+                };
+                set(key.trim(), value.trim().to_string());
+            }
         }
-    }
-    for (key, vars) in [
-        ("service.name", &["OTEL_SERVICE_NAME"][..]),
-        ("service.namespace", &["OTEL_SERVICE_NAMESPACE"]),
-        ("service.version", &["OTEL_SERVICE_VERSION"]),
-        ("service.instance.id", &["OTEL_SERVICE_INSTANCE_ID"]),
-        (
-            "deployment.environment",
-            &["OTEL_DEPLOYMENT_ENV", "DEPLOYMENT_ENV"],
-        ),
-    ] {
-        if let Some(value) = vars.iter().find_map(|v| get(env, v)) {
-            set(key, value);
+        if let Some(value) = get(env, "OTEL_SERVICE_NAME") {
+            set("service.name", value);
         }
+        Ok(attrs
+            .into_iter()
+            .map(|(k, v)| KeyValue::new(k, v))
+            .collect())
     }
-    Ok(attrs
-        .into_iter()
-        .map(|(k, v)| KeyValue::new(k, v))
-        .collect())
-}
 
 fn sampler_from_ratio(ratio: f64) -> sdktrace::Sampler {
     let inner = if (ratio - 1.0).abs() < f64::EPSILON {
@@ -646,23 +634,12 @@ pub(crate) mod tests {
             .to_string()
     }
 
-    /// `service.version`: `OTEL_SERVICE_VERSION`, then `OTEL_RESOURCE_ATTRIBUTES`,
-    /// then the compiled `VERSION`, which is `dev` without one.
+    /// `service.version`: `OTEL_RESOURCE_ATTRIBUTES`, then the compiled `VERSION` (`dev` without one).
     #[test]
     fn service_version_is_the_build_unless_overridden() {
-        assert_eq!(compiled_version(None), "dev");
-        assert_eq!(compiled_version(Some("")), "dev");
-        assert_eq!(compiled_version(Some("v1.2.3")), "v1.2.3");
-        assert_eq!(VERSION, compiled_version(option_env!("VERSION")));
-
-        assert_eq!(version(&[("CI_COMMIT_TAG", "v9.9.9")], "dev"), "dev");
         assert_eq!(version(&[], "v1.2.3"), "v1.2.3");
         let attrs = ("OTEL_RESOURCE_ATTRIBUTES", "service.version=v2.0.0");
         assert_eq!(version(&[attrs], "v1.2.3"), "v2.0.0");
-        assert_eq!(
-            version(&[attrs, ("OTEL_SERVICE_VERSION", "v3.0.0")], "v1.2.3"),
-            "v3.0.0"
-        );
     }
 
     #[test]

@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::audit::{self, Audit, AuditState};
 use crate::auth::admit::{AdmitCache, HttpAdmit};
 use crate::auth::jwt::JwtValidatorState;
-use crate::auth::{AuthError, Authenticator};
+use crate::auth::{AuthError, Authenticator, NameClaims};
 use crate::client_ip::TrustedProxies;
 use crate::config::GatewayConfig;
 use crate::control_plane::Snapshot;
@@ -37,8 +37,11 @@ use crate::route_map::{Matched, Required, Route, Scope};
 
 pub use context::GatewayContext;
 
+const ROUTE_CHECKS_PATH: &str = "/access/routes";
+
 pub struct Gateway {
     authenticator: Authenticator,
+    name_claims: NameClaims,
     pipeline: GatewayPipeline,
     /// Routes, rate limits and CORS from the control plane, swapped whole on each change.
     snapshot: Arc<ArcSwap<Snapshot>>,
@@ -57,6 +60,7 @@ impl Gateway {
         let admit = HttpAdmit::new(&cfg.identity_internal_url, InternalHttpClient::new());
         Self {
             authenticator: Authenticator::new(jwt_validator, cfg.auth_subject_claim.clone()),
+            name_claims: cfg.auth_name_claims.clone(),
             pipeline: Pipeline::new(
                 AdmitCache::new(admit, cfg.admit_cache_ttl, cfg.admit_negative_cache_ttl),
                 limiter,
@@ -128,7 +132,6 @@ impl Gateway {
         session: &mut Session,
         ctx: &mut GatewayContext,
         matched: &Matched,
-        snapshot: &Snapshot,
         request_id: &str,
     ) -> Result<bool> {
         let route = &matched.route;
@@ -157,20 +160,14 @@ impl Gateway {
             Scope::Public => Err(AuthError::MissingAuthorization),
             _ => {
                 self.authenticator
-                    .present(session.req_header(), &snapshot.name_claims)
+                    .present(session.req_header(), &self.name_claims)
                     .await
             }
         };
         // request_filter has entered the root span: a JWT's kid is recorded on it.
         let decided = self
             .pipeline
-            .decide(
-                matched,
-                &snapshot.default_policies,
-                &ip,
-                presented,
-                &mut ctx.credential,
-            )
+            .decide(matched, &ip, presented, &mut ctx.credential)
             .await;
         let audited = self.audit.enabled() && route.audit;
         let passed = match decided {
@@ -266,7 +263,7 @@ impl Gateway {
         ctx: &mut GatewayContext,
         snapshot: &Snapshot,
     ) -> Result<bool> {
-        let route = snapshot.route_checks.path.clone();
+        let route = ROUTE_CHECKS_PATH.to_string();
         if let Some(ref span) = ctx.root_span {
             span.record("http.route", route.as_str());
             span.context().span().update_name(format!("POST {route}"));
@@ -277,7 +274,7 @@ impl Gateway {
 
         let presented = self
             .authenticator
-            .present(session.req_header(), &snapshot.name_claims)
+            .present(session.req_header(), &self.name_claims)
             .await;
         if let Ok(p) = &presented {
             ctx.credential.auth_type = Some(p.auth_type());
@@ -658,7 +655,7 @@ impl ProxyHttp for Gateway {
 
         // Route checks: the gateway's own answer. No route matches the path.
         let snapshot = self.snapshot.load_full();
-        if session.req_header().method == http::Method::POST && path == snapshot.route_checks.path {
+        if session.req_header().method == http::Method::POST && path == ROUTE_CHECKS_PATH {
             return self.handle_route_checks(session, ctx, &snapshot).await;
         }
 
@@ -688,7 +685,7 @@ impl ProxyHttp for Gateway {
         if let Some(done) = self.reject_oversized_content_length(session, ctx).await? {
             return Ok(done);
         }
-        self.prepare_upstream(session, ctx, &matched, &snapshot, &request_id)
+        self.prepare_upstream(session, ctx, &matched, &request_id)
             .await
     }
 

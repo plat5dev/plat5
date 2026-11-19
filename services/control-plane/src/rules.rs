@@ -29,7 +29,7 @@ pub fn check(config: &Config) -> Result<(), Vec<FieldError>> {
             }
         }
         check_shapes(&valid, &mut errs);
-        check_route_checks(config, &valid, &mut errs);
+        check_route_checks(&valid, &mut errs);
         check_roles(config, &mut errs);
     }
     if errs.is_empty() {
@@ -528,11 +528,11 @@ fn check_shapes(routes: &[ExpandedRoute], errs: &mut Vec<FieldError>) {
     }
 }
 
-/// Rule 5, for the gateway's own path: no route, in any method, matches
-/// `route_checks.path` (docs/reference/gateway.md#route-checks). Each `{param}`
+/// Rule 4, for the gateway's own path: no route, in any method, matches
+/// `/access/routes` (docs/reference/gateway.md#route-checks). Each `{param}`
 /// matches any segment, a literal only itself.
-fn check_route_checks(config: &Config, routes: &[ExpandedRoute], errs: &mut Vec<FieldError>) {
-    let path = &config.route_checks.path;
+fn check_route_checks(routes: &[ExpandedRoute], errs: &mut Vec<FieldError>) {
+    let path = crate::config::ROUTE_CHECKS_PATH;
     let want: Vec<&str> = path.split('/').collect();
     for route in routes {
         let segments: Vec<&str> = route.path.split('/').collect();
@@ -543,10 +543,10 @@ fn check_route_checks(config: &Config, routes: &[ExpandedRoute], errs: &mut Vec<
                 .all(|(have, w)| have.starts_with('{') || have == w);
         if matches {
             errs.push(FieldError::new(
-                "route_checks.path",
+                route.at.clone(),
                 format!(
-                    "{path} is where the gateway answers route checks, and {} {} at {} matches it",
-                    route.method, route.path, route.at
+                    "{} {} matches {path}, which is reserved for gateway route checks",
+                    route.method, route.path
                 ),
             ));
         }
@@ -571,9 +571,9 @@ mod tests {
             "creator_role": "admin",
             "defaults": { "rate_limit": ["standard"] },
             "rate_limits": {
-                "standard": { "requests": 60, "window_seconds": 60 },
-                "per-project": { "requests": 100, "window_seconds": 1, "count_at": "project" },
-                "per-org": { "requests": 300, "window_seconds": 1, "count_at": "organization" }
+                "standard": { "requests": 60, "window": "60s" },
+                "per-project": { "requests": 100, "window": "1s", "count_at": "project" },
+                "per-org": { "requests": 300, "window": "1s", "count_at": "organization" }
             }
         })
     }
@@ -831,7 +831,7 @@ mod tests {
         errors_at(r("public", json!(["per-org"])), &at("public"));
         let mut c = base();
         c["rate_limits"]["per-team"] =
-            json!({ "requests": 1, "window_seconds": 1, "count_at": "team" });
+            json!({ "requests": 1, "window": "1s", "count_at": "team" });
         errors_at(c, "rate_limits.per-team.count_at");
         // defaults.rate_limit names policies, none with count_at.
         let mut c = base();
@@ -844,7 +844,7 @@ mod tests {
         // standard policy can count at a kind when no default names it.
         let mut c = base();
         c["rate_limits"]["default"] =
-            json!({ "requests": 1, "window_seconds": 1, "count_at": "organization" });
+            json!({ "requests": 1, "window": "1s", "count_at": "organization" });
         run(c).unwrap();
         // Omitted is defaults.rate_limit, in every scope; `false` is none.
         let mut c = with_routes(
@@ -854,13 +854,20 @@ mod tests {
                 { "path": "/b", "methods": ["GET"], "rate_limit": false }
             ]),
         );
-        c["rate_limits"]["burst"] = json!({ "requests": 5, "window_seconds": 1 });
+        c["rate_limits"]["burst"] = json!({ "requests": 5, "window": "1s" });
         c["defaults"]["rate_limit"] = json!(["standard", "burst"]);
         run(c.clone()).unwrap();
         let config: Config = serde_json::from_value(c).unwrap();
         let routes = &expand::expand(&config)["e10s"].routes;
         assert_eq!(routes[0].rate_limit, vec!["standard", "burst"]);
         assert!(routes[1].rate_limit.is_empty());
+        // Rate limits and defaults are optional: omitted routes are unlimited.
+        let mut c = with_routes("public", json!([{ "path": "/a", "methods": ["GET"] }]));
+        c.as_object_mut().unwrap().remove("defaults");
+        c.as_object_mut().unwrap().remove("rate_limits");
+        run(c.clone()).unwrap();
+        let config: Config = serde_json::from_value(c).unwrap();
+        assert!(expand::expand(&config)["e10s"].routes[0].rate_limit.is_empty());
     }
 
     #[test]
@@ -902,64 +909,32 @@ mod tests {
 
     #[test]
     fn a_route_matching_the_route_checks_path() {
-        // The default path is free in the base, with identity's routes.
         let mut c = base();
         c["services"] = json!({ "identity": identity() });
-        run(c.clone()).unwrap();
+        run(c).unwrap();
 
-        // A literal match, in any method, names the route and its field path.
+        let at = format!("{AT}.public.routes[0].path");
         let c = route(
             "public",
             json!({ "path": "/access/routes", "methods": ["GET"] }),
         );
-        let errs = errors_at(c, "route_checks.path");
-        assert_eq!(errs.len(), 1, "{errs:?}");
-        assert!(
-            errs[0]
-                .message
-                .contains(&format!("GET /access/routes at {AT}.public.routes[0].path")),
-            "{errs:?}"
-        );
+        errors_at(c, &at);
 
         // A param matches any segment.
         let c = route(
             "public",
             json!({ "path": "/access/{what}", "methods": ["POST"] }),
         );
-        let errs = errors_at(c, "route_checks.path");
-        assert!(errs[0].message.contains("POST /access/{what}"), "{errs:?}");
-
-        // Its own path, against identity's routes: /user.
-        let mut c = base();
-        c["services"] = json!({ "identity": identity() });
-        c["route_checks"] = json!({ "path": "/user" });
-        let errs = errors_at(c, "route_checks.path");
-        assert!(
-            errs.iter()
-                .all(|e| e.message.contains("/user at services.identity")),
-            "{errs:?}"
-        );
-        // GET, PATCH and DELETE /user: one error each.
-        assert_eq!(errs.len(), 3, "{errs:?}");
-
-        // A kind route's full public path counts.
-        let mut c = route(
-            "organization",
-            json!({ "path": "/checks", "methods": ["POST"], "required_permissions": ["organization:read"] }),
-        );
-        c["route_checks"] = json!({ "path": "/orgs/acme/checks" });
-        errors_at(c, "route_checks.path");
+        errors_at(c, &at);
 
         // Prefixes and longer paths don't match.
-        let mut c = with_routes(
+        let c = with_routes(
             "public",
             json!([
                 { "path": "/access", "methods": ["GET"] },
                 { "path": "/access/routes/{id}", "methods": ["GET"] }
             ]),
         );
-        run(c.clone()).unwrap();
-        c["route_checks"] = json!({ "path": "/checks/v1" });
         run(c).unwrap();
     }
 

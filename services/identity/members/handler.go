@@ -513,7 +513,7 @@ func (h *Handler) SetName(c fiber.Ctx) error {
 		return errors.FieldError("name", errors.FallbackValidation)
 	}
 	userID := httpx.PathParam(c, "user_id")
-	before, u, err := h.store.SetName(c.Context(), h.src.Current(), userID, name)
+	before, u, err := h.store.SetName(c.Context(), userID, name)
 	if err != nil {
 		return mapErr(c, err, "failed to set name", "user", userID)
 	}

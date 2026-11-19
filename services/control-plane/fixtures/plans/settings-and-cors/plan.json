@@ -2,7 +2,7 @@
   "revision": 7,
   "summary": {
     "add": 1,
-    "change": 7,
+    "change": 5,
     "remove": 0,
     "blocked": 0
   },
@@ -25,46 +25,12 @@
       ]
     },
     {
-      "op": "change",
-      "what": "setting",
-      "name": "route_checks",
-      "before": {
-        "path": "/access/routes"
-      },
-      "after": {
-        "path": "/v1/route-checks"
-      }
-    },
-    {
-      "op": "change",
-      "what": "setting",
-      "name": "users",
-      "before": {
-        "name": {
-          "claims": [
-            "name",
-            "preferred_username"
-          ],
-          "sync": "first_sign_in"
-        }
-      },
-      "after": {
-        "name": {
-          "claims": [
-            "profile.display_name",
-            "nickname"
-          ],
-          "sync": "each_sign_in"
-        }
-      }
-    },
-    {
       "op": "add",
       "what": "rate_limit",
       "name": "evals-org",
       "after": {
         "requests": 300,
-        "window_seconds": 1,
+        "window": "1s",
         "count_at": "organization"
       }
     },

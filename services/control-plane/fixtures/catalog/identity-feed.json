@@ -7,15 +7,6 @@
     "api",
     "admin"
   ],
-  "users": {
-    "name": {
-      "claims": [
-        "name",
-        "preferred_username"
-      ],
-      "sync": "first_sign_in"
-    }
-  },
   "kinds": {
     "environment": {
       "parent": "project",

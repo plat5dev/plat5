@@ -149,8 +149,7 @@ func Init(ctx context.Context) (*Telemetry, error) {
 }
 
 // buildResource layers the resource: the service's defaults (the compiled
-// Version among them), then OTEL_RESOURCE_ATTRIBUTES and OTEL_SERVICE_NAME,
-// then the convenience variables that are set.
+// Version among them), then OTEL_RESOURCE_ATTRIBUTES and OTEL_SERVICE_NAME.
 func buildResource(ctx context.Context) (*resource.Resource, error) {
 	defaults := []attribute.KeyValue{
 		semconv.ServiceNameKey.String(serviceName),
@@ -159,30 +158,12 @@ func buildResource(ctx context.Context) (*resource.Resource, error) {
 		semconv.ServiceVersionKey.String(Version),
 		semconv.DeploymentEnvironmentKey.String("development"),
 	}
-	var overrides []attribute.KeyValue
-	for _, o := range []struct {
-		key  attribute.Key
-		vars []string
-	}{
-		{semconv.ServiceNamespaceKey, []string{"OTEL_SERVICE_NAMESPACE"}},
-		{semconv.ServiceVersionKey, []string{"OTEL_SERVICE_VERSION"}},
-		{semconv.ServiceInstanceIDKey, []string{"OTEL_SERVICE_INSTANCE_ID"}},
-		{semconv.DeploymentEnvironmentKey, []string{"OTEL_DEPLOYMENT_ENV", "DEPLOYMENT_ENV"}},
-	} {
-		for _, v := range o.vars {
-			if value := getEnv(v, ""); value != "" {
-				overrides = append(overrides, o.key.String(value))
-				break
-			}
-		}
-	}
 
 	res, err := resource.New(ctx,
 		resource.WithAttributes(defaults...),
 		resource.WithFromEnv(),
 		resource.WithProcess(),
 		resource.WithTelemetrySDK(),
-		resource.WithAttributes(overrides...),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build resource: %w", err)

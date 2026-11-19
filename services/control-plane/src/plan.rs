@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use crate::config::{RouteChecks, Users, DEFAULT_DELETION_GRACE};
+use crate::config::DEFAULT_DELETION_GRACE;
 use crate::counts::{Counts, CountsRequest, CountsResponse};
 use crate::expand;
 use crate::schema::FieldError;
@@ -353,21 +353,18 @@ fn settings(s: &Served) -> BTreeMap<String, Value> {
             s.identity["deletion_grace"].clone(),
         ),
         ("reserved_slugs".into(), Value::Array(slugs)),
-        ("users".into(), s.gateway["users"].clone()),
-        ("route_checks".into(), s.gateway["route_checks"].clone()),
         ("defaults".into(), s.gateway["defaults"].clone()),
         ("creator_role".into(), s.identity["creator_role"].clone()),
     ])
 }
 
-/// What each setting is before the first apply. `defaults` and `creator_role`
-/// have none: every config states them.
+/// What each setting is before the first apply. `creator_role` has none: every
+/// config states it.
 fn default_settings() -> BTreeMap<String, Value> {
     BTreeMap::from([
         ("deletion_grace".into(), json!(DEFAULT_DELETION_GRACE)),
         ("reserved_slugs".into(), json!([])),
-        ("users".into(), json!(Users::default())),
-        ("route_checks".into(), json!(RouteChecks::default())),
+        ("defaults".into(), json!({ "rate_limit": [] })),
     ])
 }
 

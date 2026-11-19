@@ -14,14 +14,15 @@ pub const KEY_PREFIX: &str = "plat5:rl:";
 /// Command and connect bound. A dead socket must surface as an error inside this window.
 const VALKEY_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// Cluster-wide fixed-window limiter. Valkey is required. A request's buckets are
-/// checked together in one round trip and counted only if every one passes.
+/// Cluster-wide fixed-window limiter backed by Valkey, or disabled when
+/// `RATE_LIMIT_ENABLED=false`. A request's buckets are checked together in one
+/// round trip and counted only if every one passes.
 ///
 /// Clones share one connection. A timeout or dropped socket is replaced in the
 /// background so a later request succeeds once Valkey answers again.
 #[derive(Clone)]
 pub struct RateLimiter {
-    inner: Arc<Inner>,
+    inner: Option<Arc<Inner>>,
 }
 
 struct Inner {
@@ -67,25 +68,40 @@ impl RateLimiter {
         let client = Client::open(url)?;
         let conn = open_manager(client.clone()).await?;
         Ok(Self {
-            inner: Arc::new(Inner {
+            inner: Some(Arc::new(Inner {
                 client,
                 conn: ArcSwap::from_pointee(conn),
                 reconnecting: AtomicBool::new(false),
-            }),
+            })),
         })
     }
 
+    pub fn disabled() -> Self {
+        Self { inner: None }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.inner.is_some()
+    }
+
     pub async fn ping(&self) -> Result<(), RedisError> {
-        let mut conn = self.conn();
+        let Some(inner) = self.inner.as_ref() else {
+            return Ok(());
+        };
+        let mut conn = ConnectionManager::clone(&inner.conn.load());
         let result = redis::cmd("PING").query_async(&mut conn).await;
         if let Err(ref err) = result {
-            self.note_disconnect(err);
+            note_disconnect(inner, err);
         }
         result
     }
 
-    /// Check every bucket, and count them all only if all pass. No buckets, no trip.
+    /// Check every bucket, and count them all only if all pass. No buckets or
+    /// disabled: no trip.
     pub async fn check(&self, buckets: &[Bucket]) -> Result<Verdict, Unavailable> {
+        let Some(inner) = self.inner.as_ref() else {
+            return Ok(Verdict::Allowed(Vec::new()));
+        };
         if buckets.is_empty() {
             return Ok(Verdict::Allowed(Vec::new()));
         }
@@ -96,7 +112,7 @@ impl RateLimiter {
                 .arg(bucket.requests)
                 .arg(bucket.window_seconds);
         }
-        let mut conn = self.conn();
+        let mut conn = ConnectionManager::clone(&inner.conn.load());
         match invocation.invoke_async::<Vec<i64>>(&mut conn).await {
             Ok(vals) if vals.len() == 1 + 2 * buckets.len() => {
                 Ok(verdict(buckets, vals[0] == 1, &vals[1..], now_epoch()))
@@ -107,48 +123,43 @@ impl RateLimiter {
             }
             Err(err) => {
                 warn!(error = %err, "rate limit valkey error");
-                self.note_disconnect(&err);
+                note_disconnect(inner, &err);
                 Err(Unavailable)
             }
         }
     }
+}
 
-    fn conn(&self) -> ConnectionManager {
-        let guard = self.inner.conn.load();
-        ConnectionManager::clone(&guard)
+/// A response timeout does not replace the connection. Swap in a new one
+/// or later commands keep the dead socket.
+fn note_disconnect(inner: &Arc<Inner>, err: &RedisError) {
+    if err.is_io_error() || err.is_unrecoverable_error() {
+        spawn_reconnect(inner);
     }
+}
 
-    /// A response timeout does not replace the connection. Swap in a new one
-    /// or later commands keep the dead socket.
-    fn note_disconnect(&self, err: &RedisError) {
-        if err.is_io_error() || err.is_unrecoverable_error() {
-            self.spawn_reconnect();
-        }
+fn spawn_reconnect(inner: &Arc<Inner>) {
+    if inner.reconnecting.swap(true, Ordering::AcqRel) {
+        return;
     }
-
-    fn spawn_reconnect(&self) {
-        if self.inner.reconnecting.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let inner = Arc::clone(&self.inner);
-        let Some(handle) = tokio::runtime::Handle::try_current().ok() else {
-            inner.reconnecting.store(false, Ordering::Release);
-            warn!("valkey reconnect skipped: no tokio runtime");
-            return;
-        };
-        handle.spawn(async move {
-            match open_manager(inner.client.clone()).await {
-                Ok(conn) => {
-                    inner.conn.store(Arc::new(conn));
-                    info!("valkey reconnected");
-                }
-                Err(err) => {
-                    warn!(error = %err, "valkey reconnect failed");
-                }
+    let inner = Arc::clone(inner);
+    let Some(handle) = tokio::runtime::Handle::try_current().ok() else {
+        inner.reconnecting.store(false, Ordering::Release);
+        warn!("valkey reconnect skipped: no tokio runtime");
+        return;
+    };
+    handle.spawn(async move {
+        match open_manager(inner.client.clone()).await {
+            Ok(conn) => {
+                inner.conn.store(Arc::new(conn));
+                info!("valkey reconnected");
             }
-            inner.reconnecting.store(false, Ordering::Release);
-        });
-    }
+            Err(err) => {
+                warn!(error = %err, "valkey reconnect failed");
+            }
+        }
+        inner.reconnecting.store(false, Ordering::Release);
+    });
 }
 
 /// `0` is one attempt. redis-rs passes this count to backon as extra sleeps

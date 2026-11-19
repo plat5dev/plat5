@@ -631,9 +631,12 @@ mod span_tests {
         provider.force_flush().unwrap();
         let mut spans = exporter.get_finished_spans().unwrap();
         let out = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
-        let lines: Vec<&str> = out.lines().collect();
-        assert_eq!(lines.len(), 1, "{out}");
-        (serde_json::from_str(lines[0]).unwrap(), spans.remove(0))
+        let line: serde_json::Value = out
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .find(|v| v["message"] == "request completed")
+            .unwrap_or_else(|| panic!("no request completed line in:\n{out}"));
+        (line, spans.remove(0))
     }
 
     #[tokio::test]

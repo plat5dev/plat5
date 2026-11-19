@@ -1,7 +1,6 @@
 {
   "deletion_grace": "30d",
   "reserved_slugs": ["new", "settings", "api", "admin"],
-  "users": { "name": {"claims": ["name", "preferred_username"], "sync": "first_sign_in"} },
   "kinds": {
     "environment": {
       "bind_creator": false,
@@ -27,7 +26,7 @@
     }
   },
   "creator_role": "admin",
-  "rate_limits": { "standard": {"requests": 100, "window_seconds": 1} },
+  "rate_limits": { "standard": {"requests": 100, "window": "1s"} },
   "defaults": { "rate_limit": ["standard"] },
   "services": {
     "identity": {

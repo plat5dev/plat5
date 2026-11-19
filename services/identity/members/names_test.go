@@ -10,14 +10,9 @@ import (
 	"github.com/plat5dev/plat5/identity/internal/auditx"
 )
 
-// A person's name (docs/reference/idp.md#a-persons-name): seeded by sign-ins
-// as users.name.sync says, set or cleared by the person with PATCH /user
+// A person's name (docs/reference/idp.md#a-persons-name): seeded on first
+// sign-in while empty, set or cleared by the person with PATCH /user
 // (X-Plat5-User-Id) and by an operator on the service API (no header).
-// Which claim the gateway sends is its own: admit gets one name, the first
-// non-empty claim, and the gateway's tests cover the order.
-
-// eachSignInConfig is testConfig with users.name.sync each_sign_in.
-var eachSignInConfig = strings.Replace(testConfig, `"sync": "first_sign_in"`, `"sync": "each_sign_in"`, 1)
 
 // signIn admits subject on a user route, with name as the name claim, or no
 // claim for nil.
@@ -131,43 +126,6 @@ func TestNameFirstSignIn(t *testing.T) {
 	if got := e.userEventsAfter(0); len(got) != 1 {
 		t.Fatalf("user events %v", got)
 	}
-}
-
-func TestNameEachSignIn(t *testing.T) {
-	e := setupWith(t, eachSignInConfig)
-
-	e.signIn("erin", nil)
-	user := e.userOf("erin")
-	e.wantName(user, nil, "no claim")
-	e.signIn("erin", ptr("Erin"))
-	e.wantName(user, ptr("Erin"), "first claim")
-	e.signIn("erin", ptr("Erin Renamed"))
-	e.wantName(user, ptr("Erin Renamed"), "a later claim wins")
-	e.signIn("erin", ptr(""))
-	e.wantName(user, ptr("Erin Renamed"), "an empty claim")
-	e.signIn("erin", nil)
-	e.wantName(user, ptr("Erin Renamed"), "no claim")
-
-	// The IdP owns the name: an edit is refused, a clear too, whoever sends
-	// it: the person (PATCH /user, with X-Plat5-User-Id) or an operator.
-	for _, body := range []string{nameBody(ptr("Mine")), `{"name": null}`, nameBody(ptr(""))} {
-		for who, r := range map[string]response{
-			"person":   e.callUser("PATCH", "/users/"+user, user, body),
-			"operator": e.call("PATCH", "/users/"+user, "", body),
-		} {
-			e.expect(r, 409, who+" edit "+body)
-			if r.code() != "NAME_OWNED_BY_IDP" || r.message() != "This name comes from the sign-in provider." || r.body["error"].(map[string]any)["details"] != nil {
-				t.Fatalf("%s edit: %v", who, r.body)
-			}
-			if r.headers[auditx.Header] != "" {
-				t.Fatalf("%s edit: details %s", who, r.headers[auditx.Header])
-			}
-		}
-	}
-	e.wantName(user, ptr("Erin Renamed"), "after refused edits")
-	e.expect(e.call("PATCH", "/users/01jbx9q3t5vk8m2n4p6r7s8t9w", "", nameBody(ptr("X"))), 404, "unknown user")
-	e.signIn("erin", ptr("Erin"))
-	e.wantName(user, ptr("Erin"), "the next claim wins")
 }
 
 // The name's shape: 1 to 128 characters after trimming, like other names.

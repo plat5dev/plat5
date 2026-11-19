@@ -117,8 +117,6 @@ impl Counter for Arc<MemCounter> {
 
 struct Harness {
     pipeline: Pipeline<Arc<FakeAdmit>, Arc<MemCounter>>,
-    /// The policies `defaults.rate_limit` names, as a request passes them in.
-    defaults: Vec<Policy>,
     admit: Arc<FakeAdmit>,
     counter: Arc<MemCounter>,
 }
@@ -146,12 +144,6 @@ fn harness_with(answer: Result<AdmitAnswer, String>, auth_failure: Limit) -> Har
             counter.clone(),
             auth_failure,
         ),
-        defaults: vec![Policy {
-            name: "standard".into(),
-            requests: 60,
-            window_seconds: 60,
-            count_at: None,
-        }],
         admit,
         counter,
     }
@@ -178,7 +170,7 @@ impl Harness {
         let mut cred = RequestCredential::default();
         let r = self
             .pipeline
-            .decide(matched, &self.defaults, IP, presented, &mut cred)
+            .decide(matched, IP, presented, &mut cred)
             .await
             .map_err(|refused| refused.rejection);
         (r, cred)
@@ -484,7 +476,7 @@ async fn admit_table() {
     let mut cred = RequestCredential::default();
     let refused = h
         .pipeline
-        .decide(&read, &h.defaults, IP, Ok(key()), &mut cred)
+        .decide(&read, IP, Ok(key()), &mut cred)
         .await
         .unwrap_err();
     assert_eq!(refused.rejection, Rejection::Denied);
@@ -681,8 +673,8 @@ async fn a_full_failed_auth_bucket_answers_missing_and_forbidden_alike() {
 #[tokio::test]
 async fn refused_callers_spend_no_count_at_budget() {
     let limits = json!({
-        "evals-caller": { "requests": 3, "window_seconds": 1 },
-        "evals-org": { "requests": 2, "window_seconds": 10, "count_at": "project" }
+        "evals-caller": { "requests": 3, "window": "1s" },
+        "evals-org": { "requests": 2, "window": "10s", "count_at": "project" }
     });
     let snapshot = snapshot_with(e10s(), limits);
     let check = find(&snapshot, "POST", "/orgs/acme/projects/web/check");
@@ -781,14 +773,8 @@ async fn a_service_account_on_a_user_route_is_403() {
         (body.code.as_str(), body.message.as_str(), body.details),
         ("FORBIDDEN", "Service accounts can't use this route.", None)
     );
-    // The credential is good: no failed auth. No user's budget either: one
-    // count of default for the key, the route checks bucket.
-    let bucket = format!(
-        "standard:credential:{}",
-        crate::auth::admit::credential_hash(&key_credential())
-    );
-    assert_eq!(h.counter.buckets(), vec![bucket.clone()]);
-    assert_eq!(h.counter.count(&bucket), 1);
+    // The credential is good: neither failed-auth nor user-route buckets are spent.
+    assert!(h.counter.buckets().is_empty());
     assert_eq!(
         (cred.key_id.as_deref(), cred.principal.as_deref()),
         (Some(KEY_ID), Some("service_account"))
@@ -796,36 +782,6 @@ async fn a_service_account_on_a_user_route_is_403() {
     // Cached as an answer, not a refusal.
     h.run(&me, Ok(key())).await.0.unwrap_err();
     assert_eq!(h.calls(), 1);
-}
-
-#[tokio::test]
-async fn a_service_account_on_a_user_route_spends_default_per_key() {
-    let snapshot = catalog();
-    let me = find(&snapshot, "GET", "/user");
-    let mut h = harness(Ok(service_account_user()));
-    h.defaults[0].requests = 2;
-    for _ in 0..2 {
-        assert_eq!(
-            h.run(&me, Ok(key())).await.0.unwrap_err(),
-            Rejection::ServiceAccount
-        );
-    }
-    // The third is over the budget: a 429 with the policy's numbers, not the 403.
-    match h.run(&me, Ok(key())).await.0 {
-        Err(Rejection::RateLimited {
-            retry_after: 60,
-            info: Some(info),
-        }) => assert_eq!((info.limit, info.remaining), (2, 0)),
-        other => panic!("{other:?}"),
-    }
-    // Never the failed-auth limiter, and the same bucket a route checks call
-    // with this key spends.
-    let bucket = format!(
-        "standard:credential:{}",
-        crate::auth::admit::credential_hash(&key_credential())
-    );
-    assert!(h.counter.buckets().iter().all(|b| *b == bucket));
-    assert_eq!(h.counter.count(&bucket), 2);
 }
 
 fn e10s() -> Value {
@@ -856,8 +812,8 @@ fn e10s() -> Value {
 
 fn e10s_limits() -> Value {
     json!({
-        "evals-caller": { "requests": 3, "window_seconds": 1 },
-        "evals-org": { "requests": 2, "window_seconds": 10, "count_at": "organization" }
+        "evals-caller": { "requests": 3, "window": "1s" },
+        "evals-org": { "requests": 2, "window": "10s", "count_at": "organization" }
     })
 }
 
@@ -1381,7 +1337,7 @@ async fn route_check_batches_admit_as_their_requests_would() {
 async fn route_checks_count_the_defaults_once_a_call_per_credential() {
     let snapshot = snapshot_with(
         json!({}),
-        json!({ "standard": { "requests": 2, "window_seconds": 60 } }),
+        json!({ "standard": { "requests": 2, "window": "60s" } }),
     );
     let identity = ByChain::with(&[("acme", org(&["*"]))]);
     let (p, counter) = checks_pipeline(identity, AUTH_FAILURE);
@@ -1431,9 +1387,9 @@ async fn route_checks_count_the_defaults_once_a_call_per_credential() {
 #[tokio::test]
 async fn route_checks_count_every_policy_defaults_rate_limit_names() {
     let mut feed = fixture("catalog/gateway-feed.json");
-    feed["rate_limits"]["default"] = json!({ "requests": 1, "window_seconds": 1 });
-    feed["rate_limits"]["burst"] = json!({ "requests": 2, "window_seconds": 10 });
-    feed["rate_limits"]["standard"] = json!({ "requests": 5, "window_seconds": 60 });
+    feed["rate_limits"]["default"] = json!({ "requests": 1, "window": "1s" });
+    feed["rate_limits"]["burst"] = json!({ "requests": 2, "window": "10s" });
+    feed["rate_limits"]["standard"] = json!({ "requests": 5, "window": "60s" });
     feed["defaults"]["rate_limit"] = json!(["standard", "burst"]);
     let snapshot = build(feed).unwrap();
     let identity = ByChain::with(&[("acme", org(&["*"]))]);

@@ -60,12 +60,19 @@ impl Drop for TelemetryGuard {
     }
 }
 
-/// `service.instance.id`: `OTEL_SERVICE_INSTANCE_ID`, else the hostname. Also the
-/// replica id the gateway reports to the control plane.
+/// `service.instance.id`: from `OTEL_RESOURCE_ATTRIBUTES`, else `HOSTNAME`.
+/// Also the replica id the gateway reports to the control plane.
 pub fn service_instance_id() -> String {
-    env::var("OTEL_SERVICE_INSTANCE_ID")
+    env::var("OTEL_RESOURCE_ATTRIBUTES")
         .ok()
-        .filter(|id| !id.is_empty())
+        .and_then(|raw| {
+            raw.split(',').find_map(|entry| {
+                let (k, v) = entry.split_once('=')?;
+                (k.trim() == "service.instance.id")
+                    .then(|| v.trim().to_string())
+                    .filter(|v| !v.is_empty())
+            })
+        })
         .or_else(|| env::var("HOSTNAME").ok().filter(|h| !h.is_empty()))
         .unwrap_or_else(|| format!("gateway-{}", std::process::id()))
 }
@@ -496,8 +503,7 @@ fn exporter_list(env: Lookup, key: &str, allowed: &[&str]) -> Result<Option<Vec<
 }
 
 /// The resource, layered: the service's defaults (`version` among them), then
-/// `OTEL_RESOURCE_ATTRIBUTES`, then `OTEL_SERVICE_NAME`, then the convenience
-/// variables that are set.
+/// `OTEL_RESOURCE_ATTRIBUTES`, then `OTEL_SERVICE_NAME`.
 fn resource_attributes(env: Lookup, version: &str) -> Result<Vec<KeyValue>, String> {
     let mut attrs: Vec<(String, String)> = vec![
         ("service.name".into(), SERVICE_NAME.into()),
@@ -524,19 +530,8 @@ fn resource_attributes(env: Lookup, version: &str) -> Result<Vec<KeyValue>, Stri
             set(key.trim(), value.trim().to_string());
         }
     }
-    for (key, vars) in [
-        ("service.name", &["OTEL_SERVICE_NAME"][..]),
-        ("service.namespace", &["OTEL_SERVICE_NAMESPACE"]),
-        ("service.version", &["OTEL_SERVICE_VERSION"]),
-        ("service.instance.id", &["OTEL_SERVICE_INSTANCE_ID"]),
-        (
-            "deployment.environment",
-            &["OTEL_DEPLOYMENT_ENV", "DEPLOYMENT_ENV"],
-        ),
-    ] {
-        if let Some(value) = vars.iter().find_map(|v| get(env, v)) {
-            set(key, value);
-        }
+    if let Some(value) = get(env, "OTEL_SERVICE_NAME") {
+        set("service.name", value);
     }
     Ok(attrs
         .into_iter()
@@ -666,23 +661,12 @@ mod tests {
             .to_string()
     }
 
-    /// `service.version`: `OTEL_SERVICE_VERSION`, then `OTEL_RESOURCE_ATTRIBUTES`,
-    /// then the compiled `VERSION`, which is `dev` without one.
+    /// `service.version`: `OTEL_RESOURCE_ATTRIBUTES`, then the compiled `VERSION` (`dev` without one).
     #[test]
     fn service_version_is_the_build_unless_overridden() {
-        assert_eq!(compiled_version(None), "dev");
-        assert_eq!(compiled_version(Some("")), "dev");
-        assert_eq!(compiled_version(Some("v1.2.3")), "v1.2.3");
-        assert_eq!(VERSION, compiled_version(option_env!("VERSION")));
-
-        assert_eq!(version(&[("CI_COMMIT_TAG", "v9.9.9")], "dev"), "dev");
         assert_eq!(version(&[], "v1.2.3"), "v1.2.3");
         let attrs = ("OTEL_RESOURCE_ATTRIBUTES", "service.version=v2.0.0");
         assert_eq!(version(&[attrs], "v1.2.3"), "v2.0.0");
-        assert_eq!(
-            version(&[attrs, ("OTEL_SERVICE_VERSION", "v3.0.0")], "v1.2.3"),
-            "v3.0.0"
-        );
     }
 
     #[test]

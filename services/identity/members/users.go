@@ -6,7 +6,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/plat5dev/plat5/identity/errors"
-	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 	"github.com/plat5dev/plat5/identity/internal/id"
 	"github.com/plat5dev/plat5/identity/lifecycle"
@@ -133,10 +132,8 @@ func (s *Store) SetStatus(ctx context.Context, userID, status string) (string, *
 }
 
 // SetName sets a person's name, or clears it when name is nil
-// (docs/reference/idp.md#a-persons-name). Under users.name.sync
-// each_sign_in the IdP owns names, so any edit is refused, whoever sends it.
-// It returns the name before.
-func (s *Store) SetName(ctx context.Context, snap *feed.Snapshot, userID string, name *string) (*string, *User, error) {
+// (docs/reference/idp.md#a-persons-name). It returns the name before.
+func (s *Store) SetName(ctx context.Context, userID string, name *string) (*string, *User, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "set_user_name", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
@@ -154,8 +151,6 @@ func (s *Store) SetName(ctx context.Context, snap *feed.Snapshot, userID string,
 		return nil, nil, op.Expected("not found", ErrNotFound)
 	case err != nil:
 		return nil, nil, op.Fail(err)
-	case snap.NameSync == feed.EachSignIn:
-		return nil, nil, op.Expected("idp owns names", errors.NameOwnedByIdPError())
 	}
 	if name != nil {
 		n, err := normalizeName(*name)

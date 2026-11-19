@@ -17,7 +17,7 @@ creator_role: admin
 defaults:
   rate_limit: [standard]
 rate_limits:
-  standard: { requests: 60, window_seconds: 60 }
+  standard: { requests: 60, window: 60s }
 services:
   billing:
     url: http://billing:3000

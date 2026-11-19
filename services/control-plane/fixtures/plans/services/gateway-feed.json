@@ -131,7 +131,7 @@
   "rate_limits": {
     "standard": {
       "requests": 60,
-      "window_seconds": 60
+      "window": "60s"
     }
   },
   "defaults": {
@@ -142,17 +142,5 @@
   "cors": {
     "allowed_origins": [],
     "allowed_headers": []
-  },
-  "users": {
-    "name": {
-      "claims": [
-        "name",
-        "preferred_username"
-      ],
-      "sync": "first_sign_in"
-    }
-  },
-  "route_checks": {
-    "path": "/access/routes"
   }
 }

@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// routeChecksPath is route_checks.path at its default: the e2e config sets none.
+// routeChecksPath is the gateway's fixed route-checks endpoint.
 const routeChecksPath = "/access/routes"
 
 type check struct {

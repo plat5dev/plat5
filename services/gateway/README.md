@@ -1,6 +1,6 @@
 # Gateway
 
-Rust reverse proxy built on Pingora. It matches a route, reads the node chain from the path, authenticates (`Authorization: Bearer`: a JWT verified locally, anything else a key for identity), and calls identity's admit (cached) for the caller's member and permissions on that node. Then it applies the route's rate-limit policies (Valkey, all at once), checks `required_permissions`, fills `upstream` and the `X-Plat5-*` headers, and writes the audit intent. It strips `Authorization` and any client `X-Plat5-*`, and handles trace propagation, CORS, security headers and body limits. TLS is terminated at the edge (not in this process). It also answers route checks itself, at `route_checks.path`, for UIs that hide what the caller can't use. How a request is decided: [`docs/concepts/access.md`](../../docs/concepts/access.md#how-a-request-is-decided); the contract: [`docs/reference/gateway.md`](../../docs/reference/gateway.md).
+Rust reverse proxy built on Pingora. It matches a route, reads the node chain from the path, authenticates (`Authorization: Bearer`: a JWT verified locally, anything else a key for identity), and calls identity's admit (cached) for the caller's member and permissions on that node. Then it checks `required_permissions`, applies the route's rate-limit policies (Valkey, optional via `RATE_LIMIT_ENABLED`), fills `upstream` and the `X-Plat5-*` headers, and writes the audit intent. It strips `Authorization` and any client `X-Plat5-*`, and handles trace propagation, CORS, security headers and body limits. TLS is terminated at the edge (not in this process). It also answers route checks itself at `POST /access/routes`, for UIs that hide what the caller can't use. How a request is decided: [`docs/concepts/access.md`](../../docs/concepts/access.md#how-a-request-is-decided); the contract: [`docs/reference/gateway.md`](../../docs/reference/gateway.md).
 
 ## Local Development
 
@@ -24,23 +24,22 @@ The pipeline tests (`src/pipeline/tests.rs`) run every route of the catalog fixt
 | `INTERNAL_PORT` | `8000` | Internal port for `/health` and `/metrics` |
 | `CONTROL_PLANE_URL` | (required) | Control plane's internal base URL, e.g. `http://control-plane:5003`. Routes, rate limits and CORS come from `…/internal/gateway` |
 | `IDENTITY_INTERNAL_URL` | (required) | Identity's internal base URL, e.g. `http://identity:3001`; admit is at `/internal/admit` |
-| `VALKEY_URL` | (required) | Valkey for rate-limit counters. Replicas share one budget |
+| `RATE_LIMIT_ENABLED` | `true` | Set `false` to run without Valkey or rate limiting |
+| `VALKEY_URL` | (required unless rate limiting is off) | Valkey for rate-limit counters. Replicas share one budget |
 | `AUTH_ISSUER` | (required) | JWT `iss` |
 | `AUTH_JWKS_URI` | (required) | JWKS URL |
 | `AUTH_ALLOWED_AUDIENCES` | (required) | Comma-separated allowed `aud` values; `*` accepts any audience |
-| `AUTH_SUBJECT_CLAIM` | `sub` | Dotted claim path for the person's IdP subject (e.g. `properties.user_id`). The name claims are `users.name.claims` in `plat5.yml` |
+| `AUTH_SUBJECT_CLAIM` | `sub` | Dotted claim path for the person's IdP subject (e.g. `properties.user_id`) |
+| `AUTH_NAME_CLAIMS` | `name,preferred_username` | Comma-separated dotted claim paths used to seed a person's name on first sign-in |
 | `ADMIT_CACHE_TTL` | `5m` | How long an admit answer is cached, a duration |
 | `ADMIT_NEGATIVE_CACHE_TTL` | `10s` | How long a refusal (`valid: false`, `member_id: null`) is cached |
-| `AUDIT_ENABLED` | `true` | Wiring: whether the deployment runs an audit service. Anything but `true` / `false` refuses boot |
+| `AUDIT_ENABLED` | `true` | Set `false` to run without an audit service |
 | `AUDIT_URL` | (required unless audit is off) | Audit's internal base URL, e.g. `http://audit:3003` ([`docs/concepts/audit.md`](../../docs/concepts/audit.md)) |
 | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` | `60` | Failed-auth IP limiter. `0` = off |
-| `RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS` | `60` | Failed-auth IP window |
-| `TRUSTED_PROXIES` | (empty) | Comma-separated addresses and CIDRs of proxies in front of the gateway, whose forwarded headers it believes: [client IP](../../docs/reference/gateway.md#client-ip) and the spans' [`url.scheme`](../../docs/reference/telemetry.md#http-server-spans) |
+| `RATE_LIMIT_AUTH_FAILURE_WINDOW` | `60s` | Failed-auth IP window duration |
+| `TRUSTED_PROXIES` | (empty) | Comma-separated addresses and CIDRs of proxies in front of the gateway ([client IP](../../docs/reference/gateway.md#client-ip)) |
 | `OTEL_SERVICE_NAME` | `gateway` | Resource `service.name` |
-| `OTEL_SERVICE_NAMESPACE` | `edge` | Resource `service.namespace` |
-| `OTEL_SERVICE_VERSION` | the build's `VERSION`, else `dev` | Resource `service.version` |
-| `OTEL_SERVICE_INSTANCE_ID` | hostname | Resource `service.instance.id`, and the replica id reported to the control plane |
-| `DEPLOYMENT_ENV` / `OTEL_DEPLOYMENT_ENV` | `development` | Resource `deployment.environment` |
+| `OTEL_RESOURCE_ATTRIBUTES` | unset | Standard comma-separated `key=value` attributes (e.g. `service.namespace=edge,service.instance.id=gw-1,deployment.environment=prod`) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP base URL. Unset → no OTLP |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | unset | Optional full traces URL |
 | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | unset | Optional full metrics URL |

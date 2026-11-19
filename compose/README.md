@@ -50,7 +50,7 @@ Gateway uses `host.docker.internal` so a host-published IdP does not need a shar
 
 `SECRET_BRAND` (default `plat5`) is identity's alone: keys are `{brand}-k-2-…` and invite tokens `{brand}-i-1-…`. The gateway sends a key, or a JWT's issuer and subject, to identity's admit (`IDENTITY_INTERNAL_URL`) with the route's node chain; admit answers the member and permissions for that request. Answers are cached for `ADMIT_CACHE_TTL` (default `5m`), refusals for `ADMIT_NEGATIVE_CACHE_TTL` (default `10s`). See [`../docs/reference/gateway.md`](../docs/reference/gateway.md#admit).
 
-Rate limits are policies in `plat5.yml` ([`../docs/reference/config/rate-limits.md`](../docs/reference/config/rate-limits.md)), counted in Valkey, so replicas share one budget. `VALKEY_URL` is required. The failed-auth IP limiter is env: `RATE_LIMIT_AUTH_FAILURE_*` (default 60/60).
+Rate limits are optional policies in config ([`../docs/reference/config/rate-limits.md`](../docs/reference/config/rate-limits.md)), counted in Valkey so replicas share one budget. Set `RATE_LIMIT_ENABLED=false` on the gateway to run without Valkey. The failed-auth IP limiter is env: `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW` (default `60` / `60s`).
 
 ## Telemetry
 

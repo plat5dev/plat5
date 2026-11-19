@@ -57,10 +57,7 @@ Contract: [`../../docs/reference/telemetry.md`](../../docs/reference/telemetry.m
 | Var | Default | Purpose |
 |-----|---------|---------|
 | `OTEL_SERVICE_NAME` | `control-plane` | Resource `service.name` |
-| `OTEL_SERVICE_NAMESPACE` | `edge` | Resource `service.namespace` |
-| `OTEL_SERVICE_VERSION` | the build's `VERSION`, else `dev` | Resource `service.version` |
-| `OTEL_SERVICE_INSTANCE_ID` | hostname / pid | Resource `service.instance.id` |
-| `DEPLOYMENT_ENV` / `OTEL_DEPLOYMENT_ENV` | `development` | Resource `deployment.environment` |
+| `OTEL_RESOURCE_ATTRIBUTES` | unset | Standard comma-separated `key=value` attributes (e.g. `service.namespace=edge,deployment.environment=prod`) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP base URL. Unset → no OTLP |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | unset | Optional full traces URL |
 | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | unset | Optional full metrics URL |

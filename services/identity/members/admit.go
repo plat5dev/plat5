@@ -61,7 +61,7 @@ type admitPrincipal struct {
 
 // Admit turns a credential and a node chain into the member and permissions
 // for one request, in the steps of the contract. It writes only for a new IdP
-// subject (the person) or a name users.name.sync lets the sign-in set.
+// subject (the person) or a name seeded on first sign-in.
 func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (*Admitted, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "admit", dbx.DefaultTimeout)
 	defer cancel()
@@ -73,7 +73,7 @@ func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (
 	userRoute := len(in.Chain) == 0
 
 	// 1. Principal.
-	p, err := s.admitPrincipal(ctx, snap.NameSync, in)
+	p, err := s.admitPrincipal(ctx, in)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
@@ -136,11 +136,11 @@ func checkAdmit(in AdmitInput) error {
 // a key identity can't read, an unknown or revoked key, a suspended person,
 // or a service account whose node is deleted. A new IdP subject becomes
 // a person.
-func (s *Store) admitPrincipal(ctx context.Context, sync feed.NameSync, in AdmitInput) (*admitPrincipal, error) {
+func (s *Store) admitPrincipal(ctx context.Context, in AdmitInput) (*admitPrincipal, error) {
 	if in.Credential != nil {
 		return s.keyPrincipalFor(ctx, *in.Credential)
 	}
-	return s.idpPrincipal(ctx, sync, *in.IdP)
+	return s.idpPrincipal(ctx, *in.IdP)
 }
 
 func (s *Store) keyPrincipalFor(ctx context.Context, key string) (*admitPrincipal, error) {
@@ -174,7 +174,7 @@ func (s *Store) keyPrincipalFor(ctx context.Context, key string) (*admitPrincipa
 	return &p, nil
 }
 
-func (s *Store) idpPrincipal(ctx context.Context, sync feed.NameSync, c IdPClaims) (*admitPrincipal, error) {
+func (s *Store) idpPrincipal(ctx context.Context, c IdPClaims) (*admitPrincipal, error) {
 	issuer, subject := strings.TrimSpace(c.Issuer), strings.TrimSpace(c.Subject)
 	var name string
 	if c.Name != nil {
@@ -188,18 +188,17 @@ func (s *Store) idpPrincipal(ctx context.Context, sync feed.NameSync, c IdPClaim
 	`, issuer, subject).Scan(&principalID, &userID, &status, &current)
 	switch {
 	case dbx.IsNoRows(err):
-		if principalID, userID, status, err = s.firstSignIn(ctx, sync, issuer, subject, name); err != nil {
+		if principalID, userID, status, err = s.firstSignIn(ctx, issuer, subject, name); err != nil {
 			return nil, err
 		}
 	case err != nil:
 		return nil, err
-	case name != "" && syncs(sync, current, name):
-		// The guard repeats the check in the row's lock: under first_sign_in, a
-		// name set since the read above is kept.
+	case name != "" && current == nil:
+		// Seed the person's name if it is still empty; preserve any concurrent edit.
 		if _, err := s.pool.Exec(ctx, `
 			UPDATE principals SET name = $2, updated_at = $3
-			WHERE id = $1 AND name IS DISTINCT FROM $2 AND ($4 OR name IS NULL)
-		`, principalID, name, s.now().UTC(), sync == feed.EachSignIn); err != nil {
+			WHERE id = $1 AND name IS NULL
+		`, principalID, name, s.now().UTC()); err != nil {
 			return nil, err
 		}
 	}
@@ -207,17 +206,6 @@ func (s *Store) idpPrincipal(ctx context.Context, sync feed.NameSync, c IdPClaim
 		return nil, nil
 	}
 	return &admitPrincipal{id: principalID, kind: PrincipalPerson, userID: userID}, nil
-}
-
-// syncs is whether a sign-in's non-empty name claim changes the current name
-// (docs/reference/idp.md#a-persons-name): under first_sign_in only while it's
-// empty, under each_sign_in whenever it differs. A missing or empty claim
-// never does.
-func syncs(sync feed.NameSync, current *string, name string) bool {
-	if sync == feed.EachSignIn {
-		return current == nil || *current != name
-	}
-	return current == nil
 }
 
 // claimName is a name claim as a person's name: trimmed, and cut to the
@@ -237,12 +225,9 @@ func admissible(status string, saNodeStatus *string) bool {
 	return status == StatusActive && (saNodeStatus == nil || *saNodeStatus == nodes.StatusActive)
 }
 
-// firstSignIn creates the person behind a new IdP subject. A concurrent
-// admit for the same subject finds the link once it has the subject's lock.
-// A person an admin added before has no name yet, or one users.name.sync
-// decides about like any sign-in's. It returns the principal, its user id and
-// its status.
-func (s *Store) firstSignIn(ctx context.Context, sync feed.NameSync, issuer, subject, name string) (string, string, string, error) {
+// firstSignIn creates the person behind a new IdP subject, seeding their name
+// from the claim if present and not already set.
+func (s *Store) firstSignIn(ctx context.Context, issuer, subject, name string) (string, string, string, error) {
 	w, err := s.begin(ctx)
 	if err != nil {
 		return "", "", "", err
@@ -256,11 +241,10 @@ func (s *Store) firstSignIn(ctx context.Context, sync feed.NameSync, issuer, sub
 	if err := w.tx.QueryRow(ctx, `
 		UPDATE principals SET name = CASE
 			WHEN $2 = '' THEN name
-			WHEN $3 THEN $2
 			ELSE COALESCE(name, $2)
 		END
 		WHERE id = $1 RETURNING user_id, status
-	`, principalID, name, sync == feed.EachSignIn).Scan(&userID, &status); err != nil {
+	`, principalID, name).Scan(&userID, &status); err != nil {
 		return "", "", "", err
 	}
 	return principalID, userID, status, w.commit(ctx)

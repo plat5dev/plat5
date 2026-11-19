@@ -51,9 +51,14 @@ fn main() {
         tracing::warn!(error = %err, "failed to fetch JWKS on startup; will retry in background");
     }
 
-    let limiter = rt
-        .block_on(gateway::rate_limit::RateLimiter::connect(&cfg.valkey_url))
-        .unwrap_or_else(|e| panic!("failed to connect to valkey: {e}"));
+    let limiter = if let Some(ref url) = cfg.valkey_url {
+        info!("rate limiting on");
+        rt.block_on(gateway::rate_limit::RateLimiter::connect(url))
+            .unwrap_or_else(|e| panic!("failed to connect to valkey: {e}"))
+    } else {
+        tracing::warn!("RATE_LIMIT_ENABLED=false: rate limiting is off and Valkey is not used");
+        gateway::rate_limit::RateLimiter::disabled()
+    };
 
     // Background audit writes run on this runtime, off the request path.
     let audit = gateway::audit::Audit::new(cfg.audit_url.clone(), rt.handle());

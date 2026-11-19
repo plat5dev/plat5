@@ -57,7 +57,7 @@ pub enum RequiredDoc {
 #[derive(Clone, Debug, Deserialize)]
 pub struct PolicyDoc {
     pub requests: u64,
-    pub window_seconds: u64,
+    pub window: String,
     #[serde(default)]
     pub count_at: Option<String>,
 }
@@ -298,10 +298,13 @@ fn build_route(
                     format!("rate_limit {name} counts at {kind}, outside the chain")
                 })?),
             };
+            let window_seconds = parse_duration(&policy.window)
+                .ok_or_else(|| format!("rate_limit {name} has invalid window {:?}", policy.window))?
+                .as_secs();
             Ok(Policy {
                 name: name.clone(),
                 requests: policy.requests,
-                window_seconds: policy.window_seconds,
+                window_seconds,
                 count_at,
             })
         })
@@ -474,8 +477,8 @@ mod tests {
         let map = build_with(
             json!({ "svc": service(vec![r]) }),
             json!({
-                "per-caller": { "requests": 100, "window_seconds": 1 },
-                "evals-org": { "requests": 300, "window_seconds": 1, "count_at": "organization" }
+                "per-caller": { "requests": 100, "window": "1s" },
+                "evals-org": { "requests": 300, "window": "1s", "count_at": "organization" }
             }),
         )
         .unwrap();
@@ -554,7 +557,7 @@ mod tests {
         org_wide["rate_limit"] = json!(["org"]);
         let err = build_with(
             json!({ "svc": service(vec![org_wide]) }),
-            json!({ "org": { "requests": 1, "window_seconds": 1, "count_at": "organization" } }),
+            json!({ "org": { "requests": 1, "window": "1s", "count_at": "organization" } }),
         )
         .err()
         .unwrap();

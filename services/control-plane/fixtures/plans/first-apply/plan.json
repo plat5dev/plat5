@@ -75,7 +75,7 @@
       "name": "standard",
       "after": {
         "requests": 60,
-        "window_seconds": 60
+        "window": "60s"
       }
     },
     {

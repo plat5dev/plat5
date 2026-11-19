@@ -66,9 +66,8 @@ services:
       IDENTITY_INTERNAL_URL: http://identity:3001
       RUST_LOG: info
       OTEL_SERVICE_NAME: control-plane
-      OTEL_SERVICE_NAMESPACE: edge
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=edge,deployment.environment=docker
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
-      DEPLOYMENT_ENV: docker
     volumes:
       - ../services/control-plane/src:/app/src
       - ../services/control-plane/migrations:/app/migrations:ro
@@ -106,6 +105,7 @@ services:
       AUTH_JWKS_URI: ${AUTH_JWKS_URI:-http://host.docker.internal:5401/.well-known/jwks.json}
       AUTH_ALLOWED_AUDIENCES: ${AUTH_ALLOWED_AUDIENCES:-plat5}
       AUTH_SUBJECT_CLAIM: ${AUTH_SUBJECT_CLAIM:-properties.user_id}
+      AUTH_NAME_CLAIMS: ${AUTH_NAME_CLAIMS:-name,preferred_username}
       IDENTITY_INTERNAL_URL: http://identity:3001
       # Short in the e2e, so a delete reaches the edge at once (e2e/README.md).
       ADMIT_CACHE_TTL: ${ADMIT_CACHE_TTL:-5m}
@@ -113,17 +113,18 @@ services:
       # Audit is on unless AUDIT_ENABLED=false (then audit need not run).
       AUDIT_ENABLED: ${AUDIT_ENABLED:-true}
       AUDIT_URL: http://audit:3003
-      RUST_LOG: info
-      RATE_LIMIT_AUTH_FAILURE_REQUESTS: ${RATE_LIMIT_AUTH_FAILURE_REQUESTS:-60}
-      RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS: ${RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS:-60}
-      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      # Rate limiting is on unless RATE_LIMIT_ENABLED=false (then valkey need not run).
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
       VALKEY_URL: redis://valkey:6379
+      RATE_LIMIT_AUTH_FAILURE_REQUESTS: ${RATE_LIMIT_AUTH_FAILURE_REQUESTS:-60}
+      RATE_LIMIT_AUTH_FAILURE_WINDOW: ${RATE_LIMIT_AUTH_FAILURE_WINDOW:-60s}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      RUST_LOG: info
       # Kinds, routes, rate limits and CORS (docs/reference/gateway.md#control-plane).
       CONTROL_PLANE_URL: http://control-plane:5003
       OTEL_SERVICE_NAME: gateway
-      OTEL_SERVICE_NAMESPACE: edge
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=edge,deployment.environment=docker
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
-      DEPLOYMENT_ENV: docker
     volumes:
       - ../services/gateway/src:/app/src
     networks:
@@ -161,9 +162,8 @@ services:
       DATABASE_URL: postgres://plat5:plat5@postgres:5432/plat5?sslmode=disable
       CONTROL_PLANE_URL: http://control-plane:5003
       OTEL_SERVICE_NAME: identity
-      OTEL_SERVICE_NAMESPACE: identity
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=identity,deployment.environment=docker
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
-      DEPLOYMENT_ENV: docker
     volumes:
       - ../services/identity:/app
     networks:
@@ -194,9 +194,8 @@ services:
       INTERNAL_PORT: 3003
       DATABASE_URL: postgres://plat5:plat5@postgres:5432/plat5?sslmode=disable
       OTEL_SERVICE_NAME: audit
-      OTEL_SERVICE_NAMESPACE: audit
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=audit,deployment.environment=docker
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
-      DEPLOYMENT_ENV: docker
     volumes:
       - ../services/audit:/app
     networks:

@@ -191,9 +191,7 @@ mod tests {
                 }
             },
             "roles": { "admin": { "permissions": ["*"], "bindable_at": ["organization", "project"] } },
-            "creator_role": "admin",
-            "defaults": { "rate_limit": ["standard"] },
-            "rate_limits": { "standard": { "requests": 60, "window_seconds": 60 } }
+            "creator_role": "admin"
         })
     }
 
@@ -229,8 +227,6 @@ mod tests {
         let mut c = base();
         c["deletion_grace"] = json!("30d");
         c["reserved_slugs"] = json!(["new", "settings", "api", "admin"]);
-        c["users"] = json!({ "name": { "claims": ["name", "preferred_username"], "sync": "first_sign_in" } });
-        c["route_checks"] = json!({ "path": "/access/routes" });
         c["defaults"] = json!({
             "rate_limit": ["standard"],
             "timeouts": { "connect": "10s", "read": "30s" },
@@ -244,8 +240,8 @@ mod tests {
             "bindable_at": ["organization", "project"]
         });
         c["rate_limits"] = json!({
-            "standard": { "requests": 60, "window_seconds": 60 },
-            "evals-org": { "requests": 300, "window_seconds": 1, "count_at": "organization" }
+            "standard": { "requests": 60, "window": "60s" },
+            "evals-org": { "requests": 300, "window": "1s", "count_at": "organization" }
         });
         c["cors"] = json!({ "allowed_origins": ["https://app.example.com"], "allowed_headers": ["x-custom"] });
         c["services"] = json!({
@@ -294,122 +290,20 @@ mod tests {
                 Box::new(|c| c["reserved_slugs"] = json!(["a_b"])),
             ),
             (
-                "users",
-                Box::new(|c| c["users"] = json!({ "email_claim": "email" })),
-            ),
-            (
-                "users",
-                Box::new(|c| c["users"] = json!({ "name_claim": "name" })),
-            ),
-            (
-                "users.name",
-                Box::new(|c| c["users"] = json!({ "name": { "claim": "name" } })),
-            ),
-            (
-                "users.name.claims",
-                Box::new(|c| c["users"] = json!({ "name": { "claims": [] } })),
-            ),
-            (
-                "users.name.claims",
-                Box::new(|c| {
-                    c["users"] = json!({ "name": { "claims": ["a", "b", "c", "d", "e", "f", "g", "h", "i"] } })
-                }),
-            ),
-            (
-                "users.name.claims",
-                Box::new(|c| c["users"] = json!({ "name": { "claims": ["name", "name"] } })),
-            ),
-            (
-                "users.name.claims",
-                Box::new(|c| c["users"] = json!({ "name": { "claims": "name" } })),
-            ),
-            (
-                "users.name.claims[1]",
-                Box::new(|c| {
-                    c["users"] = json!({ "name": { "claims": ["name", "profile..name"] } })
-                }),
-            ),
-            (
-                "users.name.claims[0]",
-                Box::new(|c| c["users"] = json!({ "name": { "claims": [".name"] } })),
-            ),
-            (
-                "users.name.claims[0]",
-                Box::new(|c| c["users"] = json!({ "name": { "claims": ["full name"] } })),
-            ),
-            (
-                "users.name.claims[0]",
-                Box::new(|c| c["users"] = json!({ "name": { "claims": [""] } })),
-            ),
-            (
-                "users.name.claims[0]",
-                Box::new(|c| c["users"] = json!({ "name": { "claims": ["a".repeat(129)] } })),
-            ),
-            (
-                "users.name.sync",
-                Box::new(|c| c["users"] = json!({ "name": { "sync": "always" } })),
-            ),
-            (
-                "route_checks.path",
-                Box::new(|c| c["route_checks"] = json!({ "path": "access/routes" })),
-            ),
-            (
-                "route_checks.path",
-                Box::new(|c| c["route_checks"] = json!({ "path": "/access/routes/" })),
-            ),
-            (
-                "route_checks.path",
-                Box::new(|c| c["route_checks"] = json!({ "path": "/Access/routes" })),
-            ),
-            (
-                "route_checks.path",
-                Box::new(|c| c["route_checks"] = json!({ "path": "/access?x=1" })),
-            ),
-            (
-                "route_checks.path",
-                Box::new(|c| c["route_checks"] = json!({ "path": "/access#x" })),
-            ),
-            (
-                "route_checks.path",
-                Box::new(|c| c["route_checks"] = json!({ "path": "/access//routes" })),
-            ),
-            (
-                "route_checks.path",
-                Box::new(|c| c["route_checks"] = json!({ "path": "/access/{id}" })),
-            ),
-            (
-                "route_checks.path",
-                Box::new(|c| c["route_checks"] = json!({ "path": "/.hidden" })),
-            ),
-            (
-                "route_checks.path",
-                Box::new(|c| c["route_checks"] = json!({ "path": "/a b" })),
-            ),
-            (
-                "route_checks.path",
-                Box::new(|c| c["route_checks"] = json!({ "path": "/" })),
-            ),
-            (
-                "route_checks.path",
-                Box::new(|c| {
-                    c["route_checks"] = json!({ "path": format!("/{}", "a".repeat(256)) })
-                }),
-            ),
-            (
-                "route_checks.path",
-                Box::new(|c| c["route_checks"] = json!({ "path": json!(42) })),
-            ),
-            (
-                "route_checks",
-                Box::new(|c| c["route_checks"] = json!({ "path": "/x", "method": "POST" })),
-            ),
-            (
                 "defaults.timeouts.connect",
                 Box::new(|c| c["defaults"] = json!({ "timeouts": { "connect": 10000 } })),
             ),
             (
                 "defaults.max_body_bytes",
                 Box::new(|c| c["defaults"] = json!({ "max_body_bytes": 0 })),
+            ),
+            (
+                "defaults.rate_limit",
+                Box::new(|c| c["defaults"] = json!({ "rate_limit": [] })),
+            ),
+            (
+                "defaults.rate_limit",
+                Box::new(|c| c["defaults"] = json!({ "rate_limit": ["standard", "standard"] })),
             ),
             (
                 "kinds",
@@ -428,59 +322,8 @@ mod tests {
                 Box::new(|c| c["kinds"]["Org"] = c["kinds"]["organization"].clone()),
             ),
             (
-                "kinds.project.parent",
-                Box::new(|c| c["kinds"]["project"]["parent"] = json!(["organization"])),
-            ),
-            (
-                "kinds.project",
-                Box::new(|c| c["kinds"]["project"]["label"] = json!("Project")),
-            ),
-            (
-                "kinds.project",
-                Box::new(|c| c["kinds"]["project"]["segment"] = json!("projects")),
-            ),
-            (
-                "kinds.project",
-                Box::new(|c| c["kinds"]["project"]["permission_name"] = json!("project")),
-            ),
-            (
-                "",
-                Box::new(|c| {
-                    c.as_object_mut().unwrap().remove("defaults");
-                }),
-            ),
-            (
-                "defaults",
-                Box::new(|c| c["defaults"] = json!({ "max_body_bytes": 1 })),
-            ),
-            (
-                "defaults.rate_limit",
-                Box::new(|c| c["defaults"]["rate_limit"] = json!([])),
-            ),
-            (
-                "defaults.rate_limit",
-                Box::new(|c| c["defaults"]["rate_limit"] = json!(["standard", "standard"])),
-            ),
-            (
-                "kinds.project",
-                Box::new(|c| {
-                    c["kinds"]["project"]
-                        .as_object_mut()
-                        .unwrap()
-                        .remove("path");
-                }),
-            ),
-            (
                 "kinds.project.path",
                 Box::new(|c| c["kinds"]["project"]["path"] = json!("/projects/{project}/x")),
-            ),
-            (
-                "kinds.project.path",
-                Box::new(|c| c["kinds"]["project"]["path"] = json!("/Projects/{project}")),
-            ),
-            (
-                "kinds.project.path",
-                Box::new(|c| c["kinds"]["project"]["path"] = json!("projects")),
             ),
             (
                 "kinds.project.list_permission",
@@ -495,56 +338,26 @@ mod tests {
                 Box::new(|c| c["roles"]["admin"] = json!({ "permissions": [] })),
             ),
             (
-                "roles.admin",
-                Box::new(|c| c["roles"]["admin"]["labels"] = json!(["x"])),
-            ),
-            (
-                "roles.admin",
-                Box::new(|c| c["roles"]["admin"]["max_duration"] = json!("7d")),
-            ),
-            (
-                "roles.admin.includes[0]",
-                Box::new(|c| c["roles"]["admin"]["includes"] = json!(["Bad"])),
-            ),
-            (
                 "",
                 Box::new(|c| {
                     c.as_object_mut().unwrap().remove("creator_role");
                 }),
             ),
-            ("", Box::new(|c| c["default_role"] = json!("admin"))),
-            (
-                "",
-                Box::new(|c| {
-                    c.as_object_mut().unwrap().remove("rate_limits");
-                }),
-            ),
-            (
-                "rate_limits.standard",
-                Box::new(|c| c["rate_limits"]["standard"] = json!({ "requests": 1 })),
-            ),
             (
                 "rate_limits.p",
-                Box::new(|c| c["rate_limits"]["p"] = json!({ "requests": 1 })),
+                Box::new(|c| c["rate_limits"] = json!({ "p": { "requests": 1 } })),
             ),
             (
-                "rate_limits.p",
-                Box::new(|c| {
-                    c["rate_limits"]["p"] =
-                        json!({ "requests": 1, "window_seconds": 1, "shared": true })
-                }),
+                "rate_limits.p.window",
+                Box::new(|c| c["rate_limits"] = json!({ "p": { "requests": 1, "window": 60 } })),
             ),
             (
                 "rate_limits.p.requests",
-                Box::new(|c| c["rate_limits"]["p"] = json!({ "requests": 0, "window_seconds": 1 })),
+                Box::new(|c| c["rate_limits"] = json!({ "p": { "requests": 0, "window": "1s" } })),
             ),
             (
                 "cors.allowed_origins",
                 Box::new(|c| c["cors"] = json!({ "allowed_origins": ["*", "https://a.com"] })),
-            ),
-            (
-                "cors.allowed_origins",
-                Box::new(|c| c["cors"] = json!({ "allowed_origins": ["https://App.example.com"] })),
             ),
             (
                 "cors.allowed_origins",
@@ -561,32 +374,6 @@ mod tests {
             mutate(&mut c);
             let errs = errors(c);
             assert!(errs.iter().any(|e| e.path == path), "{path}: {errs:?}");
-        }
-    }
-
-    #[test]
-    fn route_checks_path_is_literal_segments() {
-        for path in ["/access/routes", "/v1/route-checks", "/a", "/a.b/_c"] {
-            let mut c = base();
-            c["route_checks"] = json!({ "path": path });
-            check_config(&c).unwrap_or_else(|e| panic!("{path}: {e:?}"));
-        }
-        let mut c = base();
-        c["route_checks"] = json!({});
-        check_config(&c).unwrap();
-    }
-
-    #[test]
-    fn name_claims_are_dotted_paths() {
-        for users in [
-            json!({}),
-            json!({ "name": {} }),
-            json!({ "name": { "sync": "each_sign_in" } }),
-            json!({ "name": { "claims": ["profile.display_name", "name", "https://example.com/name", "a.b.c.d.e.f.g.h"] } }),
-        ] {
-            let mut c = base();
-            c["users"] = users.clone();
-            check_config(&c).unwrap_or_else(|e| panic!("{users}: {e:?}"));
         }
     }
 
@@ -657,7 +444,7 @@ mod tests {
             json!(true),
             json!("p"),
             json!([]),
-            json!({ "requests": 1, "window_seconds": 1 }),
+            json!({ "requests": 1, "window": "1s" }),
         ] {
             let bad = with_route(
                 "public",

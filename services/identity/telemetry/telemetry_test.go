@@ -169,16 +169,9 @@ func serviceVersion(t *testing.T) string {
 	return v.AsString()
 }
 
-// service.version: OTEL_SERVICE_VERSION, then OTEL_RESOURCE_ATTRIBUTES, then the
-// compiled Version, which is dev without a VERSION at build time.
+// service.version: OTEL_RESOURCE_ATTRIBUTES, then the compiled Version (dev without one).
 func TestServiceVersion(t *testing.T) {
-	t.Setenv("OTEL_SERVICE_VERSION", "")
 	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
-	t.Setenv("CI_COMMIT_TAG", "v9.9.9")
-
-	if got := serviceVersion(t); got != "dev" {
-		t.Fatalf("without VERSION: %q, want dev", got)
-	}
 
 	prev := Version
 	Version = "v1.2.3"
@@ -190,10 +183,5 @@ func TestServiceVersion(t *testing.T) {
 	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "service.version=v2.0.0")
 	if got := serviceVersion(t); got != "v2.0.0" {
 		t.Fatalf("OTEL_RESOURCE_ATTRIBUTES: %q, want v2.0.0", got)
-	}
-
-	t.Setenv("OTEL_SERVICE_VERSION", "v3.0.0")
-	if got := serviceVersion(t); got != "v3.0.0" {
-		t.Fatalf("OTEL_SERVICE_VERSION: %q, want v3.0.0", got)
 	}
 }

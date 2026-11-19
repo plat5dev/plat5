@@ -2,17 +2,18 @@ use std::env;
 use std::time::Duration;
 
 use crate::auth::jwt::Audiences;
-use crate::auth::parse_subject_claim;
+use crate::auth::{parse_claim_path, parse_subject_claim, NameClaims};
 use crate::client_ip::TrustedProxies;
 use crate::duration::parse_duration;
 
 const DEFAULT_PORT: &str = "5001";
 const DEFAULT_INTERNAL_PORT: &str = "8000";
 const DEFAULT_SUBJECT_CLAIM: &str = "sub";
+const DEFAULT_NAME_CLAIMS: &str = "name,preferred_username";
 const DEFAULT_ADMIT_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_ADMIT_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(10);
 const DEFAULT_RATE_LIMIT_AUTH_FAILURE_REQUESTS: u64 = 60;
-const DEFAULT_RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS: u64 = 60;
+const DEFAULT_RATE_LIMIT_AUTH_FAILURE_WINDOW: Duration = Duration::from_secs(60);
 
 /// Process configuration loaded from environment (docs/reference/env.md#gateway).
 #[derive(Clone, Debug)]
@@ -22,14 +23,16 @@ pub struct GatewayConfig {
     /// The control plane's internal base URL (`CONTROL_PLANE_URL`): kinds, routes,
     /// rate limits and CORS come from `{url}/internal/gateway`.
     pub control_plane_url: String,
-    /// Valkey for rate-limit counters. Required.
-    pub valkey_url: String,
+    /// Valkey for rate-limit counters. None = rate limiting off (`RATE_LIMIT_ENABLED=false`).
+    pub valkey_url: Option<String>,
 
     pub auth_issuer: String,
     pub auth_jwks_uri: String,
     pub auth_allowed_audiences: Audiences,
     /// Dotted claim path segments for the person's IdP subject (`AUTH_SUBJECT_CLAIM`).
     pub auth_subject_claim: Vec<String>,
+    /// Dotted claim paths checked in order to seed a person's name on first sign-in (`AUTH_NAME_CLAIMS`).
+    pub auth_name_claims: NameClaims,
 
     /// Identity's internal base URL (`IDENTITY_INTERNAL_URL`); admit is at `/internal/admit`.
     pub identity_internal_url: String,
@@ -76,24 +79,33 @@ impl GatewayConfig {
                 key: "AUTH_ALLOWED_AUDIENCES",
                 message: "list at least one audience, or *".to_string(),
             })?;
+        let auth_name_claims = parse_name_claims(
+            &env::var("AUTH_NAME_CLAIMS").unwrap_or_else(|_| DEFAULT_NAME_CLAIMS.to_string()),
+        );
         let identity_internal_url = base_url(require_env("IDENTITY_INTERNAL_URL")?);
         let control_plane_url = base_url(require_env("CONTROL_PLANE_URL")?);
-        let valkey_url = require_env("VALKEY_URL")?;
-        let audit_url = audit_url_from_env()?;
+        let valkey_url = optional_module_url(
+            "RATE_LIMIT_ENABLED",
+            "VALKEY_URL",
+            env::var("RATE_LIMIT_ENABLED").ok().as_deref(),
+            env::var("VALKEY_URL").ok().as_deref(),
+            false,
+        )?;
+        let audit_url = optional_module_url(
+            "AUDIT_ENABLED",
+            "AUDIT_URL",
+            env::var("AUDIT_ENABLED").ok().as_deref(),
+            env::var("AUDIT_URL").ok().as_deref(),
+            true,
+        )?;
         let rate_limit_auth_failure_requests = parse_u64_env(
             "RATE_LIMIT_AUTH_FAILURE_REQUESTS",
             DEFAULT_RATE_LIMIT_AUTH_FAILURE_REQUESTS,
         )?;
-        let rate_limit_auth_failure_window_seconds = parse_u64_env(
-            "RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS",
-            DEFAULT_RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS,
+        let rate_limit_auth_failure_window = duration_env(
+            "RATE_LIMIT_AUTH_FAILURE_WINDOW",
+            DEFAULT_RATE_LIMIT_AUTH_FAILURE_WINDOW,
         )?;
-        if rate_limit_auth_failure_requests > 0 && rate_limit_auth_failure_window_seconds == 0 {
-            return Err(GatewayConfigError::Invalid {
-                key: "RATE_LIMIT_AUTH_FAILURE_WINDOW_SECONDS",
-                message: "must be > 0 when RATE_LIMIT_AUTH_FAILURE_REQUESTS > 0".to_string(),
-            });
-        }
 
         let trusted_proxies = TrustedProxies::parse(
             &env::var("TRUSTED_PROXIES").unwrap_or_default(),
@@ -117,6 +129,7 @@ impl GatewayConfig {
                 &env::var("AUTH_SUBJECT_CLAIM")
                     .unwrap_or_else(|_| DEFAULT_SUBJECT_CLAIM.to_string()),
             ),
+            auth_name_claims,
 
             identity_internal_url,
 
@@ -127,7 +140,7 @@ impl GatewayConfig {
             )?,
 
             rate_limit_auth_failure_requests,
-            rate_limit_auth_failure_window_seconds,
+            rate_limit_auth_failure_window_seconds: rate_limit_auth_failure_window.as_secs(),
 
             audit_url,
             trusted_proxies,
@@ -146,6 +159,15 @@ fn parse_audiences(raw: &str) -> Option<Audiences> {
         .filter(|s| !s.is_empty())
         .collect();
     (!list.is_empty()).then_some(Audiences::OneOf(list))
+}
+
+fn parse_name_claims(raw: &str) -> NameClaims {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(parse_claim_path)
+        .filter(|p| !p.is_empty())
+        .collect()
 }
 
 fn base_url(raw: String) -> String {
@@ -176,32 +198,33 @@ fn duration_env(key: &'static str, default: Duration) -> Result<Duration, Gatewa
     }
 }
 
-/// Audit is on unless `AUDIT_ENABLED=false`. On, `AUDIT_URL` is required: a
-/// forgotten URL fails boot instead of silently turning audit off.
-fn audit_url_from_env() -> Result<Option<String>, GatewayConfigError> {
-    parse_audit(
-        env::var("AUDIT_ENABLED").ok().as_deref(),
-        env::var("AUDIT_URL").ok().as_deref(),
-    )
-}
-
-fn parse_audit(
+/// Fail-closed module switch (`AUDIT_ENABLED` / `RATE_LIMIT_ENABLED`): on unless
+/// explicitly `"false"`. When on, its backing URL is required so a forgotten
+/// URL fails boot instead of silently disabling the module.
+fn optional_module_url(
+    enabled_key: &'static str,
+    url_key: &'static str,
     enabled: Option<&str>,
     url: Option<&str>,
+    strip_trailing_slash: bool,
 ) -> Result<Option<String>, GatewayConfigError> {
     match enabled.map(str::trim) {
         None | Some("") | Some("true") => {}
         Some("false") => return Ok(None),
         Some(other) => {
             return Err(GatewayConfigError::Invalid {
-                key: "AUDIT_ENABLED",
+                key: enabled_key,
                 message: format!("must be true or false, got {other:?}"),
             })
         }
     }
     match url.map(str::trim) {
-        Some(u) if !u.is_empty() => Ok(Some(u.trim_end_matches('/').to_string())),
-        _ => Err(GatewayConfigError::Missing("AUDIT_URL")),
+        Some(u) if !u.is_empty() => Ok(Some(if strip_trailing_slash {
+            u.trim_end_matches('/').to_string()
+        } else {
+            u.to_string()
+        })),
+        _ => Err(GatewayConfigError::Missing(url_key)),
     }
 }
 
@@ -210,44 +233,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn audit_is_on_by_default_and_needs_a_url() {
+    fn optional_modules_fail_closed_when_enabled() {
         assert_eq!(
-            parse_audit(None, Some("http://audit:3003/"))
-                .unwrap()
-                .as_deref(),
+            optional_module_url(
+                "AUDIT_ENABLED",
+                "AUDIT_URL",
+                None,
+                Some("http://audit:3003/"),
+                true
+            )
+            .unwrap()
+            .as_deref(),
             Some("http://audit:3003")
         );
+        assert!(matches!(
+            optional_module_url("RATE_LIMIT_ENABLED", "VALKEY_URL", None, None, false),
+            Err(GatewayConfigError::Missing("VALKEY_URL"))
+        ));
         assert_eq!(
-            parse_audit(Some("true"), Some("http://audit:3003"))
-                .unwrap()
-                .as_deref(),
-            Some("http://audit:3003")
-        );
-        for url in [None, Some(""), Some("  ")] {
-            assert!(matches!(
-                parse_audit(None, url),
-                Err(GatewayConfigError::Missing("AUDIT_URL"))
-            ));
-        }
-    }
-
-    #[test]
-    fn audit_off_ignores_the_url() {
-        assert_eq!(parse_audit(Some("false"), None).unwrap(), None);
-        assert_eq!(
-            parse_audit(Some("false"), Some("http://audit:3003")).unwrap(),
+            optional_module_url(
+                "RATE_LIMIT_ENABLED",
+                "VALKEY_URL",
+                Some("false"),
+                None,
+                false
+            )
+            .unwrap(),
             None
         );
-        assert!(parse_audit(Some("no"), Some("http://audit:3003")).is_err());
+        assert!(optional_module_url(
+            "AUDIT_ENABLED",
+            "AUDIT_URL",
+            Some("no"),
+            Some("http://audit:3003"),
+            true
+        )
+        .is_err());
     }
 
     #[test]
-    fn audiences_are_a_list_or_any() {
+    fn audiences_and_name_claims_parse() {
         assert_eq!(parse_audiences("*"), Some(Audiences::Any));
         assert_eq!(
             parse_audiences("api, console"),
             Some(Audiences::OneOf(vec!["api".into(), "console".into()]))
         );
         assert_eq!(parse_audiences(" , "), None);
+        assert_eq!(
+            parse_name_claims("profile.display_name, name"),
+            vec![vec!["profile", "display_name"], vec!["name"]]
+        );
     }
 }

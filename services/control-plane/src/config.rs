@@ -8,10 +8,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_DELETION_GRACE: &str = "30d";
-/// `users.name.claims` when the config names none.
-pub const DEFAULT_NAME_CLAIMS: [&str; 2] = ["name", "preferred_username"];
-/// `route_checks.path` when the config names none.
-pub const DEFAULT_ROUTE_CHECKS_PATH: &str = "/access/routes";
+pub const ROUTE_CHECKS_PATH: &str = "/access/routes";
 pub const DEFAULT_CONNECT_TIMEOUT: &str = "10s";
 pub const DEFAULT_READ_TIMEOUT: &str = "30s";
 pub const DEFAULT_MAX_BODY_BYTES: u64 = 10_485_760;
@@ -20,7 +17,7 @@ pub const USER_SCOPE: &str = "user";
 pub const PUBLIC_SCOPE: &str = "public";
 /// Every struct here refuses unknown fields: a config the running version
 /// can't read fails loudly, never read with a field dropped
-/// (docs/concepts/config.md#the-config).
+/// (docs/concepts/config.md#the-config-shape).
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -29,14 +26,12 @@ pub struct Config {
     #[serde(default)]
     pub reserved_slugs: Vec<String>,
     #[serde(default)]
-    pub users: Users,
-    #[serde(default)]
-    pub route_checks: RouteChecks,
     pub defaults: Defaults,
     #[serde(deserialize_with = "kinds_filled")]
     pub kinds: BTreeMap<String, Kind>,
     pub roles: BTreeMap<String, Role>,
     pub creator_role: String,
+    #[serde(default)]
     pub rate_limits: BTreeMap<String, Policy>,
     #[serde(default)]
     pub cors: Cors,
@@ -48,75 +43,12 @@ fn default_deletion_grace() -> String {
     DEFAULT_DELETION_GRACE.to_string()
 }
 
-/// `users:`: how Plat5 reads a person from the IdP's token.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct Users {
-    #[serde(default)]
-    pub name: UserName,
-}
-
-/// `users.name`: the claims a sign-in reads a person's name from, and when it
-/// sets it (docs/reference/idp.md#a-persons-name).
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct UserName {
-    #[serde(default = "default_name_claims")]
-    pub claims: Vec<String>,
-    #[serde(default)]
-    pub sync: NameSync,
-}
-
-impl Default for UserName {
-    fn default() -> Self {
-        Self {
-            claims: default_name_claims(),
-            sync: NameSync::default(),
-        }
-    }
-}
-
-fn default_name_claims() -> Vec<String> {
-    DEFAULT_NAME_CLAIMS.iter().map(|c| c.to_string()).collect()
-}
-
-/// `route_checks:`: where the gateway answers route checks
-/// (docs/reference/gateway.md#route-checks).
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct RouteChecks {
-    #[serde(default = "default_route_checks_path")]
-    pub path: String,
-}
-
-impl Default for RouteChecks {
-    fn default() -> Self {
-        Self {
-            path: default_route_checks_path(),
-        }
-    }
-}
-
-fn default_route_checks_path() -> String {
-    DEFAULT_ROUTE_CHECKS_PATH.to_string()
-}
-
-/// `users.name.sync`.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum NameSync {
-    /// A sign-in sets the name only while it's empty.
-    #[default]
-    FirstSignIn,
-    /// Every sign-in with a non-empty claim sets it; the person can't.
-    EachSignIn,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Defaults {
     /// The policies of every route that names none, and what the gateway
-    /// counts route checks and a service account on a user route against.
+    /// counts `/access/routes` against.
+    #[serde(default)]
     pub rate_limit: Vec<String>,
     #[serde(default)]
     pub timeouts: Timeouts,
@@ -244,7 +176,7 @@ pub struct Role {
 #[serde(deny_unknown_fields)]
 pub struct Policy {
     pub requests: u64,
-    pub window_seconds: u64,
+    pub window: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub count_at: Option<String>,
 }

@@ -162,7 +162,6 @@ const (
 	CodeNodePurged          = "NODE_PURGED"
 	CodeSlugNotReleasable   = "SLUG_NOT_RELEASABLE"
 	CodeInviteNotRedeemable = "INVITE_NOT_REDEEMABLE"
-	CodeNameOwnedByIdP      = "NAME_OWNED_BY_IDP"
 	CodeCursorAhead         = "CURSOR_AHEAD"
 )
 
@@ -191,11 +190,6 @@ func SlugNotReleasableError() *ApiError {
 // expired, or whose node is deleted (reason node_deleted).
 func InviteNotRedeemableError(message, reason string) *ApiError {
 	return StateError(CodeInviteNotRedeemable, message, map[string]interface{}{"reason": reason})
-}
-
-// NameOwnedByIdPError: a name edit under users.name.sync each_sign_in.
-func NameOwnedByIdPError() *ApiError {
-	return StateError(CodeNameOwnedByIdP, "This name comes from the sign-in provider.", nil)
 }
 
 // CursorAheadError: a lifecycle read whose after is past the log's newest
