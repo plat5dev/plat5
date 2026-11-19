@@ -37,7 +37,7 @@ Every node has a slug, fixed at creation. Fixed rules, not config:
 |------|--|
 | Shape | Lowercase letters, digits and hyphens; starts with a letter, doesn't end with a hyphen; 3 to 63 characters. Never an id: ids start with a digit |
 | Uniqueness | Per parent and kind. Roots share one namespace, so org slugs are deployment-wide |
-| Reuse | A node's slug is free again once the node is purged. A root's slug never is: a purged root keeps its row as a tombstone (slug, id, kind). An operator can release a purged root's slug ([slug release](../reference/api/identity.md#slug-release)) |
+| Reuse | A node's slug is free again once the node is purged. A root's slug never is: a purged root keeps its row as a tombstone (slug, id, kind) so an external config holding an old org slug can't silently route to a stranger's org. An operator can release a purged root's slug ([slug release](../reference/api/identity.md#slug-release)) |
 | Generation | Omitted on create: generated from the display name, lowercased, with each run of other characters as `-`, trimmed. Prefixed with the kind name when it would start with a digit or be too short (`project-42`). `-2`, `-3` on collision; reserved slugs and root tombstones count as taken |
 | Reserved | `reserved_slugs` in config. **422** |
 

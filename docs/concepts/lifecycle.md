@@ -16,7 +16,7 @@ A service never creates a node in its own tables first: it creates it through th
 
 - **Deleting again.** Deleting a node that's already deleted or purged succeeds and changes nothing: it keeps its first `deletion_id` and `purge_after`, so a second delete doesn't extend the grace.
 
-- **A delete revokes nothing.** While a node is deleted, nothing works on it or below: the gateway refuses it, the keys of service accounts that belong there are refused, and its invites can't be redeemed. Bindings, service accounts, keys and invites are all kept. To kill a key you think leaked, revoke it or delete its service account.
+- **A delete revokes nothing.** While a node is deleted, nothing works on it or below: the gateway refuses it, the keys of service accounts that belong there are refused, and its invites can't be redeemed. Bindings, service accounts, keys and invites are all kept so restoring an accidentally deleted node doesn't break every CI key in it. Delete isn't a key kill switch: to kill a key you think leaked, revoke it or delete its service account.
 
 - **What a deleted node grants.** Nothing on it or below, except the node itself on an `allow_deleted` route (restore). Listing deleted nodes counts its own bindings ([lists](access.md#lists)). So through the gateway, restoring a node whose parent is deleted, or creating one under a deleted parent, is the usual **403**: the parent is in the chain. **409** `PARENT_DELETED` is identity's answer to other front doors.
 
@@ -34,7 +34,7 @@ A kind is removed, or changes parent, only while it has no nodes, deleted ones i
 
 ## Members
 
-- **Removed is final.** Re-adding someone to a tree makes a new member id. The old member stays, and a lookup returns its name and `status: removed`.
+- **Removed is final.** Re-adding someone to a tree makes a new member id, keeping distinct stints and authorship history separate. The old member stays, and a lookup returns its name and `status: removed`.
 
 - **Members.** One active member per principal per tree, created with its first binding. Removal sets `removed_at`, deletes its bindings and emits `member.removed`; it's never undone, and re-adding makes a new member. A person's member left with no bindings, by a binding delete or a purge, is removed. A service account's member is removed only with the service account (deleted directly, or at purge of the node it belongs to: either way its principal and keys are deleted); with no bindings its keys still authenticate and are refused everywhere, so a team can re-bind it.
 

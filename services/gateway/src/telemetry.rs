@@ -688,4 +688,16 @@ mod tests {
             "Operation failed: connection refused"
         );
     }
+
+    #[test]
+    fn redact_query_masks_signed_url_keys() {
+        assert_eq!(
+            redact_query("sig=secret&page=2&X-Amz-Signature=s3&X-Amz-Credential=c&SIG=keep"),
+            "sig=REDACTED&page=2&X-Amz-Signature=REDACTED&X-Amz-Credential=REDACTED&SIG=keep"
+        );
+        assert_eq!(
+            redact_query("Signature=s&AWSAccessKeyId=k&X-Amz-Security-Token=t&X-Goog-Signature=g"),
+            "Signature=REDACTED&AWSAccessKeyId=REDACTED&X-Amz-Security-Token=REDACTED&X-Goog-Signature=REDACTED"
+        );
+    }
 }

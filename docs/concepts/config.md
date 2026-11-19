@@ -167,7 +167,7 @@ Each apply writes one revision, in one Postgres transaction, with the plan's sum
 - **the source**: the whole config as sent, for readback and rollback;
 - **the served bodies**: the gateway's feed and identity's feed, expanded, with defaults filled in.
 
-A revision means one thing on every reader: the feeds serve its stored bodies and never expand them again. An apply whose plan has no changes writes nothing and answers the current revision. Revisions are kept. There is no restore endpoint: rolling back is fetching an older revision (`GET /revisions/{rev}`) and applying it through the same plan.
+A revision means one thing on every reader: the feeds serve its stored bodies and never expand them again, so a control-plane upgrade never silently alters what gateways serve for an existing revision without a plan. An apply whose plan has no changes writes nothing and answers the current revision. Revisions are kept. There is no restore endpoint: rolling back is fetching an older revision (`GET /revisions/{rev}`) and applying it through the same plan.
 
 The current revision is the **head**. Writes are serialized on it, so head order is commit order, and readers long-poll it.
 

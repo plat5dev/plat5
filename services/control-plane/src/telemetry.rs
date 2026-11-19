@@ -475,42 +475,42 @@ fn exporter_list(env: Lookup, key: &str, allowed: &[&str]) -> Result<Option<Vec<
     Ok(if out.is_empty() { None } else { Some(out) })
 }
 
-    /// The resource, layered: the service's defaults (`version` among them), then
-    /// `OTEL_RESOURCE_ATTRIBUTES`, then `OTEL_SERVICE_NAME`.
-    fn resource_attributes(env: Lookup, version: &str) -> Result<Vec<KeyValue>, String> {
-        let mut attrs: Vec<(String, String)> = vec![
-            ("service.name".into(), SERVICE_NAME.into()),
-            ("service.namespace".into(), SERVICE_NAMESPACE.into()),
-            (
-                "service.instance.id".into(),
-                get(env, "HOSTNAME")
-                    .unwrap_or_else(|| format!("{SERVICE_NAME}-{}", std::process::id())),
-            ),
-            ("service.version".into(), version.into()),
-            ("deployment.environment".into(), "development".into()),
-        ];
-        let mut set = |key: &str, value: String| {
-            attrs.retain(|(k, _)| k != key);
-            attrs.push((key.to_string(), value));
-        };
-        if let Some(raw) = get(env, "OTEL_RESOURCE_ATTRIBUTES") {
-            for entry in raw.split(',') {
-                let Some((key, value)) = entry.split_once('=').filter(|(k, _)| !k.trim().is_empty())
-                else {
-                    let want = "want key=value entries, comma-separated";
-                    return Err(format!("OTEL_RESOURCE_ATTRIBUTES is {raw:?}: {want}"));
-                };
-                set(key.trim(), value.trim().to_string());
-            }
+/// The resource, layered: the service's defaults (`version` among them), then
+/// `OTEL_RESOURCE_ATTRIBUTES`, then `OTEL_SERVICE_NAME`.
+fn resource_attributes(env: Lookup, version: &str) -> Result<Vec<KeyValue>, String> {
+    let mut attrs: Vec<(String, String)> = vec![
+        ("service.name".into(), SERVICE_NAME.into()),
+        ("service.namespace".into(), SERVICE_NAMESPACE.into()),
+        (
+            "service.instance.id".into(),
+            get(env, "HOSTNAME")
+                .unwrap_or_else(|| format!("{SERVICE_NAME}-{}", std::process::id())),
+        ),
+        ("service.version".into(), version.into()),
+        ("deployment.environment".into(), "development".into()),
+    ];
+    let mut set = |key: &str, value: String| {
+        attrs.retain(|(k, _)| k != key);
+        attrs.push((key.to_string(), value));
+    };
+    if let Some(raw) = get(env, "OTEL_RESOURCE_ATTRIBUTES") {
+        for entry in raw.split(',') {
+            let Some((key, value)) = entry.split_once('=').filter(|(k, _)| !k.trim().is_empty())
+            else {
+                let want = "want key=value entries, comma-separated";
+                return Err(format!("OTEL_RESOURCE_ATTRIBUTES is {raw:?}: {want}"));
+            };
+            set(key.trim(), value.trim().to_string());
         }
-        if let Some(value) = get(env, "OTEL_SERVICE_NAME") {
-            set("service.name", value);
-        }
-        Ok(attrs
-            .into_iter()
-            .map(|(k, v)| KeyValue::new(k, v))
-            .collect())
     }
+    if let Some(value) = get(env, "OTEL_SERVICE_NAME") {
+        set("service.name", value);
+    }
+    Ok(attrs
+        .into_iter()
+        .map(|(k, v)| KeyValue::new(k, v))
+        .collect())
+}
 
 fn sampler_from_ratio(ratio: f64) -> sdktrace::Sampler {
     let inner = if (ratio - 1.0).abs() < f64::EPSILON {
@@ -659,6 +659,18 @@ pub(crate) mod tests {
         assert_eq!(
             line["error_message"],
             "Operation failed: connection refused"
+        );
+    }
+
+    #[test]
+    fn redact_query_masks_signed_url_keys() {
+        assert_eq!(
+            redact_query("sig=secret&page=2&X-Amz-Signature=s3&X-Amz-Credential=c&SIG=keep"),
+            "sig=REDACTED&page=2&X-Amz-Signature=REDACTED&X-Amz-Credential=REDACTED&SIG=keep"
+        );
+        assert_eq!(
+            redact_query("Signature=s&AWSAccessKeyId=k&X-Amz-Security-Token=t&X-Goog-Signature=g"),
+            "Signature=REDACTED&AWSAccessKeyId=REDACTED&X-Amz-Security-Token=REDACTED&X-Goog-Signature=REDACTED"
         );
     }
 }

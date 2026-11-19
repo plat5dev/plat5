@@ -35,7 +35,7 @@ Invalid values for `OTEL_*` variables fail boot with an error naming the variabl
 ### What's on logs, traces, and metrics
 
 - **Logs:** Structured JSON on stdout (`timestamp`, `level`, `message`, `request_id`, `trace_id`, `span_id`, `route`, `method`, `status`, `duration_ms`, plus admitted ids like `root_id`, `node_id`, `member_id`, `user_id` — never secrets, tokens, or principal ids).
-- **Traces:** Standard OTel HTTP server spans (`http.request.method`, `http.route`, `url.path`, `url.scheme`, `http.response.status_code`), with `request_id` and admitted `plat5.*` ids attached at the gateway. 4xx responses are normal outcomes (not span errors); 5xx mark the span as `Error`.
+- **Traces:** Standard OTel HTTP server spans (`http.request.method`, `http.route`, `url.path`, `url.scheme`, `http.response.status_code`), with `request_id` and admitted `plat5.*` ids attached at the gateway. Presigned-URL query params (`sig`, `X-Amz-Signature`, etc.) are redacted in `url.query`. 4xx responses are normal outcomes (not span errors); 5xx mark the span as `Error`.
 - **Metrics:** Prometheus format at `/metrics` on `INTERNAL_PORT`: HTTP request counters and latency histograms (`http_requests_total`, `http_request_duration_seconds`), DB operation metrics, process metrics, and key platform gauges/counters (`gateway_config_revision`, `gateway_config_refused_total`, `audit_writes_total`, `node_operations_total`, `access_evaluations_total`). High-cardinality ids never appear as metric labels.
 
 ## For your services (opt-in)

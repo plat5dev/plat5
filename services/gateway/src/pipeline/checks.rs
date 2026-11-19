@@ -225,10 +225,9 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         Ok(permitted(&route.required, &answer.permissions))
     }
 
-    /// One count of each policy `defaults.rate_limit` names, per credential:
-    /// a route checks call, or a service account refused on a user route. The
-    /// buckets are the same. Checked and counted together, as on a route; Ok
-    /// carries the tightest one's numbers.
+    /// One count of each policy `defaults.rate_limit` names, per credential,
+    /// for a `POST /access/routes` call. Checked and counted together, as on a
+    /// route; Ok carries the tightest one's numbers.
     pub(super) async fn limit_credential(
         &self,
         defaults: &[Policy],

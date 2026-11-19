@@ -321,7 +321,7 @@ func TestAdmitRoleChanges(t *testing.T) {
 
 // A new IdP subject becomes a person with a user id at their first admit, on
 // any route, with no member anywhere, and user.created; the name claim seeds
-// the name, and a later sign-in leaves it (first_sign_in, the default).
+// the name while empty, and a later sign-in leaves it alone.
 func TestAdmitFirstSignIn(t *testing.T) {
 	e := setup(t)
 	e.org(e.person("alice"), "Gruow")
