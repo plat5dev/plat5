@@ -154,8 +154,7 @@ func StateError(code, message string, details interface{}) *ApiError {
 	}
 }
 
-// The 409 codes for state refusals, each with its fallback message
-// (docs/reference/error-copy.md).
+// The 409 codes for state refusals.
 const (
 	CodeParentDeleted       = "PARENT_DELETED"
 	CodeGraceExpired        = "GRACE_EXPIRED"

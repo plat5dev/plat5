@@ -26,7 +26,7 @@ type AdmitInput struct {
 }
 
 // IdPClaims is what the gateway read from a verified JWT. Name is the first
-// non-empty claim of users.name.claims.
+// non-empty claim of AUTH_NAME_CLAIMS.
 type IdPClaims struct {
 	Issuer, Subject string
 	Name            *string

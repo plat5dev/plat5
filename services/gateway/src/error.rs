@@ -99,9 +99,9 @@ impl ApiError {
         }
     }
 
-    /// A 401 on a matched route: the message names what the route's scope takes
-    /// (docs/reference/error-copy.md#gateway-401). It never says why the credential
-    /// sent failed, so it tells a caller nothing about a key they hold.
+    /// A 401 on a matched route: the message names what the route's scope takes.
+    /// It never says why the credential sent failed, so it tells a caller nothing
+    /// about a key they hold.
     pub fn unauthorized_for(scope: &Scope, details: Option<serde_json::Value>) -> Self {
         let mut err = Self::unauthorized(details);
         err.message = match scope {
@@ -131,7 +131,7 @@ impl ApiError {
     }
 
     /// A service account on a user route: the credential is good, and user
-    /// routes are a person's own (docs/reference/error-copy.md#gateway-403).
+    /// routes are a person's own.
     pub fn service_account_forbidden() -> Self {
         Self {
             error_type: "invalid_request_error".to_string(),

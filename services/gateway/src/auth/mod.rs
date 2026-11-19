@@ -93,7 +93,7 @@ impl AuthError {
     }
 }
 
-/// `users.name.claims`, each as path segments, in order.
+/// `AUTH_NAME_CLAIMS`, each as path segments, in order.
 pub type NameClaims = Vec<Vec<String>>;
 
 /// Three dot-separated segments is a JWT; anything else is a key.
@@ -118,7 +118,7 @@ impl Authenticator {
     }
 
     /// The request's credential, from `Authorization: Bearer`. `name_claims` is
-    /// `users.name.claims`: a JWT's name is the first of them that's non-empty.
+    /// `AUTH_NAME_CLAIMS`: a JWT's name is the first of them that's non-empty.
     pub async fn present(
         &self,
         req: &RequestHeader,
@@ -214,7 +214,7 @@ pub fn first_name(claims: &Value, paths: &[Vec<String>]) -> Option<String> {
     })
 }
 
-/// A dotted claim path (`AUTH_SUBJECT_CLAIM`, each of `users.name.claims`) as
+/// A dotted claim path (`AUTH_SUBJECT_CLAIM`, each of `AUTH_NAME_CLAIMS`) as
 /// path segments, each trimmed, empty ones dropped.
 pub fn parse_claim_path(raw: &str) -> Vec<String> {
     raw.split('.')
