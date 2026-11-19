@@ -112,10 +112,11 @@ impl Report {
         metrics::record_config_revision(revision);
     }
 
-    /// Logs and counts a refusal once per revision.
-    pub fn refused(&mut self, revision: i64, reason: String) {
+    /// Logs and counts a refusal once per revision. Returns `true` when this
+    /// revision was newly refused, `false` if it was already refused.
+    pub fn refused(&mut self, revision: i64, reason: String) -> bool {
         if self.refused.as_ref().is_some_and(|(r, _)| *r == revision) {
-            return;
+            return false;
         }
         error!(
             revision,
@@ -124,6 +125,7 @@ impl Report {
         );
         metrics::record_config_refused(revision);
         self.refused = Some((revision, reason.chars().take(MAX_REASON_CHARS).collect()));
+        true
     }
 
     /// The query a poll carries.
@@ -160,14 +162,22 @@ impl ControlPlane {
                 Ok(Some(feed)) => match revision_of(&feed) {
                     Some(revision) => match build(feed) {
                         Ok(snapshot) => break snapshot,
-                        Err(e) => report.refused(revision, e),
+                        Err(e) => {
+                            if !report.refused(revision, e) {
+                                sleep(retry).await;
+                                retry = (retry * 2).min(MAX_RETRY_DELAY);
+                            }
+                        }
                     },
                     None => {
                         error!("control-plane answer has no revision; retrying");
                         sleep(retry).await;
+                        retry = (retry * 2).min(MAX_RETRY_DELAY);
                     }
                 },
-                Ok(None) => {}
+                Ok(None) => {
+                    retry = Duration::from_secs(1);
+                }
                 Err(e) => {
                     warn!(error = %e, "waiting for the control plane");
                     sleep(retry).await;
@@ -199,22 +209,30 @@ async fn follow(client: Client, mut report: Report, snapshot: Arc<ArcSwap<Snapsh
     let mut retry = Duration::from_secs(1);
     loop {
         match client.fetch(&report.query(Some(report.cursor()))).await {
-            Ok(None) => {}
-            Ok(Some(feed)) => {
+            Ok(None) => {
                 retry = Duration::from_secs(1);
+            }
+            Ok(Some(feed)) => {
                 let Some(revision) = revision_of(&feed) else {
                     error!("control-plane answer has no revision; keeping current routes");
                     sleep(retry).await;
+                    retry = (retry * 2).min(MAX_RETRY_DELAY);
                     continue;
                 };
                 match build(feed) {
                     Ok(next) => {
+                        retry = Duration::from_secs(1);
                         let routes = next.routes.route_count();
                         snapshot.store(Arc::new(next));
                         report.loaded(revision);
                         info!(revision, routes, "control-plane snapshot reloaded");
                     }
-                    Err(e) => report.refused(revision, e),
+                    Err(e) => {
+                        if !report.refused(revision, e) {
+                            sleep(retry).await;
+                            retry = (retry * 2).min(MAX_RETRY_DELAY);
+                        }
+                    }
                 }
             }
             Err(e) => {
@@ -248,8 +266,12 @@ pub fn build(feed: Value) -> Result<Snapshot, String> {
             }
             Some(p) => {
                 let window_seconds = parse_duration(&p.window)
+                    .filter(|d| *d >= Duration::from_secs(1))
                     .ok_or_else(|| {
-                        format!("defaults.rate_limit: {name:?} has invalid window {:?}", p.window)
+                        format!(
+                            "defaults.rate_limit: {name:?} has invalid window {:?} (must be at least 1s)",
+                            p.window
+                        )
                     })?
                     .as_secs();
                 Ok(Policy {
@@ -369,7 +391,10 @@ mod tests {
         // Empty defaults.rate_limit is allowed (unlimited by default).
         let mut no_default_policy = feed(json!({}));
         no_default_policy["defaults"]["rate_limit"] = json!([]);
-        assert!(build(no_default_policy).unwrap().default_policies.is_empty());
+        assert!(build(no_default_policy)
+            .unwrap()
+            .default_policies
+            .is_empty());
     }
 
     #[test]
@@ -387,12 +412,15 @@ mod tests {
         unknown_default["defaults"]["rate_limit"] = json!(["ghost"]);
         let mut counted_default = feed(json!({}));
         counted_default["defaults"]["rate_limit"] = json!(["per-org"]);
+        let mut zero_window_default = feed(json!({}));
+        zero_window_default["rate_limits"]["standard"]["window"] = json!("0s");
         for bad in [
             no_revision,
             no_rate_limits,
             no_defaults,
             unknown_default,
             counted_default,
+            zero_window_default,
             feed(json!({ "w": { "url": "http://w:1" } })),
             feed(widgets(json!({ "connect": "1s" }))),
             feed(widgets(json!({ "connect": "fast", "read": "1s" }))),
@@ -460,13 +488,18 @@ mod tests {
             vec![("replica", "gw-1".to_string()), ("loaded", "0".to_string())]
         );
         report.loaded(41);
-        report.refused(42, "x".repeat(MAX_REASON_CHARS + 10));
+        assert!(report.refused(42, "x".repeat(MAX_REASON_CHARS + 10)));
+        assert!(!report.refused(42, "same revision again".into()));
         assert_eq!(report.cursor(), 42);
         let q = report.query(Some(report.cursor()));
         assert_eq!(q[0], ("after", "42".to_string()));
         assert_eq!(q[2], ("loaded", "41".to_string()));
         assert_eq!(q[3], ("refused", "42".to_string()));
         assert_eq!(q[4].1.len(), MAX_REASON_CHARS);
+        // After a store reset to a lower bad revision, refusing it again reports false so follow backs off.
+        assert!(report.refused(3, "bad after reset".into()));
+        assert!(!report.refused(3, "bad after reset".into()));
+        assert_eq!(report.cursor(), 41);
         // A newer revision that loads clears the refusal.
         report.loaded(43);
         assert_eq!(report.cursor(), 43);

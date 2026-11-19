@@ -1,10 +1,10 @@
-use std::sync::LazyLock;
 use opentelemetry::metrics::{Counter, Histogram};
 use opentelemetry::{global, KeyValue};
 use prometheus::{
     histogram_opts, register_histogram_vec, register_int_counter_vec, Encoder, HistogramVec,
     IntCounterVec, TextEncoder,
 };
+use std::sync::LazyLock;
 
 /// Registers process metrics (CPU, memory, start time, etc.).
 /// Linux only — process collector needs procfs (prod containers are Linux).

@@ -9,7 +9,6 @@ import (
 const (
 	defaultPort         = "3000"
 	defaultInternalPort = "3001"
-	defaultDatabaseURL  = "postgres://plat5:plat5@localhost:5432/plat5?sslmode=disable"
 	defaultSecretBrand  = "plat5"
 	maxSecretBrandLen   = 32
 )
@@ -20,7 +19,8 @@ const (
 type Config struct {
 	Port         string
 	InternalPort string
-	DatabaseURL  string
+	// DatabaseURL is DATABASE_URL: Postgres connection string. Required.
+	DatabaseURL string
 	// SecretBrand starts every secret identity mints, API keys and invite
 	// tokens (docs/reference/api/identity.md#secrets).
 	SecretBrand string
@@ -34,6 +34,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	databaseURL, err := parseDatabaseURL(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		return Config{}, err
+	}
 	controlPlane, err := parseControlPlaneURL(os.Getenv("CONTROL_PLANE_URL"))
 	if err != nil {
 		return Config{}, err
@@ -41,10 +45,18 @@ func Load() (Config, error) {
 	return Config{
 		Port:            envOr("PORT", defaultPort),
 		InternalPort:    envOr("INTERNAL_PORT", defaultInternalPort),
-		DatabaseURL:     envOr("DATABASE_URL", defaultDatabaseURL),
+		DatabaseURL:     databaseURL,
 		SecretBrand:     brand,
 		ControlPlaneURL: controlPlane,
 	}, nil
+}
+
+func parseDatabaseURL(raw string) (string, error) {
+	u := strings.TrimSpace(raw)
+	if u == "" {
+		return "", fmt.Errorf("DATABASE_URL is required")
+	}
+	return u, nil
 }
 
 // parseControlPlaneURL: identity doesn't listen until it has the control

@@ -32,3 +32,20 @@ func TestUnavailable(t *testing.T) {
 		t.Error("Unavailable(nil)")
 	}
 }
+
+func TestIsDeadlock(t *testing.T) {
+	for err, want := range map[error]bool{
+		&pgconn.PgError{Code: "40P01"}:                       true,
+		fmt.Errorf("tx: %w", &pgconn.PgError{Code: "40P01"}): true,
+		&pgconn.PgError{Code: "40001"}:                       false,
+		&pgconn.PgError{Code: "23505"}:                       false,
+		errors.New("deadlock"):                               false,
+	} {
+		if got := IsDeadlock(err); got != want {
+			t.Errorf("IsDeadlock(%v) = %v, want %v", err, got, want)
+		}
+	}
+	if IsDeadlock(nil) {
+		t.Error("IsDeadlock(nil)")
+	}
+}

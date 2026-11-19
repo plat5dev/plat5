@@ -2,6 +2,7 @@ package nodes
 
 import (
 	"context"
+	stderrors "errors"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -37,8 +38,11 @@ func NewSweeper(store *Store, log zerolog.Logger) *Sweeper {
 func (w *Sweeper) Run(ctx context.Context) {
 	ticker := time.NewTicker(SweepInterval)
 	defer ticker.Stop()
-	for {
+	for ctx.Err() == nil {
 		w.Sweep(ctx)
+		if ctx.Err() != nil {
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -49,16 +53,25 @@ func (w *Sweeper) Run(ctx context.Context) {
 
 // Sweep runs once. A failure is logged and retried on the next run.
 func (w *Sweeper) Sweep(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
 	n, err := w.store.PurgeDue(ctx)
-	if err != nil && ctx.Err() == nil {
+	if err != nil && ctx.Err() == nil && !stderrors.Is(err, context.Canceled) {
 		w.log.Error().Err(err).Msg("purge sweep failed")
 	}
 	if n > 0 {
 		w.log.Info().Int("nodes", n).Msg("purged nodes")
 	}
+	if ctx.Err() != nil {
+		return
+	}
 	for _, t := range w.also {
+		if ctx.Err() != nil {
+			return
+		}
 		n, err := t.run(ctx)
-		if err != nil && ctx.Err() == nil {
+		if err != nil && ctx.Err() == nil && !stderrors.Is(err, context.Canceled) {
 			w.log.Error().Err(err).Str("task", t.name).Msg("sweep failed")
 		}
 		if n > 0 {

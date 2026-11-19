@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -44,5 +45,40 @@ func TestMigrateRefusesAnUnknownMigration(t *testing.T) {
 	err = db.MigrateSchema(ctx, pool, schema)
 	if err == nil || !strings.Contains(err.Error(), "002_personal_log") {
 		t.Fatalf("want refusal naming the unknown migration, got %v", err)
+	}
+}
+
+func TestMigrateSchemaConcurrent(t *testing.T) {
+	url := os.Getenv("AUDIT_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("AUDIT_TEST_DATABASE_URL is unset")
+	}
+	ctx := context.Background()
+	schema := fmt.Sprintf("audit_test_concurrent_%d", time.Now().UnixNano())
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "DROP SCHEMA "+pgx.Identifier{schema}.Sanitize()+" CASCADE")
+	})
+
+	const workers = 6
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- db.MigrateSchema(ctx, pool, schema)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent MigrateSchema: %v", err)
+		}
 	}
 }

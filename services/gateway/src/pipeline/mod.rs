@@ -20,9 +20,7 @@ use crate::metrics;
 use crate::rate_limit::{Bucket, RateLimitInfo, RateLimiter, Unavailable, Verdict};
 use crate::route_map::{BadParam, Matched, Route, Scope, Values};
 
-pub use checks::{
-    parse_checks, BadField, Check, CheckRefused, Checked, MAX_CHECKS, MAX_CHECKS_BODY,
-};
+pub use checks::{parse_checks, BadField, Check, Checked, MAX_CHECKS, MAX_CHECKS_BODY};
 pub use permissions::permitted;
 
 pub const MEMBER_ID_HEADER: &str = "X-Plat5-Member-Id";
@@ -250,7 +248,11 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         let presented = match presented {
             Ok(p) => p,
             // Refused here, without identity: not counted.
-            Err(err) => return Err(unauthorized(err, None, route.scope.name())),
+            Err(err) => {
+                let auth_type = err.auth_type();
+                cred.auth_type = auth_type;
+                return Err(unauthorized(err, auth_type, route.scope.name()));
+            }
         };
         let auth_type = presented.auth_type();
         cred.auth_type = Some(auth_type);

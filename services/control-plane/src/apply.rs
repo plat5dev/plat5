@@ -117,10 +117,11 @@ pub async fn dry_run(
     store: &Store,
     counts: &dyn Counts,
     prepared: &Prepared,
+    request_id: &str,
 ) -> Result<DryRun, Failure> {
     let (revision, current) = store.served().await?;
     let next = Served::of(&prepared.config);
-    let plan = plan::dry_run(revision, current.as_ref(), &next, counts).await?;
+    let plan = plan::dry_run(revision, current.as_ref(), &next, counts, request_id).await?;
     Ok(DryRun {
         plan,
         services: next.gateway["services"].clone(),
@@ -132,28 +133,44 @@ pub struct Applied {
     pub summary: Summary,
 }
 
-/// Applies with the head locked. An empty plan writes nothing and answers the
-/// current revision.
+/// Plans against an unlocked snapshot (including any call to identity), then
+/// locks the head only to re-verify `expect.revision` and commit. An empty plan
+/// writes nothing and answers the current revision.
 pub async fn apply(
     store: &Store,
     counts: &dyn Counts,
     prepared: &Prepared,
     request_id: &str,
 ) -> Result<Applied, Failure> {
-    let locked = store.lock().await?;
+    let Some(expect) = prepared.expect.as_ref() else {
+        return Err(Failure::Invalid(vec![FieldError::new(
+            "expect",
+            "required: the revision the plan was made against (0 for the first apply)",
+        )]));
+    };
+    let (revision, current) = store.served().await?;
     let next = Served::of(&prepared.config);
     let plan = plan::apply(
-        locked.revision,
-        locked.served.as_ref(),
+        revision,
+        current.as_ref(),
         &next,
-        prepared.expect.as_ref(),
+        Some(expect),
         counts,
+        request_id,
     )
     .await?;
     if plan.is_empty() {
         return Ok(Applied {
-            revision: locked.revision,
+            revision,
             summary: plan.summary,
+        });
+    }
+    let locked = store.lock().await?;
+    if locked.revision != expect.revision {
+        return Err(Failure::Stale {
+            precondition: "revision".into(),
+            expected: Some(expect.revision),
+            actual: Some(locked.revision),
         });
     }
     let summary = serde_json::to_value(&plan.summary).expect("summary serializes");
@@ -174,8 +191,8 @@ mod tests {
     fn base() -> Value {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures/plans/first-apply/after.yml");
-        let yaml: serde_yaml::Value =
-            serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let yaml: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         serde_json::to_value(yaml).unwrap()
     }
 
@@ -227,6 +244,27 @@ mod tests {
                 "{at}: read"
             );
             assert!(matches!(check(&config), Err(Failure::Invalid(_))), "{at}");
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_refuses_missing_expect_before_touching_postgres() {
+        let prepared = prepare(base()).unwrap();
+        assert!(prepared.expect.is_none());
+        let err = apply(
+            &Store::lazy_for_test(),
+            &crate::counts::NoCounts,
+            &prepared,
+            "req-1",
+        )
+        .await;
+        match err {
+            Err(Failure::Invalid(fields)) => {
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0].path, "expect");
+            }
+            Err(other) => panic!("expected Invalid(expect), got {other:?}"),
+            Ok(_) => panic!("expected error"),
         }
     }
 }

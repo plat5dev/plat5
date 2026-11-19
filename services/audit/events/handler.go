@@ -7,10 +7,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gofiber/fiber/v3"
 
 	"github.com/plat5dev/plat5/audit/errors"
+	"github.com/plat5dev/plat5/audit/internal/dbx"
 	"github.com/plat5dev/plat5/audit/internal/httpx"
 	"github.com/plat5dev/plat5/audit/internal/id"
 	"github.com/plat5dev/plat5/audit/metrics"
@@ -53,8 +55,7 @@ func (h *Handler) PutIntent(c fiber.Ctx) error {
 	}
 	created, err := h.store.CreateIntent(c.Context(), in, final)
 	if err != nil {
-		httpx.LogError(c.Context(), "create audit intent", err, errors.KindDB)
-		return errors.ServiceUnavailableError()
+		return dbError(c.Context(), "create audit intent", err)
 	}
 	if !created {
 		metrics.RecordIntent(metrics.IntentExisting)
@@ -77,8 +78,7 @@ func (h *Handler) PatchOutcome(c fiber.Ctx) error {
 		return errors.NotFoundError("audit_event", requestID)
 	}
 	if err != nil {
-		httpx.LogError(c.Context(), "apply audit outcome", err, errors.KindDB)
-		return errors.ServiceUnavailableError()
+		return dbError(c.Context(), "apply audit outcome", err)
 	}
 	metrics.RecordOutcome(result)
 	return c.SendStatus(fiber.StatusNoContent)
@@ -175,14 +175,21 @@ func (h *Handler) ListUser(c fiber.Ctx) error {
 func (h *Handler) list(c fiber.Ctx, f Filter) error {
 	list, hasMore, err := h.store.List(c.Context(), f)
 	if err != nil {
-		httpx.LogError(c.Context(), "list audit events", err, errors.KindDB)
-		return errors.InternalError()
+		return dbError(c.Context(), "list audit events", err)
 	}
 	resp := listResponse{AuditEvents: make([]eventResponse, 0, len(list)), HasMore: hasMore}
 	for _, e := range list {
 		resp.AuditEvents = append(resp.AuditEvents, toResponse(e))
 	}
 	return c.JSON(resp)
+}
+
+func dbError(ctx context.Context, msg string, err error) error {
+	httpx.LogError(ctx, msg, err, errors.KindDB)
+	if dbx.Unavailable(err) {
+		return errors.ServiceUnavailableError()
+	}
+	return errors.InternalError()
 }
 
 // parseFilter reads the list query. Unknown, repeated, or malformed params are
@@ -201,7 +208,7 @@ func parseFilter(c fiber.Ctx) (Filter, error) {
 		seen[key] = true
 
 		if name, ok := paramFilterName(key); ok {
-			if !validParamName(name) || value == "" || len(value) > maxTextLen {
+			if !validParamName(name) || value == "" || len(value) > maxTextLen || !utf8.ValidString(value) || strings.ContainsRune(value, 0) {
 				bad.add(key)
 				continue
 			}
@@ -237,11 +244,12 @@ func parseFilter(c fiber.Ctx) (Filter, error) {
 		case "outcome":
 			f.Outcome = filterText(&bad, key, value)
 		case "status":
-			n, err := strconv.Atoi(value)
+			n64, err := strconv.ParseInt(value, 10, 32)
 			if err != nil {
 				bad.add(key)
 				continue
 			}
+			n := int(n64)
 			f.Status = &n
 		case "request_id":
 			f.RequestID = filterText(&bad, key, value)

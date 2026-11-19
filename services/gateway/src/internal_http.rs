@@ -27,12 +27,6 @@ pub enum InternalHttpError {
     Decode(String),
 }
 
-impl InternalHttpError {
-    pub fn is_not_found(&self) -> bool {
-        matches!(self, InternalHttpError::HttpStatus { status: 404 })
-    }
-}
-
 impl Default for InternalHttpClient {
     fn default() -> Self {
         Self::new()

@@ -80,7 +80,7 @@ async fn fixture_configs_plan() {
         let before = before.exists().then(|| load(&before));
         let revision = if before.is_some() { 7 } else { 0 };
         let counts = FixedCounts::new(read_counts(&case));
-        let plan = dry_run(revision, before.as_ref(), &after, &counts)
+        let plan = dry_run(revision, before.as_ref(), &after, &counts, "test")
             .await
             .unwrap_or_else(|e| panic!("{name}: {e:?}"));
         fixtures::check_json(&plan_file, &serde_json::to_value(&plan).unwrap());
@@ -104,13 +104,16 @@ fn case(name: &str) -> (Served, Served, CountsResponse) {
 async fn an_apply_recomputes_the_plan() {
     let (before, after, counts) = case("remove-kind");
     let counts = FixedCounts::new(counts);
-    let plan = dry_run(7, Some(&before), &after, &counts).await.unwrap();
+    let plan = dry_run(7, Some(&before), &after, &counts, "test")
+        .await
+        .unwrap();
     let applied = apply(
         7,
         Some(&before),
         &after,
         Some(&Expect { revision: 7 }),
         &counts,
+        "test",
     )
     .await
     .unwrap();
@@ -128,6 +131,7 @@ async fn a_stale_expect_is_refused_before_counting() {
         &after,
         Some(&Expect { revision: 7 }),
         &counts,
+        "test",
     )
     .await;
     assert_eq!(
@@ -144,7 +148,15 @@ async fn a_stale_expect_is_refused_before_counting() {
 #[tokio::test]
 async fn an_apply_needs_expect() {
     let (before, after, counts) = case("roles");
-    let got = apply(7, Some(&before), &after, None, &FixedCounts::new(counts)).await;
+    let got = apply(
+        7,
+        Some(&before),
+        &after,
+        None,
+        &FixedCounts::new(counts),
+        "test",
+    )
+    .await;
     assert!(matches!(got, Err(Refused::Invalid(e)) if e[0].path == "expect"));
 }
 
@@ -161,6 +173,7 @@ async fn a_blocked_plan_is_refused() {
             &after,
             Some(&Expect { revision: 7 }),
             &FixedCounts::new(counts),
+            "test",
         )
         .await;
         assert!(
@@ -174,7 +187,9 @@ async fn a_blocked_plan_is_refused() {
 async fn a_node_made_since_the_dry_run_blocks_the_apply() {
     let (before, after, counts) = case("remove-kind");
     let fixed = FixedCounts::new(counts.clone());
-    let plan = dry_run(7, Some(&before), &after, &fixed).await.unwrap();
+    let plan = dry_run(7, Some(&before), &after, &fixed, "test")
+        .await
+        .unwrap();
     assert_eq!(plan.summary.blocked, 0);
     fixed.set(CountsResponse {
         kinds: [(
@@ -192,6 +207,7 @@ async fn a_node_made_since_the_dry_run_blocks_the_apply() {
         &after,
         Some(&Expect { revision: 7 }),
         &fixed,
+        "test",
     )
     .await;
     assert!(
@@ -204,13 +220,20 @@ async fn a_node_made_since_the_dry_run_blocks_the_apply() {
 async fn identity_is_asked_only_when_the_plan_needs_counts() {
     // The first apply, with identity not yet up.
     let after = load(&plans().join("first-apply/after.yml"));
-    dry_run(0, None, &after, &NoCounts).await.unwrap();
-    apply(0, None, &after, Some(&Expect { revision: 0 }), &NoCounts)
-        .await
-        .unwrap();
+    dry_run(0, None, &after, &NoCounts, "test").await.unwrap();
+    apply(
+        0,
+        None,
+        &after,
+        Some(&Expect { revision: 0 }),
+        &NoCounts,
+        "test",
+    )
+    .await
+    .unwrap();
     for name in ["roles", "services", "add-kind-at-bottom", "identity-routes"] {
         let (before, after, _) = case(name);
-        dry_run(7, Some(&before), &after, &NoCounts)
+        dry_run(7, Some(&before), &after, &NoCounts, "test")
             .await
             .unwrap_or_else(|e| panic!("{name}: {e:?}"));
     }
@@ -218,7 +241,7 @@ async fn identity_is_asked_only_when_the_plan_needs_counts() {
         let (before, after, _) = case(name);
         assert!(
             matches!(
-                dry_run(7, Some(&before), &after, &NoCounts).await,
+                dry_run(7, Some(&before), &after, &NoCounts, "test").await,
                 Err(Refused::CountsUnavailable(_))
             ),
             "{name}"
@@ -236,7 +259,9 @@ async fn a_plan_compares_the_stored_bodies_with_new_ones() {
     stored.gateway["services"]["e10s"]["routes"][0]["rate_limit"] = json!([]);
     // An older version served the whole of defaults to the gateway.
     stored.gateway["defaults"]["max_body_bytes"] = json!(1);
-    let plan = dry_run(7, Some(&stored), &after, &NoCounts).await.unwrap();
+    let plan = dry_run(7, Some(&stored), &after, &NoCounts, "test")
+        .await
+        .unwrap();
     assert_eq!(plan.summary.change, 2, "{plan:?}");
     let defaults = &plan.changes[0];
     assert_eq!(
@@ -250,7 +275,9 @@ async fn a_plan_compares_the_stored_bodies_with_new_ones() {
     assert_eq!(routes[0].before, Some(json!({ "rate_limit": [] })));
     assert_eq!(routes[0].after, Some(json!({ "rate_limit": ["standard"] })));
     // The same bodies plan nothing.
-    let plan = dry_run(7, Some(&after), &after, &NoCounts).await.unwrap();
+    let plan = dry_run(7, Some(&after), &after, &NoCounts, "test")
+        .await
+        .unwrap();
     assert!(plan.is_empty());
 }
 

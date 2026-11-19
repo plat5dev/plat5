@@ -9,6 +9,7 @@ import (
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 	"github.com/plat5dev/plat5/identity/internal/id"
 	"github.com/plat5dev/plat5/identity/lifecycle"
+	"github.com/plat5dev/plat5/identity/metrics"
 	"github.com/plat5dev/plat5/identity/nodes"
 )
 
@@ -50,6 +51,7 @@ func (s *Store) CreateChild(ctx context.Context, snap *feed.Snapshot, parentID s
 	if err := w.commit(ctx); err != nil {
 		return nil, nil, op.Fail(err)
 	}
+	metrics.RecordNodeOps("created", 1)
 	op.OK("created")
 	return n, b, nil
 }
@@ -101,6 +103,7 @@ func (s *Store) CreateRoot(ctx context.Context, snap *feed.Snapshot, in nodes.Cr
 	if err := w.commit(ctx); err != nil {
 		return nil, "", op.Fail(err)
 	}
+	metrics.RecordNodeOps("created", 1)
 	op.OK("created")
 	return n, memberID, nil
 }

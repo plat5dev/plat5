@@ -116,6 +116,11 @@ func IsForeignKeyViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
+func IsDeadlock(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "40P01"
+}
+
 // Unavailable reports whether err means Postgres couldn't be reached or didn't
 // answer in time: a failed connect, a closed connection, a network
 // error, a timeout, or Postgres refusing connections. Those are 503s

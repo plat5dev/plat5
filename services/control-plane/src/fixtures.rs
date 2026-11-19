@@ -21,8 +21,8 @@ pub fn dir() -> PathBuf {
 
 pub fn yaml(path: &Path) -> Value {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let yaml: serde_yaml::Value =
-        serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let yaml: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     serde_json::to_value(yaml).unwrap()
 }
 

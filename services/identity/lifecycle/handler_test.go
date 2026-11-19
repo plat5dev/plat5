@@ -343,6 +343,78 @@ func TestShutdownEndsWaits(t *testing.T) {
 	}
 }
 
+// Downward Sync resets the head, wakes waiters past it so CURSOR_AHEAD fires
+// promptly, and does not spin for readers at the new head.
+func TestHeadDownwardSync(t *testing.T) {
+	h := NewHead()
+	h.Advance(10)
+
+	woke := make(chan bool, 1)
+	go func() {
+		woke <- h.WaitPast(context.Background(), 10)
+	}()
+	time.Sleep(10 * time.Millisecond)
+	h.Sync(2)
+
+	if got := h.Current(); got != 2 {
+		t.Fatalf("Current = %d, want 2", got)
+	}
+	select {
+	case ok := <-woke:
+		if !ok {
+			t.Fatal("WaitPast returned false on downward Sync")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitPast did not wake on downward Sync")
+	}
+
+	// A reader at the new head waits cleanly instead of spinning.
+	waitCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if h.WaitPast(waitCtx, 2) {
+		t.Fatal("WaitPast returned true at new head without newer events")
+	}
+	if time.Since(start) < 40*time.Millisecond {
+		t.Fatalf("WaitPast returned too early after %v", time.Since(start))
+	}
+
+	// End-to-end: a log reset while long-polling returns 409 CURSOR_AHEAD promptly.
+	store := sample()
+	app := following(t, store, 10*time.Second)
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		store.mu.Lock()
+		store.events = nil
+		store.mu.Unlock()
+	}()
+	start = time.Now()
+	status, body := get(t, app, "?after=4")
+	apiErr, _ := body["error"].(map[string]any)
+	if status != 409 || apiErr["code"] != "CURSOR_AHEAD" || time.Since(start) > 2*time.Second {
+		t.Fatalf("reset while waiting: status %d after %v: %v", status, time.Since(start), body)
+	}
+}
+
+// WaitPast respects a canceled context or stopped Head even when id > after.
+func TestHeadWaitPastRespectsCanceledAndStoppedWhenAhead(t *testing.T) {
+	h := NewHead()
+	h.Advance(10)
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if h.WaitPast(canceledCtx, 5) {
+		t.Fatal("WaitPast returned true with canceled ctx when id > after")
+	}
+
+	followCtx, stopFollow := context.WithCancel(context.Background())
+	stopFollow()
+	h.Follow(followCtx, func(context.Context) (int64, error) { return 10, nil }, time.Hour, zerolog.Nop())
+	if h.WaitPast(context.Background(), 5) {
+		t.Fatal("WaitPast returned true with stopped Head when id > after")
+	}
+}
+
 // Postgres unavailable is 503 SERVICE_UNAVAILABLE, with or without after.
 func TestPostgresDownIs503(t *testing.T) {
 	pool, err := pgxpool.New(context.Background(), "postgres://plat5:plat5@127.0.0.1:1/plat5?connect_timeout=1")

@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -28,7 +29,10 @@ import (
 const partitionInterval = time.Hour
 
 func main() {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("invalid audit configuration: %v", err)
+	}
 	ctx := context.Background()
 
 	// Register prometheus metrics before OTLP bridge so the first export sees them.
@@ -68,9 +72,14 @@ func main() {
 	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	go store.MaintainPartitions(runCtx, partitionInterval, func(err error) {
-		baseLogger.Error().Str("error_type", apierrors.KindDB.String()).Err(err).Msg("audit partition maintenance failed")
-	})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		store.MaintainPartitions(runCtx, partitionInterval, func(err error) {
+			baseLogger.Error().Str("error_type", apierrors.KindDB.String()).Err(err).Msg("audit partition maintenance failed")
+		})
+	}()
 
 	errCh := make(chan error, 2)
 	go func() {
@@ -80,13 +89,15 @@ func main() {
 		errCh <- app.Listen(":" + cfg.Port)
 	}()
 
+	var listenErr error
 	select {
 	case <-runCtx.Done():
 		baseLogger.Info().Msg("shutdown signal received")
 	case err := <-errCh:
+		stop()
 		if err != nil {
+			listenErr = err
 			baseLogger.Error().Err(err).Msg("server exited unexpectedly")
-			stop()
 		}
 	}
 
@@ -99,11 +110,15 @@ func main() {
 	if err := internalApp.ShutdownWithContext(shutdownCtx); err != nil {
 		baseLogger.Error().Err(err).Msg("internal server shutdown")
 	}
+	wg.Wait()
 	pool.Close()
 	if err := telem.Shutdown(shutdownCtx); err != nil {
 		baseLogger.Error().Err(err).Msg("telemetry shutdown")
 	}
 	baseLogger.Info().Msg("shutdown complete")
+	if listenErr != nil {
+		os.Exit(1)
+	}
 }
 
 func newPublicApp(telem *telemetry.Telemetry, handler *events.Handler) *fiber.App {

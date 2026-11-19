@@ -172,3 +172,90 @@ func TestLoadWaitsForAConfig(t *testing.T) {
 		t.Fatalf("loaded %v after %d calls", src.Loaded(), calls.Load())
 	}
 }
+
+func TestFollowerBackoffOn404(t *testing.T) {
+	var polls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("after") == "" {
+			_, _ = w.Write([]byte(good))
+			return
+		}
+		polls.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	src := &Source{}
+	f := NewFollower(srv.URL, src, zerolog.Nop())
+	f.retryDelay = 25 * time.Millisecond
+	if err := f.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 140*time.Millisecond)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.Follow(ctx)
+	}()
+	<-done
+
+	got := polls.Load()
+	// With exponential backoff (25ms, 50ms, 100ms), 140ms allows at most ~3-4 polls, never a hot-loop.
+	if got < 2 || got > 5 {
+		t.Fatalf("404 polls = %d, want between 2 and 5 (exponential backoff)", got)
+	}
+	if src.Current().Revision != 3 {
+		t.Fatalf("kept revision %d, want 3", src.Current().Revision)
+	}
+	if f.revision != 0 {
+		t.Fatalf("cursor revision = %d, want 0 after 404", f.revision)
+	}
+}
+
+func TestFollowerBackoffOnMalformed200PreservesRevision(t *testing.T) {
+	var polls atomic.Int32
+	var badAfter atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		after := r.URL.Query().Get("after")
+		if after == "" {
+			_, _ = w.Write([]byte(good))
+			return
+		}
+		if after != "3" {
+			badAfter.Add(1)
+		}
+		polls.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{not valid json"))
+	}))
+	defer srv.Close()
+
+	src := &Source{}
+	f := NewFollower(srv.URL, src, zerolog.Nop())
+	f.retryDelay = 25 * time.Millisecond
+	if err := f.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 140*time.Millisecond)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.Follow(ctx)
+	}()
+	<-done
+
+	got := polls.Load()
+	if got < 2 || got > 5 {
+		t.Fatalf("malformed 200 polls = %d, want between 2 and 5 (exponential backoff)", got)
+	}
+	if badAfter.Load() != 0 {
+		t.Fatalf("saw %d polls with after != 3; previous revision was not preserved", badAfter.Load())
+	}
+	if f.revision != 3 {
+		t.Fatalf("f.revision = %d, want 3", f.revision)
+	}
+}

@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
-use std::sync::LazyLock;
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{Client, RedisError, Script};
+use std::sync::LazyLock;
 use tracing::{info, warn};
 
 /// Every counter key starts with this, so a Valkey shared with other software is safe.

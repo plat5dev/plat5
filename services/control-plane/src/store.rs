@@ -1,7 +1,8 @@
 //! Revisions in Postgres, schema `control_plane`: one row per apply, and the head;
 //! and each gateway replica's latest report.
-//! An apply locks the head row from the read it plans against until its write,
-//! so writes are serialized and head order is commit order.
+//! An apply plans against an unlocked snapshot and then locks the head row only
+//! to re-verify its precondition and write, so writes are serialized and head
+//! order is commit order without holding a lock across network I/O.
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -47,12 +48,10 @@ pub struct Revision {
     pub created_at: DateTime<Utc>,
 }
 
-/// The head, locked for an apply, with the bodies it serves. Dropped without
-/// `write`, it rolls back.
+/// The head, locked for an apply. Dropped without `write`, it rolls back.
 pub struct Locked {
     tx: Transaction<'static, Postgres>,
     pub revision: i64,
-    pub served: Option<Served>,
 }
 
 /// Which feed's body.
@@ -74,7 +73,7 @@ impl Reader {
 impl Store {
     pub async fn connect(database_url: &str) -> Result<Self, StoreError> {
         let pool = PgPoolOptions::new()
-            .max_connections(5)
+            .max_connections(15)
             .after_connect(|conn, _meta| {
                 Box::pin(async move {
                     sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {SCHEMA}"))
@@ -181,18 +180,13 @@ impl Store {
         Ok(row)
     }
 
-    /// Locks the head for an apply and reads the bodies it serves.
+    /// Locks the head for an apply.
     pub async fn lock(&self) -> Result<Locked, StoreError> {
         let mut tx = self.pool.begin().await?;
         let (revision,): (i64,) = sqlx::query_as("SELECT revision FROM config_head FOR UPDATE")
             .fetch_one(&mut *tx)
             .await?;
-        let served = served_in(&mut tx, revision).await?;
-        Ok(Locked {
-            tx,
-            revision,
-            served,
-        })
+        Ok(Locked { tx, revision })
     }
 
     /// Writes the next revision, its source and the bodies it serves, and
@@ -291,6 +285,23 @@ impl Store {
                 seen_at,
             })
             .collect())
+    }
+
+    /// Deletes gateway replica reports older than an hour.
+    pub async fn prune_stale_replicas(&self) -> Result<u64, StoreError> {
+        let result =
+            sqlx::query("DELETE FROM gateway_replicas WHERE seen_at < now() - interval '1 hour'")
+                .execute(&self.pool)
+                .await?;
+        Ok(result.rows_affected())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lazy_for_test() -> Self {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://127.0.0.1:1/unused")
+            .expect("lazy pool");
+        Self { pool }
     }
 }
 

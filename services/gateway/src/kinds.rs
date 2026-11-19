@@ -27,10 +27,6 @@ impl Kinds {
         }
     }
 
-    pub fn contains(&self, kind: &str) -> bool {
-        self.parents.contains_key(kind)
-    }
-
     /// `kind` and its ancestors, root first. Err when the parents don't lead to a root.
     pub fn chain(&self, kind: &str) -> Result<Vec<String>, String> {
         let mut chain = vec![kind.to_string()];

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
 )
@@ -8,7 +9,6 @@ import (
 const (
 	defaultPort         = "3002"
 	defaultInternalPort = "3003"
-	defaultDatabaseURL  = "postgres://plat5:plat5@localhost:5432/plat5?sslmode=disable"
 )
 
 // Config is process-level audit service configuration.
@@ -20,12 +20,16 @@ type Config struct {
 	DatabaseURL  string
 }
 
-func Load() Config {
+func Load() (Config, error) {
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		return Config{}, fmt.Errorf("DATABASE_URL is required")
+	}
 	return Config{
 		Port:         envOr("PORT", defaultPort),
 		InternalPort: envOr("INTERNAL_PORT", defaultInternalPort),
-		DatabaseURL:  envOr("DATABASE_URL", defaultDatabaseURL),
-	}
+		DatabaseURL:  databaseURL,
+	}, nil
 }
 
 func envOr(key, fallback string) string {

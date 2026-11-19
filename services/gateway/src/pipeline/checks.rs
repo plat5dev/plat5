@@ -118,7 +118,7 @@ fn public_path(path: &str) -> bool {
 
 /// Why one check has no answer: the whole call is refused instead.
 #[derive(Debug, PartialEq, Eq)]
-pub enum CheckRefused {
+enum CheckRefused {
     /// Admit refused the credential itself: **401**.
     Credential,
     /// Identity didn't answer: **503**.
@@ -141,7 +141,10 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
     ) -> Result<AdmitCredential, Rejection> {
         match presented {
             Ok(p) => Ok(p.into_admit().0),
-            Err(err) => Err(unauthorized(err, None, CHECKS_SCOPE)),
+            Err(err) => {
+                let auth_type = err.auth_type();
+                Err(unauthorized(err, auth_type, CHECKS_SCOPE))
+            }
         }
     }
 

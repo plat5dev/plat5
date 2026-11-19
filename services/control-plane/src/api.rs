@@ -1,11 +1,14 @@
 use std::time::{Duration, Instant};
 
-use axum::extract::{MatchedPath, Path, Query, Request, State};
+use axum::extract::rejection::{PathRejection, QueryRejection};
+use axum::extract::{Extension, MatchedPath, Path, Query, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use opentelemetry::global;
+use opentelemetry::propagation::Extractor;
 use opentelemetry::trace::{Status, TraceContextExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -29,6 +32,21 @@ const LONG_POLL_WAIT: Duration = Duration::from_secs(25);
 
 /// How long a gateway replica stays in `GET /status` after its last poll.
 const REPLICA_SEEN_SECS: i64 = 60;
+
+#[derive(Clone)]
+struct RequestId(String);
+
+struct HeaderExtractor<'a>(&'a axum::http::HeaderMap);
+
+impl Extractor for HeaderExtractor<'_> {
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0.get(key).and_then(|v| v.to_str().ok())
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        self.0.keys().map(|k| k.as_str()).collect()
+    }
+}
 
 pub fn public_router(state: AppState) -> Router {
     let authed = Router::new()
@@ -65,7 +83,7 @@ pub fn internal_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn http_observability(request: Request, next: Next) -> Response {
+async fn http_observability(mut request: Request, next: Next) -> Response {
     let start = Instant::now();
     let method = request.method().as_str().to_string();
     let path = request.uri().path().to_string();
@@ -86,6 +104,12 @@ async fn http_observability(request: Request, next: Next) -> Response {
         None => method.clone(),
     };
     let request_id = request_id_from_headers(request.headers());
+    request
+        .extensions_mut()
+        .insert(RequestId(request_id.clone()));
+    let parent_cx = global::get_text_map_propagator(|propagator| {
+        propagator.extract(&HeaderExtractor(request.headers()))
+    });
 
     let span = tracing::info_span!(
         "http",
@@ -100,6 +124,7 @@ async fn http_observability(request: Request, next: Next) -> Response {
         http.response.status_code = tracing::field::Empty,
         error.type = tracing::field::Empty,
     );
+    let _ = span.set_parent(parent_cx);
     if let Some(ref r) = route {
         span.record("http.route", r.as_str());
     }
@@ -171,12 +196,15 @@ fn trace_ids() -> (Option<String>, Option<String>) {
 /// A feed read is a long-poll: up to 25 seconds, over and over, per reader. As a
 /// trace or a request metric it would be one long span every cycle and a latency
 /// that measures nothing. Only failures are logged.
-async fn feed_observability(request: Request, next: Next) -> Response {
+async fn feed_observability(mut request: Request, next: Next) -> Response {
     let route = request
         .extensions()
         .get::<MatchedPath>()
         .map(|m| m.as_str().to_string());
     let request_id = request_id_from_headers(request.headers());
+    request
+        .extensions_mut()
+        .insert(RequestId(request_id.clone()));
     let response = next.run(request).await;
     let status = response.status().as_u16();
     if status >= 500 {
@@ -199,7 +227,11 @@ async fn admin_auth_middleware(
     request: Request,
     next: Next,
 ) -> Result<Response, AppError> {
-    let request_id = request_id_from_headers(request.headers());
+    let request_id = request
+        .extensions()
+        .get::<RequestId>()
+        .map(|id| id.0.clone())
+        .unwrap_or_else(|| request_id_from_headers(request.headers()));
     let authorized = request
         .headers()
         .get(header::AUTHORIZATION)
@@ -287,7 +319,7 @@ fn parse_body(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/json");
     let parsed = if content_type.contains("yaml") || content_type.contains("yml") {
-        serde_yaml::from_slice::<serde_yaml::Value>(body)
+        serde_yaml_ng::from_slice::<serde_yaml_ng::Value>(body)
             .map_err(|e| e.to_string())
             .and_then(|y| serde_json::to_value(y).map_err(|e| e.to_string()))
     } else {
@@ -309,15 +341,17 @@ struct ApplyQuery {
 /// preconditions hold (docs/concepts/config.md#plan-and-apply).
 async fn apply_config(
     State(state): State<AppState>,
-    Query(query): Query<ApplyQuery>,
+    Extension(RequestId(request_id)): Extension<RequestId>,
+    query: Result<Query<ApplyQuery>, QueryRejection>,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, AppError> {
-    let request_id = request_id_from_headers(&headers);
+    let Query(query) =
+        query.map_err(|e| AppError::invalid_request(request_id.clone(), e.body_text()))?;
     let body = parse_body(&headers, &body, &request_id)?;
     let prepared = apply::prepare(body).map_err(|f| failure(&request_id, f))?;
     if query.dry_run {
-        let dry_run = apply::dry_run(&state.store, state.counts.as_ref(), &prepared)
+        let dry_run = apply::dry_run(&state.store, state.counts.as_ref(), &prepared, &request_id)
             .await
             .map_err(|f| failure(&request_id, f))?;
         return Ok((with_request_id(request_id), Json(dry_run)).into_response());
@@ -349,9 +383,8 @@ fn revision_body(r: &crate::store::Revision, request_id: &str) -> Result<Value, 
 /// The current config, as applied. **404** before the first apply.
 async fn get_config(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
+    Extension(RequestId(request_id)): Extension<RequestId>,
 ) -> Result<Response, AppError> {
-    let request_id = request_id_from_headers(&headers);
     let current = state
         .store
         .current()
@@ -368,9 +401,8 @@ async fn get_config(
 
 async fn list_revisions(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
+    Extension(RequestId(request_id)): Extension<RequestId>,
 ) -> Result<Response, AppError> {
-    let request_id = request_id_from_headers(&headers);
     let revisions = state
         .store
         .revisions()
@@ -396,10 +428,11 @@ async fn list_revisions(
 
 async fn get_revision(
     State(state): State<AppState>,
-    Path(rev): Path<i64>,
-    headers: axum::http::HeaderMap,
+    Extension(RequestId(request_id)): Extension<RequestId>,
+    rev: Result<Path<i64>, PathRejection>,
 ) -> Result<Response, AppError> {
-    let request_id = request_id_from_headers(&headers);
+    let Path(rev) =
+        rev.map_err(|e| AppError::invalid_request(request_id.clone(), e.body_text()))?;
     let revision = state
         .store
         .revision(rev)
@@ -421,9 +454,8 @@ async fn get_revision(
 /// Where each gateway replica stands: those that polled in the last minute.
 async fn get_status(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
+    Extension(RequestId(request_id)): Extension<RequestId>,
 ) -> Result<Response, AppError> {
-    let request_id = request_id_from_headers(&headers);
     let head = state
         .store
         .head()
@@ -455,8 +487,7 @@ async fn get_status(
         .into_response())
 }
 
-async fn get_schema(headers: axum::http::HeaderMap) -> Response {
-    let request_id = request_id_from_headers(&headers);
+async fn get_schema(Extension(RequestId(request_id)): Extension<RequestId>) -> Response {
     (with_request_id(request_id), Json(schema::bundle())).into_response()
 }
 
@@ -475,16 +506,12 @@ struct GatewayQuery {
     reason: Option<String>,
 }
 
-/// With `after`, waits until the control plane is past it. False means nothing
-/// newer came within the wait. A cursor ahead of the head (the store was reset)
-/// is answered at once.
+/// With `after`, waits until the control plane differs from it (advanced or
+/// reset). False means nothing newer came within the wait or shutdown fired.
 async fn wait_for_newer(state: &AppState, after: Option<i64>) -> bool {
     let Some(after) = after else {
         return true;
     };
-    if after > state.feed.current() {
-        return true;
-    }
     state.feed.wait_past(after, LONG_POLL_WAIT).await
 }
 
@@ -494,10 +521,9 @@ async fn wait_for_newer(state: &AppState, after: Option<i64>) -> bool {
 async fn feed(
     state: AppState,
     after: Option<i64>,
-    headers: &axum::http::HeaderMap,
+    request_id: String,
     reader: Reader,
 ) -> Result<Response, AppError> {
-    let request_id = request_id_from_headers(headers);
     if !wait_for_newer(&state, after).await {
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
@@ -514,8 +540,8 @@ async fn feed(
 
 async fn gateway_feed(
     State(state): State<AppState>,
+    Extension(RequestId(request_id)): Extension<RequestId>,
     Query(query): Query<GatewayQuery>,
-    headers: axum::http::HeaderMap,
 ) -> Result<Response, AppError> {
     if let Some(replica) = query.replica.filter(|r| !r.is_empty()) {
         let report = Report {
@@ -529,13 +555,236 @@ async fn gateway_feed(
             tracing::warn!(error = %e, replica = %report.replica, "gateway report not kept");
         }
     }
-    feed(state, query.after, &headers, Reader::Gateway).await
+    feed(state, query.after, request_id, Reader::Gateway).await
 }
 
 async fn identity_feed(
     State(state): State<AppState>,
+    Extension(RequestId(request_id)): Extension<RequestId>,
     Query(query): Query<FeedQuery>,
-    headers: axum::http::HeaderMap,
 ) -> Result<Response, AppError> {
-    feed(state, query.after, &headers, Reader::Identity).await
+    feed(state, query.after, request_id, Reader::Identity).await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use axum::body::Body;
+    use axum::http::Request;
+    use opentelemetry::trace::TracerProvider;
+    use opentelemetry_sdk::propagation::TraceContextPropagator;
+    use opentelemetry_sdk::trace as sdktrace;
+    use tokio::sync::watch;
+    use tower::ServiceExt;
+    use tracing_opentelemetry::OpenTelemetryLayer;
+    use tracing_subscriber::fmt::MakeWriter;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    use super::*;
+    use crate::counts::NoCounts;
+    use crate::feed::Feed;
+    use crate::store::Store;
+
+    const TOKEN: &str = "test-admin-token";
+
+    #[derive(Clone, Default)]
+    struct LogBuf(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogBuf {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for LogBuf {
+        type Writer = LogBuf;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    fn test_state(head: i64) -> (AppState, watch::Sender<bool>) {
+        let (tx, rx) = watch::channel(false);
+        let state = AppState {
+            store: Store::lazy_for_test(),
+            feed: Feed::new_for_test(head, rx),
+            counts: Arc::new(NoCounts),
+            admin_token: TOKEN.into(),
+        };
+        (state, tx)
+    }
+
+    #[tokio::test]
+    async fn single_request_id_matches_header_body_and_log() {
+        let buf = LogBuf::default();
+        let subscriber =
+            tracing_subscriber::registry().with(crate::telemetry::json_layer(buf.clone()));
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let (state, _tx) = test_state(0);
+        let router = public_router(state);
+
+        // Unauthorized request without X-Request-ID mints one ID shared everywhere.
+        let resp = router
+            .clone()
+            .oneshot(Request::get("/config").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let header_id = resp
+            .headers()
+            .get("x-request-id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["request_id"], json!(header_id));
+
+        let log_text = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        let line: Value = serde_json::from_str(log_text.lines().last().unwrap()).unwrap();
+        assert_eq!(line["request_id"], json!(header_id));
+
+        // 200 response without X-Request-ID also shares one minted ID across header and log.
+        let resp = router
+            .oneshot(Request::get("/schema").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let schema_header_id = resp
+            .headers()
+            .get("x-request-id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let log_text = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        let line: Value = serde_json::from_str(log_text.lines().last().unwrap()).unwrap();
+        assert_eq!(line["request_id"], json!(schema_header_id));
+    }
+
+    #[tokio::test]
+    async fn malformed_path_and_query_return_plat5_error_envelope() {
+        let (state, _tx) = test_state(0);
+        let router = public_router(state);
+
+        // Malformed path param on GET /revisions/{rev}
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::get("/revisions/not-a-number")
+                    .header("authorization", format!("Bearer {TOKEN}"))
+                    .header("x-request-id", "req-path-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.headers()
+                .get("x-request-id")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "req-path-1"
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["code"], json!("INVALID_REQUEST"));
+        assert_eq!(body["error"]["request_id"], json!("req-path-1"));
+
+        // Malformed query param on POST /apply
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::post("/apply?dry_run=notabool")
+                    .header("authorization", format!("Bearer {TOKEN}"))
+                    .header("x-request-id", "req-query-1")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.headers()
+                .get("x-request-id")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "req-query-1"
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["code"], json!("INVALID_REQUEST"));
+        assert_eq!(body["error"]["request_id"], json!("req-query-1"));
+    }
+
+    #[tokio::test]
+    async fn incoming_traceparent_sets_server_span_trace_id() {
+        global::set_text_map_propagator(TraceContextPropagator::new());
+        let provider = sdktrace::SdkTracerProvider::builder().build();
+        let buf = LogBuf::default();
+        let subscriber = tracing_subscriber::registry()
+            .with(crate::telemetry::json_layer(buf.clone()))
+            .with(OpenTelemetryLayer::new(provider.tracer("test")));
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let (state, _tx) = test_state(0);
+        let router = public_router(state);
+
+        let trace_id = "0af7651916cd43dd8448eb211c80319c";
+        let resp = router
+            .oneshot(
+                Request::get("/schema")
+                    .header("traceparent", format!("00-{trace_id}-b7ad6b7169203331-01"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let log_text = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        let line: Value = serde_json::from_str(log_text.lines().last().unwrap()).unwrap();
+        assert_eq!(line["trace_id"], json!(trace_id));
+    }
+
+    #[tokio::test]
+    async fn long_poll_returns_204_immediately_on_shutdown() {
+        let (state, shutdown_tx) = test_state(5);
+        let router = internal_router(state);
+
+        let poll = tokio::spawn(async move {
+            router
+                .oneshot(
+                    Request::get("/internal/identity?after=5")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        shutdown_tx.send(true).unwrap();
+
+        let resp = tokio::time::timeout(Duration::from_secs(1), poll)
+            .await
+            .expect("long-poll should finish promptly on shutdown")
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    }
 }

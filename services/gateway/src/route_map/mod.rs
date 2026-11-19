@@ -299,7 +299,13 @@ fn build_route(
                 })?),
             };
             let window_seconds = parse_duration(&policy.window)
-                .ok_or_else(|| format!("rate_limit {name} has invalid window {:?}", policy.window))?
+                .filter(|d| *d >= Duration::from_secs(1))
+                .ok_or_else(|| {
+                    format!(
+                        "rate_limit {name} has invalid window {:?} (must be at least 1s)",
+                        policy.window
+                    )
+                })?
                 .as_secs();
             Ok(Policy {
                 name: name.clone(),
@@ -562,5 +568,17 @@ mod tests {
         .err()
         .unwrap();
         assert!(err.contains("outside the chain"), "{err}");
+
+        let mut zero_window = route("/x", "GET", "public", "/x");
+        zero_window["rate_limit"] = json!(["zero"]);
+        for window in ["0s", "0m"] {
+            let err = build_with(
+                json!({ "svc": service(vec![zero_window.clone()]) }),
+                json!({ "zero": { "requests": 10, "window": window } }),
+            )
+            .err()
+            .unwrap();
+            assert!(err.contains("invalid window"), "{window}: {err}");
+        }
     }
 }

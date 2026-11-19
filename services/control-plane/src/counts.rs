@@ -2,12 +2,14 @@
 //! moves under a new parent (docs/reference/api/internal.md#plan-counts). Asked
 //! only when the plan does one of those.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
+use opentelemetry::global;
 use serde::{Deserialize, Serialize};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct CountsRequest {
@@ -31,7 +33,7 @@ pub type CountsFuture<'a> =
     Pin<Box<dyn Future<Output = Result<CountsResponse, String>> + Send + 'a>>;
 
 pub trait Counts: Send + Sync {
-    fn plan_counts(&self, request: CountsRequest) -> CountsFuture<'_>;
+    fn plan_counts(&self, request: CountsRequest, request_id: &str) -> CountsFuture<'_>;
 }
 
 /// `POST {IDENTITY_INTERNAL_URL}/internal/plan`.
@@ -53,15 +55,20 @@ impl HttpCounts {
 }
 
 impl Counts for HttpCounts {
-    fn plan_counts(&self, request: CountsRequest) -> CountsFuture<'_> {
+    fn plan_counts(&self, request: CountsRequest, request_id: &str) -> CountsFuture<'_> {
+        let request_id = request_id.to_string();
         Box::pin(async move {
-            let resp = self
-                .http
-                .post(&self.url)
-                .json(&request)
-                .send()
-                .await
-                .map_err(|e| format!("identity: {e}"))?;
+            let mut req = self.http.post(&self.url).json(&request);
+            if !request_id.is_empty() {
+                req = req.header("x-request-id", &request_id);
+            }
+            let mut trace_headers = HashMap::new();
+            let cx = tracing::Span::current().context();
+            global::get_text_map_propagator(|p| p.inject_context(&cx, &mut trace_headers));
+            for (k, v) in trace_headers {
+                req = req.header(k, v);
+            }
+            let resp = req.send().await.map_err(|e| format!("identity: {e}"))?;
             let status = resp.status();
             if !status.is_success() {
                 return Err(format!("identity: HTTP {status}"));
@@ -109,7 +116,7 @@ impl FixedCounts {
 
 #[cfg(test)]
 impl Counts for FixedCounts {
-    fn plan_counts(&self, request: CountsRequest) -> CountsFuture<'_> {
+    fn plan_counts(&self, request: CountsRequest, _request_id: &str) -> CountsFuture<'_> {
         self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let all = self.0.lock().unwrap().clone();
         Box::pin(async move {
@@ -130,7 +137,95 @@ pub struct NoCounts;
 
 #[cfg(test)]
 impl Counts for NoCounts {
-    fn plan_counts(&self, _: CountsRequest) -> CountsFuture<'_> {
+    fn plan_counts(&self, _: CountsRequest, _request_id: &str) -> CountsFuture<'_> {
         Box::pin(async { Err("identity: connection refused".to_string()) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderMap;
+    use axum::routing::post;
+    use axum::{Json, Router};
+    use opentelemetry::trace::TracerProvider;
+    use opentelemetry_sdk::propagation::TraceContextPropagator;
+    use opentelemetry_sdk::trace as sdktrace;
+    use std::sync::{Arc, Mutex};
+    use tracing::Instrument;
+    use tracing_opentelemetry::OpenTelemetryLayer;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    #[tokio::test]
+    async fn propagates_traceparent_and_request_id() {
+        global::set_text_map_propagator(TraceContextPropagator::new());
+        let provider = sdktrace::SdkTracerProvider::builder().build();
+        let subscriber =
+            tracing_subscriber::registry().with(OpenTelemetryLayer::new(provider.tracer("test")));
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let seen: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+        let seen_handler = seen.clone();
+        let app = Router::new().route(
+            "/internal/plan",
+            post(move |headers: HeaderMap| {
+                let seen = seen_handler.clone();
+                async move {
+                    let mut map = seen.lock().unwrap();
+                    for (k, v) in &headers {
+                        if let Ok(s) = v.to_str() {
+                            map.insert(k.as_str().to_string(), s.to_string());
+                        }
+                    }
+                    Json(CountsResponse {
+                        kinds: [("folder".to_string(), KindCounts::default())].into(),
+                    })
+                }
+            }),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let trace_id = "4bf92f3577b34da6a3ce929d0e0e4736";
+        let incoming = HashMap::from([(
+            "traceparent".to_string(),
+            format!("00-{trace_id}-00f067aa0ba902b7-01"),
+        )]);
+        let parent_cx = global::get_text_map_propagator(|p| p.extract(&incoming));
+
+        let span = tracing::info_span!("http_test");
+        let _ = span.set_parent(parent_cx);
+
+        let counts = HttpCounts::new(&format!("http://{addr}"));
+        let resp = counts
+            .plan_counts(
+                CountsRequest {
+                    kinds: vec!["folder".to_string()],
+                },
+                "req-abc-123",
+            )
+            .instrument(span)
+            .await
+            .unwrap();
+        assert_eq!(resp.kinds["folder"].nodes, 0);
+
+        server.abort();
+
+        let headers = seen.lock().unwrap();
+        assert_eq!(
+            headers.get("x-request-id").map(String::as_str),
+            Some("req-abc-123")
+        );
+        let tp = headers
+            .get("traceparent")
+            .expect("traceparent header must be sent");
+        assert!(
+            tp.starts_with(&format!("00-{trace_id}-")),
+            "expected trace_id {trace_id} in traceparent {tp}"
+        );
     }
 }

@@ -202,42 +202,61 @@ func (s *Store) DeleteAccount(ctx context.Context, userID string) (bool, error) 
 	defer cancel()
 	defer op.End()
 
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		changed, err := s.deleteAccountOnce(ctx, userID)
+		if err == nil {
+			if changed {
+				op.OK("deleted")
+			} else {
+				op.OK("unchanged")
+			}
+			return changed, nil
+		}
+		if dbx.IsDeadlock(err) && attempt+1 < maxAttempts && ctx.Err() == nil {
+			continue
+		}
+		return false, op.Fail(err)
+	}
+	return false, nil
+}
+
+func (s *Store) deleteAccountOnce(ctx context.Context, userID string) (bool, error) {
 	w, err := s.begin(ctx)
 	if err != nil {
-		return false, op.Fail(err)
+		return false, err
 	}
 	defer w.rollback(ctx)
 	u, err := s.user(ctx, w.tx, userID)
 	if err == ErrNotFound {
-		op.OK("unchanged")
 		return false, nil
 	}
 	if err != nil {
-		return false, op.Fail(err)
+		return false, err
 	}
 	rows, err := w.tx.Query(ctx, `SELECT DISTINCT root_id FROM members WHERE principal_id = $1 AND removed_at IS NULL`, u.principalID)
 	if err != nil {
-		return false, op.Fail(err)
+		return false, err
 	}
 	roots, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
-		return false, op.Fail(err)
+		return false, err
 	}
 	if err := nodes.LockTrees(ctx, w.tx, roots); err != nil {
-		return false, op.Fail(err)
+		return false, err
 	}
 	rows, err = w.tx.Query(ctx, `
 		SELECT id FROM members WHERE principal_id = $1 AND removed_at IS NULL ORDER BY id
 	`, u.principalID)
 	if err != nil {
-		return false, op.Fail(err)
+		return false, err
 	}
 	memberIDs, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
-		return false, op.Fail(err)
+		return false, err
 	}
 	if err := s.removeMembers(ctx, w, memberIDs); err != nil {
-		return false, op.Fail(err)
+		return false, err
 	}
 	// A join into a tree not locked above can still insert a member. Locking
 	// the principal waits for any join that already inserted one (its foreign
@@ -245,13 +264,13 @@ func (s *Store) DeleteAccount(ctx context.Context, userID string) (bool, error) 
 	// foreign key once this commits. Members that appeared meanwhile are
 	// removed too, with their trees locked.
 	if _, err := w.tx.Exec(ctx, `SELECT 1 FROM principals WHERE id = $1 FOR UPDATE`, u.principalID); err != nil {
-		return false, op.Fail(err)
+		return false, err
 	}
 	rows, err = w.tx.Query(ctx, `
 		SELECT root_id, id FROM members WHERE principal_id = $1 AND removed_at IS NULL ORDER BY id
 	`, u.principalID)
 	if err != nil {
-		return false, op.Fail(err)
+		return false, err
 	}
 	late, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) ([2]string, error) {
 		var out [2]string
@@ -259,7 +278,7 @@ func (s *Store) DeleteAccount(ctx context.Context, userID string) (bool, error) 
 		return out, err
 	})
 	if err != nil {
-		return false, op.Fail(err)
+		return false, err
 	}
 	if len(late) > 0 {
 		lateRoots := make([]string, len(late))
@@ -268,25 +287,23 @@ func (s *Store) DeleteAccount(ctx context.Context, userID string) (bool, error) 
 			lateRoots[i], lateIDs[i] = m[0], m[1]
 		}
 		if err := nodes.LockTrees(ctx, w.tx, lateRoots); err != nil {
-			return false, op.Fail(err)
+			return false, err
 		}
 		if err := s.removeMembers(ctx, w, lateIDs); err != nil {
-			return false, op.Fail(err)
+			return false, err
 		}
 	}
 	tag, err := w.tx.Exec(ctx, `DELETE FROM principals WHERE id = $1`, u.principalID)
 	if err != nil {
-		return false, op.Fail(err)
+		return false, err
 	}
 	if tag.RowsAffected() == 0 {
 		// A concurrent delete got there first and wrote the events.
-		op.OK("unchanged")
 		return false, nil
 	}
 	w.event(lifecycle.UserDeleted(u.ID))
 	if err := w.commit(ctx); err != nil {
-		return false, op.Fail(err)
+		return false, err
 	}
-	op.OK("deleted")
 	return true, nil
 }

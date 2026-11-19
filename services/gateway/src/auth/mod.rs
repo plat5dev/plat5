@@ -9,10 +9,11 @@ pub mod jwt;
 use pingora::http::RequestHeader;
 use serde_json::Value;
 
-use self::jwt::{validate_token, JwtCache, JwtValidatorState};
+use self::jwt::{is_unexpired, validate_token, JwtCache, JwtValidatorState};
 
 const JWT_CACHE_CAPACITY: u64 = 10_000;
 const JWT_CACHE_TTL_BUFFER_SECS: u64 = 60;
+const MAX_NAME_CHARS: usize = 128;
 
 /// Credential kind, as logs and audit events name it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +92,14 @@ impl AuthError {
             _ => None,
         }
     }
+
+    /// Credential kind when known locally before admit (locally refused JWTs).
+    pub fn auth_type(&self) -> Option<AuthType> {
+        match self {
+            AuthError::InvalidToken { .. } | AuthError::MissingSubject => Some(AuthType::Jwt),
+            _ => None,
+        }
+    }
 }
 
 /// `AUTH_NAME_CLAIMS`, each as path segments, in order.
@@ -141,6 +150,12 @@ impl Authenticator {
 
         let (claims, kid) = match self.jwt_cache.get(token).await {
             Some(cached) => {
+                if !is_unexpired(&cached.claims) {
+                    self.jwt_cache.invalidate(token).await;
+                    return Err(AuthError::InvalidToken {
+                        reason: "token_expired",
+                    });
+                }
                 let kid = cached.header.kid.clone();
                 (cached.claims, kid)
             }
@@ -205,12 +220,14 @@ pub fn extract_claim_path(claims: &Value, path: &[String]) -> Option<String> {
 }
 
 /// The first of `paths` that holds a string with something besides spaces,
-/// trimmed: the person's name (docs/reference/idp.md#a-persons-name).
+/// trimmed and truncated to 128 characters: the person's name
+/// (docs/reference/idp.md#a-persons-name).
 pub fn first_name(claims: &Value, paths: &[Vec<String>]) -> Option<String> {
     paths.iter().find_map(|path| {
         let name = extract_claim_path(claims, path)?;
-        let name = name.trim();
-        (!name.is_empty()).then(|| name.to_string())
+        let truncated: String = name.trim().chars().take(MAX_NAME_CHARS).collect();
+        let trimmed = truncated.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
     })
 }
 
@@ -373,5 +390,66 @@ mod tests {
             Err(AuthError::MissingAuthorization),
             "X-API-Key is not a credential"
         );
+    }
+
+    #[test]
+    fn first_name_truncates_to_128_chars_and_trims() {
+        let long_ascii = format!("  {}  ", "a".repeat(200));
+        assert_eq!(
+            first_name(&json!({ "name": long_ascii }), &paths(&["name"])),
+            Some("a".repeat(128))
+        );
+
+        let long_utf8 = "é".repeat(200);
+        let got = first_name(&json!({ "name": long_utf8 }), &paths(&["name"])).unwrap();
+        assert_eq!(got.chars().count(), 128);
+        assert_eq!(got, "é".repeat(128));
+
+        // Space right at the 128-char boundary is trimmed after truncation.
+        let space_at_boundary = format!("{} tail", "b".repeat(127));
+        assert_eq!(
+            first_name(&json!({ "name": space_at_boundary }), &paths(&["name"])),
+            Some("b".repeat(127))
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_cached_jwt_is_rejected_and_evicted_immediately() {
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let mut a = authenticator();
+        a.jwt_cache = JwtCache::with_fixed_ttl(100, Duration::from_secs(60));
+
+        for (tok, exp) in [
+            ("h.p.int", json!(now_secs.saturating_sub(1))),
+            ("h.p.now", json!(now_secs)),
+            ("h.p.flt", json!((now_secs.saturating_sub(1)) as f64)),
+        ] {
+            a.jwt_cache
+                .put(
+                    tok,
+                    jsonwebtoken::TokenData {
+                        header: jsonwebtoken::Header::new(jsonwebtoken::Algorithm::EdDSA),
+                        claims: json!({ "sub": "user-1", "exp": exp }),
+                    },
+                )
+                .await;
+            assert_eq!(
+                a.present(&request(Some(&format!("Bearer {tok}"))), &paths(&["name"]))
+                    .await,
+                Err(AuthError::InvalidToken {
+                    reason: "token_expired"
+                }),
+                "{tok}"
+            );
+            assert!(
+                a.jwt_cache.get(tok).await.is_none(),
+                "{tok} must be evicted on expired hit"
+            );
+        }
     }
 }

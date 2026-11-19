@@ -17,7 +17,8 @@ const PollInterval = time.Second
 type Head struct {
 	mu      sync.Mutex
 	id      int64
-	changed chan struct{} // closed when id moves forward
+	gen     uint64        // bumped when id moves downward (DB reset)
+	changed chan struct{} // closed when id changes
 	stopped chan struct{} // closed when Follow returns
 }
 
@@ -43,14 +44,42 @@ func (h *Head) Advance(id int64) {
 	}
 }
 
-// WaitPast waits until the head is past after, ctx ends, or Follow stops.
-// True if the head is past after.
+// Sync updates the head from a fresh store read and wakes waiting readers on
+// any change. Moving downward (after a log reset) bumps the generation so
+// waiters past the new head wake promptly for CURSOR_AHEAD instead of spinning.
+func (h *Head) Sync(id int64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if id == h.id {
+		return
+	}
+	if id < h.id {
+		h.gen++
+	}
+	h.id = id
+	close(h.changed)
+	h.changed = make(chan struct{})
+}
+
+// WaitPast waits until the head is past after (or resets below it), ctx ends,
+// or Follow stops. True if the caller should re-read the log.
 func (h *Head) WaitPast(ctx context.Context, after int64) bool {
+	h.mu.Lock()
+	startGen := h.gen
+	h.mu.Unlock()
 	for {
+		if ctx.Err() != nil {
+			return false
+		}
+		select {
+		case <-h.stopped:
+			return false
+		default:
+		}
 		h.mu.Lock()
-		id, changed := h.id, h.changed
+		id, gen, changed := h.id, h.gen, h.changed
 		h.mu.Unlock()
-		if id > after {
+		if id > after || gen != startGen || (gen > 0 && id < after) {
 			return true
 		}
 		select {
@@ -72,7 +101,7 @@ func (h *Head) Follow(ctx context.Context, read func(context.Context) (int64, er
 	defer ticker.Stop()
 	for {
 		if id, err := read(ctx); err == nil {
-			h.Advance(id)
+			h.Sync(id)
 		} else if ctx.Err() == nil {
 			log.Warn().Err(err).Msg("lifecycle log head poll failed")
 		}

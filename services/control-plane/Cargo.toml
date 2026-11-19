@@ -13,21 +13,19 @@ chrono = { version = "0.4", features = ["serde"] }
 http = "1"
 jsonschema = { version = "0.60", default-features = false }
 opentelemetry = { version = "0.31", features = ["trace", "metrics"] }
-opentelemetry-otlp = { version = "0.31", features = ["http-proto", "metrics", "trace"] }
+opentelemetry-otlp = { version = "0.31", default-features = false, features = ["http-proto", "reqwest-blocking-client", "metrics", "trace"] }
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio", "metrics"] }
 prometheus = { version = "0.13.4", features = ["process"] }
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
-serde_yaml = "0.9"
+serde_yaml_ng = "0.10"
 subtle = "2.6"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "chrono", "json"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "fs", "signal", "time"] }
-tower = "0.5"
-tower-http = { version = "0.6", features = ["trace"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
 tracing = "0.1"
 tracing-opentelemetry = "0.32"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]

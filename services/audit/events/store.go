@@ -319,10 +319,13 @@ func scanEvent(row dbx.Scannable) (*Event, error) {
 	return &e, nil
 }
 
+const partitionTimeout = 30 * time.Second
+
 // EnsurePartitions creates the monthly partitions of the events and their log
 // keys covering from..to (inclusive months). Replicas serialize on an advisory lock; existing partitions are kept.
 func (s *Store) EnsurePartitions(ctx context.Context, from, to time.Time) error {
-	ctx, op := dbx.Begin(ctx, s.tracer, "ensure_partitions")
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "ensure_partitions", partitionTimeout)
+	defer cancel()
 	defer op.End()
 
 	tx, err := s.pool.Begin(ctx)
@@ -363,7 +366,7 @@ func (s *Store) MaintainPartitions(ctx context.Context, interval time.Duration, 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := s.EnsureAround(ctx, time.Now()); err != nil {
+			if err := s.EnsureAround(ctx, time.Now()); err != nil && ctx.Err() == nil {
 				onErr(err)
 			}
 		}

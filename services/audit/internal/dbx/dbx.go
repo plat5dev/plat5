@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -48,10 +50,6 @@ func (o *Op) End() {
 	o.span.End()
 }
 
-func (o *Op) Span() trace.Span {
-	return o.span
-}
-
 // OK records success metrics and sets span status.
 func (o *Op) OK(msg string) {
 	if msg == "" {
@@ -68,13 +66,6 @@ func (o *Op) Expected(msg string, err error) error {
 	return err
 }
 
-// SoftFail records metricErr on the error counter but Ok span status (e.g. unique conflict).
-func (o *Op) SoftFail(msg string, metricErr, ret error) error {
-	metrics.RecordDBOperation(o.name, time.Since(o.start), metricErr)
-	o.span.SetStatus(codes.Ok, msg)
-	return ret
-}
-
 // Fail records error metrics/span and wraps err with the op name.
 func (o *Op) Fail(err error) error {
 	metrics.RecordDBOperation(o.name, time.Since(o.start), err)
@@ -83,14 +74,35 @@ func (o *Op) Fail(err error) error {
 	return fmt.Errorf("%s: %w", o.name, err)
 }
 
-// Attr sets extra span attributes mid-op.
-func (o *Op) Attr(attrs ...attribute.KeyValue) {
-	o.span.SetAttributes(attrs...)
-}
-
-func IsUniqueViolation(err error) bool {
+// Unavailable reports whether err means Postgres couldn't be reached or didn't
+// answer in time: a failed connect, a closed connection, a network
+// error, a timeout, or Postgres refusing connections. Those are 503s
+// (docs/reference/errors.md#which-status); any other failure is a 500.
+func Unavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var connectErr *pgconn.ConnectError
+	var netErr net.Error
 	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+	switch {
+	case errors.As(err, &connectErr), errors.As(err, &netErr):
+		return true
+	case errors.Is(err, context.DeadlineExceeded), pgconn.Timeout(err):
+		return true
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, net.ErrClosed):
+		return true
+	case errors.As(err, &pgErr):
+		// Class 08, connection exception; 53300, too many connections;
+		// 57P01 to 57P03, an admin or crash shutdown, or not accepting yet.
+		switch {
+		case len(pgErr.Code) == 5 && pgErr.Code[:2] == "08":
+			return true
+		case pgErr.Code == "53300", pgErr.Code == "57P01", pgErr.Code == "57P02", pgErr.Code == "57P03":
+			return true
+		}
+	}
+	return false
 }
 
 func IsNoRows(err error) bool {

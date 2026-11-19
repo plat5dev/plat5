@@ -2,8 +2,8 @@ mod cache;
 mod state;
 mod validate;
 
-pub use cache::JwtCache;
-pub use state::JwtValidatorState;
+pub use cache::{is_unexpired, JwtCache};
+pub use state::{JwksUnavailable, JwtValidatorState};
 pub use validate::validate_token;
 
 /// The audiences a token's `aud` must hold one of (`AUTH_ALLOWED_AUDIENCES`).

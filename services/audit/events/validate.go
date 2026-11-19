@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	stderrors "errors"
+	"math"
 	"time"
+
+	"github.com/oklog/ulid/v2"
 
 	"github.com/plat5dev/plat5/audit/errors"
 )
@@ -67,8 +70,18 @@ func ParseIntent(requestID string, body []byte) (*Intent, *Outcome, error) {
 	if err != nil {
 		return nil, nil, errors.FieldError("occurred_at", "")
 	}
+	ms := at.UnixMilli()
+	if ms < 0 || uint64(ms) > ulid.MaxTime() {
+		return nil, nil, errors.FieldError("occurred_at", "")
+	}
 	if req.Service == nil || *req.Service == "" {
 		return nil, nil, errors.FieldError("service", "")
+	}
+	if !validStatus(req.Status) {
+		return nil, nil, errors.FieldError("status", "")
+	}
+	if req.Outcome != nil && *req.Outcome == "" {
+		return nil, nil, errors.FieldError("outcome", "")
 	}
 
 	in := &Intent{
@@ -113,6 +126,9 @@ func ParseOutcome(requestID string, body []byte) (*Outcome, error) {
 	if req.Outcome == nil || *req.Outcome == "" || *req.Outcome == OutcomePending {
 		return nil, errors.FieldError("outcome", "")
 	}
+	if !validStatus(req.Status) {
+		return nil, errors.FieldError("status", "")
+	}
 	out := &Outcome{
 		Outcome:       *req.Outcome,
 		Status:        req.Status,
@@ -131,4 +147,8 @@ func ParseOutcome(requestID string, body []byte) (*Outcome, error) {
 		out.Details = json.RawMessage(details)
 	}
 	return out, nil
+}
+
+func validStatus(s *int) bool {
+	return s == nil || (*s >= math.MinInt32 && *s <= math.MaxInt32)
 }

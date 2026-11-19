@@ -102,7 +102,7 @@ impl GatewayConfig {
             "RATE_LIMIT_AUTH_FAILURE_REQUESTS",
             DEFAULT_RATE_LIMIT_AUTH_FAILURE_REQUESTS,
         )?;
-        let rate_limit_auth_failure_window = duration_env(
+        let rate_limit_auth_failure_window = positive_duration_env(
             "RATE_LIMIT_AUTH_FAILURE_WINDOW",
             DEFAULT_RATE_LIMIT_AUTH_FAILURE_WINDOW,
         )?;
@@ -175,7 +175,22 @@ fn base_url(raw: String) -> String {
 }
 
 fn require_env(key: &'static str) -> Result<String, GatewayConfigError> {
-    env::var(key).map_err(|_| GatewayConfigError::Missing(key))
+    require_non_empty(key, env::var(key))
+}
+
+fn require_non_empty(
+    key: &'static str,
+    raw: Result<String, env::VarError>,
+) -> Result<String, GatewayConfigError> {
+    let val = raw.map_err(|_| GatewayConfigError::Missing(key))?;
+    let trimmed = val.trim();
+    if trimmed.is_empty() {
+        return Err(GatewayConfigError::Invalid {
+            key,
+            message: "must not be empty".to_string(),
+        });
+    }
+    Ok(trimmed.to_string())
 }
 
 fn parse_u64_env(key: &'static str, default: u64) -> Result<u64, GatewayConfigError> {
@@ -196,6 +211,30 @@ fn duration_env(key: &'static str, default: Duration) -> Result<Duration, Gatewa
         }),
         Err(_) => Ok(default),
     }
+}
+
+fn positive_duration_env(
+    key: &'static str,
+    default: Duration,
+) -> Result<Duration, GatewayConfigError> {
+    match env::var(key) {
+        Ok(raw) => parse_positive_duration(key, &raw),
+        Err(_) => Ok(default),
+    }
+}
+
+fn parse_positive_duration(key: &'static str, raw: &str) -> Result<Duration, GatewayConfigError> {
+    let duration = parse_duration(raw).ok_or_else(|| GatewayConfigError::Invalid {
+        key,
+        message: format!("{raw:?} is not a duration such as 10s or 5m"),
+    })?;
+    if duration < Duration::from_secs(1) {
+        return Err(GatewayConfigError::Invalid {
+            key,
+            message: "must be at least 1s".to_string(),
+        });
+    }
+    Ok(duration)
 }
 
 /// Fail-closed module switch (`AUDIT_ENABLED` / `RATE_LIMIT_ENABLED`): on unless
@@ -282,6 +321,50 @@ mod tests {
         assert_eq!(
             parse_name_claims("profile.display_name, name"),
             vec![vec!["profile", "display_name"], vec!["name"]]
+        );
+    }
+
+    #[test]
+    fn require_non_empty_rejects_missing_empty_and_whitespace() {
+        assert!(matches!(
+            require_non_empty("AUTH_ISSUER", Err(env::VarError::NotPresent)),
+            Err(GatewayConfigError::Missing("AUTH_ISSUER"))
+        ));
+        for raw in ["", "   ", "\t\n"] {
+            assert!(
+                matches!(
+                    require_non_empty("AUTH_ISSUER", Ok(raw.to_string())),
+                    Err(GatewayConfigError::Invalid {
+                        key: "AUTH_ISSUER",
+                        ..
+                    })
+                ),
+                "accepted {raw:?}"
+            );
+        }
+        assert_eq!(
+            require_non_empty("AUTH_ISSUER", Ok("  https://auth.example.com  ".into())).unwrap(),
+            "https://auth.example.com"
+        );
+    }
+
+    #[test]
+    fn rate_limit_window_rejects_zero_duration() {
+        for raw in ["0s", "0m", "0h", "0d"] {
+            assert!(
+                matches!(
+                    parse_positive_duration("RATE_LIMIT_AUTH_FAILURE_WINDOW", raw),
+                    Err(GatewayConfigError::Invalid {
+                        key: "RATE_LIMIT_AUTH_FAILURE_WINDOW",
+                        ..
+                    })
+                ),
+                "accepted {raw:?}"
+            );
+        }
+        assert_eq!(
+            parse_positive_duration("RATE_LIMIT_AUTH_FAILURE_WINDOW", "1s").unwrap(),
+            Duration::from_secs(1)
         );
     }
 }

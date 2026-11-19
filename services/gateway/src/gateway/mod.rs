@@ -13,7 +13,7 @@ use pingora::http::ResponseHeader;
 use pingora::proxy::{FailToProxy, ProxyHttp, Session};
 use pingora::upstreams::peer::HttpPeer;
 use pingora::{Error, ErrorSource, ErrorType, Result};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
@@ -164,7 +164,6 @@ impl Gateway {
                     .await
             }
         };
-        // request_filter has entered the root span: a JWT's kid is recorded on it.
         let decided = self
             .pipeline
             .decide(matched, &ip, presented, &mut ctx.credential)
@@ -234,18 +233,11 @@ impl Gateway {
         if let Err(err) =
             upstream::build_and_store_upstream_peer(session, ctx, route, forwarding).await
         {
-            let status = match err {
-                upstream::UpstreamError::Internal => 500,
-                upstream::UpstreamError::BadUpstream => 502,
+            let (status, error) = match err {
+                upstream::UpstreamError::Internal => (500, ApiError::internal_error()),
+                upstream::UpstreamError::BadUpstream => (502, ApiError::service_unavailable()),
             };
-            return response::write_json_error(
-                &self.cors(),
-                session,
-                ctx,
-                status,
-                ApiError::internal_error(),
-            )
-            .await;
+            return response::write_json_error(&self.cors(), session, ctx, status, error).await;
         }
         Ok(false)
     }
@@ -276,9 +268,10 @@ impl Gateway {
             .authenticator
             .present(session.req_header(), &self.name_claims)
             .await;
-        if let Ok(p) = &presented {
-            ctx.credential.auth_type = Some(p.auth_type());
-        }
+        ctx.credential.auth_type = match &presented {
+            Ok(p) => Some(p.auth_type()),
+            Err(err) => err.auth_type(),
+        };
         let credential = match GatewayPipeline::check_credential(presented) {
             Ok(c) => c,
             Err(rejection) => return write_check_rejection(&cors, session, ctx, rejection).await,
@@ -638,55 +631,55 @@ impl ProxyHttp for Gateway {
         let query = session.req_header().uri.query().map(str::to_string);
         let scheme = url_scheme(session, &self.trusted_proxies);
         let root_span = ctx.ensure_root_span(&method, scheme, &path, query.as_deref());
-        let _root_guard = root_span.enter();
+        let span = tracing::info_span!(parent: &root_span, "gateway.request_filter");
 
-        let span = tracing::info_span!("gateway.request_filter");
-        let _entered = span.enter();
+        async {
+            let request_id = Uuid::new_v4().to_string();
+            ctx.request_id = Some(request_id.clone());
+            if let Some(ref span) = ctx.root_span {
+                span.record("request_id", request_id.as_str());
+            }
 
-        let request_id = Uuid::new_v4().to_string();
-        ctx.request_id = Some(request_id.clone());
-        if let Some(ref span) = ctx.root_span {
-            span.record("request_id", request_id.as_str());
+            if session.req_header().method == http::Method::OPTIONS {
+                return self.handle_preflight(session, ctx).await;
+            }
+
+            // Route checks: the gateway's own answer. No route matches the path.
+            let snapshot = self.snapshot.load_full();
+            if session.req_header().method == http::Method::POST && path == ROUTE_CHECKS_PATH {
+                return self.handle_route_checks(session, ctx, &snapshot).await;
+            }
+
+            // Unmatched: 404, not counted by the failed-auth limiter.
+            let Some(matched) = snapshot.routes.find_route(&path, &method) else {
+                warn!("no matching route");
+                return response::write_json_error(
+                    &self.cors(),
+                    session,
+                    ctx,
+                    404,
+                    ApiError::not_found(),
+                )
+                .await;
+            };
+
+            let route = &matched.route;
+            ctx.route = Some(route.path.clone());
+            ctx.max_body_bytes = route.max_body_bytes;
+            if let Some(ref span) = ctx.root_span {
+                span.record("http.route", route.path.as_str());
+                span.context()
+                    .span()
+                    .update_name(format!("{} {}", method, route.path));
+            }
+            if let Some(done) = self.reject_oversized_content_length(session, ctx).await? {
+                return Ok(done);
+            }
+            self.prepare_upstream(session, ctx, &matched, &request_id)
+                .await
         }
-
-        if session.req_header().method == http::Method::OPTIONS {
-            return self.handle_preflight(session, ctx).await;
-        }
-
-        // Route checks: the gateway's own answer. No route matches the path.
-        let snapshot = self.snapshot.load_full();
-        if session.req_header().method == http::Method::POST && path == ROUTE_CHECKS_PATH {
-            return self.handle_route_checks(session, ctx, &snapshot).await;
-        }
-
-        // Unmatched: 404, not counted by the failed-auth limiter. The route, the
-        // name claims and the default policies all come from this one snapshot.
-        let Some(matched) = snapshot.routes.find_route(&path, &method) else {
-            warn!("no matching route");
-            return response::write_json_error(
-                &self.cors(),
-                session,
-                ctx,
-                404,
-                ApiError::not_found(),
-            )
-            .await;
-        };
-
-        let route = &matched.route;
-        ctx.route = Some(route.path.clone());
-        ctx.max_body_bytes = route.max_body_bytes;
-        if let Some(ref span) = ctx.root_span {
-            span.record("http.route", route.path.as_str());
-            span.context()
-                .span()
-                .update_name(format!("{} {}", method, route.path));
-        }
-        if let Some(done) = self.reject_oversized_content_length(session, ctx).await? {
-            return Ok(done);
-        }
-        self.prepare_upstream(session, ctx, &matched, &request_id)
-            .await
+        .instrument(span)
+        .await
     }
 
     async fn request_body_filter(

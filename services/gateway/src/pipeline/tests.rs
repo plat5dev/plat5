@@ -437,19 +437,23 @@ async fn admit_table() {
     }
 
     // No credential, or a JWT refused locally → 401 without identity, not counted;
-    // the JWT's reason in details.
-    for err in [
-        AuthError::MissingAuthorization,
-        AuthError::InvalidAuthorizationHeader,
-        AuthError::InvalidToken {
-            reason: "token_expired",
-        },
-        AuthError::MissingSubject,
+    // the JWT's reason in details, and auth_type recorded for locally-refused JWTs.
+    for (err, want_auth_type) in [
+        (AuthError::MissingAuthorization, None),
+        (AuthError::InvalidAuthorizationHeader, None),
+        (
+            AuthError::InvalidToken {
+                reason: "token_expired",
+            },
+            Some(AuthType::Jwt),
+        ),
+        (AuthError::MissingSubject, Some(AuthType::Jwt)),
     ] {
         let h = harness(Ok(ok()));
-        let (r, _) = h.run(&read, Err(err.clone())).await;
+        let (r, cred) = h.run(&read, Err(err.clone())).await;
         let rejection = r.err().unwrap();
         assert_eq!(rejection, Rejection::Unauthorized(err.clone()));
+        assert_eq!(cred.auth_type, want_auth_type, "{err:?}");
         assert_eq!(h.calls(), 0);
         assert!(h.counter.buckets().is_empty(), "{err:?} is not counted");
         let body = rejection.body(&read.route);

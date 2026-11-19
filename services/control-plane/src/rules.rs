@@ -830,8 +830,7 @@ mod tests {
         );
         errors_at(r("public", json!(["per-org"])), &at("public"));
         let mut c = base();
-        c["rate_limits"]["per-team"] =
-            json!({ "requests": 1, "window": "1s", "count_at": "team" });
+        c["rate_limits"]["per-team"] = json!({ "requests": 1, "window": "1s", "count_at": "team" });
         errors_at(c, "rate_limits.per-team.count_at");
         // defaults.rate_limit names policies, none with count_at.
         let mut c = base();
@@ -867,7 +866,9 @@ mod tests {
         c.as_object_mut().unwrap().remove("rate_limits");
         run(c.clone()).unwrap();
         let config: Config = serde_json::from_value(c).unwrap();
-        assert!(expand::expand(&config)["e10s"].routes[0].rate_limit.is_empty());
+        assert!(expand::expand(&config)["e10s"].routes[0]
+            .rate_limit
+            .is_empty());
     }
 
     #[test]

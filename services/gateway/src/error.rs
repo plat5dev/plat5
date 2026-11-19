@@ -6,28 +6,18 @@ use crate::route_map::{Required, Scope};
 /// The 401 message where any credential is taken.
 const ANY_CREDENTIAL: &str = "Authentication required: a sign-in token or an API key.";
 
-/// Standard error kinds for telemetry.
-/// Used in span attributes and log fields.
-/// Closed set: auth, network, db, io, internal, validation.
+/// Error kinds for 5xx telemetry (span attributes and log fields).
 #[derive(Debug, Clone, Copy)]
 pub enum ErrorKind {
-    Auth,
     Network,
-    Db,
-    Io,
     Internal,
-    Validation,
 }
 
 impl ErrorKind {
     pub fn as_str(&self) -> &'static str {
         match self {
-            ErrorKind::Auth => "auth",
             ErrorKind::Network => "network",
-            ErrorKind::Db => "db",
-            ErrorKind::Io => "io",
             ErrorKind::Internal => "internal",
-            ErrorKind::Validation => "validation",
         }
     }
 }
@@ -238,6 +228,12 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_slice(&val.to_json_bytes(None)).unwrap();
         assert_eq!(parsed["error"]["code"], "VALIDATION_ERROR");
         assert_eq!(parsed["error"]["message"], "method must be GET.");
-        assert_eq!(parsed["error"]["details"]["fields"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            parsed["error"]["details"]["fields"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 }

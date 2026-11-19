@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -68,13 +69,26 @@ func main() {
 	memberStore := members.NewStore(pool, nodeStore, cfg.SecretBrand)
 	sweeper := nodes.NewSweeper(nodeStore, baseLogger)
 	sweeper.Also("expire invites", memberStore.ExpireInvites)
-	go follower.Follow(runCtx)
-	go sweeper.Run(runCtx)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		follower.Follow(runCtx)
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		sweeper.Run(runCtx)
+	}()
 
 	nodeHandler := nodes.NewHandler(nodeStore, src)
 	memberHandler := members.NewHandler(memberStore, src)
 	lifecycleHandler := lifecycle.NewHandler(lifecycle.NewStore(pool), lifecycle.LongPollWait)
-	go lifecycleHandler.Follow(runCtx, lifecycle.PollInterval, baseLogger)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		lifecycleHandler.Follow(runCtx, lifecycle.PollInterval, baseLogger)
+	}()
 
 	app := newPublicApp(telem, nodeHandler, memberHandler)
 	internalApp := newInternalApp(telem, pool, src, lifecycleHandler, nodeHandler, memberHandler)
@@ -94,15 +108,19 @@ func main() {
 		errCh <- app.Listen(":" + cfg.Port)
 	}()
 
+	exitCode := 0
 	select {
 	case <-runCtx.Done():
 		baseLogger.Info().Msg("shutdown signal received")
 	case err := <-errCh:
 		if err != nil {
 			baseLogger.Error().Err(err).Msg("server exited unexpectedly")
-			stop()
+			exitCode = 1
 		}
+		stop()
 	}
+
+	stop()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -113,11 +131,16 @@ func main() {
 	if err := internalApp.ShutdownWithContext(shutdownCtx); err != nil {
 		baseLogger.Error().Err(err).Msg("internal server shutdown")
 	}
+	wg.Wait()
 	pool.Close()
 	if err := telem.Shutdown(shutdownCtx); err != nil {
 		baseLogger.Error().Err(err).Msg("telemetry shutdown")
 	}
 	baseLogger.Info().Msg("shutdown complete")
+	if exitCode != 0 {
+		cancel()
+		os.Exit(exitCode)
+	}
 }
 
 func newPublicApp(telem *telemetry.Telemetry, nodeHandler *nodes.Handler, memberHandler *members.Handler) *fiber.App {

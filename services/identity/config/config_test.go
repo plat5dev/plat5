@@ -56,7 +56,27 @@ func TestParseControlPlaneURL(t *testing.T) {
 	}
 }
 
+func TestParseDatabaseURL(t *testing.T) {
+	u, err := parseDatabaseURL(" postgres://plat5:plat5@localhost:5432/plat5 ")
+	if err != nil || u != "postgres://plat5:plat5@localhost:5432/plat5" {
+		t.Fatalf("%q %v", u, err)
+	}
+	if _, err := parseDatabaseURL(" "); err == nil {
+		t.Fatal("a missing DATABASE_URL must fail boot")
+	}
+}
+
+func TestLoadRequiresDatabaseURL(t *testing.T) {
+	t.Setenv("CONTROL_PLANE_URL", "http://control-plane:5003")
+	t.Setenv("DATABASE_URL", "")
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "DATABASE_URL") {
+		t.Fatalf("want DATABASE_URL error, got %v", err)
+	}
+}
+
 func TestLoadIgnoresSMTP(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://plat5:plat5@localhost:5432/plat5?sslmode=disable")
 	t.Setenv("CONTROL_PLANE_URL", "http://control-plane:5003")
 	t.Setenv("SMTP_HOST", "mail.example.com")
 	t.Setenv("SMTP_USER", "u")

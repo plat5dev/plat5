@@ -24,8 +24,8 @@ fn fixture(case: &str, file: &str) -> Value {
         .join("fixtures/plans")
         .join(case)
         .join(file);
-    let yaml: serde_yaml::Value =
-        serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let yaml: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     serde_json::to_value(yaml).unwrap()
 }
 
@@ -112,8 +112,9 @@ async fn plan_and_apply_against_postgres() {
     }
     let store = Store::connect(&url).await.unwrap();
     let counts = Arc::new(FixedCounts::new(folder_counts(2)));
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let state = AppState {
-        feed: Feed::spawn(store.clone(), 0),
+        feed: Feed::spawn(store.clone(), 0, shutdown_rx),
         store,
         counts: counts.clone(),
         admin_token: TOKEN.into(),

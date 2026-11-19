@@ -371,7 +371,7 @@ func (s *Store) Delete(ctx context.Context, snap *feed.Snapshot, nodeID string) 
 	defer tx.Rollback(ctx)
 	n, err := s.LockedNode(ctx, tx, nodeID)
 	if err != nil {
-		return false, op.Expected("not found", err)
+		return false, op.Reject(err, ErrNotFound)
 	}
 	if n.Status != StatusActive {
 		op.OK("unchanged")
@@ -425,7 +425,7 @@ func (s *Store) Restore(ctx context.Context, nodeID string) (*Node, bool, error)
 	defer tx.Rollback(ctx)
 	n, err := s.LockedNode(ctx, tx, nodeID)
 	if err != nil {
-		return nil, false, op.Expected("not found", err)
+		return nil, false, op.Reject(err, ErrNotFound)
 	}
 	if n.Status == StatusActive {
 		op.OK("unchanged")
@@ -532,7 +532,7 @@ func (s *Store) ReleaseSlug(ctx context.Context, nodeID string) (*string, *Node,
 	defer tx.Rollback(ctx)
 	n, err := s.LockedNode(ctx, tx, nodeID)
 	if err != nil {
-		return nil, nil, op.Expected("not found", err)
+		return nil, nil, op.Reject(err, ErrNotFound)
 	}
 	if n.Status != StatusPurged || n.ParentID != nil {
 		return nil, nil, op.Expected("not a purged root", errors.SlugNotReleasableError())

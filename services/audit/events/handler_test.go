@@ -3,6 +3,7 @@ package events
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/plat5dev/plat5/audit/errors"
 	"github.com/plat5dev/plat5/audit/metrics"
@@ -20,9 +22,13 @@ type fakeStore struct {
 	byRequest map[string]*Event
 	lastList  Filter
 	list      []*Event
+	err       error
 }
 
 func (f *fakeStore) CreateIntent(_ context.Context, in *Intent, final *Outcome) (bool, error) {
+	if f.err != nil {
+		return false, f.err
+	}
 	if f.byRequest == nil {
 		f.byRequest = map[string]*Event{}
 	}
@@ -38,6 +44,9 @@ func (f *fakeStore) CreateIntent(_ context.Context, in *Intent, final *Outcome) 
 }
 
 func (f *fakeStore) ApplyOutcome(_ context.Context, requestID string, out *Outcome) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
 	e, ok := f.byRequest[requestID]
 	if !ok {
 		return "", ErrNotFound
@@ -50,6 +59,9 @@ func (f *fakeStore) ApplyOutcome(_ context.Context, requestID string, out *Outco
 }
 
 func (f *fakeStore) List(_ context.Context, filter Filter) ([]*Event, bool, error) {
+	if f.err != nil {
+		return nil, false, f.err
+	}
 	f.lastList = filter
 	return f.list, false, nil
 }
@@ -224,24 +236,77 @@ func TestListFilters(t *testing.T) {
 	}
 
 	for name, q := range map[string]string{
-		"unknown param":      "?actor=01m",
-		"repeated param":     "?service=a&service=b",
-		"bad status":         "?status=4xx",
-		"bad cursor":         "?starting_after=nope",
-		"uppercase cursor":   "?starting_after=01JA2Z6Q3Y8D5V2K9N4R7T1W0X",
-		"bad time":           "?occurred_after=yesterday",
-		"empty param":        "?params%5Bmember_id%5D=",
-		"bad param name":     "?params%5Bmember-id%5D=m",
-		"zero limit":         "?limit=0",
-		"empty value":        "?service=",
-		"bad request id":     "?request_id=a%20b",
-		"bracketless key":    "?params=m",
-		"key prefix, no key": "?key_prefix=plat5-k-2",
+		"unknown param":            "?actor=01m",
+		"repeated param":           "?service=a&service=b",
+		"bad status":               "?status=4xx",
+		"status overflow":          "?status=9999999999",
+		"status negative overflow": "?status=-9999999999",
+		"bad cursor":               "?starting_after=nope",
+		"uppercase cursor":         "?starting_after=01JA2Z6Q3Y8D5V2K9N4R7T1W0X",
+		"bad time":                 "?occurred_after=yesterday",
+		"empty param":              "?params%5Bmember_id%5D=",
+		"bad param name":           "?params%5Bmember-id%5D=m",
+		"nul byte in param":        "?params%5Bmember_id%5D=a%00b",
+		"invalid utf8 in param":    "?params%5Bmember_id%5D=%ff",
+		"zero limit":               "?limit=0",
+		"empty value":              "?service=",
+		"bad request id":           "?request_id=a%20b",
+		"bracketless key":          "?params=m",
+		"key prefix, no key":       "?key_prefix=plat5-k-2",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if code, body := do(t, app, http.MethodGet, "/nodes/01o/audit-events"+q, ""); code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 422, got %d %s", code, body)
 			}
 		})
+	}
+}
+
+func TestStoreErrorStatusMapping(t *testing.T) {
+	routes := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"put intent", http.MethodPut, "/internal/events/req-1", validIntent},
+		{"patch outcome", http.MethodPatch, "/internal/events/req-1", `{"outcome":"responded","status":200}`},
+		{"list node", http.MethodGet, "/nodes/01o/audit-events", ""},
+		{"list user", http.MethodGet, "/users/01u/audit-events", ""},
+	}
+	errs := []struct {
+		name     string
+		err      error
+		wantCode int
+		wantErr  string
+	}{
+		{"timeout", context.DeadlineExceeded, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE"},
+		{"connection lost", &pgconn.PgError{Code: "08006"}, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE"},
+		{"internal db error", stderrors.New("scan: wrong type"), http.StatusInternalServerError, "INTERNAL_ERROR"},
+		{"sql bug", &pgconn.PgError{Code: "42703"}, http.StatusInternalServerError, "INTERNAL_ERROR"},
+	}
+
+	for _, r := range routes {
+		for _, tc := range errs {
+			t.Run(r.name+"/"+tc.name, func(t *testing.T) {
+				s := &fakeStore{err: tc.err}
+				app := newTestApp(s)
+				code, body := do(t, app, r.method, r.path, r.body)
+				if code != tc.wantCode {
+					t.Fatalf("want %d, got %d %s", tc.wantCode, code, body)
+				}
+				var env struct {
+					Error struct {
+						Code string `json:"code"`
+					} `json:"error"`
+				}
+				if err := json.Unmarshal(body, &env); err != nil {
+					t.Fatalf("unmarshal %s: %v", body, err)
+				}
+				if env.Error.Code != tc.wantErr {
+					t.Fatalf("want code %s, got %s", tc.wantErr, env.Error.Code)
+				}
+			})
+		}
 	}
 }

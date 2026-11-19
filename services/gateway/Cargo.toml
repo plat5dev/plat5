@@ -13,9 +13,8 @@ jsonwebtoken = { version = "10.2.0", default-features = false, features = ["rust
 moka = { version = "0.12", features = ["future"] }
 uuid = { version = "1", features = ["v4"] }
 opentelemetry = { version = "0.31", features = ["trace", "metrics"] }
-opentelemetry-http = "0.31"
-opentelemetry-otlp = { version = "0.31", features = ["http-proto", "metrics", "trace"] }
-opentelemetry_sdk = { version = "0.31", features = ["rt-tokio", "metrics"] }
+opentelemetry-otlp = { version = "0.31", default-features = false, features = ["http-proto", "reqwest-blocking-client", "metrics", "trace"] }
+opentelemetry_sdk = { version = "0.31", features = ["metrics"] }
 pingora = { version = "0.6", features = ["proxy"] }
 prometheus = { version = "0.13.4", features = ["process"] }
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "script"] }
@@ -25,4 +24,4 @@ serde_json = { version = "1.0.145", features = ["raw_value"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "io-util"] }
 tracing = "0.1"
 tracing-opentelemetry = "0.32"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

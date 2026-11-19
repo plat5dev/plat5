@@ -25,26 +25,46 @@ const (
 // Follower keeps a Source current from the control plane:
 // GET {CONTROL_PLANE_URL}/internal/identity?after={revision}.
 type Follower struct {
-	client   *http.Client
-	url      string
-	src      *Source
-	log      zerolog.Logger
-	revision int64
+	client     *http.Client
+	url        string
+	src        *Source
+	log        zerolog.Logger
+	revision   int64
+	retryDelay time.Duration
 }
 
 func NewFollower(baseURL string, src *Source, log zerolog.Logger) *Follower {
 	return &Follower{
-		client: &http.Client{Timeout: pollTimeout},
-		url:    strings.TrimRight(baseURL, "/") + "/internal/identity",
-		src:    src,
-		log:    log,
+		client:     &http.Client{Timeout: pollTimeout},
+		url:        strings.TrimRight(baseURL, "/") + "/internal/identity",
+		src:        src,
+		log:        log,
+		retryDelay: time.Second,
+	}
+}
+
+func (f *Follower) baseDelay() time.Duration {
+	if f.retryDelay > 0 {
+		return f.retryDelay
+	}
+	return time.Second
+}
+
+func (f *Follower) sleep(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
 	}
 }
 
 // Load waits until the first snapshot is stored, retrying while the control
 // plane is down or has no config. Identity doesn't listen before this returns.
 func (f *Follower) Load(ctx context.Context) error {
-	delay := time.Second
+	delay := f.baseDelay()
 	for {
 		res, err := f.fetch(ctx, nil)
 		switch {
@@ -58,10 +78,8 @@ func (f *Follower) Load(ctx context.Context) error {
 			f.log.Info().Int64("revision", res.revision).Int("kinds", len(res.snap.Kinds)).Msg("config loaded")
 			return nil
 		}
-		select {
-		case <-ctx.Done():
+		if !f.sleep(ctx, delay) {
 			return ctx.Err()
-		case <-time.After(delay):
 		}
 		delay = min(delay*2, maxRetryDelay)
 	}
@@ -70,7 +88,15 @@ func (f *Follower) Load(ctx context.Context) error {
 // Follow long-polls for changes until ctx ends. A snapshot identity can't use
 // is skipped, and the current one stays.
 func (f *Follower) Follow(ctx context.Context) {
-	delay := time.Second
+	base := f.baseDelay()
+	delay := base
+	backoff := func() bool {
+		if !f.sleep(ctx, delay) {
+			return false
+		}
+		delay = min(delay*2, maxRetryDelay)
+		return true
+	}
 	for ctx.Err() == nil {
 		after := f.revision
 		res, err := f.fetch(ctx, &after)
@@ -79,25 +105,34 @@ func (f *Follower) Follow(ctx context.Context) {
 				return
 			}
 			f.log.Warn().Err(err).Msg("config poll failed; keeping current config")
-			select {
-			case <-ctx.Done():
+			if !backoff() {
 				return
-			case <-time.After(delay):
 			}
-			delay = min(delay*2, maxRetryDelay)
 			continue
 		}
-		delay = time.Second
 		if res.unchanged {
+			delay = base
 			continue
 		}
-		f.revision = res.revision
 		switch {
 		case res.missing:
+			f.revision = 0
 			f.log.Error().Msg("the control plane has no config; keeping current config")
+			if !backoff() {
+				return
+			}
 		case res.snap != nil:
+			delay = base
+			f.revision = res.revision
 			f.src.Store(res.snap)
 			f.log.Info().Int64("revision", res.revision).Int("kinds", len(res.snap.Kinds)).Msg("config reloaded")
+		case res.revision == 0:
+			if !backoff() {
+				return
+			}
+		default:
+			delay = base
+			f.revision = res.revision
 		}
 	}
 }

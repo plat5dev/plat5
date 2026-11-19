@@ -103,13 +103,17 @@ func TestParseIntentRefusesWhatItCantStore(t *testing.T) {
 		from, to  string
 		field     string
 	}{
-		"no request id":  {"", "", "", "request_id"},
-		"no occurred_at": {"r", `"occurred_at": "2026-10-08T18:30:00.123456Z",`, ``, "occurred_at"},
-		"not a time":     {"r", `2026-10-08T18:30:00.123456Z`, `yesterday`, "occurred_at"},
-		"no service":     {"r", `"service": "identity",`, ``, "service"},
-		"wrong type":     {"r", `"203.0.113.7"`, `7`, "ip"},
-		"nodes a string": {"r", `"nodes": [`, `"nodes": "x", "nodes2": [`, "nodes"},
-		"not json":       {"r", `{`, `[`, "body"},
+		"no request id":            {"", "", "", "request_id"},
+		"no occurred_at":           {"r", `"occurred_at": "2026-10-08T18:30:00.123456Z",`, ``, "occurred_at"},
+		"not a time":               {"r", `2026-10-08T18:30:00.123456Z`, `yesterday`, "occurred_at"},
+		"pre-1970 occurred_at":     {"r", `2026-10-08T18:30:00.123456Z`, `1969-12-31T23:59:59.999Z`, "occurred_at"},
+		"no service":               {"r", `"service": "identity",`, ``, "service"},
+		"empty outcome":            {"r", `"ip": "203.0.113.7",`, `"ip": "203.0.113.7", "outcome": "",`, "outcome"},
+		"status overflow":          {"r", `"ip": "203.0.113.7",`, `"ip": "203.0.113.7", "outcome": "rejected", "status": 9999999999,`, "status"},
+		"status negative overflow": {"r", `"ip": "203.0.113.7",`, `"ip": "203.0.113.7", "outcome": "rejected", "status": -9999999999,`, "status"},
+		"wrong type":               {"r", `"203.0.113.7"`, `7`, "ip"},
+		"nodes a string":           {"r", `"nodes": [`, `"nodes": "x", "nodes2": [`, "nodes"},
+		"not json":                 {"r", `{`, `[`, "body"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -162,11 +166,14 @@ func TestParseOutcome(t *testing.T) {
 	}
 
 	bad := map[string]struct{ body, field string }{
-		"pending":            {`{"outcome":"pending","status":200}`, "outcome"},
-		"no outcome":         {`{"status":200}`, "outcome"},
-		"status a string":    {`{"outcome":"responded","status":"200"}`, "status"},
-		"details not object": {`{"outcome":"responded","status":200,"details":[1]}`, "details"},
-		"named not a list":   {`{"outcome":"responded","status":201,"named_node_ids":"01o"}`, "named_node_ids"},
+		"pending":                  {`{"outcome":"pending","status":200}`, "outcome"},
+		"empty outcome":            {`{"outcome":"","status":200}`, "outcome"},
+		"no outcome":               {`{"status":200}`, "outcome"},
+		"status a string":          {`{"outcome":"responded","status":"200"}`, "status"},
+		"status overflow":          {`{"outcome":"responded","status":9999999999}`, "status"},
+		"status negative overflow": {`{"outcome":"responded","status":-9999999999}`, "status"},
+		"details not object":       {`{"outcome":"responded","status":200,"details":[1]}`, "details"},
+		"named not a list":         {`{"outcome":"responded","status":201,"named_node_ids":"01o"}`, "named_node_ids"},
 	}
 	for name, tc := range bad {
 		t.Run(name, func(t *testing.T) {

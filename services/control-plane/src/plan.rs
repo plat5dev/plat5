@@ -127,19 +127,20 @@ pub async fn dry_run(
     current: Option<&Served>,
     next: &Served,
     counts: &dyn Counts,
+    request_id: &str,
 ) -> Result<Plan, Refused> {
-    make_plan(revision, current, next, counts).await
+    make_plan(revision, current, next, counts, request_id).await
 }
 
 /// The apply: the same plan, recomputed, if its precondition holds and nothing
-/// blocks it. The caller holds the head locked from reading `revision` until it
-/// writes.
+/// blocks it.
 pub async fn apply(
     revision: i64,
     current: Option<&Served>,
     next: &Served,
     expect: Option<&Expect>,
     counts: &dyn Counts,
+    request_id: &str,
 ) -> Result<Plan, Refused> {
     let Some(expect) = expect else {
         return Err(Refused::Invalid(vec![FieldError::new(
@@ -154,7 +155,7 @@ pub async fn apply(
             actual: Some(revision),
         });
     }
-    let plan = make_plan(revision, current, next, counts).await?;
+    let plan = make_plan(revision, current, next, counts, request_id).await?;
     let blocked: Vec<FieldError> = plan
         .changes
         .iter()
@@ -201,6 +202,7 @@ async fn make_plan(
     current: Option<&Served>,
     next: &Served,
     counts: &dyn Counts,
+    request_id: &str,
 ) -> Result<Plan, Refused> {
     let old_kinds = current
         .map(|c| named(&c.gateway, "kinds"))
@@ -225,7 +227,7 @@ async fn make_plan(
         CountsResponse::default()
     } else {
         counts
-            .plan_counts(request)
+            .plan_counts(request, request_id)
             .await
             .map_err(Refused::CountsUnavailable)?
     };

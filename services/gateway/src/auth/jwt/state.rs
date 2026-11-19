@@ -15,6 +15,18 @@ const REFRESH_INTERVAL_SECS: u64 = 15 * 60;
 
 type JwksFetchTx = broadcast::Sender<Result<Arc<JwkSet>, String>>;
 
+/// JWKS could not be fetched on the cold path: **503**.
+#[derive(Debug, Clone)]
+pub struct JwksUnavailable(pub String);
+
+impl std::fmt::Display for JwksUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for JwksUnavailable {}
+
 #[derive(Clone)]
 pub struct JwtValidatorState {
     issuer: Arc<str>,
@@ -45,7 +57,7 @@ impl JwtValidatorState {
         }
     }
 
-    pub async fn get_jwks(&self) -> Result<JwkSet, reqwest::Error> {
+    pub async fn get_jwks(&self) -> Result<JwkSet, JwksUnavailable> {
         if let Some(jwks) = self.jwks.load_full() {
             return Ok((*jwks).clone());
         }
@@ -65,19 +77,20 @@ impl JwtValidatorState {
         };
 
         if let Some(mut rx) = waiter {
-            match rx.recv().await {
-                Ok(Ok(jwks)) => return Ok((*jwks).clone()),
-                Ok(Err(_)) | Err(_) => {
-                    // Fetcher failed or lagged; try again below if cache still empty.
-                }
-            }
-            if let Some(jwks) = self.jwks.load_full() {
-                return Ok((*jwks).clone());
-            }
-            return self.fetch_and_store().await;
+            return match rx.recv().await {
+                Ok(Ok(jwks)) => Ok((*jwks).clone()),
+                Ok(Err(msg)) => Err(JwksUnavailable(msg)),
+                Err(_) => match self.jwks.load_full() {
+                    Some(jwks) => Ok((*jwks).clone()),
+                    None => Err(JwksUnavailable("in-flight jwks fetch ended".to_string())),
+                },
+            };
         }
 
-        let result = self.fetch_and_store().await;
+        let result = self
+            .fetch_and_store()
+            .await
+            .map_err(|err| JwksUnavailable(err.to_string()));
         {
             let mut slot = self.in_flight.lock().await;
             if let Some(tx) = slot.take() {
@@ -86,7 +99,7 @@ impl JwtValidatorState {
                         let _ = tx.send(Ok(Arc::new(j.clone())));
                     }
                     Err(err) => {
-                        let _ = tx.send(Err(err.to_string()));
+                        let _ = tx.send(Err(err.0.clone()));
                     }
                 }
             }
@@ -194,4 +207,57 @@ impl JwtValidatorState {
 async fn fetch_jwks(client: &reqwest::Client, uri: &str) -> reqwest::Result<JwkSet> {
     let res = client.get(uri).send().await?;
     res.json::<JwkSet>().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn cold_path_failure_does_not_thundering_herd() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                counter.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    let _ = sock.read(&mut buf).await;
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    let _ = sock
+                        .write_all(
+                            b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                        )
+                        .await;
+                });
+            }
+        });
+
+        let state = JwtValidatorState::new(
+            "https://auth".into(),
+            format!("http://{addr}/jwks"),
+            Audiences::Any,
+        );
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            let s = state.clone();
+            tasks.push(tokio::spawn(async move { s.get_jwks().await }));
+        }
+        for t in tasks {
+            assert!(t.await.unwrap().is_err());
+        }
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "waiters must share the failed cold-path fetch instead of retrying concurrently"
+        );
+    }
 }

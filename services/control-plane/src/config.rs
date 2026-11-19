@@ -141,10 +141,6 @@ fn is_yes(b: &bool) -> bool {
 }
 
 impl Kind {
-    pub fn is_root(&self) -> bool {
-        self.parent.is_none()
-    }
-
     /// The literal of the kind's path piece: `/projects` for `/projects/{project}`.
     pub fn collection(&self) -> &str {
         match self.path[1..].find('/') {
@@ -259,15 +255,6 @@ pub enum Required {
 pub enum Keyword {
     #[serde(rename = "any_member")]
     AnyMember,
-}
-
-impl Required {
-    pub fn permissions(&self) -> &[String] {
-        match self {
-            Required::Permissions(p) => p,
-            Required::Keyword(_) => &[],
-        }
-    }
 }
 
 /// `rate_limit`: policy names, or `false` for none (the schema refuses `true`).

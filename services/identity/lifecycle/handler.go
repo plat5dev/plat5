@@ -82,7 +82,7 @@ func (h *Handler) List(c fiber.Ctx) error {
 		if err != nil {
 			return httpx.MapDB(ctx, err, "failed to read the events head", httpx.DBErr{})
 		}
-		h.head.Advance(head)
+		h.head.Sync(head)
 		if q.after > head {
 			// Past the newest event: identity's log was reset, and its new
 			// events have ids below the cursor. The reader starts over.

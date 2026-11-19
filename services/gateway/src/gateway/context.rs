@@ -80,6 +80,7 @@ impl GatewayContext {
         }
 
         let span = tracing::info_span!(
+            parent: None,
             "http",
             otel.kind = "server",
             otel.name = %method,

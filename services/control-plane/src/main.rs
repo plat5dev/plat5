@@ -21,12 +21,16 @@ mod telemetry;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::counts::{Counts, HttpCounts};
 use crate::feed::Feed;
 use crate::store::Store;
+
+/// How often stale `gateway_replicas` rows (older than 1 hour) are pruned.
+const REPLICA_PRUNE_INTERVAL: Duration = Duration::from_secs(300);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -88,11 +92,38 @@ async fn main() {
 
     let counts: Arc<dyn Counts> = Arc::new(HttpCounts::new(&identity_url));
 
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        wait_for_shutdown_signal().await;
+        info!("shutdown signal received");
+        let _ = shutdown_tx.send(true);
+    });
+
     let head = store.head().await.unwrap_or_else(|e| {
         error!(error = %e, "failed to read control-plane head");
         std::process::exit(1);
     });
-    let feed = Feed::spawn(store.clone(), head);
+    let feed = Feed::spawn(store.clone(), head, shutdown_rx.clone());
+
+    {
+        let store = store.clone();
+        let shutdown = watch_shutdown(shutdown_rx.clone());
+        tokio::spawn(async move {
+            tokio::pin!(shutdown);
+            let mut interval = tokio::time::interval(REPLICA_PRUNE_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            interval.tick().await;
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown => break,
+                    _ = interval.tick() => {}
+                }
+                if let Err(e) = store.prune_stale_replicas().await {
+                    warn!(error = %e, "failed to prune stale gateway replicas");
+                }
+            }
+        });
+    }
 
     let state = AppState {
         store,
@@ -122,13 +153,6 @@ async fn main() {
             error!(error = %e, "failed to bind internal port");
             std::process::exit(1);
         });
-
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    tokio::spawn(async move {
-        wait_for_shutdown_signal().await;
-        info!("shutdown signal received");
-        let _ = shutdown_tx.send(true);
-    });
 
     let public_shutdown = watch_shutdown(shutdown_rx.clone());
     let internal_shutdown = watch_shutdown(shutdown_rx);
