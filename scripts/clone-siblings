@@ -14,10 +14,10 @@ REPOS=(
   cli
   operator
   template-bun-effect-api
-  template-customer-console
   template-go-fiber-api
   template-node-fastify-api
-  template-operator-console
+  template-solid-customer-console
+  template-solid-operator-console
 )
 
 PULL=0
