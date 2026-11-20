@@ -2,7 +2,7 @@
 #
 # Build context: services/gateway/.
 
-FROM rust:1 AS local
+FROM rust:1-bookworm AS local
 
 WORKDIR /app
 
@@ -35,7 +35,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN cargo chef prepare --recipe-path recipe.json
 
-FROM rust:1 AS builder
+FROM rust:1-bookworm AS builder
 
 WORKDIR /app
 

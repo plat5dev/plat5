@@ -3,7 +3,7 @@
 # Build context: services/control-plane/, plus a named context `schema`: the
 # repo's schema/ (compose: additional_contexts; CI: build-contexts).
 
-FROM rust:1 AS local
+FROM rust:1-bookworm AS local
 
 WORKDIR /app
 
@@ -37,7 +37,7 @@ COPY src ./src
 COPY migrations ./migrations
 RUN cargo chef prepare --recipe-path recipe.json
 
-FROM rust:1 AS builder
+FROM rust:1-bookworm AS builder
 
 WORKDIR /app
 
