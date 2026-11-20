@@ -498,12 +498,25 @@ mod tests {
         c["services"] = json!({ "s": { "url": "http://s:3000", "routes": [] } });
         assert!(has_error_at(c, "services.s"));
         for url in [
-            "https://s:443",
             "http://s",
+            "http://s:3000",
+            "https://s",
+            "https://s:443",
+            "https://api.example.com:8443",
+        ] {
+            let mut c = with_route("public", json!({ "path": "/a", "methods": ["GET"] }));
+            c["services"]["s"]["url"] = json!(url);
+            assert!(errors(c).is_empty(), "{url}");
+        }
+        for url in [
+            "ftp://s:80",
             "http://s:0",
             "http://s:70000",
+            "http://s:",
             "http://u@s:1",
             "http://s:1/x",
+            "https://s/x",
+            "https://s?a=1",
         ] {
             let mut c = with_route("public", json!({ "path": "/a", "methods": ["GET"] }));
             c["services"]["s"]["url"] = json!(url);

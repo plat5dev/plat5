@@ -42,7 +42,7 @@ With the kinds in [kinds](kinds.md), the versions route is `GET` and `POST /orgs
 | Field | Type | Rule |
 |-------|------|------|
 | service name | `string` | The file's one top-level key: 1–128 of `[A-Za-z0-9._-]`. No name is reserved. The `service` on every audit event |
-| `url` | `string` | Upstream, exactly `http://host:port` (explicit port, no path, no query), from the **gateway's** network view. `https://` is **422**: TLS upstreams aren't supported. Credentials in the URL, a port outside 1–65535, or any other form is **422** |
+| `url` | `string` | Upstream, `http://host[:port]` (default port `80`) or `https://host[:port]` (default port `443`), no path or query, from the **gateway's** network view. Credentials in the URL, a port outside 1–65535, or any other form is **422** |
 | `timeouts` | `{connect, read}?` | Upstream timeouts, each a duration. One left out uses `defaults.timeouts` ([settings](settings.md)) |
 | `max_body_bytes` | `integer?` | The largest request body forwarded to this service. Larger is **413**. Omitted uses `defaults.max_body_bytes` |
 | `scopes` | `map<scope, scope block>` | One block per scope: a kind name, `user` or `public`. At least one route in all |

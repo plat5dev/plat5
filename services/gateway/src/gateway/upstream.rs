@@ -111,7 +111,15 @@ pub async fn build_and_store_upstream_peer(
         global::get_text_map_propagator(|propagator| propagator.inject_context(&cx, &mut injector));
     }
 
-    let peer_addr = peer_address(&route.base_url);
+    let Some(upstream) = parse_upstream(&route.base_url) else {
+        warn!(
+            route = %route.path,
+            upstream = %route.base_url,
+            "upstream address is not a valid host[:port]"
+        );
+        return Err(UpstreamError::BadUpstream);
+    };
+    let peer_addr = upstream.addr();
     let Some(socket_addr) = resolve_peer(&peer_addr).await else {
         warn!(
             route = %route.path,
@@ -120,8 +128,26 @@ pub async fn build_and_store_upstream_peer(
         );
         return Err(UpstreamError::BadUpstream);
     };
-    info!(route = %route.path, upstream = %peer_addr, "forwarding request to upstream");
-    let mut peer = HttpPeer::new(socket_addr, false, String::new());
+    if upstream.tls {
+        if let Err(err) = session
+            .req_header_mut()
+            .insert_header("Host", upstream.host_header())
+        {
+            warn!(
+                error_type = ErrorKind::Internal.as_str(),
+                error_message = %err,
+                "failed to set upstream Host header"
+            );
+            return Err(UpstreamError::Internal);
+        }
+    }
+    info!(route = %route.path, upstream = %peer_addr, tls = upstream.tls, "forwarding request to upstream");
+    let sni = if upstream.tls {
+        upstream.host.clone()
+    } else {
+        String::new()
+    };
+    let mut peer = HttpPeer::new(socket_addr, upstream.tls, sni);
     peer.options.connection_timeout = Some(route.timeouts.connect);
     peer.options.read_timeout = Some(route.timeouts.read);
     ctx.upstream_peer = Some(Box::new(peer));
@@ -135,18 +161,68 @@ fn path_and_query(path: &str, query: Option<&str>) -> String {
     }
 }
 
-/// Gateway peers are host:port. Strip accidental scheme/path from route config.
-pub fn peer_address(base_url: &str) -> String {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedUpstream {
+    pub tls: bool,
+    pub host: String,
+    pub port: u16,
+}
+
+impl ParsedUpstream {
+    pub fn addr(&self) -> String {
+        format!("{}:{}", self.host, self.port)
+    }
+
+    pub fn host_header(&self) -> String {
+        let default_port = if self.tls { 443 } else { 80 };
+        if self.port == default_port {
+            self.host.clone()
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
+    }
+}
+
+/// Parse `http://host[:port]` (default 80), `https://host[:port]` (default 443),
+/// or legacy bare `host:port`.
+pub fn parse_upstream(base_url: &str) -> Option<ParsedUpstream> {
     let s = base_url.trim();
-    let without_scheme = s
-        .strip_prefix("https://")
-        .or_else(|| s.strip_prefix("http://"))
-        .unwrap_or(s);
-    without_scheme
-        .split('/')
-        .next()
-        .unwrap_or(without_scheme)
-        .to_string()
+    let (tls, default_port, rest) = if let Some(rest) = s.strip_prefix("https://") {
+        (true, Some(443u16), rest)
+    } else if let Some(rest) = s.strip_prefix("http://") {
+        (false, Some(80u16), rest)
+    } else {
+        (false, None, s)
+    };
+    let authority = rest.split('/').next().unwrap_or(rest);
+    if authority.is_empty() {
+        return None;
+    }
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((h, p)) => {
+            let port = p.parse::<u16>().ok()?;
+            if port == 0 {
+                return None;
+            }
+            (h, port)
+        }
+        None => (authority, default_port?),
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some(ParsedUpstream {
+        tls,
+        host: host.to_string(),
+        port,
+    })
+}
+
+#[cfg(test)]
+pub fn peer_address(base_url: &str) -> String {
+    parse_upstream(base_url)
+        .map(|u| u.addr())
+        .unwrap_or_else(|| base_url.trim().to_string())
 }
 
 /// Resolve `host:port` without panicking and without blocking the executor
@@ -201,6 +277,46 @@ mod tests {
     fn peer_address_strips_scheme_so_stored_bare_routes_still_work() {
         assert_eq!(peer_address("http://api:3000"), "api:3000");
         assert_eq!(peer_address("api:3000"), "api:3000");
+        assert_eq!(peer_address("http://api"), "api:80");
+        assert_eq!(peer_address("https://api.example.com"), "api.example.com:443");
+        assert_eq!(
+            peer_address("https://api.example.com:8443"),
+            "api.example.com:8443"
+        );
+    }
+
+    #[test]
+    fn parse_upstream_handles_http_https_and_default_ports() {
+        let http_default = parse_upstream("http://api.internal").unwrap();
+        assert_eq!(
+            http_default,
+            ParsedUpstream {
+                tls: false,
+                host: "api.internal".into(),
+                port: 80
+            }
+        );
+        assert_eq!(http_default.host_header(), "api.internal");
+
+        let https_default = parse_upstream("https://svc.run.app").unwrap();
+        assert_eq!(
+            https_default,
+            ParsedUpstream {
+                tls: true,
+                host: "svc.run.app".into(),
+                port: 443
+            }
+        );
+        assert_eq!(https_default.addr(), "svc.run.app:443");
+        assert_eq!(https_default.host_header(), "svc.run.app");
+
+        let https_custom = parse_upstream("https://svc.run.app:8443").unwrap();
+        assert_eq!(https_custom.addr(), "svc.run.app:8443");
+        assert_eq!(https_custom.host_header(), "svc.run.app:8443");
+
+        assert!(parse_upstream("").is_none());
+        assert!(parse_upstream("http://api:0").is_none());
+        assert!(parse_upstream("barehost").is_none());
     }
 
     #[test]

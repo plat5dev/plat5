@@ -23,9 +23,9 @@
       "properties": {
         "url": {
           "title": "url",
-          "description": "Upstream, exactly `http://host:port` (explicit port, no path, no query), from the **gateway's** network view. `https://` is **422**: TLS upstreams aren't supported. Credentials in the URL, a port outside 1–65535, or any other form is **422**.",
+          "description": "Upstream, `http://host[:port]` (default port `80`) or `https://host[:port]` (default port `443`), no path or query, from the **gateway's** network view. Credentials in the URL, a port outside 1–65535, or any other form is **422**.",
           "type": "string",
-          "pattern": "^http://[^/?#@:\\s]+:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+          "pattern": "^https?://[^/?#@:\\s]+(:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$"
         },
         "timeouts": {
           "title": "timeouts",
