@@ -5,6 +5,8 @@ use crate::auth::jwt::Audiences;
 use crate::auth::{parse_claim_path, parse_subject_claim, NameClaims};
 use crate::client_ip::TrustedProxies;
 use crate::duration::parse_duration;
+use crate::gateway::signing::UpstreamSigner;
+use crate::rate_limit::DEFAULT_KEY_PREFIX;
 
 const DEFAULT_PORT: &str = "5001";
 const DEFAULT_INTERNAL_PORT: &str = "8000";
@@ -25,6 +27,8 @@ pub struct GatewayConfig {
     pub control_plane_url: String,
     /// Valkey for rate-limit counters. None = rate limiting off (`RATE_LIMIT_ENABLED=false`).
     pub valkey_url: Option<String>,
+    /// Key prefix for Valkey rate-limit counters (`VALKEY_KEY_PREFIX`).
+    pub valkey_key_prefix: String,
 
     pub auth_issuer: String,
     pub auth_jwks_uri: String,
@@ -51,6 +55,13 @@ pub struct GatewayConfig {
     /// Proxies whose `X-Forwarded-For` names the client (`TRUSTED_PROXIES`).
     /// Empty = the TCP peer is the client.
     pub trusted_proxies: TrustedProxies,
+
+    /// Optional Ed25519 signer for outgoing upstream requests (`UPSTREAM_SIGNING_KEY`).
+    pub upstream_signer: Option<UpstreamSigner>,
+
+    /// Refuse upstream connections whose resolved IP is loopback, private, link-local,
+    /// CGNAT, ULA, or unspecified (`UPSTREAM_BLOCK_PRIVATE_IPS`).
+    pub upstream_block_private_ips: bool,
 }
 
 #[derive(Debug)]
@@ -114,6 +125,16 @@ impl GatewayConfig {
             key: "TRUSTED_PROXIES",
             message,
         })?;
+        let valkey_key_prefix = parse_key_prefix(env::var("VALKEY_KEY_PREFIX").ok().as_deref())?;
+        let upstream_signer = parse_upstream_signer(
+            env::var("UPSTREAM_SIGNING_KEY").ok().as_deref(),
+            env::var("UPSTREAM_SIGNING_KEY_ID").ok().as_deref(),
+        )?;
+        let upstream_block_private_ips = parse_bool_env(
+            "UPSTREAM_BLOCK_PRIVATE_IPS",
+            env::var("UPSTREAM_BLOCK_PRIVATE_IPS").ok().as_deref(),
+            false,
+        )?;
 
         Ok(Self {
             port: env::var("PORT").unwrap_or_else(|_| DEFAULT_PORT.to_string()),
@@ -121,6 +142,7 @@ impl GatewayConfig {
                 .unwrap_or_else(|_| DEFAULT_INTERNAL_PORT.to_string()),
             control_plane_url,
             valkey_url,
+            valkey_key_prefix,
 
             auth_issuer,
             auth_jwks_uri,
@@ -144,6 +166,8 @@ impl GatewayConfig {
 
             audit_url,
             trusted_proxies,
+            upstream_signer,
+            upstream_block_private_ips,
         })
     }
 }
@@ -267,6 +291,74 @@ fn optional_module_url(
     }
 }
 
+fn parse_key_prefix(raw: Option<&str>) -> Result<String, GatewayConfigError> {
+    let Some(raw) = raw else {
+        return Ok(DEFAULT_KEY_PREFIX.to_string());
+    };
+    if raw.is_empty()
+        || !raw
+            .bytes()
+            .all(|b| b.is_ascii_graphic())
+    {
+        return Err(GatewayConfigError::Invalid {
+            key: "VALKEY_KEY_PREFIX",
+            message: "must be non-empty visible ASCII without whitespace".to_string(),
+        });
+    }
+    Ok(raw.to_string())
+}
+
+fn parse_bool_env(
+    key: &'static str,
+    raw: Option<&str>,
+    default: bool,
+) -> Result<bool, GatewayConfigError> {
+    match raw.map(str::trim) {
+        None | Some("") => Ok(default),
+        Some("true") => Ok(true),
+        Some("false") => Ok(false),
+        Some(other) => Err(GatewayConfigError::Invalid {
+            key,
+            message: format!("must be true or false, got {other:?}"),
+        }),
+    }
+}
+
+fn parse_upstream_signer(
+    key_raw: Option<&str>,
+    kid_raw: Option<&str>,
+) -> Result<Option<UpstreamSigner>, GatewayConfigError> {
+    let Some(seed) = key_raw else {
+        if kid_raw.is_some() {
+            return Err(GatewayConfigError::Invalid {
+                key: "UPSTREAM_SIGNING_KEY_ID",
+                message: "cannot be set without UPSTREAM_SIGNING_KEY".to_string(),
+            });
+        }
+        return Ok(None);
+    };
+    if seed.trim().is_empty() {
+        return Err(GatewayConfigError::Invalid {
+            key: "UPSTREAM_SIGNING_KEY",
+            message: "must not be empty when set".to_string(),
+        });
+    }
+    if let Some(kid) = kid_raw {
+        if let Err(message) = crate::gateway::signing::validate_kid(kid.trim()) {
+            return Err(GatewayConfigError::Invalid {
+                key: "UPSTREAM_SIGNING_KEY_ID",
+                message,
+            });
+        }
+    }
+    UpstreamSigner::from_seed_b64url(seed, kid_raw)
+        .map(Some)
+        .map_err(|message| GatewayConfigError::Invalid {
+            key: "UPSTREAM_SIGNING_KEY",
+            message,
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,5 +458,43 @@ mod tests {
             parse_positive_duration("RATE_LIMIT_AUTH_FAILURE_WINDOW", "1s").unwrap(),
             Duration::from_secs(1)
         );
+    }
+
+    #[test]
+    fn valkey_key_prefix_defaults_and_validates() {
+        assert_eq!(parse_key_prefix(None).unwrap(), DEFAULT_KEY_PREFIX);
+        assert_eq!(parse_key_prefix(Some("dep-1:rl:")).unwrap(), "dep-1:rl:");
+        assert!(parse_key_prefix(Some("")).is_err());
+        assert!(parse_key_prefix(Some("bad prefix")).is_err());
+        assert!(parse_key_prefix(Some("bad\t")).is_err());
+    }
+
+    #[test]
+    fn bool_env_parses_strictly() {
+        assert!(!parse_bool_env("UPSTREAM_BLOCK_PRIVATE_IPS", None, false).unwrap());
+        assert!(!parse_bool_env("UPSTREAM_BLOCK_PRIVATE_IPS", Some(""), false).unwrap());
+        assert!(parse_bool_env("UPSTREAM_BLOCK_PRIVATE_IPS", Some("true"), false).unwrap());
+        assert!(!parse_bool_env("UPSTREAM_BLOCK_PRIVATE_IPS", Some("false"), true).unwrap());
+        assert!(parse_bool_env("UPSTREAM_BLOCK_PRIVATE_IPS", Some("1"), false).is_err());
+    }
+
+    #[test]
+    fn upstream_signer_config_fails_closed() {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine;
+
+        let valid_seed = URL_SAFE_NO_PAD.encode([9u8; 32]);
+        assert!(parse_upstream_signer(None, None).unwrap().is_none());
+        assert!(parse_upstream_signer(None, Some("k-1")).is_err());
+        assert!(parse_upstream_signer(Some(""), None).is_err());
+        assert!(parse_upstream_signer(Some("   "), None).is_err());
+        assert!(parse_upstream_signer(Some("not-valid"), None).is_err());
+        assert!(parse_upstream_signer(Some(&valid_seed), Some("bad kid")).is_err());
+
+        let signer = parse_upstream_signer(Some(&valid_seed), Some("k-2026")).unwrap().unwrap();
+        assert_eq!(signer.kid(), "k-2026");
+
+        let default_signer = parse_upstream_signer(Some(&valid_seed), None).unwrap().unwrap();
+        assert_eq!(default_signer.kid().len(), 16);
     }
 }

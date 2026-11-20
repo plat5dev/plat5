@@ -60,7 +60,7 @@ Policies and buckets: [rate limits](config/rate-limits.md).
 | Check | Every policy on the route in one round trip, counted only if all pass |
 | Exceed | **429** `RATE_LIMITED`, `details.retry_after_seconds`, `Retry-After` |
 | Admitted headers | On limited routes (2xx and 429): `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, for the tightest policy |
-| Keys | Under a fixed `plat5:rl:` prefix |
+| Keys | Under `VALKEY_KEY_PREFIX` (default `plat5:rl:`) |
 | Failed-auth IP | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW` (default `60` / `60s`; `0` requests = off). What it counts: [access](../concepts/access.md#how-a-request-is-decided). **429** sets `Retry-After`; no `X-RateLimit-*` |
 
 ## Audit
@@ -122,7 +122,12 @@ Each `allowed` runs the gateway's own route match, admit (using the admit cache)
 
 ## TLS termination
 
-TLS terminates at the edge or load balancer, not the gateway. Services behind the gateway receive plaintext HTTP.
+TLS terminates at the edge or load balancer, not the gateway. Services behind the gateway receive plaintext HTTP (or HTTPS when their `url` is `https://…`).
+
+## Upstream security
+
+- **Request signing.** Set `UPSTREAM_SIGNING_KEY` (and optionally `UPSTREAM_SIGNING_KEY_ID`) to attach an Ed25519 `X-Plat5-Signature` header to every forwarded request ([`reference/headers.md`](headers.md#upstream-request-signing)), so services outside the private network can verify requests came from the gateway.
+- **Private-IP blocking.** Set `UPSTREAM_BLOCK_PRIVATE_IPS=true` to refuse upstream connections whose DNS-resolved address is loopback, private (RFC1918 / IPv6 ULA), link-local (`169.254.0.0/16` / `fe80::/10`), CGNAT (`100.64.0.0/10`), unspecified, or an IPv4-mapped IPv6 address pointing to any of those. Blocked requests return **502** `SERVICE_UNAVAILABLE`.
 
 ## CORS
 

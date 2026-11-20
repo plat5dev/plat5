@@ -1045,8 +1045,10 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "async-trait",
+ "base64",
  "blake3",
  "bytes",
+ "ed25519-dalek",
  "http",
  "jsonwebtoken",
  "moka",
@@ -1059,6 +1061,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tracing",
  "tracing-opentelemetry",

@@ -19,10 +19,14 @@ Internal ports (`INTERNAL_PORT`) take no token. Keep them inside the deployment'
 | `ADMIT_NEGATIVE_CACHE_TTL` | Duration. Default `10s` |
 | `RATE_LIMIT_ENABLED` | Default `true`. Set `false` to run without Valkey or rate limiting ([rate limits](gateway.md#rate-limits)) |
 | `VALKEY_URL` | Required unless `RATE_LIMIT_ENABLED=false` |
+| `VALKEY_KEY_PREFIX` | Prefix for Valkey rate-limit keys. Default `plat5:rl:` (non-empty visible ASCII, no whitespace) |
 | `RATE_LIMIT_AUTH_FAILURE_REQUESTS`, `RATE_LIMIT_AUTH_FAILURE_WINDOW` | Failed-auth IP limiter (active when `RATE_LIMIT_ENABLED=true`). Default `60` and `60s`; `0` requests = off |
 | `AUDIT_ENABLED` | Default `true`. Set `false` to run without writing audit events ([audit](../concepts/audit.md#on-and-off)) |
 | `AUDIT_URL` | Audit's internal base URL, e.g. `http://audit:3003`. Required unless `AUDIT_ENABLED=false` |
 | `TRUSTED_PROXIES` | Comma-separated IPs/CIDRs trusted for `X-Forwarded-For` and `X-Forwarded-Proto` ([client IP](gateway.md#client-ip)) |
+| `UPSTREAM_SIGNING_KEY` | Optional 32-byte Ed25519 seed encoded as base64url without padding. When set, every upstream request carries `X-Plat5-Signature` ([signing](headers.md#upstream-request-signing)); empty-but-set or invalid refuses boot |
+| `UPSTREAM_SIGNING_KEY_ID` | Optional `kid` (`1–64` of `[A-Za-z0-9._-]`) for `X-Plat5-Signature`. Defaults to the first 16 hex chars of `SHA-256(public_key)`. Refuses boot if set without `UPSTREAM_SIGNING_KEY` |
+| `UPSTREAM_BLOCK_PRIVATE_IPS` | Default `false`. Set `true` to refuse upstream connections whose resolved IP is loopback, RFC1918 private, link-local, CGNAT, ULA, or unspecified ([gateway](gateway.md#upstream-security)) |
 
 The replica id reported to the control plane is `service.instance.id` from `OTEL_RESOURCE_ATTRIBUTES`, falling back to `HOSTNAME`.
 

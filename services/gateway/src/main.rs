@@ -52,13 +52,23 @@ fn main() {
     }
 
     let limiter = if let Some(ref url) = cfg.valkey_url {
-        info!("rate limiting on");
-        rt.block_on(gateway::rate_limit::RateLimiter::connect(url))
-            .unwrap_or_else(|e| panic!("failed to connect to valkey: {e}"))
+        info!(key_prefix = %cfg.valkey_key_prefix, "rate limiting on");
+        rt.block_on(gateway::rate_limit::RateLimiter::connect(
+            url,
+            cfg.valkey_key_prefix.clone(),
+        ))
+        .unwrap_or_else(|e| panic!("failed to connect to valkey: {e}"))
     } else {
         tracing::warn!("RATE_LIMIT_ENABLED=false: rate limiting is off and Valkey is not used");
         gateway::rate_limit::RateLimiter::disabled()
     };
+
+    if let Some(ref signer) = cfg.upstream_signer {
+        info!(kid = %signer.kid(), "upstream request signing on");
+    }
+    if cfg.upstream_block_private_ips {
+        info!("upstream private IP blocking on");
+    }
 
     // Background audit writes run on this runtime, off the request path.
     let audit = gateway::audit::Audit::new(cfg.audit_url.clone(), rt.handle());

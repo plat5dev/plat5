@@ -1,5 +1,6 @@
 mod context;
 mod response;
+pub mod signing;
 mod upstream;
 
 use std::net::IpAddr;
@@ -47,6 +48,8 @@ pub struct Gateway {
     snapshot: Arc<ArcSwap<Snapshot>>,
     audit: Audit,
     trusted_proxies: TrustedProxies,
+    upstream_signer: Option<signing::UpstreamSigner>,
+    upstream_block_private_ips: bool,
 }
 
 impl Gateway {
@@ -72,6 +75,8 @@ impl Gateway {
             snapshot,
             audit,
             trusted_proxies: cfg.trusted_proxies.clone(),
+            upstream_signer: cfg.upstream_signer.clone(),
+            upstream_block_private_ips: cfg.upstream_block_private_ips,
         }
     }
 
@@ -230,8 +235,16 @@ impl Gateway {
             }
         }
 
-        if let Err(err) =
-            upstream::build_and_store_upstream_peer(session, ctx, route, forwarding).await
+        if let Err(err) = upstream::build_and_store_upstream_peer(
+            session,
+            ctx,
+            route,
+            forwarding,
+            request_id,
+            self.upstream_signer.as_ref(),
+            self.upstream_block_private_ips,
+        )
+        .await
         {
             let (status, error) = match err {
                 upstream::UpstreamError::Internal => (500, ApiError::internal_error()),

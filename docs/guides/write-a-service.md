@@ -16,7 +16,7 @@ Full header list: [`reference/headers.md`](../reference/headers.md). Services ne
 
 These three rules keep multi-tenant isolation intact:
 
-1. **Stay on the private network.** The rewritten path and `X-Plat5-*` headers are authentic only if nothing except your front doors (Plat5's gateway, an operator plane, etc.) can reach the service.
+1. **Stay on the private network — or verify `X-Plat5-Signature`.** The rewritten path and `X-Plat5-*` headers are authentic only if nothing except your front doors (Plat5's gateway, an operator plane, etc.) can reach the service, or the gateway signs requests with `UPSTREAM_SIGNING_KEY` and your service verifies `X-Plat5-Signature` ([`reference/headers.md`](../reference/headers.md#upstream-request-signing)).
 2. **Scope every query by the node id from the request.** Never look up, update, or delete a record by its record id alone — the record id comes from the client, while the node id comes from the front door.
    ```sql
    -- Wrong: serves another tenant's task to anyone with its id

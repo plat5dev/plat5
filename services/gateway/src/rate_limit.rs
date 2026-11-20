@@ -8,8 +8,8 @@ use redis::{Client, RedisError, Script};
 use std::sync::LazyLock;
 use tracing::{info, warn};
 
-/// Every counter key starts with this, so a Valkey shared with other software is safe.
-pub const KEY_PREFIX: &str = "plat5:rl:";
+/// Default counter key prefix (`VALKEY_KEY_PREFIX`), so a Valkey shared with other software is safe.
+pub const DEFAULT_KEY_PREFIX: &str = "plat5:rl:";
 
 /// Command and connect bound. A dead socket must surface as an error inside this window.
 const VALKEY_TIMEOUT: Duration = Duration::from_millis(500);
@@ -29,6 +29,7 @@ struct Inner {
     client: Client,
     conn: ArcSwap<ConnectionManager>,
     reconnecting: AtomicBool,
+    key_prefix: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,7 +39,7 @@ pub struct RateLimitInfo {
     pub reset_epoch: u64,
 }
 
-/// One fixed-window counter: `key` under [`KEY_PREFIX`].
+/// One fixed-window counter: `key` under the configured Valkey key prefix.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Bucket {
     pub key: String,
@@ -64,7 +65,7 @@ pub enum Verdict {
 pub struct Unavailable;
 
 impl RateLimiter {
-    pub async fn connect(url: &str) -> Result<Self, RedisError> {
+    pub async fn connect(url: &str, key_prefix: String) -> Result<Self, RedisError> {
         let client = Client::open(url)?;
         let conn = open_manager(client.clone()).await?;
         Ok(Self {
@@ -72,6 +73,7 @@ impl RateLimiter {
                 client,
                 conn: ArcSwap::from_pointee(conn),
                 reconnecting: AtomicBool::new(false),
+                key_prefix,
             })),
         })
     }
@@ -108,7 +110,7 @@ impl RateLimiter {
         let mut invocation = CHECK.prepare_invoke();
         for bucket in buckets {
             invocation
-                .key(format!("{KEY_PREFIX}{}", bucket.key))
+                .key(format!("{}{}", inner.key_prefix, bucket.key))
                 .arg(bucket.requests)
                 .arg(bucket.window_seconds);
         }
@@ -323,7 +325,8 @@ mod tests {
         });
 
         let started = Instant::now();
-        let result = RateLimiter::connect(&format!("redis://{addr}")).await;
+        let result =
+            RateLimiter::connect(&format!("redis://{addr}"), DEFAULT_KEY_PREFIX.to_string()).await;
         assert!(result.is_err());
         assert!(
             started.elapsed() < Duration::from_secs(2),
@@ -348,9 +351,10 @@ mod tests {
             }
         });
 
-        let limiter = RateLimiter::connect(&format!("redis://{addr}"))
-            .await
-            .expect("connect");
+        let limiter =
+            RateLimiter::connect(&format!("redis://{addr}"), DEFAULT_KEY_PREFIX.to_string())
+                .await
+                .expect("connect");
         limiter.ping().await.expect("ping");
         let verdict = limiter.check(&[bucket()]).await.expect("check");
         assert!(matches!(verdict, Verdict::Allowed(ref infos) if infos[0].remaining == 9));

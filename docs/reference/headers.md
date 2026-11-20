@@ -14,6 +14,7 @@ The same values the upstream placeholders use, so a service can read them either
 | `X-Plat5-Principal` | Kind and user routes | `person` or `service_account` (always `person` on a user route) |
 | `X-Request-ID` | Every route | Correlation id, gateway-generated; also on the response |
 | `traceparent` | Every route | W3C trace context |
+| `X-Plat5-Signature` | Every route (when enabled) | Ed25519 request signature; omitted unless `UPSTREAM_SIGNING_KEY` is set ([signing](#upstream-request-signing)) |
 
 `<Kind>` is the kind name in title case, with `_` becoming `-`: `project` → `Project`, `cost_center` → `Cost-Center`.
 
@@ -48,3 +49,35 @@ None. Internal calls carry no token: the deployment's network is the boundary ([
 ## Other front doors
 
 Base Plat5 defines no other headers. An operator plane documents its own, such as `X-Plat5-Operator-Id`, in its own repo.
+
+## Upstream request signing
+
+When `UPSTREAM_SIGNING_KEY` is set ([`reference/env.md`](env.md#gateway)), the gateway signs every forwarded request (including `public` routes) and attaches:
+
+```text
+X-Plat5-Signature: v1,kid=<kid>,t=<unix_seconds>,sig=<base64url_nopad>
+```
+
+- `v1` — signature version.
+- `kid` — key identifier (`1–64` of `[A-Za-z0-9._-]`), for zero-downtime key rotation.
+- `t` — UTC Unix timestamp in seconds (decimal integer). Verifiers should reject timestamps outside a short skew window (recommended: ±30s).
+- `sig` — 64-byte Ed25519 signature encoded as base64url without padding (`RFC 4648 §5`).
+
+The signed bytes are UTF-8, `\n`-delimited:
+
+```text
+v1\n
+<kid>\n
+<t>\n
+<METHOD>\n
+<path_and_query>\n
+<X-Request-ID>\n
+<sorted_plat5_headers>
+```
+
+- `<METHOD>` is uppercase (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`).
+- `<path_and_query>` is the rewritten upstream request target (with `?query` when present).
+- `<X-Request-ID>` is included so every signature is unique per request (supporting optional replay-cache deduplication) and the correlation id cannot be forged.
+- `<sorted_plat5_headers>` is every outgoing `X-Plat5-*` header except `X-Plat5-Signature`, formatted as `<lowercase-name>:<value>\n` and sorted lexicographically by byte order of `<lowercase-name>` (empty on `public` routes).
+
+Request bodies are not hashed: TLS protects the body in transit and skipping body hashing preserves streaming. Client-sent `X-Plat5-Signature` headers are stripped by the `X-Plat5-*` strip rule above.

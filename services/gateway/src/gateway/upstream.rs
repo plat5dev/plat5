@@ -1,3 +1,5 @@
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
 use http::header::HeaderName;
 use http::HeaderValue;
 use opentelemetry::global;
@@ -13,6 +15,7 @@ use crate::pipeline::{Caller, Forward};
 use crate::route_map::Route;
 
 use super::context::GatewayContext;
+use super::signing::{UpstreamSigner, SIGNATURE_HEADER};
 
 /// Consumed by the gateway; never leaked to services.
 pub fn strip_client_credentials(req: &mut RequestHeader) {
@@ -69,7 +72,24 @@ pub async fn build_and_store_upstream_peer(
     ctx: &mut GatewayContext,
     route: &Route,
     forward: Forward,
+    request_id: &str,
+    signer: Option<&UpstreamSigner>,
+    block_private_ips: bool,
 ) -> std::result::Result<(), UpstreamError> {
+    let query = session.req_header().uri.query().map(str::to_string);
+    let path_and_query = path_and_query(&forward.path, query.as_deref());
+    let signature = signer.map(|s| {
+        s.sign_now(
+            session.req_header().method.as_str(),
+            &path_and_query,
+            request_id,
+            forward
+                .headers
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str())),
+        )
+    });
+
     let req = session.req_header_mut();
     strip_client_credentials(req);
     strip_plat5_headers(req);
@@ -83,9 +103,17 @@ pub async fn build_and_store_upstream_peer(
             return Err(UpstreamError::Internal);
         }
     }
+    if let Some(sig) = signature {
+        if let Err(err) = req.insert_header(SIGNATURE_HEADER, sig) {
+            warn!(
+                error_type = ErrorKind::Internal.as_str(),
+                error_message = %err,
+                "failed to set upstream signature header"
+            );
+            return Err(UpstreamError::Internal);
+        }
+    }
 
-    let query = session.req_header().uri.query().map(str::to_string);
-    let path_and_query = path_and_query(&forward.path, query.as_deref());
     let new_uri = http::Uri::builder()
         .path_and_query(path_and_query.as_str())
         .build()
@@ -120,11 +148,11 @@ pub async fn build_and_store_upstream_peer(
         return Err(UpstreamError::BadUpstream);
     };
     let peer_addr = upstream.addr();
-    let Some(socket_addr) = resolve_peer(&peer_addr).await else {
+    let Some(socket_addr) = resolve_peer(&peer_addr, block_private_ips).await else {
         warn!(
             route = %route.path,
             upstream = %peer_addr,
-            "upstream address is not a resolvable host:port"
+            "upstream address is not a resolvable or allowed host:port"
         );
         return Err(UpstreamError::BadUpstream);
     };
@@ -226,10 +254,60 @@ pub fn peer_address(base_url: &str) -> String {
 }
 
 /// Resolve `host:port` without panicking and without blocking the executor
-/// (`lookup_host` runs the lookup on the blocking pool). `None` when malformed
-/// or unresolvable.
-async fn resolve_peer(addr: &str) -> Option<std::net::SocketAddr> {
-    tokio::net::lookup_host(addr).await.ok()?.next()
+/// (`lookup_host` runs the lookup on the blocking pool). `None` when malformed,
+/// unresolvable, or blocked by `UPSTREAM_BLOCK_PRIVATE_IPS`.
+async fn resolve_peer(addr: &str, block_private_ips: bool) -> Option<std::net::SocketAddr> {
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host(addr).await.ok()?.collect();
+    if addrs.is_empty() {
+        return None;
+    }
+    if block_private_ips {
+        for resolved in &addrs {
+            if is_blocked_ip(resolved.ip()) {
+                warn!(
+                    upstream = %addr,
+                    ip = %resolved.ip(),
+                    "blocked upstream connection to private or reserved IP"
+                );
+                return None;
+            }
+        }
+    }
+    addrs.into_iter().next()
+}
+
+/// True for loopback, RFC1918 private, link-local (including cloud metadata),
+/// CGNAT (`100.64.0.0/10`), IPv6 ULA (`fc00::/7`), unspecified, broadcast,
+/// multicast, or an IPv4-mapped IPv6 address pointing to any of those.
+pub fn is_blocked_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => is_blocked_ipv4(v4),
+        IpAddr::V6(v6) => is_blocked_ipv6(v6),
+    }
+}
+
+fn is_blocked_ipv4(ip: Ipv4Addr) -> bool {
+    let o = ip.octets();
+    ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || ip.is_broadcast()
+        || ip.is_multicast()
+        || o[0] == 0 // 0.0.0.0/8 ("this network")
+        || (o[0] == 100 && (o[1] & 0xc0) == 64) // 100.64.0.0/10 (CGNAT / shared address space)
+}
+
+fn is_blocked_ipv6(ip: Ipv6Addr) -> bool {
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        return is_blocked_ipv4(v4);
+    }
+    let s = ip.segments();
+    ip.is_loopback()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || (s[0] & 0xfe00) == 0xfc00 // fc00::/7 (ULA)
+        || (s[0] & 0xffc0) == 0xfe80 // fe80::/10 (link-local)
 }
 
 struct RequestHeaderInjector<'a> {
@@ -264,13 +342,65 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_peer_rejects_bad_addresses() {
-        assert!(resolve_peer("example.com").await.is_none());
-        assert!(resolve_peer("").await.is_none());
-        assert!(resolve_peer("host:notaport").await.is_none());
+        assert!(resolve_peer("example.com", false).await.is_none());
+        assert!(resolve_peer("", false).await.is_none());
+        assert!(resolve_peer("host:notaport", false).await.is_none());
         assert_eq!(
-            resolve_peer("127.0.0.1:3000").await.map(|a| a.port()),
+            resolve_peer("127.0.0.1:3000", false).await.map(|a| a.port()),
             Some(3000)
         );
+        assert!(resolve_peer("127.0.0.1:3000", true).await.is_none());
+        assert!(resolve_peer("169.254.169.254:80", true).await.is_none());
+        assert_eq!(
+            resolve_peer("93.184.216.34:443", true).await.map(|a| a.port()),
+            Some(443)
+        );
+    }
+
+    #[test]
+    fn blocked_ips_cover_private_metadata_cgnat_and_mapped_v6() {
+        for blocked in [
+            "127.0.0.1",
+            "127.255.255.254",
+            "10.0.0.1",
+            "172.16.0.1",
+            "172.31.255.254",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "100.127.255.254",
+            "0.0.0.0",
+            "0.1.2.3",
+            "224.0.0.1",
+            "255.255.255.255",
+            "::1",
+            "::",
+            "fc00::1",
+            "fd12:3456::1",
+            "fe80::1",
+            "ff02::1",
+            "::ffff:127.0.0.1",
+            "::ffff:169.254.169.254",
+            "::ffff:10.0.0.5",
+            "::ffff:100.64.1.1",
+        ] {
+            let ip: IpAddr = blocked.parse().unwrap();
+            assert!(is_blocked_ip(ip), "expected {blocked} to be blocked");
+        }
+
+        for allowed in [
+            "1.1.1.1",
+            "8.8.8.8",
+            "93.184.216.34",
+            "100.63.255.255",
+            "100.128.0.1",
+            "172.32.0.1",
+            "2606:4700:4700::1111",
+            "::ffff:93.184.216.34",
+        ] {
+            let ip: IpAddr = allowed.parse().unwrap();
+            assert!(!is_blocked_ip(ip), "expected {allowed} to be allowed");
+        }
     }
 
     #[test]
