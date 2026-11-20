@@ -83,7 +83,7 @@ For a kind `K` with parent `P`. `<p>` is `K`'s permission prefix (`K`'s name, or
 | `K` | `/service-accounts` | `GET` `<p>:bindings:read`; `POST` `<p>:bindings:write` | `/nodes/{K.id}/service-accounts` |
 | `K` | `/service-accounts/{service_account_id}` | `GET` `<p>:bindings:read`; `PATCH`, `DELETE` `<p>:bindings:write` | `/nodes/{K.id}/service-accounts/{service_account_id}` |
 | `K` | `/service-accounts/{service_account_id}/keys` | `GET`, `POST` `<p>:bindings:write` | `/nodes/{K.id}/service-accounts/{service_account_id}/keys` |
-| `K` | `/service-accounts/{service_account_id}/keys/{key_id}` | `DELETE` `<p>:bindings:write` | `/nodes/{K.id}/service-accounts/{service_account_id}/keys/{key_id}` |
+| `K` | `/service-accounts/{service_account_id}/keys/{key_id}` | `PATCH`, `DELETE` `<p>:bindings:write` | `/nodes/{K.id}/service-accounts/{service_account_id}/keys/{key_id}` |
 | `K` | `/invites` | `GET`, `POST`: on a root `<p>:bindings:write`, below one `guests:write` | `/nodes/{K.id}/invites` |
 | `K` | `/invites/{invite_id}` | `DELETE`, as `/invites` | `/nodes/{K.id}/invites/{invite_id}` |
 | `K` | `/roles` | `GET` `any_member` | `/nodes/{K.id}/roles` |
@@ -93,7 +93,7 @@ For a kind `K` with parent `P`. `<p>` is `K`'s permission prefix (`K`'s name, or
 | `user` | `/user` | `GET`, `PATCH`, `DELETE` | `/users/{user.id}` |
 | `user` | `/user/nodes` | `GET` | `/users/{user.id}/nodes` |
 | `user` | `/user/keys` | `GET`, `POST` | `/users/{user.id}/keys` |
-| `user` | `/user/keys/{key_id}` | `DELETE` | `/users/{user.id}/keys/{key_id}` |
+| `user` | `/user/keys/{key_id}` | `PATCH`, `DELETE` | `/users/{user.id}/keys/{key_id}` |
 | `user` | `/user/invites/redeem` | `POST` | `/users/{user.id}/invites/redeem` |
 
 Adding a member to a root by IdP subject (`POST /nodes/{root_id}/members`) isn't generated: it trusts the caller to name a person by raw IdP subject, which suits an operator plane or provisioning more than a customer. A deployment that wants it at the gateway adds the route to `/members`, with the permission it chooses. What each upstream does: [identity's API](../api/identity.md).

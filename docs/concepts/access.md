@@ -88,7 +88,7 @@ Any credential works on any route in a kind scope: a person's JWT or personal ke
 
 **JWT.** A signed JWT access token from the configured issuer, verified against its JWKS ([`reference/idp.md`](../reference/idp.md)). The gateway reads the issuer, the subject claim (`AUTH_SUBJECT_CLAIM`) and the first non-empty name claim of `AUTH_NAME_CLAIMS`, and sends them to admit as `idp`.
 
-**Key.** Sent to admit as `credential`, as presented.
+**Key.** Sent to admit as `credential`, as presented. A key may carry an IP allowlist (`allowed_cidrs`, [`reference/api/identity.md`](../reference/api/identity.md#key)); when set, the gateway refuses requests from any other [client IP](../reference/gateway.md#client-ip) with **401**, counted by the failed-auth IP limiter.
 
 ## How a request is decided
 
@@ -111,7 +111,7 @@ On a `public` route, authenticate and admit is skipped and there is no caller. O
 
 ## How fast changes reach the edge
 
-The gateway caches each admit ([`reference/gateway.md`](../reference/gateway.md#cache)). A removed binding, a role change, a deleted node, a suspended person or a revoked key reaches the edge within `ADMIT_CACHE_TTL`. A refusal is cached only for `ADMIT_NEGATIVE_CACHE_TTL`, so a fresh invitee or a new node works within seconds.
+The gateway caches each admit ([`reference/gateway.md`](../reference/gateway.md#cache)). A removed binding, a role change, a deleted node, a suspended person, a revoked key or a key IP allowlist change reaches the edge within `ADMIT_CACHE_TTL`. A refusal is cached only for `ADMIT_NEGATIVE_CACHE_TTL`, so a fresh invitee or a new node works within seconds.
 
 ## Outside a request
 

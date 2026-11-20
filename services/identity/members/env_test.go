@@ -188,7 +188,7 @@ func (e *env) bindingOf(memberID, nodeID string) string {
 
 func (e *env) key(owner KeyOwner) string {
 	e.t.Helper()
-	k, err := e.store.CreateKey(e.ctx, owner, "")
+	k, err := e.store.CreateKey(e.ctx, owner, "", nil)
 	if err != nil {
 		e.t.Fatal(err)
 	}

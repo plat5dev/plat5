@@ -166,7 +166,7 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         let mut allowed = Vec::with_capacity(checks.len());
         for check in checks {
             match self
-                .check(routes, &check.method, &check.path, credential)
+                .check(routes, &check.method, &check.path, credential, ip)
                 .await
             {
                 Ok(answer) => allowed.push(answer),
@@ -196,6 +196,7 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         method: &str,
         path: &str,
         credential: &AdmitCredential,
+        ip: &str,
     ) -> Result<bool, CheckRefused> {
         // Match. No route, or not this method: what a request would get as a 404.
         let Some(matched) = routes.find_route(path, method) else {
@@ -213,7 +214,7 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
             .get(&req)
             .await
             .map_err(|_| CheckRefused::Unavailable)?;
-        if !answer.valid {
+        if !answer.valid || !answer.allows_ip(ip) {
             return Err(CheckRefused::Credential);
         }
         // A service account on a user route: what a request would get as a 403.

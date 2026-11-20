@@ -45,18 +45,20 @@ type ChainNode struct {
 
 // Admitted is admit's answer. Empty strings are nulls on the wire.
 type Admitted struct {
-	Valid       bool
-	Principal   string
-	KeyID       string
-	Nodes       []ChainNode
-	MemberID    string
-	UserID      string
-	Permissions []string
+	Valid        bool
+	Principal    string
+	KeyID        string
+	AllowedCIDRs []string
+	Nodes        []ChainNode
+	MemberID     string
+	UserID       string
+	Permissions  []string
 }
 
 // admitPrincipal is the principal behind a credential.
 type admitPrincipal struct {
 	id, kind, userID, keyID string
+	allowedCIDRs            []string
 }
 
 // Admit turns a credential and a node chain into the member and permissions
@@ -81,7 +83,7 @@ func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (
 		op.OK("invalid")
 		return &Admitted{}, nil
 	}
-	out := &Admitted{Valid: true, Principal: p.kind, KeyID: p.keyID}
+	out := &Admitted{Valid: true, Principal: p.kind, KeyID: p.keyID, AllowedCIDRs: p.allowedCIDRs}
 	if userRoute {
 		// A person's user id. A service account has none: the gateway refuses
 		// it on a user route.
@@ -153,12 +155,12 @@ func (s *Store) keyPrincipalFor(ctx context.Context, key string) (*admitPrincipa
 	var revoked bool
 	var nodeStatus *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT p.id, p.kind, p.user_id, k.id, p.status, k.revoked_at IS NOT NULL, bn.status
+		SELECT p.id, p.kind, p.user_id, k.id, k.allowed_cidrs, p.status, k.revoked_at IS NOT NULL, bn.status
 		FROM api_keys k
 		JOIN principals p ON p.id = k.principal_id
 		LEFT JOIN nodes bn ON bn.id = p.node_id
 		WHERE k.key_hash = $1
-	`, secret.Hash(key)).Scan(&p.id, &p.kind, &userID, &p.keyID, &status, &revoked, &nodeStatus)
+	`, secret.Hash(key)).Scan(&p.id, &p.kind, &userID, &p.keyID, &p.allowedCIDRs, &status, &revoked, &nodeStatus)
 	if dbx.IsNoRows(err) {
 		return nil, nil
 	}

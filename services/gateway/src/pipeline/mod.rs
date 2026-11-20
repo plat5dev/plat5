@@ -265,7 +265,14 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
             .map_err(|_| Rejection::Unavailable)?;
         cred.key_id = answer.key_id.clone();
 
-        if !answer.valid {
+        if !answer.valid || !answer.allows_ip(ip) {
+            if answer.valid {
+                info!(
+                    key_id = answer.key_id.as_deref().unwrap_or(""),
+                    client_ip = ip,
+                    "api key rejected by ip allowlist"
+                );
+            }
             let rejection = unauthorized(
                 AuthError::InvalidCredential,
                 Some(auth_type),

@@ -82,7 +82,10 @@
               "path": "/service-accounts/{service_account_id}/keys"
             },
             {
-              "methods": { "DELETE": {"required_permissions": ["project:bindings:write"]} },
+              "methods": {
+                "DELETE": {"required_permissions": ["project:bindings:write"]},
+                "PATCH": {"required_permissions": ["project:bindings:write"]}
+              },
               "path": "/service-accounts/{service_account_id}/keys/{key_id}"
             },
             { "methods": {"GET": {"required_permissions": "any_member"}}, "path": "/roles" }
@@ -157,7 +160,10 @@
               "path": "/service-accounts/{service_account_id}/keys"
             },
             {
-              "methods": { "DELETE": {"required_permissions": ["organization:bindings:write"]} },
+              "methods": {
+                "DELETE": {"required_permissions": ["organization:bindings:write"]},
+                "PATCH": {"required_permissions": ["organization:bindings:write"]}
+              },
               "path": "/service-accounts/{service_account_id}/keys/{key_id}"
             },
             {
@@ -250,7 +256,7 @@
             { "methods": ["GET"], "path": "/user/nodes", "upstream": "/users/{user.id}/nodes" },
             { "methods": ["GET", "POST"], "path": "/user/keys", "upstream": "/users/{user.id}/keys" },
             {
-              "methods": ["DELETE"],
+              "methods": ["PATCH", "DELETE"],
               "path": "/user/keys/{key_id}",
               "upstream": "/users/{user.id}/keys/{key_id}"
             },

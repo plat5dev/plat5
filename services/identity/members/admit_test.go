@@ -125,7 +125,7 @@ func TestAdmit(t *testing.T) {
 		t.Fatal(err)
 	}
 	aliceKey := e.key(KeyOwner{UserID: alice})
-	revoked, err := e.store.CreateKey(e.ctx, KeyOwner{UserID: alice}, "revoked")
+	revoked, err := e.store.CreateKey(e.ctx, KeyOwner{UserID: alice}, "revoked", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -63,7 +63,8 @@ People, by user id. Not behind any generated public route except the caller's ow
 | `DELETE` | `/users/{user_id}` | [Delete the account](../../concepts/lifecycle.md#deleting-an-account). **204**; already deleted: **204** |
 | `PATCH` | `/users/{user_id}/status` | `{ status: active \| suspended }` |
 | `GET` | `/users/{user_id}/nodes` | `?kind=` across every tree (omitted: every kind), [filtered](../../concepts/access.md#lists) to what the person can read. `?status=deleted` for deleted ones. Nodes |
-| `GET`, `POST` | `/users/{user_id}/keys` | The person's personal [keys](#key). `POST { name? }` returns the key once, **201** |
+| `GET`, `POST` | `/users/{user_id}/keys` | The person's personal [keys](#key). `POST { name?, allowed_cidrs? }` returns the key once, **201** |
+| `PATCH` | `/users/{user_id}/keys/{key_id}` | `{ name?, allowed_cidrs? }`, at least one required. `allowed_cidrs: []` or `null` clears the allowlist. Returns the key |
 | `DELETE` | `/users/{user_id}/keys/{key_id}` | Revoke. **204**, again **204** |
 | `POST` | `/users/{user_id}/invites/redeem` | `{ token }`. **200** `{ member_id, node }`: the person's member in the invite's tree, and the [node](#node) it was for |
 
@@ -74,7 +75,8 @@ People, by user id. Not behind any generated public route except the caller's ow
 | `GET` | `/nodes/{node_id}/service-accounts` | [Service accounts](#service-account) that belong to this node |
 | `POST` | `/nodes/{node_id}/service-accounts` | `{ name, role }`, both required. One transaction: principal, member in the node's tree, binding at the node, `member.created`. Returns the service account, **201** |
 | `GET`, `PATCH`, `DELETE` | `/nodes/{node_id}/service-accounts/{service_account_id}` | Addressed by its member id. **404** if it doesn't belong to this node. `PATCH { name }`. Delete, **204**: the principal and its keys are deleted and the member removed with `member.removed`; a lookup shows the removed member with no name. Already deleted: **204** |
-| `GET`, `POST` | `/nodes/{node_id}/service-accounts/{service_account_id}/keys` | [Keys](#key), revoked ones included. `POST { name? }` returns the key once, **201** |
+| `GET`, `POST` | `/nodes/{node_id}/service-accounts/{service_account_id}/keys` | [Keys](#key), revoked ones included. `POST { name?, allowed_cidrs? }` returns the key once, **201** |
+| `PATCH` | `/nodes/{node_id}/service-accounts/{service_account_id}/keys/{key_id}` | `{ name?, allowed_cidrs? }`, at least one required. `allowed_cidrs: []` or `null` clears the allowlist. Returns the key |
 | `DELETE` | `/nodes/{node_id}/service-accounts/{service_account_id}/keys/{key_id}` | Revoke. **204**, again **204** |
 
 A service account is a principal like a person: its bindings can sit anywhere in its own tree (`POST /nodes/{node_id}/bindings` with its member id), never outside it.
@@ -140,7 +142,7 @@ Lists are [paginated](../lists.md) under the plural key. Times are RFC 3339, UTC
 
 #### Key
 
-`{ id, name, key_prefix, created_at, revoked_at }`. On create, plus `key`, once.
+`{ id, name, key_prefix, allowed_cidrs, created_at, revoked_at }`. `allowed_cidrs` is the canonicalized IP/CIDR allowlist (`[]` when unrestricted). On create, plus `key`, once.
 
 #### Invite
 
@@ -151,6 +153,7 @@ Lists are [paginated](../lists.md) under the plural key. Times are RFC 3339, UTC
 | Field | Rule |
 |-------|------|
 | Node `display_name`, a person's `name`, service account `name`, key `name` | 1 to 128 characters after trimming. A key's `name` defaults to `Unnamed key`; a person's is `null` until it's known |
+| Key `allowed_cidrs` | Up to 50 IPv4/IPv6 addresses or CIDR blocks, canonicalized (bare IPs become `/32` or `/128`, host bits masked) and deduplicated. Empty or omitted: unrestricted |
 | Invite `expires_in` | From `60s` to `30d`. Default `7d` |
 | Invite `max_uses` | At least 1, or `null` for unlimited. Omitted → 1 |
 
@@ -172,7 +175,8 @@ All responses use the [Plat5 error envelope](../errors.md).
 | Restore with a deleted parent; create under a deleted node | **409** `PARENT_DELETED` (`{ parent_id }`) |
 | Restore past `deletion_grace` | **409** `GRACE_EXPIRED` |
 | Release the slug of a node that isn't a purged root | **409** `SLUG_NOT_RELEASABLE` |
-| Any write to a purged node or to what hangs off it ([lifecycle](../../concepts/lifecycle.md#deleting-restoring-and-purging)): `PATCH`, a child create, adding or changing a binding, member or service account, creating or revoking a service account's key or an invite. Not a slug release, and not a delete that finds nothing left (**204**) | **409** `NODE_PURGED` |
+| Any write to a purged node or to what hangs off it ([lifecycle](../../concepts/lifecycle.md#deleting-restoring-and-purging)): `PATCH`, a child create, adding or changing a binding, member or service account, creating, changing or revoking a service account's key or an invite. Not a slug release, and not a delete that finds nothing left (**204**) | **409** `NODE_PURGED` |
+| Changing a revoked key (`PATCH`) | **409** `KEY_REVOKED` |
 | Redeem of an invite that's redeemed, revoked or expired, or whose node is deleted | **409** `INVITE_NOT_REDEEMABLE` (`{ reason }`) |
 | Postgres unavailable | **503** `SERVICE_UNAVAILABLE` |
 

@@ -20,6 +20,7 @@ POST /internal/admit
   "valid": true,
   "principal": "service_account",
   "key_id": "01jbz…",
+  "allowed_cidrs": ["203.0.113.0/24"],
   "nodes": [ { "kind": "organization", "id": "01jbw…" }, { "kind": "project", "id": "01jbx…" } ],
   "member_id": "01jby…",
   "user_id": null,
@@ -34,7 +35,7 @@ POST /internal/admit
 
 An empty `chain` is a user route: `nodes`, `member_id` and `permissions` are empty. For a person, `user_id` is the person's. A valid service account answers `valid: true` and `principal: "service_account"` with `user_id: null`: it has no user, and the gateway refuses it there. On a tree route `user_id` is `null`.
 
-Every field is in every answer, so the gateway never sees a missing one. With `valid: false`, `principal`, `key_id`, `member_id` and `user_id` are `null`, and `nodes` and `permissions` are empty. A missing node and a caller outside the tree both answer `member_id: null` with empty `nodes` and `permissions`. `key_id` is the key's id for a key, `null` for a JWT. `permissions` is sorted, with `*` as the role wrote it.
+Every field is in every answer, so the gateway never sees a missing one. With `valid: false`, `principal`, `key_id`, `member_id` and `user_id` are `null`, and `allowed_cidrs`, `nodes` and `permissions` are empty. A missing node and a caller outside the tree both answer `member_id: null` with empty `nodes` and `permissions`. `key_id` is the key's id for a key, `null` for a JWT. `allowed_cidrs` is the key's IP allowlist (`[]` for a JWT or an unrestricted key). `permissions` is sorted, with `*` as the role wrote it.
 
 Identity resolves `chain` by kind name only and doesn't check it against its kinds: a gateway a revision ahead or behind gets `member_id: null`, not an error. A body identity can't read is **422**: neither or both of `credential` and `idp`, or an `idp` without `issuer` or `subject`.
 
@@ -42,7 +43,7 @@ Identity resolves `chain` by kind name only and doesn't check it against its kin
 
 | Admit result | Status |
 |--------------|--------|
-| `valid: false` | **401** |
+| `valid: false`, or `allowed_cidrs` non-empty and doesn't contain the [client IP](../gateway.md#client-ip) | **401** |
 | `principal: "service_account"` on a user route | **403** |
 | `member_id: null` on a kind route | **403** |
 | `permissions` share none with the route, and the route isn't `any_member` | **403** |

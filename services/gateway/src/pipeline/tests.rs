@@ -1161,6 +1161,57 @@ async fn a_service_account_is_false_on_user_checks() {
 }
 
 #[tokio::test]
+async fn api_key_ip_allowlist_enforced_in_gateway_with_shared_cache() {
+    let snapshot = catalog();
+    let read = project_read(&snapshot);
+    let mut ans = answer_for(&read.route, &["project:read"]);
+    ans.allowed_cidrs = vec!["203.0.113.0/24".into()];
+    let h = harness(Ok(ans));
+
+    // Allowed IP passes.
+    let mut cred = RequestCredential::default();
+    assert!(h
+        .pipeline
+        .decide(&read, "203.0.113.7", Ok(key()), &mut cred)
+        .await
+        .is_ok());
+    assert_eq!(h.admit.calls.load(Ordering::SeqCst), 1);
+
+    // Disallowed IP gets 401 and counts failed-auth limiter, reusing the cached admit.
+    let mut cred = RequestCredential::default();
+    let err = h
+        .pipeline
+        .decide(&read, "198.51.100.9", Ok(key()), &mut cred)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.rejection,
+        Rejection::Unauthorized(AuthError::InvalidCredential)
+    );
+    assert_eq!(h.counter.count("@auth-failure:198.51.100.9"), 1);
+    assert_eq!(h.admit.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn api_key_ip_allowlist_refuses_route_checks_with_401() {
+    let snapshot = catalog();
+    let mut ans = org(&["*"]);
+    ans.allowed_cidrs = vec!["10.0.0.0/8".into()];
+    let identity = ByChain::with(&[("acme", ans)]);
+    let (p, counter) = checks_pipeline(identity, AUTH_FAILURE);
+    let err = run_checks(
+        &p,
+        &snapshot,
+        &key_credential(),
+        &[("GET", "/orgs/acme")],
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err, Rejection::Unauthorized(AuthError::InvalidCredential));
+    assert_eq!(counter.count(IP_BUCKET), 1);
+}
+
+#[tokio::test]
 async fn route_checks_answer_denied_and_missing_false_uncounted() {
     let snapshot = catalog();
     let identity = ByChain::with(&[("acme/web", project(&["project:write"]))]);

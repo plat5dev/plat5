@@ -1,6 +1,7 @@
 //! Identity's admit (docs/reference/api/internal.md#admit) and the gateway's cache
 //! of its answers (docs/reference/gateway.md#cache).
 
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -10,6 +11,7 @@ use std::future::Future;
 use tracing::{info, warn};
 
 use crate::auth::call::AuthCallTimer;
+use crate::client_ip::Cidr;
 use crate::internal_http::InternalHttpClient;
 use crate::metrics;
 
@@ -60,6 +62,7 @@ pub struct AdmitAnswer {
     pub principal: Option<String>,
     #[serde(deserialize_with = "Option::deserialize")]
     pub key_id: Option<String>,
+    pub allowed_cidrs: Vec<String>,
     pub nodes: Vec<NodeRef>,
     #[serde(deserialize_with = "Option::deserialize")]
     pub member_id: Option<String>,
@@ -72,6 +75,20 @@ impl AdmitAnswer {
     /// A refusal: an invalid credential, or no member on a tree route.
     pub fn refused(&self, req: &AdmitRequest) -> bool {
         !self.valid || (!req.chain.is_empty() && self.member_id.is_none())
+    }
+
+    /// Whether the client IP is permitted by the key's IP allowlist.
+    /// An empty allowlist permits any IP.
+    pub fn allows_ip(&self, ip: &str) -> bool {
+        if self.allowed_cidrs.is_empty() {
+            return true;
+        }
+        let Ok(addr) = ip.parse::<IpAddr>() else {
+            return false;
+        };
+        self.allowed_cidrs
+            .iter()
+            .any(|raw| Cidr::parse(raw).is_ok_and(|c| c.contains(addr)))
     }
 }
 
@@ -153,6 +170,10 @@ impl<A: Admit> AdmitCache<A> {
         self.entries
             .try_get_with(key, async {
                 let answer = self.admit.admit(req).await?;
+                if answer.valid && answer.allowed_cidrs.iter().any(|c| Cidr::parse(c).is_err()) {
+                    warn!(error_message = "allowed_cidrs", "admit answered with an invalid CIDR");
+                    return Err(AdmitUnavailable("allowed_cidrs".to_string()));
+                }
                 if !answer.refused(req) {
                     check_admitted(&answer, req).map_err(|e| {
                         warn!(error_message = e, "admit answered without a field it needs");
@@ -310,6 +331,7 @@ pub mod tests {
             valid: true,
             principal: Some("person".into()),
             key_id: Some(KEY_ID.into()),
+            allowed_cidrs: vec![],
             nodes: nodes
                 .iter()
                 .map(|(kind, id)| NodeRef {
@@ -329,6 +351,7 @@ pub mod tests {
             valid: true,
             principal: Some("person".into()),
             key_id: None,
+            allowed_cidrs: vec![],
             nodes: vec![],
             member_id: None,
             user_id: Some(USER.into()),
@@ -342,6 +365,7 @@ pub mod tests {
             valid: true,
             principal: Some("service_account".into()),
             key_id: Some(KEY_ID.into()),
+            allowed_cidrs: vec![],
             nodes: vec![],
             member_id: None,
             user_id: None,
@@ -355,6 +379,7 @@ pub mod tests {
             valid: true,
             principal: Some("person".into()),
             key_id: Some(KEY_ID.into()),
+            allowed_cidrs: vec![],
             nodes: vec![],
             member_id: None,
             user_id: None,
@@ -367,6 +392,7 @@ pub mod tests {
             valid: false,
             principal: None,
             key_id: None,
+            allowed_cidrs: vec![],
             nodes: vec![],
             member_id: None,
             user_id: None,
@@ -433,7 +459,7 @@ pub mod tests {
     #[test]
     fn every_answer_field_is_required() {
         let full = serde_json::json!({
-            "valid": true, "principal": "person", "key_id": null, "nodes": [],
+            "valid": true, "principal": "person", "key_id": null, "allowed_cidrs": [], "nodes": [],
             "member_id": null, "user_id": "01u", "permissions": []
         });
         assert!(serde_json::from_value::<AdmitAnswer>(full.clone()).is_ok());
@@ -441,6 +467,7 @@ pub mod tests {
             "valid",
             "principal",
             "key_id",
+            "allowed_cidrs",
             "nodes",
             "member_id",
             "user_id",
@@ -588,6 +615,30 @@ pub mod tests {
         // A service account has no user: its answer is whole.
         let (c, _) = cache(Ok(service_account_user()));
         assert!(c.get(&user_req).await.is_ok());
+
+        // A valid answer with an unparseable CIDR is rejected (503) and not cached.
+        let (c, fake) = cache(Ok(AdmitAnswer {
+            allowed_cidrs: vec!["not-a-cidr".into()],
+            ..admitted(&[("organization", "01o"), ("project", "01p")], &[])
+        }));
+        assert!(c.get(&req).await.is_err());
+        assert!(c.get(&req).await.is_err());
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn allows_ip_matches_cidrs_and_fails_closed() {
+        let mut ans = admitted(&[("organization", "01o")], &[]);
+        assert!(ans.allows_ip("203.0.113.7"));
+        assert!(ans.allows_ip("not-an-ip"));
+
+        ans.allowed_cidrs = vec!["203.0.113.0/24".into(), "2001:db8::1/128".into()];
+        assert!(ans.allows_ip("203.0.113.7"));
+        assert!(ans.allows_ip("::ffff:203.0.113.99"));
+        assert!(ans.allows_ip("2001:db8::1"));
+        assert!(!ans.allows_ip("198.51.100.1"));
+        assert!(!ans.allows_ip("2001:db8::2"));
+        assert!(!ans.allows_ip("not-an-ip"));
     }
 
     #[tokio::test]

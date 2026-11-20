@@ -10,13 +10,13 @@ use std::net::IpAddr;
 
 /// An address or a CIDR block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Cidr {
+pub(crate) struct Cidr {
     addr: IpAddr,
     prefix: u8,
 }
 
 impl Cidr {
-    fn parse(raw: &str) -> Result<Self, String> {
+    pub(crate) fn parse(raw: &str) -> Result<Self, String> {
         let (addr, prefix) = match raw.split_once('/') {
             Some((addr, prefix)) => (addr, Some(prefix)),
             None => (raw, None),
@@ -37,7 +37,7 @@ impl Cidr {
         Ok(Self { addr, prefix })
     }
 
-    fn contains(&self, ip: IpAddr) -> bool {
+    pub(crate) fn contains(&self, ip: IpAddr) -> bool {
         match (self.addr, ip.to_canonical()) {
             (IpAddr::V4(net), IpAddr::V4(ip)) => {
                 let mask = u32::MAX

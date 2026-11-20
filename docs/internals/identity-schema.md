@@ -76,6 +76,7 @@ CREATE TABLE api_keys (
     name          TEXT NOT NULL,
     key_prefix    TEXT NOT NULL,
     key_hash      TEXT NOT NULL UNIQUE,
+    allowed_cidrs TEXT[] NOT NULL DEFAULT '{}',
     revoked_at    TIMESTAMPTZ,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );

@@ -2,6 +2,7 @@ package members
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"github.com/gofiber/fiber/v3"
@@ -61,6 +62,7 @@ func (h *Handler) Mount(r fiber.Router) {
 	r.Get("/users/:user_id/nodes", h.UserNodes)
 	r.Get("/users/:user_id/keys", h.ListKeys)
 	r.Post("/users/:user_id/keys", h.CreateKey)
+	r.Patch("/users/:user_id/keys/:key_id", h.PatchKey)
 	r.Delete("/users/:user_id/keys/:key_id", h.RevokeKey)
 	r.Post("/users/:user_id/invites/redeem", h.Redeem)
 
@@ -71,6 +73,7 @@ func (h *Handler) Mount(r fiber.Router) {
 	r.Delete("/nodes/:node_id/service-accounts/:service_account_id", h.DeleteServiceAccount)
 	r.Get("/nodes/:node_id/service-accounts/:service_account_id/keys", h.ListKeys)
 	r.Post("/nodes/:node_id/service-accounts/:service_account_id/keys", h.CreateKey)
+	r.Patch("/nodes/:node_id/service-accounts/:service_account_id/keys/:key_id", h.PatchKey)
 	r.Delete("/nodes/:node_id/service-accounts/:service_account_id/keys/:key_id", h.RevokeKey)
 
 	r.Get("/nodes/:node_id/invites", h.ListInvites)
@@ -122,12 +125,13 @@ type ServiceAccountResponse struct {
 }
 
 type KeyResponse struct {
-	ID        string  `json:"id"`
-	Name      string  `json:"name"`
-	KeyPrefix string  `json:"key_prefix"`
-	CreatedAt string  `json:"created_at"`
-	RevokedAt *string `json:"revoked_at"`
-	Key       string  `json:"key,omitempty"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	KeyPrefix    string   `json:"key_prefix"`
+	AllowedCIDRs []string `json:"allowed_cidrs"`
+	CreatedAt    string   `json:"created_at"`
+	RevokedAt    *string  `json:"revoked_at"`
+	Key          string   `json:"key,omitempty"`
 }
 
 type InviteResponse struct {
@@ -188,8 +192,12 @@ func serviceAccountResponse(sa *ServiceAccount) ServiceAccountResponse {
 }
 
 func keyResponse(k *Key) KeyResponse {
-	return KeyResponse{ID: k.ID, Name: k.Name, KeyPrefix: k.KeyPrefix, CreatedAt: httpx.FormatTime(k.CreatedAt),
-		RevokedAt: httpx.FormatTimePtr(k.RevokedAt), Key: k.Secret}
+	cidrs := k.AllowedCIDRs
+	if cidrs == nil {
+		cidrs = []string{}
+	}
+	return KeyResponse{ID: k.ID, Name: k.Name, KeyPrefix: k.KeyPrefix, AllowedCIDRs: cidrs,
+		CreatedAt: httpx.FormatTime(k.CreatedAt), RevokedAt: httpx.FormatTimePtr(k.RevokedAt), Key: k.Secret}
 }
 
 func inviteResponse(inv *Invite) InviteResponse {
@@ -681,18 +689,61 @@ func (h *Handler) ListKeys(c fiber.Ctx) error {
 
 func (h *Handler) CreateKey(c fiber.Ctx) error {
 	var req struct {
-		Name string `json:"name"`
+		Name         string   `json:"name"`
+		AllowedCIDRs []string `json:"allowed_cidrs"`
 	}
 	if err := httpx.OptionalBody(c, &req); err != nil {
 		return err
 	}
-	k, err := h.store.CreateKey(c.Context(), keyOwner(c), req.Name)
+	k, err := h.store.CreateKey(c.Context(), keyOwner(c), req.Name, req.AllowedCIDRs)
 	if err != nil {
 		return mapErr(c, err, "failed to create key", "key", "")
 	}
 	auditx.Set(c, auditx.Details{"key_id": k.ID, "key_prefix": k.KeyPrefix})
 	auditx.SetCreated(c, k.ID)
 	return c.Status(fiber.StatusCreated).JSON(keyResponse(k))
+}
+
+func (h *Handler) PatchKey(c fiber.Ctx) error {
+	var req struct {
+		Name         json.RawMessage `json:"name"`
+		AllowedCIDRs json.RawMessage `json:"allowed_cidrs"`
+	}
+	if err := httpx.Body(c, &req); err != nil {
+		return err
+	}
+	if req.Name == nil && req.AllowedCIDRs == nil {
+		return errors.FieldError("", "Nothing to update.")
+	}
+	var patch KeyPatch
+	if req.Name != nil {
+		var name string
+		if strings.TrimSpace(string(req.Name)) == "null" || json.Unmarshal(req.Name, &name) != nil {
+			return errors.FieldError("name", errors.FallbackValidation)
+		}
+		patch.Name = &name
+	}
+	if req.AllowedCIDRs != nil {
+		var cidrs []string
+		if strings.TrimSpace(string(req.AllowedCIDRs)) == "null" {
+			cidrs = []string{}
+		} else if err := json.Unmarshal(req.AllowedCIDRs, &cidrs); err != nil {
+			return errors.FieldError("allowed_cidrs", errors.FallbackValidation)
+		}
+		patch.AllowedCIDRs = &cidrs
+	}
+	keyID := httpx.PathParam(c, "key_id")
+	before, after, err := h.store.UpdateKey(c.Context(), keyOwner(c), keyID, patch)
+	if err != nil {
+		return mapErr(c, err, "failed to update key", "key", keyID)
+	}
+	d := auditx.Details{}
+	d.Changed("name", before.Name, after.Name)
+	if !slices.Equal(before.AllowedCIDRs, after.AllowedCIDRs) {
+		d["allowed_cidrs"] = auditx.Change{From: before.AllowedCIDRs, To: after.AllowedCIDRs}
+	}
+	auditx.Set(c, d)
+	return c.JSON(keyResponse(after))
 }
 
 func (h *Handler) RevokeKey(c fiber.Ctx) error {

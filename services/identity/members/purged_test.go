@@ -32,7 +32,7 @@ func newPurgedTree(e *env) purgedTree {
 	tr.bob = e.join(tr.org, "bob", "member")
 	tr.binding = e.bind(tr.project, tr.bob, "developer").ID
 	tr.sa, _ = e.serviceAccount(tr.project, "viewer")
-	k, err := e.store.CreateKey(e.ctx, KeyOwner{NodeID: tr.project.ID, MemberID: tr.sa}, "ci")
+	k, err := e.store.CreateKey(e.ctx, KeyOwner{NodeID: tr.project.ID, MemberID: tr.sa}, "ci", nil)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -58,6 +58,7 @@ func (tr purgedTree) writes() []purgedWrite {
 		{"create a service account", "POST", p + "/service-accounts", `{"name": "deploy", "role": "viewer"}`},
 		{"rename a service account", "PATCH", sa, `{"name": "renamed"}`},
 		{"create a key", "POST", sa + "/keys", `{"name": "another"}`},
+		{"update a key", "PATCH", sa + "/keys/" + tr.keyID, `{"name": "renamed"}`},
 		{"revoke a key", "DELETE", sa + "/keys/" + tr.keyID, ""},
 		{"create an invite", "POST", p + "/invites", `{"role": "viewer"}`},
 		{"revoke an invite", "DELETE", p + "/invites/" + tr.invite, ""},

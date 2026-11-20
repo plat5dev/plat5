@@ -20,7 +20,7 @@ Every credential is `Authorization: Bearer`. Three dot-separated segments is a J
 ```
 POST {IDENTITY_INTERNAL_URL}/internal/admit
 { "credential" | "idp", "chain": [{ "kind", "ref" }], "allow_deleted" }
-→ { "valid", "principal", "key_id", "nodes": [{ "kind", "id" }], "member_id", "user_id", "permissions" }
+→ { "valid", "principal", "key_id", "allowed_cidrs", "nodes": [{ "kind", "id" }], "member_id", "user_id", "permissions" }
 ```
 
 On identity's `INTERNAL_PORT`. An empty chain is a user route. Contract: [`reference/api/internal.md`](api/internal.md#admit).

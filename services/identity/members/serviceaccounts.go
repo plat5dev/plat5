@@ -2,6 +2,8 @@ package members
 
 import (
 	"context"
+	"fmt"
+	"net/netip"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -243,25 +245,80 @@ func (s *Store) DeleteServiceAccount(ctx context.Context, nodeID, memberID strin
 
 // --- keys ---
 
+// MaxAllowedCIDRs is the most entries an API key's IP allowlist may hold.
+const MaxAllowedCIDRs = 50
+
 // Key is an API key, on a person or a service account.
 type Key struct {
-	ID        string
-	Name      string
-	KeyPrefix string
-	CreatedAt time.Time
-	RevokedAt *time.Time
+	ID           string
+	Name         string
+	KeyPrefix    string
+	AllowedCIDRs []string
+	CreatedAt    time.Time
+	RevokedAt    *time.Time
 	// Secret is set once, on create.
 	Secret string
 }
 
-const keyColumns = `id, name, key_prefix, created_at, revoked_at`
+// KeyPatch is what PATCH .../keys/{key_id} changes. A nil field is left alone.
+type KeyPatch struct {
+	Name         *string
+	AllowedCIDRs *[]string
+}
+
+const keyColumns = `id, name, key_prefix, allowed_cidrs, created_at, revoked_at`
 
 func scanKey(row dbx.Scannable) (*Key, error) {
 	var k Key
-	if err := row.Scan(&k.ID, &k.Name, &k.KeyPrefix, &k.CreatedAt, &k.RevokedAt); err != nil {
+	if err := row.Scan(&k.ID, &k.Name, &k.KeyPrefix, &k.AllowedCIDRs, &k.CreatedAt, &k.RevokedAt); err != nil {
 		return nil, err
 	}
+	if k.AllowedCIDRs == nil {
+		k.AllowedCIDRs = []string{}
+	}
 	return &k, nil
+}
+
+// normalizeAllowedCIDRs parses, canonicalizes, and deduplicates an IP/CIDR
+// allowlist. An empty list means unrestricted.
+func normalizeAllowedCIDRs(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return []string{}, nil
+	}
+	if len(raw) > MaxAllowedCIDRs {
+		return nil, errors.FieldError("allowed_cidrs", fmt.Sprintf("At most %d entries are allowed.", MaxAllowedCIDRs))
+	}
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for i, entry := range raw {
+		s := strings.TrimSpace(entry)
+		var prefix netip.Prefix
+		if strings.Contains(s, "/") {
+			p, err := netip.ParsePrefix(s)
+			if err != nil || p.Addr().Zone() != "" {
+				return nil, errors.FieldError(fmt.Sprintf("allowed_cidrs[%d]", i), "Must be a valid IP address or CIDR block.")
+			}
+			if p.Addr().Is4In6() && p.Bits() >= 96 {
+				prefix = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96).Masked()
+			} else {
+				prefix = p.Masked()
+			}
+		} else {
+			addr, err := netip.ParseAddr(s)
+			if err != nil || addr.Zone() != "" {
+				return nil, errors.FieldError(fmt.Sprintf("allowed_cidrs[%d]", i), "Must be a valid IP address or CIDR block.")
+			}
+			addr = addr.Unmap()
+			prefix = netip.PrefixFrom(addr, addr.BitLen())
+		}
+		canon := prefix.String()
+		if _, dup := seen[canon]; dup {
+			continue
+		}
+		seen[canon] = struct{}{}
+		out = append(out, canon)
+	}
+	return out, nil
 }
 
 // KeyOwner is whose keys a request addresses: a service account that belongs to a
@@ -321,7 +378,7 @@ func (s *Store) ListKeys(ctx context.Context, owner KeyOwner, limit int, startin
 
 // CreateKey mints a key for the owner. The secret is returned once and stored
 // only as its hash.
-func (s *Store) CreateKey(ctx context.Context, owner KeyOwner, name string) (*Key, error) {
+func (s *Store) CreateKey(ctx context.Context, owner KeyOwner, name string, allowedCIDRs []string) (*Key, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_key", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
@@ -331,6 +388,10 @@ func (s *Store) CreateKey(ctx context.Context, owner KeyOwner, name string) (*Ke
 	}
 	if utf8.RuneCountInString(name) > secret.MaxNameLen {
 		return nil, op.Expected("invalid", errors.FieldError("name", "Name is too long."))
+	}
+	cidrs, err := normalizeAllowedCIDRs(allowedCIDRs)
+	if err != nil {
+		return nil, op.Expected("invalid", err)
 	}
 	w, err := s.begin(ctx)
 	if err != nil {
@@ -347,9 +408,9 @@ func (s *Store) CreateKey(ctx context.Context, owner KeyOwner, name string) (*Ke
 		return nil, op.Fail(err)
 	}
 	k, err := scanKey(w.tx.QueryRow(ctx, `
-		INSERT INTO api_keys (id, principal_id, name, key_prefix, key_hash, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING `+keyColumns, id.New(), principalID, name, secret.DisplayPrefix(key, prefix), secret.Hash(key), s.now().UTC()))
+		INSERT INTO api_keys (id, principal_id, name, key_prefix, key_hash, allowed_cidrs, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING `+keyColumns, id.New(), principalID, name, secret.DisplayPrefix(key, prefix), secret.Hash(key), cidrs, s.now().UTC()))
 	if dbx.IsForeignKeyViolation(err) {
 		return nil, op.Expected("not found", ErrNotFound) // the owner went meanwhile
 	}
@@ -362,6 +423,77 @@ func (s *Store) CreateKey(ctx context.Context, owner KeyOwner, name string) (*Ke
 	k.Secret = key
 	op.OK("created")
 	return k, nil
+}
+
+// UpdateKey changes a live key's name and/or IP allowlist. Editing a revoked
+// key returns 409 KEY_REVOKED.
+func (s *Store) UpdateKey(ctx context.Context, owner KeyOwner, keyID string, patch KeyPatch) (*Key, *Key, error) {
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "update_key", dbx.DefaultTimeout)
+	defer cancel()
+	defer op.End()
+	if patch.Name == nil && patch.AllowedCIDRs == nil {
+		return nil, nil, op.Expected("invalid", errors.FieldError("", "Nothing to update."))
+	}
+	var newName *string
+	if patch.Name != nil {
+		n, err := normalizeName(*patch.Name)
+		if err != nil {
+			return nil, nil, op.Expected("invalid", err)
+		}
+		newName = &n
+	}
+	var newCIDRs []string
+	if patch.AllowedCIDRs != nil {
+		cidrs, err := normalizeAllowedCIDRs(*patch.AllowedCIDRs)
+		if err != nil {
+			return nil, nil, op.Expected("invalid", err)
+		}
+		newCIDRs = cidrs
+	}
+	w, err := s.begin(ctx)
+	if err != nil {
+		return nil, nil, op.Fail(err)
+	}
+	defer w.rollback(ctx)
+	principalID, err := s.lockedKeyPrincipal(ctx, w, owner)
+	if err == nil && !id.Valid(keyID) {
+		err = ErrNotFound
+	}
+	if err != nil {
+		return nil, nil, op.Reject(err, ErrNotFound, nodes.ErrNotFound)
+	}
+	before, err := scanKey(w.tx.QueryRow(ctx, `
+		SELECT `+keyColumns+` FROM api_keys WHERE id = $1 AND principal_id = $2 FOR UPDATE
+	`, keyID, principalID))
+	if dbx.IsNoRows(err) {
+		return nil, nil, op.Expected("not found", ErrNotFound)
+	}
+	if err != nil {
+		return nil, nil, op.Fail(err)
+	}
+	if before.RevokedAt != nil {
+		return nil, nil, op.Expected("revoked", errors.KeyRevokedError())
+	}
+	name := before.Name
+	if newName != nil {
+		name = *newName
+	}
+	cidrs := before.AllowedCIDRs
+	if patch.AllowedCIDRs != nil {
+		cidrs = newCIDRs
+	}
+	after, err := scanKey(w.tx.QueryRow(ctx, `
+		UPDATE api_keys SET name = $3, allowed_cidrs = $4
+		WHERE id = $1 AND principal_id = $2
+		RETURNING `+keyColumns, keyID, principalID, name, cidrs))
+	if err != nil {
+		return nil, nil, op.Fail(err)
+	}
+	if err := w.commit(ctx); err != nil {
+		return nil, nil, op.Fail(err)
+	}
+	op.OK("ok")
+	return before, after, nil
 }
 
 // RevokeKey revokes one of the owner's keys. Revoking a revoked key changes
@@ -388,13 +520,16 @@ func (s *Store) RevokeKey(ctx context.Context, owner KeyOwner, keyID string) (*K
 		UPDATE api_keys k SET revoked_at = COALESCE(k.revoked_at, $3)
 		FROM (SELECT id, revoked_at FROM api_keys WHERE id = $1 AND principal_id = $2 FOR UPDATE) old
 		WHERE k.id = old.id
-		RETURNING k.id, k.name, k.key_prefix, k.created_at, k.revoked_at, old.revoked_at IS NULL
-	`, keyID, principalID, s.now().UTC()).Scan(&k.ID, &k.Name, &k.KeyPrefix, &k.CreatedAt, &k.RevokedAt, &changed)
+		RETURNING k.id, k.name, k.key_prefix, k.allowed_cidrs, k.created_at, k.revoked_at, old.revoked_at IS NULL
+	`, keyID, principalID, s.now().UTC()).Scan(&k.ID, &k.Name, &k.KeyPrefix, &k.AllowedCIDRs, &k.CreatedAt, &k.RevokedAt, &changed)
 	if dbx.IsNoRows(err) {
 		return nil, false, op.Expected("not found", ErrNotFound)
 	}
 	if err != nil {
 		return nil, false, op.Fail(err)
+	}
+	if k.AllowedCIDRs == nil {
+		k.AllowedCIDRs = []string{}
 	}
 	if err := w.commit(ctx); err != nil {
 		return nil, false, op.Fail(err)

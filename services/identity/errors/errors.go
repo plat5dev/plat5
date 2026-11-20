@@ -162,6 +162,7 @@ const (
 	CodeSlugNotReleasable   = "SLUG_NOT_RELEASABLE"
 	CodeInviteNotRedeemable = "INVITE_NOT_REDEEMABLE"
 	CodeCursorAhead         = "CURSOR_AHEAD"
+	CodeKeyRevoked          = "KEY_REVOKED"
 )
 
 // ParentDeletedError: a restore or a create under a node that isn't live.
@@ -195,6 +196,11 @@ func InviteNotRedeemableError(message, reason string) *ApiError {
 // event. The log was reset; the reader starts over from the first event.
 func CursorAheadError() *ApiError {
 	return StateError(CodeCursorAhead, "The log has no event at this cursor. Read from its first event.", nil)
+}
+
+// KeyRevokedError: an edit to a key that has been revoked.
+func KeyRevokedError() *ApiError {
+	return StateError(CodeKeyRevoked, "A revoked key can't be changed.", nil)
 }
 
 func PayloadTooLargeError(maxSizeBytes int64) *ApiError {
