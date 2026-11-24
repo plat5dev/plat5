@@ -1,4 +1,4 @@
-package members
+package access_test
 
 import (
 	"fmt"
@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/plat5dev/plat5/identity/access"
+	"github.com/plat5dev/plat5/identity/members"
 	"github.com/plat5dev/plat5/identity/metrics"
 	"github.com/plat5dev/plat5/identity/nodes"
 )
@@ -41,7 +43,7 @@ func evalSetup(t *testing.T) (*env, evalTree) {
 	e.bind(tr.gone, tr.bob, "admin")
 	// carol: a guest, viewer on web only.
 	carol := e.person("carol")
-	if _, err := e.store.Redeem(e.ctx, carol, e.invite(tr.web, "viewer").Token); err != nil {
+	if _, err := e.members.Redeem(e.ctx, carol, e.invite(tr.web, "viewer").Token); err != nil {
 		t.Fatal(err)
 	}
 	tr.carol = e.memberOf(tr.gruow, "carol")
@@ -50,12 +52,12 @@ func evalSetup(t *testing.T) (*env, evalTree) {
 	e.bind(tr.web, tr.dana, "viewer")
 	// frank: developer at the org, then suspended.
 	tr.frank = e.join(tr.gruow, "frank", "developer")
-	if _, _, err := e.store.SetStatus(e.ctx, e.userOf("frank"), StatusSuspended); err != nil {
+	if _, _, err := e.members.SetStatus(e.ctx, e.userOf("frank"), members.StatusSuspended); err != nil {
 		t.Fatal(err)
 	}
 	// A removed member, once developer at the org.
 	tr.removed = e.join(tr.gruow, "gil", "developer")
-	if _, err := e.store.RemoveMember(e.ctx, tr.gruow.ID, tr.removed); err != nil {
+	if _, err := e.members.RemoveMember(e.ctx, tr.gruow.ID, tr.removed); err != nil {
 		t.Fatal(err)
 	}
 	// A service account that belongs to web with developer there, and one
@@ -201,7 +203,7 @@ func TestEvaluationChanges(t *testing.T) {
 	if !e.decide(body) {
 		t.Fatal("dana reaches web")
 	}
-	if _, err := e.store.DeleteBinding(e.ctx, tr.web.ID, e.bindingOf(tr.dana, tr.web.ID)); err != nil {
+	if _, err := e.members.DeleteBinding(e.ctx, tr.web.ID, e.bindingOf(tr.dana, tr.web.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if e.decide(body) || e.removed(tr.dana) {
@@ -343,8 +345,8 @@ func TestEvaluationsSemantics(t *testing.T) {
 // answered item by item.
 func TestEvaluationsSize(t *testing.T) {
 	e, tr := evalSetup(t)
-	items := make([]string, MaxEvaluations)
-	want := make([]bool, MaxEvaluations)
+	items := make([]string, access.MaxEvaluations)
+	want := make([]bool, access.MaxEvaluations)
 	for i := range items {
 		switch i % 3 {
 		case 0:

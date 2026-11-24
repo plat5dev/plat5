@@ -1,122 +1,15 @@
-package members
+package access_test
 
 import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/plat5dev/plat5/identity/internal/id"
+	"github.com/plat5dev/plat5/identity/members"
 	"github.com/plat5dev/plat5/identity/nodes"
 )
-
-func TestKindAtOrBelow(t *testing.T) {
-	snap := parseConfig(t, testConfig)
-	cases := []struct {
-		kind, scope string
-		want        bool
-	}{
-		{"organization", "organization", true},
-		{"folder", "organization", true},
-		{"project", "organization", true},
-		{"project", "folder", true},
-		{"project", "project", true},
-		{"organization", "folder", false},
-		{"folder", "project", false},
-		{"unknown", "organization", false},
-	}
-	for _, tc := range cases {
-		if got := kindAtOrBelow(snap, tc.kind, tc.scope); got != tc.want {
-			t.Errorf("kindAtOrBelow(%q, %q) = %v, want %v", tc.kind, tc.scope, got, tc.want)
-		}
-	}
-}
-
-func TestGrantingPairs(t *testing.T) {
-	snap := parseConfig(t, testConfig)
-	kinds, roles := grantingPairs(snap, "project:write")
-	var pairs []string
-	for i := range kinds {
-		pairs = append(pairs, kinds[i]+":"+roles[i])
-	}
-	slices.Sort(pairs)
-	want := []string{
-		"folder:admin", "folder:developer",
-		"organization:admin", "organization:developer",
-		"project:admin", "project:developer",
-	}
-	if !slices.Equal(pairs, want) {
-		t.Fatalf("grantingPairs(project:write) = %v, want %v", pairs, want)
-	}
-
-	// A permission granted only by "*".
-	kinds, roles = grantingPairs(snap, "billing:export")
-	if len(kinds) != 3 {
-		t.Fatalf("wildcard-only pairs: %v %v", kinds, roles)
-	}
-	for _, r := range roles {
-		if r != "admin" {
-			t.Fatalf("expected only admin, got %v", roles)
-		}
-	}
-}
-
-func TestReadResourceSearchValidation(t *testing.T) {
-	uid := id.New()
-	good := func(body string) ResourceSearch {
-		t.Helper()
-		obj, err := readObject([]byte(body))
-		if err != nil {
-			t.Fatalf("readObject: %v", err)
-		}
-		in, err := readResourceSearch(obj)
-		if err != nil {
-			t.Fatalf("readResourceSearch(%s): %v", body, err)
-		}
-		return in
-	}
-	in := good(fmt.Sprintf(`{
-		"subject": {"type": "member", "id": %q},
-		"action": {"name": "project:read"},
-		"resource": {"type": "project", "id": "ignored"},
-		"scope": {"node_id": %q},
-		"page": {"limit": 25, "token": %q},
-		"context": {"extra": true}
-	}`, uid, uid, uid))
-	if in.MemberID != uid || in.Permission != "project:read" || in.Kind != "project" ||
-		in.ScopeNodeID != uid || in.Limit != 25 || in.After != uid {
-		t.Fatalf("parsed %+v", in)
-	}
-
-	badCases := []struct {
-		name, body, wantSubstr string
-	}{
-		{"missing subject", `{"action":{"name":"a"},"resource":{"type":"project"}}`, "subject"},
-		{"wrong subject type", fmt.Sprintf(`{"subject":{"type":"user","id":%q},"action":{"name":"a"},"resource":{"type":"project"}}`, uid), "subject.type"},
-		{"bad subject id", `{"subject":{"type":"member","id":"bad"},"action":{"name":"a"},"resource":{"type":"project"}}`, "subject.id"},
-		{"missing resource", fmt.Sprintf(`{"subject":{"type":"member","id":%q},"action":{"name":"a"}}`, uid), "resource"},
-		{"empty resource type", fmt.Sprintf(`{"subject":{"type":"member","id":%q},"action":{"name":"a"},"resource":{"type":""}}`, uid), "resource.type"},
-		{"missing action", fmt.Sprintf(`{"subject":{"type":"member","id":%q},"resource":{"type":"project"}}`, uid), "action"},
-		{"empty action name", fmt.Sprintf(`{"subject":{"type":"member","id":%q},"action":{"name":""},"resource":{"type":"project"}}`, uid), "action.name"},
-		{"bad scope id", fmt.Sprintf(`{"subject":{"type":"member","id":%q},"action":{"name":"a"},"resource":{"type":"project"},"scope":{"node_id":"nope"}}`, uid), "scope.node_id"},
-		{"limit zero", fmt.Sprintf(`{"subject":{"type":"member","id":%q},"action":{"name":"a"},"resource":{"type":"project"},"page":{"limit":0}}`, uid), "page.limit"},
-		{"limit too high", fmt.Sprintf(`{"subject":{"type":"member","id":%q},"action":{"name":"a"},"resource":{"type":"project"},"page":{"limit":1001}}`, uid), "page.limit"},
-		{"bad page token", fmt.Sprintf(`{"subject":{"type":"member","id":%q},"action":{"name":"a"},"resource":{"type":"project"},"page":{"token":"not-ulid"}}`, uid), "page.token"},
-	}
-	for _, tc := range badCases {
-		t.Run(tc.name, func(t *testing.T) {
-			obj, err := readObject([]byte(tc.body))
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = readResourceSearch(obj)
-			if err == nil || !strings.Contains(err.Error(), tc.wantSubstr) {
-				t.Fatalf("err = %v, want substring %q", err, tc.wantSubstr)
-			}
-		})
-	}
-}
 
 func (e *env) searchResources(body string) (all bool, nodeIDs []string, nextToken string) {
 	e.t.Helper()
@@ -170,7 +63,7 @@ func TestSearchResources(t *testing.T) {
 
 	// frank: suspended developer on org.
 	frank := e.join(org, "frank", "developer")
-	if _, _, err := e.store.SetStatus(e.ctx, e.userOf("frank"), StatusSuspended); err != nil {
+	if _, _, err := e.members.SetStatus(e.ctx, e.userOf("frank"), members.StatusSuspended); err != nil {
 		t.Fatal(err)
 	}
 
@@ -248,14 +141,14 @@ func TestSearchResources(t *testing.T) {
 
 	// No-match cases return 200 { all: false, results: [] }.
 	for name, body := range map[string]string{
-		"suspended member":      req(frank, "project", "project:read", org, ""),
-		"unknown member":        req(id.New(), "project", "project:read", org, ""),
-		"cross-tree scope":      req(erin, "project", "project:read", org, ""),
-		"other org scope":       req(bob, "project", "project:read", other, ""),
-		"deleted scope":         req(bob, "project", "project:read", fDel, ""),
-		"unknown kind":          req(alice, "nope", "project:read", org, ""),
-		"upward kind":           req(alice, "organization", "organization:read", f1, ""),
-		"ungranted permission":  req(bob, "project", "project:delete", org, ""),
+		"suspended member":     req(frank, "project", "project:read", org, ""),
+		"unknown member":       req(id.New(), "project", "project:read", org, ""),
+		"cross-tree scope":     req(erin, "project", "project:read", org, ""),
+		"other org scope":      req(bob, "project", "project:read", other, ""),
+		"deleted scope":        req(bob, "project", "project:read", fDel, ""),
+		"unknown kind":         req(alice, "nope", "project:read", org, ""),
+		"upward kind":          req(alice, "organization", "organization:read", f1, ""),
+		"ungranted permission": req(bob, "project", "project:delete", org, ""),
 	} {
 		t.Run(name, func(t *testing.T) {
 			all, got, next := e.searchResources(body)

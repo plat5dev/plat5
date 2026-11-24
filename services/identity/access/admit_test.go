@@ -1,4 +1,4 @@
-package members
+package access_test
 
 import (
 	"encoding/json"
@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/plat5dev/plat5/identity/internal/secret"
+	"github.com/plat5dev/plat5/identity/members"
 )
 
 // POST /internal/admit (docs/reference/api/internal.md#admit): one table, one
@@ -114,22 +115,22 @@ func TestAdmit(t *testing.T) {
 	e.bind(old, bobM, "viewer")
 	// carol: a guest, viewer on web only, through an invite below the root.
 	carol := e.person("carol")
-	if _, err := e.store.Redeem(e.ctx, carol, e.invite(web, "viewer").Token); err != nil {
+	if _, err := e.members.Redeem(e.ctx, carol, e.invite(web, "viewer").Token); err != nil {
 		t.Fatal(err)
 	}
 	// dave: a person in no tree. frank: suspended, with a personal key.
 	dave := e.person("dave")
 	frank := e.person("frank")
-	frankKey := e.key(KeyOwner{UserID: frank})
-	if _, _, err := e.store.SetStatus(e.ctx, frank, StatusSuspended); err != nil {
+	frankKey := e.key(members.KeyOwner{UserID: frank})
+	if _, _, err := e.members.SetStatus(e.ctx, frank, members.StatusSuspended); err != nil {
 		t.Fatal(err)
 	}
-	aliceKey := e.key(KeyOwner{UserID: alice})
-	revoked, err := e.store.CreateKey(e.ctx, KeyOwner{UserID: alice}, "revoked", nil)
+	aliceKey := e.key(members.KeyOwner{UserID: alice})
+	revoked, err := e.members.CreateKey(e.ctx, members.KeyOwner{UserID: alice}, "revoked", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := e.store.RevokeKey(e.ctx, KeyOwner{UserID: alice}, revoked.ID); err != nil {
+	if _, _, err := e.members.RevokeKey(e.ctx, members.KeyOwner{UserID: alice}, revoked.ID); err != nil {
 		t.Fatal(err)
 	}
 	// A service account that belongs to web with developer there, and one that

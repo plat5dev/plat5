@@ -5,6 +5,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/plat5dev/plat5/identity/access"
 	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 	"github.com/plat5dev/plat5/identity/internal/id"
@@ -269,7 +270,7 @@ func (s *Store) visible(ctx context.Context, snap *feed.Snapshot, cands []*liste
 	for i, c := range cands {
 		nodeIDs[i], memberIDs[i] = c.ID, c.memberID
 	}
-	kinds, roles := bindablePairs(snap)
+	kinds, roles := access.BindablePairs(snap)
 	rows, err := s.pool.Query(ctx, `
 		SELECT c.node_id, b.role
 		FROM unnest($1::text[], $2::text[]) AS c (node_id, member_id)
@@ -279,7 +280,7 @@ func (s *Store) visible(ctx context.Context, snap *feed.Snapshot, cands []*liste
 			OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = b.group_id AND gm.member_id = c.member_id)
 		)
 		JOIN nodes bn ON bn.id = b.node_id
-		WHERE (bn.status = 'active' OR bn.id = c.node_id) AND `+counts("$3", "$4"),
+		WHERE (bn.status = 'active' OR bn.id = c.node_id) AND `+access.CountsSQL("$3", "$4"),
 		nodeIDs, memberIDs, kinds, roles)
 	if err != nil {
 		return nil, err
@@ -294,7 +295,7 @@ func (s *Store) visible(ctx context.Context, snap *feed.Snapshot, cands []*liste
 	}
 	for _, c := range cands {
 		k, ok := snap.Kind(c.Kind)
-		out[c.ID] = ok && Resolve(snap, held[c.ID]).Has(k.ListPermission)
+		out[c.ID] = ok && access.Resolve(snap, held[c.ID]).Has(k.ListPermission)
 	}
 	return out, nil
 }

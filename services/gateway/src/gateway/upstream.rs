@@ -274,8 +274,11 @@ impl ResolvedPeer {
 }
 
 /// Caches DNS lookups for upstream `host:port` addresses and round-robins across
-/// all returned records. Failed or private-IP-blocked lookups are never cached,
-/// and concurrent misses for the same address share one lookup.
+/// the returned records in the OS-preferred address family (RFC 6724). Filtering
+/// to the first record's family avoids sending half of requests to an unbound
+/// family on dual-stack names (such as `localhost` returning `[::1, 127.0.0.1]`).
+/// Failed or private-IP-blocked lookups are never cached, and concurrent misses
+/// for the same address share one lookup.
 #[derive(Clone)]
 pub struct PeerResolver {
     cache: Cache<String, Arc<ResolvedPeer>>,
@@ -340,6 +343,11 @@ impl PeerResolver {
                         }
                     }
                 }
+                let prefer_ipv4 = addrs[0].is_ipv4();
+                let addrs: Vec<SocketAddr> = addrs
+                    .into_iter()
+                    .filter(|sa| sa.is_ipv4() == prefer_ipv4)
+                    .collect();
                 Ok(Arc::new(ResolvedPeer {
                     addrs,
                     next: AtomicUsize::new(0),
@@ -514,6 +522,48 @@ mod tests {
             Some(public)
         );
         assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn peer_resolver_sticks_to_preferred_address_family() {
+        let resolver = PeerResolver::with_ttl(true, Duration::from_secs(60));
+        let v4_a: SocketAddr = "93.184.216.34:443".parse().unwrap();
+        let v4_b: SocketAddr = "93.184.216.35:443".parse().unwrap();
+        let v6_a: SocketAddr = "[2606:2800:220:1:248:1893:25c8:1946]:443"
+            .parse()
+            .unwrap();
+        let v6_b: SocketAddr = "[2606:2800:220:1:248:1893:25c8:1947]:443"
+            .parse()
+            .unwrap();
+        let v6_private: SocketAddr = "[::1]:443".parse().unwrap();
+
+        let give = |res: Vec<SocketAddr>| move |_addr: String| async move { Some(res) };
+
+        // IPv4 first: round-robins across IPv4 records only.
+        for expected in [v4_a, v4_b, v4_a] {
+            assert_eq!(
+                resolver
+                    .resolve_with("v4first.example.com:443", give(vec![v4_a, v6_a, v4_b]))
+                    .await,
+                Some(expected)
+            );
+        }
+
+        // IPv6 first: round-robins across IPv6 records only.
+        for expected in [v6_a, v6_b, v6_a] {
+            assert_eq!(
+                resolver
+                    .resolve_with("v6first.example.com:443", give(vec![v6_a, v4_a, v6_b]))
+                    .await,
+                Some(expected)
+            );
+        }
+
+        // A private IP in the non-preferred family still fails SSRF checks.
+        assert!(resolver
+            .resolve_with("mixed.example.com:443", give(vec![v4_a, v6_private]))
+            .await
+            .is_none());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-package members
+package access
 
 import (
 	"context"
@@ -105,24 +105,33 @@ func (s *Store) SearchResources(ctx context.Context, snap *feed.Snapshot, in Res
 		return &ResourceSearchResult{All: true}, nil
 	}
 
-	// Sparse case: expand only from nodes where the member (directly or via a
-	// group) holds a granting binding at or below scopeID.
+	// Sparse case: anchor on the member's granting bindings (direct and via
+	// groups) at or below scopeID, then expand downward to matching live nodes.
+	// This keeps work proportional to the member's bindings rather than the
+	// total number of nodes under scopeID.
 	rows, err := tx.Query(ctx, `
+		WITH granting_nodes AS (
+			SELECT DISTINCT b.node_id
+			FROM (
+				SELECT node_id, role FROM bindings WHERE member_id = $4
+				UNION ALL
+				SELECT b.node_id, b.role
+				FROM group_members gm
+				JOIN bindings b ON b.group_id = gm.group_id
+				WHERE gm.member_id = $4
+			) b
+			JOIN nodes bn ON bn.id = b.node_id
+			JOIN node_ancestors in_scope ON in_scope.node_id = bn.id AND in_scope.ancestor_id = $1
+			WHERE bn.status = 'active'
+			  AND `+CountsSQL("$5", "$6")+`
+		)
 		SELECT DISTINCT n.id
-		FROM node_ancestors sa
-		JOIN nodes n ON n.id = sa.node_id
-		JOIN node_ancestors ba ON ba.node_id = n.id
-		JOIN bindings b ON b.node_id = ba.ancestor_id
-		JOIN nodes bn ON bn.id = b.node_id
-		WHERE sa.ancestor_id = $1
-		  AND n.kind = $2
+		FROM granting_nodes g
+		JOIN node_ancestors ba ON ba.ancestor_id = g.node_id
+		JOIN nodes n ON n.id = ba.node_id
+		WHERE n.kind = $2
 		  AND n.status = 'active'
 		  AND n.id > $3
-		  AND (
-		      b.member_id = $4
-		      OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = b.group_id AND gm.member_id = $4)
-		  )
-		  AND `+counts("$5", "$6")+`
 		  AND NOT EXISTS (
 		      SELECT 1 FROM node_ancestors da JOIN nodes dn ON dn.id = da.ancestor_id
 		      WHERE da.node_id = n.id AND dn.status <> 'active'

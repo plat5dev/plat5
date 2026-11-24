@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/plat5dev/plat5/identity/access"
 	apierrors "github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/auditx"
@@ -93,9 +95,10 @@ func setupWith(t *testing.T, config string) *env {
 	nodes.NewHandler(nodeStore, e.src).Mount(e.app)
 	NewHandler(e.store, e.src).Mount(e.app)
 	e.internal = fiber.New(fiber.Config{ErrorHandler: apierrors.FiberErrorHandler})
-	NewHandler(e.store, e.src).MountInternal(e.internal.Group("/internal"))
+	accessHandler := access.NewHandler(access.NewStore(pool, "plat5", e.store).WithClock(c.now), e.src)
+	accessHandler.MountInternal(e.internal.Group("/internal"))
 	nodes.NewHandler(nodeStore, e.src).MountInternal(e.internal.Group("/internal"))
-	NewHandler(e.store, e.src).MountAccess(e.internal.Group("/access/v1"))
+	accessHandler.MountAccess(e.internal.Group("/access/v1"))
 	return e
 }
 
@@ -135,6 +138,19 @@ func (e *env) userOf(subject string) string {
 		e.t.Fatalf("user of %s: %v", subject, err)
 	}
 	return userID
+}
+
+// memberOf is the active member of the person behind subject in root.
+func (e *env) memberOf(root *nodes.Node, subject string) string {
+	e.t.Helper()
+	var id string
+	if err := e.pool.QueryRow(e.ctx, `
+		SELECT m.id FROM members m JOIN idp_links l ON l.principal_id = m.principal_id
+		WHERE l.subject = $1 AND m.root_id = $2 AND m.removed_at IS NULL
+	`, subject, root.ID).Scan(&id); err != nil {
+		e.t.Fatalf("member of %s: %v", subject, err)
+	}
+	return id
 }
 
 // org creates an org as userID, who becomes its admin. It returns the org
@@ -429,4 +445,62 @@ func ids(items []map[string]any) []string {
 		out = append(out, it["id"].(string))
 	}
 	return out
+}
+
+// --- admit helpers for member/group/catalog tests ---
+
+var admitFields = []string{"valid", "principal", "key_id", "nodes", "member_id", "user_id", "permissions"}
+
+func gatewayStatus(r response, need any) int {
+	if r.status != 200 {
+		return 503
+	}
+	for _, f := range admitFields {
+		if _, ok := r.body[f]; !ok {
+			return 503
+		}
+	}
+	if r.body["valid"] != true {
+		return 401
+	}
+	if need == nil {
+		if r.body["principal"] == "service_account" {
+			return 403
+		}
+		return 200
+	}
+	if r.body["member_id"] == nil {
+		return 403
+	}
+	if need == "any_member" {
+		return 200
+	}
+	for _, p := range permissionsOf(r) {
+		if p == "*" || slices.Contains(need.([]string), p) {
+			return 200
+		}
+	}
+	return 403
+}
+
+func permissionsOf(r response) []string {
+	out := []string{}
+	items, _ := r.body["permissions"].([]any)
+	for _, it := range items {
+		out = append(out, it.(string))
+	}
+	return out
+}
+
+func (e *env) admit(body string) response {
+	e.t.Helper()
+	return e.callInternal("POST", "/internal/admit", body)
+}
+
+func admitBody(who string, allowDeleted bool, chain ...string) string {
+	refs := []string{}
+	for i := 0; i+1 < len(chain); i += 2 {
+		refs = append(refs, fmt.Sprintf(`{"kind": %q, "ref": %q}`, chain[i], chain[i+1]))
+	}
+	return fmt.Sprintf(`{%s, "chain": [%s], "allow_deleted": %v}`, who, strings.Join(refs, ", "), allowDeleted)
 }

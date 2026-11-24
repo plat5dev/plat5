@@ -104,6 +104,31 @@ func (s *Store) ensurePerson(ctx context.Context, w *write, issuer, subject stri
 	return principalID, nil
 }
 
+// FirstSignIn creates the person behind a new IdP subject, seeding their name
+// from the claim if present and not already set. It implements
+// access.PersonRegistrar.
+func (s *Store) FirstSignIn(ctx context.Context, issuer, subject, name string) (principalID, userID, status string, err error) {
+	w, err := s.begin(ctx)
+	if err != nil {
+		return "", "", "", err
+	}
+	defer w.rollback(ctx)
+	principalID, err = s.ensurePerson(ctx, w, issuer, subject)
+	if err != nil {
+		return "", "", "", err
+	}
+	if err := w.tx.QueryRow(ctx, `
+		UPDATE principals SET name = CASE
+			WHEN $2 = '' THEN name
+			ELSE COALESCE(name, $2)
+		END
+		WHERE id = $1 RETURNING user_id, status
+	`, principalID, name).Scan(&userID, &status); err != nil {
+		return "", "", "", err
+	}
+	return principalID, userID, status, w.commit(ctx)
+}
+
 // lockedRoot locks a root's tree and checks it's a root: the only nodes with
 // a members API.
 func (s *Store) lockedRoot(ctx context.Context, w *write, rootID string) (*nodes.Node, error) {

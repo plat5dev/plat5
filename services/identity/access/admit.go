@@ -1,4 +1,4 @@
-package members
+package access
 
 import (
 	"context"
@@ -181,7 +181,10 @@ func (s *Store) idpPrincipal(ctx context.Context, c IdPClaims) (*admitPrincipal,
 	`, issuer, subject).Scan(&principalID, &userID, &status, &current)
 	switch {
 	case dbx.IsNoRows(err):
-		if principalID, userID, status, err = s.firstSignIn(ctx, issuer, subject, name); err != nil {
+		if s.registrar == nil {
+			return nil, errNoRegistrar
+		}
+		if principalID, userID, status, err = s.registrar.FirstSignIn(ctx, issuer, subject, name); err != nil {
 			return nil, err
 		}
 	case err != nil:
@@ -198,7 +201,7 @@ func (s *Store) idpPrincipal(ctx context.Context, c IdPClaims) (*admitPrincipal,
 	if !admissible(status, nil) {
 		return nil, nil
 	}
-	return &admitPrincipal{id: principalID, kind: PrincipalPerson, userID: userID}, nil
+	return &admitPrincipal{id: principalID, kind: principalPerson, userID: userID}, nil
 }
 
 // claimName is a name claim as a person's name: trimmed, and cut to the
@@ -215,37 +218,15 @@ func claimName(raw string) string {
 // person who isn't suspended, or a service account whose node (saNodeStatus,
 // nil for a person) is live.
 func admissible(status string, saNodeStatus *string) bool {
-	return status == StatusActive && (saNodeStatus == nil || *saNodeStatus == nodes.StatusActive)
-}
-
-// firstSignIn creates the person behind a new IdP subject, seeding their name
-// from the claim if present and not already set.
-func (s *Store) firstSignIn(ctx context.Context, issuer, subject, name string) (string, string, string, error) {
-	w, err := s.begin(ctx)
-	if err != nil {
-		return "", "", "", err
-	}
-	defer w.rollback(ctx)
-	principalID, err := s.ensurePerson(ctx, w, issuer, subject)
-	if err != nil {
-		return "", "", "", err
-	}
-	var userID, status string
-	if err := w.tx.QueryRow(ctx, `
-		UPDATE principals SET name = CASE
-			WHEN $2 = '' THEN name
-			ELSE COALESCE(name, $2)
-		END
-		WHERE id = $1 RETURNING user_id, status
-	`, principalID, name).Scan(&userID, &status); err != nil {
-		return "", "", "", err
-	}
-	return principalID, userID, status, w.commit(ctx)
+	return status == statusActive && (saNodeStatus == nil || *saNodeStatus == nodes.StatusActive)
 }
 
 // resolveAdmitChain resolves the node chain, the principal's active member in
 // the chain's root, and the roles of that member's counting bindings (direct
 // and group) on every node in the chain, in a single Postgres round-trip.
+// Each hop splits ID lookups (nodes_pkey) from slug lookups (nodes_slug_uidx)
+// via a LATERAL UNION ALL so Postgres can use direct index scans instead of an
+// OR filter over every child of the parent.
 // Returns chain == nil when any node is missing, purged, or deleted (except a
 // deleted last node with allowDeleted), and memberID == "" when the principal
 // is not an active member of the resolved root.
@@ -271,7 +252,7 @@ func (s *Store) resolveAdmitChain(
 		refVals[i] = c.Ref
 		isIDs[i] = isID
 	}
-	bindKinds, bindRoles := bindablePairs(snap)
+	bindKinds, bindRoles := BindablePairs(snap)
 	if bindKinds == nil {
 		bindKinds, bindRoles = []string{}, []string{}
 	}
@@ -287,21 +268,47 @@ func (s *Store) resolveAdmitChain(
 			chain (pos, kind, id) AS (
 				SELECT r.pos, n.kind, n.id
 				FROM reqs r
-				JOIN nodes n
-				  ON COALESCE(n.parent_id, '') = ''
-				 AND n.kind = r.kind
-				 AND ((r.is_id AND n.id = r.ref) OR (NOT r.is_id AND n.slug = r.ref))
+				CROSS JOIN LATERAL (
+					SELECT n.kind, n.id
+					FROM nodes n
+					WHERE r.is_id
+					  AND n.id = r.ref
+					  AND n.parent_id IS NULL
+					  AND n.kind = r.kind
+					  AND (n.status = 'active' OR (r.pos = $5 AND $6 AND n.status = 'deleted'))
+					UNION ALL
+					SELECT n.kind, n.id
+					FROM nodes n
+					WHERE NOT r.is_id
+					  AND COALESCE(n.parent_id, '') = ''
+					  AND n.kind = r.kind
+					  AND n.slug = r.ref
+					  AND n.slug IS NOT NULL
+					  AND (n.status = 'active' OR (r.pos = $5 AND $6 AND n.status = 'deleted'))
+				) n
 				WHERE r.pos = 1
-				  AND (n.status = 'active' OR (r.pos = $5 AND $6 AND n.status = 'deleted'))
 				UNION ALL
 				SELECT r.pos, n.kind, n.id
 				FROM chain c
 				JOIN reqs r ON r.pos = c.pos + 1
-				JOIN nodes n
-				  ON COALESCE(n.parent_id, '') = c.id
-				 AND n.kind = r.kind
-				 AND ((r.is_id AND n.id = r.ref) OR (NOT r.is_id AND n.slug = r.ref))
-				WHERE n.status = 'active' OR (r.pos = $5 AND $6 AND n.status = 'deleted')
+				CROSS JOIN LATERAL (
+					SELECT n.kind, n.id
+					FROM nodes n
+					WHERE r.is_id
+					  AND n.id = r.ref
+					  AND n.parent_id = c.id
+					  AND n.kind = r.kind
+					  AND (n.status = 'active' OR (r.pos = $5 AND $6 AND n.status = 'deleted'))
+					UNION ALL
+					SELECT n.kind, n.id
+					FROM nodes n
+					WHERE NOT r.is_id
+					  AND COALESCE(n.parent_id, '') = c.id
+					  AND n.kind = r.kind
+					  AND n.slug = r.ref
+					  AND n.slug IS NOT NULL
+					  AND (n.status = 'active' OR (r.pos = $5 AND $6 AND n.status = 'deleted'))
+				) n
 			),
 			resolved AS (
 				SELECT pos, kind, id
@@ -322,7 +329,7 @@ func (s *Store) resolveAdmitChain(
 					b.member_id = m.id
 					OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = b.group_id AND gm.member_id = m.id)
 				)
-				WHERE `+counts("$8", "$9")+`
+				WHERE `+CountsSQL("$8", "$9")+`
 			)
 		SELECT
 			(SELECT array_agg(id ORDER BY pos) FROM resolved),
@@ -364,8 +371,7 @@ type queryer interface {
 
 // heldOnChains is, for each pair, the roles of the member's bindings on the
 // chain's nodes that count there (bindable at the node's kind): what
-// Resolve unions. Admit asks for one pair, an evaluation for each pair it
-// decides.
+// Resolve unions. Evaluations and resource search share it.
 func heldOnChains(ctx context.Context, q queryer, snap *feed.Snapshot, pairs []memberChain) ([][]string, error) {
 	var idx []int32
 	var memberIDs, nodeIDs []string
@@ -380,7 +386,7 @@ func heldOnChains(ctx context.Context, q queryer, snap *feed.Snapshot, pairs []m
 	if len(idx) == 0 {
 		return out, nil
 	}
-	kinds, roles := bindablePairs(snap)
+	kinds, roles := BindablePairs(snap)
 	rows, err := q.Query(ctx, `
 		SELECT c.i, b.role
 		FROM unnest($1::int[], $2::text[], $3::text[]) AS c (i, member_id, node_id)
@@ -389,7 +395,7 @@ func heldOnChains(ctx context.Context, q queryer, snap *feed.Snapshot, pairs []m
 			OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = b.group_id AND gm.member_id = c.member_id)
 		)
 		JOIN nodes bn ON bn.id = b.node_id
-		WHERE `+counts("$4", "$5"),
+		WHERE `+CountsSQL("$4", "$5"),
 		idx, memberIDs, nodeIDs, kinds, roles)
 	if err != nil {
 		return nil, err

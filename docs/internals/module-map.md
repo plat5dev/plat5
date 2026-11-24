@@ -66,8 +66,9 @@ No cycles. Test-only modules (`api_tests`, `docgen`, `fixtures`, `plan/tests`) a
 
 ```mermaid
 flowchart TD
-  main[identity main] --> members & nodes & lifecycle & feed & infra
-  members --> nodes & lifecycle & feed & internal & infra
+  main[identity main] --> access & members & nodes & lifecycle & feed & infra
+  members --> access & nodes & lifecycle & feed & internal & infra
+  access --> nodes & feed & internal & infra
   nodes --> lifecycle & feed & internal & infra
   lifecycle --> internal & infra
   internal --> infra
@@ -109,8 +110,9 @@ No cycles. `events` is the only domain package.
 | cp `rules`, `expand`, `schema`, `config` | Config validation and expansion | schema, config, expand | apply, plan |
 | cp `store` | Postgres storage of revisions and replica status | served | api, apply, feed, main |
 | cp `feed`, `counts` | Long-poll feeds; HTTP client for identity's plan counts | store / none | main, api, apply, plan |
-| **identity** (service) | Tree of nodes, principals, members, bindings, keys, lifecycle log | control-plane (feed), Postgres | gateway, control-plane |
-| id `members` | Users, people, service accounts, invites, bindings, keys, admit, evaluations, internal API | nodes, lifecycle, feed, internal/*, errors, metrics | main |
+| **identity** (service) | Tree of nodes, principals, members, groups, bindings, keys, lifecycle log, access decisions | control-plane (feed), Postgres | gateway, control-plane |
+| id `access` | Read/decision plane: gateway admit, AuthZEN evaluation and resource search, role-to-permission resolution | nodes, feed, internal/*, errors, metrics | main, members |
+| id `members` | Users, people, service accounts, groups, invites, bindings, keys | access, nodes, lifecycle, feed, internal/*, errors, metrics | main |
 | id `nodes` | Node tree, slugs, purge sweeper, plan counts | lifecycle, feed, internal/*, errors, metrics | main, members |
 | id `lifecycle` | Commit-ordered lifecycle event log | errors, internal/dbx, internal/httpx | main, members, nodes |
 | id `feed` | Follows the control plane's identity feed | none | main, members, nodes |

@@ -15,6 +15,7 @@ import (
 	"github.com/gofiber/fiber/v3/middleware/recover"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/plat5dev/plat5/identity/access"
 	"github.com/plat5dev/plat5/identity/config"
 	"github.com/plat5dev/plat5/identity/db"
 	apierrors "github.com/plat5dev/plat5/identity/errors"
@@ -67,6 +68,7 @@ func main() {
 	}
 	nodeStore := nodes.NewStore(pool)
 	memberStore := members.NewStore(pool, nodeStore, cfg.SecretBrand)
+	accessStore := access.NewStore(pool, cfg.SecretBrand, memberStore)
 	sweeper := nodes.NewSweeper(nodeStore, baseLogger)
 	sweeper.Also("expire invites", memberStore.ExpireInvites)
 	var wg sync.WaitGroup
@@ -83,6 +85,7 @@ func main() {
 
 	nodeHandler := nodes.NewHandler(nodeStore, src)
 	memberHandler := members.NewHandler(memberStore, src)
+	accessHandler := access.NewHandler(accessStore, src)
 	lifecycleHandler := lifecycle.NewHandler(lifecycle.NewStore(pool), lifecycle.LongPollWait)
 	wg.Add(1)
 	go func() {
@@ -91,7 +94,7 @@ func main() {
 	}()
 
 	app := newPublicApp(telem, nodeHandler, memberHandler)
-	internalApp := newInternalApp(telem, pool, src, lifecycleHandler, nodeHandler, memberHandler)
+	internalApp := newInternalApp(telem, pool, src, lifecycleHandler, nodeHandler, accessHandler)
 
 	baseLogger.Info().
 		Str("port", cfg.Port).
@@ -168,7 +171,7 @@ func newInternalApp(
 	src *feed.Source,
 	lifecycleHandler *lifecycle.Handler,
 	nodeHandler *nodes.Handler,
-	memberHandler *members.Handler,
+	accessHandler *access.Handler,
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName:      "identity-internal",
@@ -208,10 +211,10 @@ func newInternalApp(
 		)
 	}
 	internalAPI := traced("/internal")
-	memberHandler.MountInternal(internalAPI)
+	accessHandler.MountInternal(internalAPI)
 	nodeHandler.MountInternal(internalAPI)
-	// AuthZEN's access evaluation API, for services, at AuthZEN's paths
-	// (docs/reference/api/internal.md#access-evaluation).
-	memberHandler.MountAccess(traced("/access/v1"))
+	// AuthZEN's access evaluation and resource search APIs, for services, at
+	// AuthZEN's paths (docs/reference/api/internal.md#access-evaluation).
+	accessHandler.MountAccess(traced("/access/v1"))
 	return app
 }

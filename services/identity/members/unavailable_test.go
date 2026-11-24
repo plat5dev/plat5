@@ -8,6 +8,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/plat5dev/plat5/identity/access"
 	apierrors "github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/id"
@@ -36,9 +37,10 @@ func TestPostgresDownIs503(t *testing.T) {
 	nodes.NewHandler(nodeStore, src).Mount(e.app)
 	NewHandler(store, src).Mount(e.app)
 	e.internal = fiber.New(fiber.Config{ErrorHandler: apierrors.FiberErrorHandler})
-	NewHandler(store, src).MountInternal(e.internal.Group("/internal"))
+	accessHandler := access.NewHandler(access.NewStore(pool, "plat5", store), src)
+	accessHandler.MountInternal(e.internal.Group("/internal"))
 	nodes.NewHandler(nodeStore, src).MountInternal(e.internal.Group("/internal"))
-	NewHandler(store, src).MountAccess(e.internal.Group("/access/v1"))
+	accessHandler.MountAccess(e.internal.Group("/access/v1"))
 
 	node, member, user := id.New(), id.New(), id.New()
 	for _, c := range []struct {

@@ -236,69 +236,6 @@ func checkRole(snap *feed.Snapshot, roleSlug, kind, field string) error {
 	return nil
 }
 
-// bindablePairs is every (kind, role) where the role can be bound, as two
-// arrays for SQL: a binding counts only when its node's kind and role are one
-// of these pairs.
-func bindablePairs(snap *feed.Snapshot) (kinds, roles []string) {
-	for _, slug := range snap.RoleSlugs() {
-		for _, k := range snap.Roles[slug].BindableAt {
-			kinds = append(kinds, k)
-			roles = append(roles, slug)
-		}
-	}
-	return kinds, roles
-}
-
-// counts is the SQL condition for a binding b on node bn that counts: its
-// role in the document and bindable at bn's kind. kinds and roles are the
-// arrays from bindablePairs.
-func counts(kinds, roles string) string {
-	return `(bn.kind, b.role) IN (SELECT * FROM unnest(` + kinds + `::text[], ` + roles + `::text[]))`
-}
-
-// --- resolution ---
-
-// Permissions is the union of the permissions of roles a member holds at a
-// node (docs/concepts/access.md#resolution). All is "*".
-type Permissions struct {
-	All bool
-	Set map[string]bool
-}
-
-// Resolve unions the permissions of roles, which must already count
-// (bindable where they sit). A role gone from the document grants nothing.
-func Resolve(snap *feed.Snapshot, roles []string) Permissions {
-	out := Permissions{Set: map[string]bool{}}
-	for _, slug := range roles {
-		role, ok := snap.Role(slug)
-		if !ok {
-			continue
-		}
-		for _, p := range role.Permissions {
-			if p == "*" {
-				out.All = true
-			}
-			out.Set[p] = true
-		}
-	}
-	return out
-}
-
-// Has is whether p grants permission: "*", or permission itself.
-func (p Permissions) Has(permission string) bool {
-	return p.All || p.Set[permission]
-}
-
-// List is the permissions, sorted, with * as written.
-func (p Permissions) List() []string {
-	out := make([]string, 0, len(p.Set))
-	for perm := range p.Set {
-		out = append(out, perm)
-	}
-	sort.Strings(out)
-	return out
-}
-
 // page trims a limit+1 read to limit and says whether there was more.
 func page[T any](items []T, limit int) ([]T, bool) {
 	if len(items) > limit {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/plat5dev/plat5/identity/access"
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
@@ -331,5 +332,5 @@ func (s *Store) Membership(ctx context.Context, snap *feed.Snapshot, nodeID, mem
 		}
 	}
 	op.OK("ok")
-	return &Membership{MemberID: m.ID, Bindings: bindings, Permissions: Resolve(snap, held).List()}, nil
+	return &Membership{MemberID: m.ID, Bindings: bindings, Permissions: access.Resolve(snap, held).List()}, nil
 }
