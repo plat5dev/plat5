@@ -14,11 +14,12 @@ import (
 	"github.com/plat5dev/plat5/identity/nodes"
 )
 
-// Binding is a role for a member on one node of its tree, as listed at a
-// node: Inherited when it sits on an ancestor of that node.
+// Binding is a role for a member or a group on one node of its tree, as listed
+// at a node: Inherited when it sits on an ancestor of that node.
 type Binding struct {
 	ID        string
-	MemberID  string
+	MemberID  *string
+	GroupID   *string
 	NodeID    string
 	Role      string
 	Inherited bool
@@ -35,18 +36,22 @@ type Binding struct {
 // bindingSelect reads Bindings as listed at node $1; where uses $2 on.
 func bindingSelect(where string) string {
 	return `
-		SELECT b.id, b.member_id, b.node_id, b.role, b.node_id <> $1, ` + guestSQL + `, m.principal, p.name,
+		SELECT b.id, b.member_id, b.group_id, b.node_id, b.role, b.node_id <> $1,
+		       COALESCE(` + guestSQL + `, false),
+		       CASE WHEN b.group_id IS NOT NULL THEN 'group' ELSE m.principal END,
+		       CASE WHEN b.group_id IS NOT NULL THEN g.name ELSE p.name END,
 		       b.created_at, b.updated_at, bn.kind
 		FROM bindings b
 		JOIN nodes bn ON bn.id = b.node_id
-		JOIN members m ON m.id = b.member_id
+		LEFT JOIN members m ON m.id = b.member_id
 		LEFT JOIN principals p ON p.id = m.principal_id
+		LEFT JOIN groups g ON g.id = b.group_id
 		WHERE b.node_id IN (SELECT ancestor_id FROM node_ancestors WHERE node_id = $1) AND ` + where
 }
 
 func scanBinding(row dbx.Scannable) (*Binding, error) {
 	var b Binding
-	if err := row.Scan(&b.ID, &b.MemberID, &b.NodeID, &b.Role, &b.Inherited, &b.Guest, &b.Principal, &b.Name,
+	if err := row.Scan(&b.ID, &b.MemberID, &b.GroupID, &b.NodeID, &b.Role, &b.Inherited, &b.Guest, &b.Principal, &b.Name,
 		&b.CreatedAt, &b.UpdatedAt, &b.nodeKind); err != nil {
 		return nil, err
 	}
@@ -72,6 +77,55 @@ func (s *Store) insertBinding(ctx context.Context, w *write, memberID, nodeID, r
 		return nil, err
 	}
 	return scanBinding(w.tx.QueryRow(ctx, bindingSelect(`b.id = $2`), nodeID, bindingID))
+}
+
+// insertGroupBinding binds role for a group on a node. One binding per group
+// per node: a second is 409.
+func (s *Store) insertGroupBinding(ctx context.Context, w *write, groupID, nodeID, role string) (*Binding, error) {
+	bindingID := id.New()
+	now := s.now().UTC()
+	_, err := w.tx.Exec(ctx, `
+		INSERT INTO bindings (id, group_id, node_id, role, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)
+	`, bindingID, groupID, nodeID, role, now)
+	if dbx.IsUniqueViolation(err) {
+		return nil, errors.ConflictError("This group already has a role here.", "group_id", groupID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return scanBinding(w.tx.QueryRow(ctx, bindingSelect(`b.id = $2`), nodeID, bindingID))
+}
+
+// CreateGroupBinding binds role for a group belonging to the node's tree.
+func (s *Store) CreateGroupBinding(ctx context.Context, snap *feed.Snapshot, nodeID, groupID, role string) (*Binding, error) {
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_group_binding", dbx.DefaultTimeout)
+	defer cancel()
+	defer op.End()
+
+	w, err := s.begin(ctx)
+	if err != nil {
+		return nil, op.Fail(err)
+	}
+	defer w.rollback(ctx)
+	n, err := s.nodes.LockedWritable(ctx, w.tx, nodeID)
+	if err != nil {
+		return nil, op.Reject(err, nodes.ErrNotFound)
+	}
+	if err := checkRole(snap, role, n.Kind, "role"); err != nil {
+		return nil, op.Expected("invalid", err)
+	}
+	if err := s.checkGroupInTree(ctx, w, n, groupID); err != nil {
+		return nil, op.Reject(err)
+	}
+	b, err := s.insertGroupBinding(ctx, w, groupID, n.ID, role)
+	if err != nil {
+		return nil, op.Reject(err)
+	}
+	if err := w.commit(ctx); err != nil {
+		return nil, op.Fail(err)
+	}
+	op.OK("created")
+	return b, nil
 }
 
 // CreateBinding binds role for a member already in the node's tree.
@@ -222,8 +276,10 @@ func (s *Store) DeleteBinding(ctx context.Context, nodeID, bindingID string) (*B
 	if _, err := w.tx.Exec(ctx, `DELETE FROM bindings WHERE id = $1`, b.ID); err != nil {
 		return nil, op.Fail(err)
 	}
-	if err := s.removeEmptyPeople(ctx, w, []string{b.MemberID}); err != nil {
-		return nil, op.Fail(err)
+	if b.MemberID != nil {
+		if err := s.removeEmptyPeople(ctx, w, []string{*b.MemberID}); err != nil {
+			return nil, op.Fail(err)
+		}
 	}
 	if err := w.commit(ctx); err != nil {
 		return nil, op.Fail(err)
@@ -233,7 +289,7 @@ func (s *Store) DeleteBinding(ctx context.Context, nodeID, bindingID string) (*B
 }
 
 // Membership is what one member holds at a node: the bindings that count for
-// it there, and the permissions they grant.
+// it there (both direct and through groups), and the permissions they grant.
 type Membership struct {
 	MemberID    string
 	Bindings    []*Binding
@@ -257,7 +313,10 @@ func (s *Store) Membership(ctx context.Context, snap *feed.Snapshot, nodeID, mem
 	if err != nil {
 		return nil, op.Reject(err, ErrNotFound)
 	}
-	rows, err := s.pool.Query(ctx, bindingSelect(`b.member_id = $2 ORDER BY b.id`), n.ID, m.ID)
+	rows, err := s.pool.Query(ctx, bindingSelect(`(
+		b.member_id = $2
+		OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = b.group_id AND gm.member_id = $2)
+	) ORDER BY b.id`), n.ID, m.ID)
 	if err != nil {
 		return nil, op.Fail(err)
 	}

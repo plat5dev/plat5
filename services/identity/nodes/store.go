@@ -679,9 +679,22 @@ func (s *Store) purgeTree(ctx context.Context, rootID string, now time.Time) (in
 	for i, m := range removed {
 		removedIDs[i] = m.memberID
 	}
+	if len(removedIDs) > 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM group_members WHERE member_id = ANY($1)`, removedIDs); err != nil {
+			return 0, err
+		}
+	}
+	if rootPurged {
+		if _, err := tx.Exec(ctx, `DELETE FROM groups WHERE root_id = $1`, rootID); err != nil {
+			return 0, err
+		}
+	}
 	rows, err = tx.Query(ctx, `
-		DELETE FROM bindings WHERE node_id = ANY($1) OR member_id = ANY($2)
-		RETURNING member_id
+		WITH deleted AS (
+			DELETE FROM bindings WHERE node_id = ANY($1) OR member_id = ANY($2)
+			RETURNING member_id
+		)
+		SELECT DISTINCT member_id FROM deleted WHERE member_id IS NOT NULL
 	`, ids, removedIDs)
 	if err != nil {
 		return 0, err
@@ -690,11 +703,12 @@ func (s *Store) purgeTree(ctx context.Context, rootID string, now time.Time) (in
 	if err != nil {
 		return 0, err
 	}
-	// A person's member left with no bindings is removed.
+	// A person's member left with no direct bindings and no group memberships is removed.
 	if err := removeMembers(`
 		UPDATE members m SET removed_at = $2
 		WHERE m.principal = 'person' AND m.id = ANY($1) AND m.removed_at IS NULL
 		  AND NOT EXISTS (SELECT 1 FROM bindings b WHERE b.member_id = m.id)
+		  AND NOT EXISTS (SELECT 1 FROM group_members gm WHERE gm.member_id = m.id)
 		RETURNING m.id, m.principal
 	`, touched, now); err != nil {
 		return 0, err

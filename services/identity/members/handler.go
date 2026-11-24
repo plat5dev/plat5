@@ -54,6 +54,15 @@ func (h *Handler) Mount(r fiber.Router) {
 	r.Delete("/nodes/:node_id/members/:member_id", h.RemoveMember)
 	r.Get("/members/:member_id/user", h.MemberUser)
 
+	r.Get("/nodes/:node_id/groups", h.ListGroups)
+	r.Post("/nodes/:node_id/groups", h.CreateGroup)
+	r.Get("/nodes/:node_id/groups/:group_id", h.GetGroup)
+	r.Patch("/nodes/:node_id/groups/:group_id", h.RenameGroup)
+	r.Delete("/nodes/:node_id/groups/:group_id", h.DeleteGroup)
+	r.Get("/nodes/:node_id/groups/:group_id/members", h.ListGroupMembers)
+	r.Post("/nodes/:node_id/groups/:group_id/members", h.AddGroupMember)
+	r.Delete("/nodes/:node_id/groups/:group_id/members/:member_id", h.RemoveGroupMember)
+
 	r.Get("/users", h.LookupUser)
 	r.Get("/users/:user_id", h.GetUser)
 	r.Patch("/users/:user_id", h.SetName)
@@ -85,7 +94,8 @@ func (h *Handler) Mount(r fiber.Router) {
 
 type BindingResponse struct {
 	ID        string  `json:"id"`
-	MemberID  string  `json:"member_id"`
+	MemberID  *string `json:"member_id"`
+	GroupID   *string `json:"group_id"`
 	NodeID    string  `json:"node_id"`
 	Role      string  `json:"role"`
 	Inherited bool    `json:"inherited"`
@@ -94,6 +104,14 @@ type BindingResponse struct {
 	Name      *string `json:"name"`
 	CreatedAt string  `json:"created_at"`
 	UpdatedAt string  `json:"updated_at"`
+}
+
+type GroupResponse struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	RootID    string `json:"root_id"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 type MembershipResponse struct {
@@ -165,8 +183,15 @@ type RedeemResponse struct {
 
 func bindingResponse(b *Binding) BindingResponse {
 	return BindingResponse{
-		ID: b.ID, MemberID: b.MemberID, NodeID: b.NodeID, Role: b.Role, Inherited: b.Inherited, Guest: b.Guest,
+		ID: b.ID, MemberID: b.MemberID, GroupID: b.GroupID, NodeID: b.NodeID, Role: b.Role, Inherited: b.Inherited, Guest: b.Guest,
 		Principal: b.Principal, Name: b.Name, CreatedAt: httpx.FormatTime(b.CreatedAt), UpdatedAt: httpx.FormatTime(b.UpdatedAt),
+	}
+}
+
+func groupResponse(g *Group) GroupResponse {
+	return GroupResponse{
+		ID: g.ID, Name: g.Name, RootID: g.RootID,
+		CreatedAt: httpx.FormatTime(g.CreatedAt), UpdatedAt: httpx.FormatTime(g.UpdatedAt),
 	}
 }
 
@@ -319,6 +344,7 @@ func (h *Handler) Roles(c fiber.Ctx) error {
 
 type CreateBindingRequest struct {
 	MemberID string `json:"member_id"`
+	GroupID  string `json:"group_id"`
 	Role     string `json:"role"`
 }
 
@@ -351,8 +377,23 @@ func (h *Handler) CreateBinding(c fiber.Ctx) error {
 	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
-	b, err := h.store.CreateBinding(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"),
-		strings.TrimSpace(req.MemberID), req.Role)
+	memberID := strings.TrimSpace(req.MemberID)
+	groupID := strings.TrimSpace(req.GroupID)
+	if (memberID == "") == (groupID == "") {
+		if memberID != "" {
+			return errors.FieldError("group_id", "Send either member_id or group_id, not both.")
+		}
+		return errors.FieldError("member_id", "Choose a member or a group.")
+	}
+	var (
+		b   *Binding
+		err error
+	)
+	if groupID != "" {
+		b, err = h.store.CreateGroupBinding(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), groupID, req.Role)
+	} else {
+		b, err = h.store.CreateBinding(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), memberID, req.Role)
+	}
 	if err != nil {
 		return mapErr(c, err, "failed to create binding", "binding", "")
 	}
@@ -384,7 +425,13 @@ func (h *Handler) DeleteBinding(c fiber.Ctx) error {
 		return mapErr(c, err, "failed to delete binding", "binding", bindingID)
 	}
 	if b != nil {
-		auditx.Set(c, auditx.Details{"binding_id": b.ID, "member_id": b.MemberID, "role": auditx.Change{From: b.Role, To: nil}})
+		d := auditx.Details{"binding_id": b.ID, "role": auditx.Change{From: b.Role, To: nil}}
+		if b.MemberID != nil {
+			d["member_id"] = *b.MemberID
+		} else if b.GroupID != nil {
+			d["group_id"] = *b.GroupID
+		}
+		auditx.Set(c, d)
 	}
 	return c.SendStatus(fiber.StatusNoContent)
 }
@@ -472,6 +519,128 @@ func (h *Handler) MemberUser(c fiber.Ctx) error {
 		return mapErr(c, err, "failed to get user", "user", "")
 	}
 	return c.JSON(userResponse(u))
+}
+
+// --- groups ---
+
+type GroupNameRequest struct {
+	Name string `json:"name"`
+}
+
+type AddGroupMemberRequest struct {
+	MemberID string `json:"member_id"`
+}
+
+func (h *Handler) ListGroups(c fiber.Ctx) error {
+	limit, after, err := httpx.ParseListParams(c)
+	if err != nil {
+		return err
+	}
+	list, hasMore, err := h.store.ListGroups(c.Context(), httpx.PathParam(c, "node_id"), limit, after)
+	if err != nil {
+		return mapErr(c, err, "failed to list groups", "group", "")
+	}
+	out := make([]GroupResponse, 0, len(list))
+	for _, g := range list {
+		out = append(out, groupResponse(g))
+	}
+	return c.JSON(fiber.Map{"groups": out, "has_more": hasMore})
+}
+
+func (h *Handler) CreateGroup(c fiber.Ctx) error {
+	var req GroupNameRequest
+	if err := httpx.Body(c, &req); err != nil {
+		return err
+	}
+	g, err := h.store.CreateGroup(c.Context(), httpx.PathParam(c, "node_id"), req.Name)
+	if err != nil {
+		return mapErr(c, err, "failed to create group", "group", "")
+	}
+	auditx.Set(c, auditx.Details{"group_id": g.ID})
+	auditx.SetCreated(c, g.ID)
+	return c.Status(fiber.StatusCreated).JSON(groupResponse(g))
+}
+
+func (h *Handler) GetGroup(c fiber.Ctx) error {
+	groupID := httpx.PathParam(c, "group_id")
+	g, err := h.store.GetGroup(c.Context(), httpx.PathParam(c, "node_id"), groupID)
+	if err != nil {
+		return mapErr(c, err, "failed to get group", "group", groupID)
+	}
+	return c.JSON(groupResponse(g))
+}
+
+func (h *Handler) RenameGroup(c fiber.Ctx) error {
+	var req GroupNameRequest
+	if err := httpx.Body(c, &req); err != nil {
+		return err
+	}
+	groupID := httpx.PathParam(c, "group_id")
+	before, after, err := h.store.RenameGroup(c.Context(), httpx.PathParam(c, "node_id"), groupID, req.Name)
+	if err != nil {
+		return mapErr(c, err, "failed to rename group", "group", groupID)
+	}
+	d := auditx.Details{}
+	d.Changed("name", before, after.Name)
+	auditx.Set(c, d)
+	return c.JSON(groupResponse(after))
+}
+
+func (h *Handler) DeleteGroup(c fiber.Ctx) error {
+	groupID := httpx.PathParam(c, "group_id")
+	g, err := h.store.DeleteGroup(c.Context(), httpx.PathParam(c, "node_id"), groupID)
+	if err != nil {
+		return mapErr(c, err, "failed to delete group", "group", groupID)
+	}
+	if g != nil {
+		auditx.Set(c, auditx.Details{"group_id": g.ID, "name": auditx.Change{From: g.Name, To: nil}})
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (h *Handler) ListGroupMembers(c fiber.Ctx) error {
+	limit, after, err := httpx.ParseListParams(c)
+	if err != nil {
+		return err
+	}
+	groupID := httpx.PathParam(c, "group_id")
+	list, hasMore, err := h.store.ListGroupMembers(c.Context(), httpx.PathParam(c, "node_id"), groupID, limit, after)
+	if err != nil {
+		return mapErr(c, err, "failed to list group members", "group", groupID)
+	}
+	out := make([]MemberResponse, 0, len(list))
+	for _, m := range list {
+		out = append(out, memberResponse(m))
+	}
+	return c.JSON(fiber.Map{"members": out, "has_more": hasMore})
+}
+
+func (h *Handler) AddGroupMember(c fiber.Ctx) error {
+	var req AddGroupMemberRequest
+	if err := httpx.Body(c, &req); err != nil {
+		return err
+	}
+	groupID := httpx.PathParam(c, "group_id")
+	memberID := strings.TrimSpace(req.MemberID)
+	m, err := h.store.AddGroupMember(c.Context(), httpx.PathParam(c, "node_id"), groupID, memberID)
+	if err != nil {
+		return mapErr(c, err, "failed to add group member", "group", groupID)
+	}
+	auditx.Set(c, auditx.Details{"group_id": groupID, "member_id": m.ID})
+	return c.Status(fiber.StatusCreated).JSON(memberResponse(m))
+}
+
+func (h *Handler) RemoveGroupMember(c fiber.Ctx) error {
+	groupID := httpx.PathParam(c, "group_id")
+	memberID := httpx.PathParam(c, "member_id")
+	changed, err := h.store.RemoveGroupMember(c.Context(), httpx.PathParam(c, "node_id"), groupID, memberID)
+	if err != nil {
+		return mapErr(c, err, "failed to remove group member", "group", groupID)
+	}
+	if changed {
+		auditx.Set(c, auditx.Details{"group_id": groupID, "member_id": memberID})
+	}
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
 // --- users ---

@@ -32,12 +32,27 @@ Each is optional: without it, nobody is bound, and the list is the full list. A 
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `GET` | `/nodes/{node_id}/bindings` | Every [binding](#binding) that counts here: on this node (`inherited: false`) and on each ancestor (`true`). `?inherited=false` for this node's own |
-| `POST` | `/nodes/{node_id}/bindings` | `{ member_id, role }`. **422** if the member isn't in the node's tree or the role isn't bindable at the kind. **409** if the member already has a binding here. Returns the binding, **201** |
+| `GET` | `/nodes/{node_id}/bindings` | Every [binding](#binding) that counts here (member and group): on this node (`inherited: false`) and on each ancestor (`true`). `?inherited=false` for this node's own |
+| `POST` | `/nodes/{node_id}/bindings` | `{ member_id, role }` or `{ group_id, role }` (exactly one of `member_id` or `group_id`). **422** if the member or group isn't in the node's tree or the role isn't bindable at the kind. **409** if that member or group already has a binding here. Returns the binding, **201** |
 | `PATCH` | `/nodes/{node_id}/bindings/{binding_id}` | `{ role }` |
-| `DELETE` | `/nodes/{node_id}/bindings/{binding_id}` | **204**, and again **204** once it's gone. A person's member left with no bindings is removed. A service account's isn't |
-| `GET` | `/nodes/{node_id}/memberships/{member_id}` | [Membership](#membership): what that member holds here |
+| `DELETE` | `/nodes/{node_id}/bindings/{binding_id}` | **204**, and again **204** once it's gone. A person's member left with no direct bindings and no group memberships is removed. A service account's isn't |
+| `GET` | `/nodes/{node_id}/memberships/{member_id}` | [Membership](#membership): every binding that counts for that member here (direct and through groups) |
 | `DELETE` | `/nodes/{root_id}/memberships/{member_id}` | The same as `DELETE /nodes/{root_id}/members/{member_id}` ([members](#members)), so a public `…/membership` route reads and leaves through one upstream. A root only; any other node is **404** |
+
+## Groups
+
+`/nodes/{root_id}/groups…` take a root; any other node is **404**. Groups are flat collections of active members (people or service accounts) within one tree.
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `GET` | `/nodes/{root_id}/groups` | [Groups](#group) of the tree |
+| `POST` | `/nodes/{root_id}/groups` | `{ name }`. Returns the group, **201** |
+| `GET` | `/nodes/{root_id}/groups/{group_id}` | [Group](#group). **404** if not in this tree |
+| `PATCH` | `/nodes/{root_id}/groups/{group_id}` | `{ name }`. Returns the group |
+| `DELETE` | `/nodes/{root_id}/groups/{group_id}` | Delete the group, its bindings and its memberships. Final. **204**; already deleted: **204**, no change. A person's member left with no direct bindings and no group memberships is removed |
+| `GET` | `/nodes/{root_id}/groups/{group_id}/members` | Active [members](#member) in the group |
+| `POST` | `/nodes/{root_id}/groups/{group_id}/members` | `{ member_id }`. Must be an active member of this tree (**422** otherwise). **409** if already in the group. Returns the member, **201** |
+| `DELETE` | `/nodes/{root_id}/groups/{group_id}/members/{member_id}` | Remove the member from the group. **204**; already absent: **204**, no change. A person's member left with no direct bindings and no group memberships is removed |
 
 ## Members
 
@@ -122,15 +137,19 @@ Lists are [paginated](../lists.md) under the plural key. Times are RFC 3339, UTC
 
 #### Binding
 
-`{ id, member_id, node_id, role, inherited, guest, principal, name, created_at, updated_at }`. `node_id` is where the binding sits; `inherited` is true when that's an ancestor of the node listed. `guest` is true when the member is a guest; `principal` and `name` are the member's.
+`{ id, member_id, group_id, node_id, role, inherited, guest, principal, name, created_at, updated_at }`. Exactly one of `member_id` or `group_id` is set; the other is `null`. `node_id` is where the binding sits; `inherited` is true when that's an ancestor of the node listed. For a member binding, `guest`, `principal` (`person` or `service_account`) and `name` are the member's; for a group binding, `guest` is `false`, `principal` is `group`, and `name` is the group's name.
+
+#### Group
+
+`{ id, name, root_id, created_at, updated_at }`. Collection key `groups`.
 
 #### Membership
 
-`{ member_id, bindings, permissions }`: the bindings that count for that member at the node, each a [binding](#binding), and the permissions they grant there, sorted, with `*` as the role wrote it.
+`{ member_id, bindings, permissions }`: every [binding](#binding) that counts for that member at the node (both direct and through groups), and the permissions they grant there, sorted, with `*` as the role wrote it.
 
 #### Member
 
-`{ id, principal, name, status, guest }`. `principal` is `person` or `service_account`; `status` is `active` or `removed`; `guest` is true for a person's active member with no binding at the root, and always false for a service account. `name` is null for a person who hasn't signed in, or whose account was deleted.
+`{ id, principal, name, status, guest }`. `principal` is `person` or `service_account`; `status` is `active` or `removed`; `guest` is true for a person's active member with no effective binding at the root (neither directly nor through a group), and always false for a service account. `name` is null for a person who hasn't signed in, or whose account was deleted.
 
 #### User
 
@@ -152,7 +171,7 @@ Lists are [paginated](../lists.md) under the plural key. Times are RFC 3339, UTC
 
 | Field | Rule |
 |-------|------|
-| Node `display_name`, a person's `name`, service account `name`, key `name` | 1 to 128 characters after trimming. A key's `name` defaults to `Unnamed key`; a person's is `null` until it's known |
+| Node `display_name`, a person's `name`, group `name`, service account `name`, key `name` | 1 to 128 characters after trimming. A key's `name` defaults to `Unnamed key`; a person's is `null` until it's known |
 | Key `allowed_cidrs` | Up to 50 IPv4/IPv6 addresses or CIDR blocks, canonicalized (bare IPs become `/32` or `/128`, host bits masked) and deduplicated. Empty or omitted: unrestricted |
 | Invite `expires_in` | From `60s` to `30d`. Default `7d` |
 | Invite `max_uses` | At least 1, or `null` for unlimited. Omitted → 1 |
@@ -163,11 +182,11 @@ All responses use the [Plat5 error envelope](../errors.md).
 
 | Case | Status |
 |------|--------|
-| A node, member, user, binding, key or invite not under the address given | **404** (service API). Through the gateway a missing node is already a **403** |
-| Slug taken by a sibling, or by a root's tombstone; a person already a member; a member already bound on the node | **409** `CONFLICT` (`{ field, value }`) |
+| A node, member, group, user, binding, key or invite not under the address given | **404** (service API). Through the gateway a missing node is already a **403** |
+| Slug taken by a sibling, or by a root's tombstone; a person already a member; a member or group already bound on the node; a member already in a group | **409** `CONFLICT` (`{ field, value }`) |
 | Slug malformed or reserved | **422** |
 | Role not in the roles document, or not bindable at the kind | **422** |
-| Direct binding for a member who isn't active in the node's tree | **422**: a member id belongs to one tree, and a removed member is never active again |
+| Direct binding for a member who isn't active in the node's tree, or a group not in the node's tree, or sending neither/both of `member_id` and `group_id` | **422**: a member or group belongs to one tree, and a removed member is never active again |
 | Child kind, on a list or a create, that isn't a kind whose parent is this node's kind | **422** |
 | `X-Plat5-Member-Id` naming no active member of the node's tree, or `X-Plat5-User-Id` naming no active user | **400** |
 | An invite without `role`, or below a root with `grants` | **422** |

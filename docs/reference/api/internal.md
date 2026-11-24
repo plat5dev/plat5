@@ -31,7 +31,7 @@ POST /internal/admit
 1. **Principal.** Hash the key, or look up the IdP link. A new IdP subject creates the person. `name`, the first non-empty claim of `AUTH_NAME_CLAIMS`, sets the person's name if it is currently empty ([a person's name](../idp.md#a-persons-name)). `valid` means only that the credential is good: a known, unrevoked key, or an IdP subject, of an active principal. A suspended person, an unknown or revoked key, a key identity can't read, or a service account whose node is deleted is `valid: false`, on any chain.
 2. **Nodes.** Resolve each `ref` (slug or id) under the previous node, by kind. A missing, purged or deleted node ends here. With `allow_deleted`, the last node may be deleted (not purged), and its own bindings still count. Nothing else ever counts a deleted node's bindings.
 3. **Member.** The principal's active member in the chain's tree.
-4. **Permissions.** The union of the roles of that member's bindings on any node in the chain, includes resolved ([`concepts/access.md`](../../concepts/access.md#resolution)).
+4. **Permissions.** The union of the roles of that member's direct bindings and group bindings on any node in the chain, includes resolved ([`concepts/access.md`](../../concepts/access.md#resolution)).
 
 An empty `chain` is a user route: `nodes`, `member_id` and `permissions` are empty. For a person, `user_id` is the person's. A valid service account answers `valid: true` and `principal: "service_account"` with `user_id: null`: it has no user, and the gateway refuses it there. On a tree route `user_id` is `null`.
 
@@ -136,7 +136,7 @@ POST /access/v1/evaluation
 
 1. **Node.** The node exists, its kind is `resource.type`, and it and every node above it are live.
 2. **Member.** The member is active in the node's tree, and admit would accept its principal: a person who isn't suspended, or a service account whose node is live.
-3. **Permission.** The union of the roles of the member's bindings on the node and its ancestors grants `action.name`: `includes` resolved, `*` granting every permission ([resolution](../../concepts/access.md#resolution)).
+3. **Permission.** The union of the roles of the member's direct bindings and group bindings on the node and its ancestors grants `action.name`: `includes` resolved, `*` granting every permission ([resolution](../../concepts/access.md#resolution)).
 
 Anything else is `false`, never an error: a deleted, purged or unknown node, a `resource.type` that isn't the node's kind, a removed or unknown member, a member of another tree, or no binding that grants the permission. Identity keeps no cache for these answers: each one reads the bindings as they are, and roles as identity has them ([config](../../concepts/config.md#how-a-change-reaches-readers)).
 
@@ -171,12 +171,51 @@ POST /access/v1/evaluations
 
 Each item is decided as a single evaluation would decide it. A call resolves each distinct node's chain once.
 
+#### Resource search
+
+<a id="resource-search"></a>Which live nodes of a kind a member holds a permission on, within a scope node or across their whole tree. Built on the AuthZEN Resource Search shape, on identity's `INTERNAL_PORT` only, at `POST /access/v1/search/resource`. Never a gateway route.
+
+```
+POST /access/v1/search/resource
+{
+  "subject":  { "type": "member", "id": "01jby…" },
+  "action":   { "name": "project:read" },
+  "resource": { "type": "project" },
+  "scope":    { "node_id": "01jbw…" },
+  "page":     { "limit": 100, "token": "01jbx…" }
+}
+→ 200
+{ "all": true, "results": [] }
+// or
+{
+  "all": false,
+  "results": [
+    { "type": "project", "id": "01jbx…" },
+    { "type": "project", "id": "01jcz…" }
+  ],
+  "page": { "next_token": "01jcz…" }
+}
+```
+
+| Field | |
+|-------|--|
+| `subject` | Required. `type` is `member`, `id` a member id |
+| `action` | Required. `name` is a permission, as roles grant it |
+| `resource` | Required. `type` is a kind name (`id` and `properties` accepted and ignored) |
+| `scope` | Optional. `{ node_id }`: a live node in the member's tree to search at or below. Omitted: the member's root |
+| `page` | Optional. `{ limit?, token? }`: `limit` 1 to 1000 (default 100); `token` is a lowercase ULID cursor (`id > token`) |
+| `context` | Optional. Accepted and ignored |
+
+- **Short-circuit (`all: true`).** When the member is admissible, `scope` (or their root) is live with live ancestors, `resource.type` is a kind at or below `scope`'s kind, and the member's direct or group bindings on `scope` or its ancestors already grant `action.name`, identity answers `{ "all": true, "results": [] }` without enumerating descendants: the caller holds `action.name` on every live node of `resource.type` under `scope`.
+- **Explicit results (`all: false`).** Otherwise, `results` lists each live node of `resource.type` at or below `scope` (whose ancestors are all live) on which the member holds `action.name` through direct or group bindings, ordered by `id` ascending. When more results follow, `page.next_token` is the last id returned.
+- **No matches.** An unknown, removed, or inadmissible member, a missing/deleted/purged scope, a scope in another tree, or an unknown/unreachable kind answers `{ "all": false, "results": [] }`, never an error. Identity keeps no cache for these answers.
+
 #### Errors
 
 | Result | Response |
 |--------|----------|
 | Answered | **200**, whatever the decisions |
-| A body identity can't read: not sent as `application/json`, or not a JSON object; a `subject`, `resource` or `action` missing, after defaults; a `subject.type` other than `member`; an id that isn't a lowercase ULID; an empty `resource.type` or `action.name`; a field of the wrong type; an unknown `evaluations_semantic`; more than 100 items | **400** `INVALID_REQUEST`, in the [error envelope](../errors.md). `message` says which field, with its path (`evaluations[2].subject.id`) |
+| A body identity can't read: not sent as `application/json`, or not a JSON object; a `subject`, `resource` or `action` missing, after defaults; a `subject.type` other than `member`; an id that isn't a lowercase ULID; an empty `resource.type` or `action.name`; a field of the wrong type; an unknown `evaluations_semantic`; more than 100 items; or invalid `scope.node_id`, `page.limit` (outside 1–1000) or `page.token` | **400** `INVALID_REQUEST`, in the [error envelope](../errors.md). `message` says which field, with its path (`evaluations[2].subject.id`) |
 | Postgres unavailable | **503** `SERVICE_UNAVAILABLE`. No decision: the caller acts as if it were `false`, and retries later |
 
 AuthZEN gives an error status and a message string, with no shape for the body; the message is the envelope's `message`. An `X-Request-ID` on the request comes back on the response, as AuthZEN asks.

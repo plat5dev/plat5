@@ -23,7 +23,9 @@ Who can do what, in one place: the ancestor rule, who can be in a tree, roles an
 
 - **Joining.** A person exists from first sign-in, or from an admin adding them. A root is joined by invite or by an admin adding someone. Nodes below a root bind people already in the tree, or guests who redeem an invite below the root.
 
-- **Guests.** A person's member with no binding at its root, only on nodes below it, made by redeeming an invite below the root. Service accounts are never guests. Invites below a root need `guests:write`, checked like any permission: on the invite's node or an ancestor. A deployment turns guests on by granting it, and keeps guest invites in the root's hands by not granting it, or `*`, through any role bindable below the root. Guests are listed on the root's members list, marked, so an admin sees everyone who can reach the tree.
+- **Guests.** A person's member with no effective binding at its root (directly or through a group), only on nodes below it, made by redeeming an invite below the root. Service accounts are never guests. Invites below a root need `guests:write`, checked like any permission: on the invite's node or an ancestor. A deployment turns guests on by granting it, and keeps guest invites in the root's hands by not granting it, or `*`, through any role bindable below the root. Guests are listed on the root's members list, marked, so an admin sees everyone who can reach the tree.
+
+- **Groups.** A flat group of active members (people or service accounts) belonging to one root tree. Groups never nest and never cross trees. A group can hold bindings on any node of its tree, and every member of the group inherits those bindings.
 
 - **Closed world.** A tree's data refers only to its own nodes and members. Plat5 guarantees half of this by never sending a principal id, and sending a user id only on user routes and in user events, which carry no tree; the other half is a convention services follow. People cross trees; data doesn't.
 
@@ -34,7 +36,7 @@ Who can do what, in one place: the ancestor rule, who can be in a tree, roles an
 |-------|------|-------|
 | Route `required_permissions` | Which permissions the route needs (any one of them), or `any_member` | The service's file |
 | Role | Which permissions it grants, roles it includes, and where it can be bound | The deployment's roles document |
-| Binding | This member holds this role on this node | Identity, written through the node API |
+| Binding | This member or group holds this role on this node | Identity, written through the node API |
 
 The gateway checks the caller's permissions on the route's node against the route. It never sees roles or bindings, only permissions, from admit. Services see none of it.
 
@@ -50,7 +52,7 @@ The roles document's fields: [`reference/config/roles.md`](../reference/config/r
 
 Identity resolves permissions at admit, for one member on one node chain ([`reference/api/internal.md`](../reference/api/internal.md#admit)).
 
-1. Take the member's bindings on every node in the chain: the route's node and each ancestor.
+1. Take the member's direct bindings and the bindings of every group the member belongs to, on every node in the chain: the route's node and each ancestor.
 2. Drop any binding whose role isn't in the document, or isn't bindable at its node's kind.
 3. `permissions` is the union of the remaining roles' permissions, each role's `includes` resolved.
 
@@ -66,17 +68,17 @@ Identity resolves permissions at admit, for one member on one node chain ([`refe
 | Redeem an invite at a root | The invite's `role` at the root, plus each of its `grants` |
 | Redeem an invite below a root | The invite's `role` at that node. For someone not in the tree, that makes them a guest |
 | Create a service account | `role` in the body, required. Bound at the node it belongs to |
-| Create or change a binding | `role` in the body, required |
+| Create or change a binding | `role` in the body, required; `member_id` or `group_id` on create |
 
-A role not in the document, or not bindable at the node's kind, is **422**. A direct binding for someone who isn't in the tree is **422**: guests come through invites.
+A role not in the document, or not bindable at the node's kind, is **422**. A direct binding for someone who isn't in the tree, or for a group of another tree, is **422**: guests come through invites.
 
-One binding per member per node. Changing a member's role on a node is a `PATCH` of that binding.
+One binding per member per node, and one binding per group per node. Changing a binding's role on a node is a `PATCH` of that binding.
 
 ### Who may assign
 
 There is no grant cap. Identity doesn't compare the caller to the role it assigns, or to the member it acts on. Whoever may call a binding route may bind any role bindable there, including one with more permissions than its own. The route's permissions decide who may call; that's the gateway's check.
 
-Service accounts are created and their keys made under the same permission as bindings, `<kind>:bindings:write` by default: creating a service account binds a role, so it's a binding write. A service account is the tree's, not its creator's. Its bindings are its own, and its keys carry them.
+Service accounts, their keys, and groups are managed under the same permission as bindings, `<kind>:bindings:write` by default: creating a service account binds a role, and adding a member to a group grants them every role bound to that group. A service account is the tree's, not its creator's. Its bindings are its own, and its keys carry them.
 
 So the permissions that reach binding routes are as strong as the strongest role. Give `<kind>:bindings:write` only to members you'd trust with every role bindable at that kind.
 
@@ -118,9 +120,10 @@ The gateway caches each admit ([`reference/gateway.md`](../reference/gateway.md#
 The gateway decides for the caller of a request. Two kinds of service code need the answer for someone else, or later:
 
 - work outside a request: notifications, digests, scheduled reports, outbound webhooks, queued jobs;
-- checks about another member inside a request: an assignee, a mention, a share.
+- checks about another member inside a request: an assignee, a mention, a share;
+- cross-node queries inside a broader scope (for example, listing a member's tasks or searching across every project they can read in an org).
 
-A member can lose a node while staying in its tree (a binding removed, a role edited), and no event says so. So the service asks identity, when the work runs, whether member M holds permission P on node N ([evaluation](../reference/api/internal.md#access-evaluation)). Identity answers yes only when the gateway would admit M to a route requiring P on N:
+A member can lose a node while staying in its tree (a binding or group membership removed, a role edited), and no event says so. So the service asks identity, when the work runs, whether member M holds permission P on node N ([evaluation](../reference/api/internal.md#access-evaluation)), or which live nodes of kind K under a scope node member M holds permission P on ([resource search](../reference/api/internal.md#resource-search)). Identity answers yes only when the gateway would admit M to a route requiring P on N:
 
 - the node exists, is of the kind asked about, and it and its ancestors are live;
 - M is an active member of the node's tree, and admit would accept its principal: a person who isn't suspended, or a service account whose node is live;

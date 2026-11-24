@@ -338,7 +338,10 @@ func heldOnChains(ctx context.Context, q queryer, snap *feed.Snapshot, pairs []m
 	rows, err := q.Query(ctx, `
 		SELECT c.i, b.role
 		FROM unnest($1::int[], $2::text[], $3::text[]) AS c (i, member_id, node_id)
-		JOIN bindings b ON b.member_id = c.member_id AND b.node_id = c.node_id
+		JOIN bindings b ON b.node_id = c.node_id AND (
+			b.member_id = c.member_id
+			OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = b.group_id AND gm.member_id = c.member_id)
+		)
 		JOIN nodes bn ON bn.id = b.node_id
 		WHERE `+counts("$4", "$5"),
 		idx, memberIDs, nodeIDs, kinds, roles)

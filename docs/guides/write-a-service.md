@@ -76,6 +76,22 @@ POST {IDENTITY_INTERNAL_URL}/access/v1/evaluations
 
 Read permission names from your service's own config rather than hardcoding them, and fail closed on any non-200 response (don't send; retry later).
 
+For cross-node queries inside a broader scope (for example, listing a member's tasks across every project they can read in an org), ask identity's resource search endpoint ([`reference/api/internal.md`](../reference/api/internal.md#resource-search)):
+
+```json
+POST {IDENTITY_INTERNAL_URL}/access/v1/search/resource
+{
+  "subject":  { "type": "member", "id": "<member id>" },
+  "action":   { "name": "<permission from your config>" },
+  "resource": { "type": "project" },
+  "scope":    { "node_id": "<organization id>" }
+}
+→ { "all": true, "results": [] }
+// or { "all": false, "results": [ { "type": "project", "id": "<project id>" } ] }
+```
+
+When `all` is `true`, the member holds the permission on every live node of that kind under `scope`; otherwise filter by the returned `results` ids.
+
 ## Nodes with service fields
 
 Identity stores a node's `id`, `kind`, `parent_id`, `slug`, `display_name`, and `status`. Any product-specific fields about a node (like a project's region or billing settings) live in your service, keyed by the node id:

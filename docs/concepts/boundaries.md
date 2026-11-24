@@ -28,7 +28,8 @@ Do not add these because they would be convenient:
 - Per-tree sessions. The IdP token works everywhere
 - Moving a node to another tree (an extension point, below)
 - Comparing the caller to the role it grants (a grant cap), or to the member it acts on
-- More than one binding per member per node
+- More than one binding per member per node, or per group per node
+- Nested groups, or groups spanning trees
 - Roles in the gateway. The control plane stores the roles document; only identity reads it
 - A projection store between the control plane and its readers. Postgres is the one store
 - Login UI, passwords or JWKS. That's the IdP
@@ -44,7 +45,8 @@ None of these touches nodes, the ancestor rule, slugs, or what services see; the
 | Case | Today | Extension |
 |---|---|---|
 | One outside person on one project | Guest bindings | — |
-| A whole org shared into a project; an agency across client orgs | Not possible | Group principals: a binding whose principal is "members of org A" |
+| A team within an org bound across many projects | In-tree groups | — |
+| A whole org shared into a project; an agency across client orgs | Not possible | Cross-tree group principals: a binding whose principal is "members of org A" |
 | Anyone with a link, or any signed-in user | Not possible | Public principals, like `allUsers` and `allAuthenticatedUsers` |
 | Moving a project to another org | Refused | Cross-org move with a `node.moved` event |
 | A kind optional in the middle (a project under an org or a folder) | One parent per kind | A list of parents, additive |

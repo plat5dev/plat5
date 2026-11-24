@@ -27,6 +27,7 @@ import (
 const (
 	PrincipalPerson         = "person"
 	PrincipalServiceAccount = "service_account"
+	PrincipalGroup          = "group"
 
 	StatusActive    = "active"
 	StatusSuspended = "suspended"
@@ -171,10 +172,13 @@ func (s *Store) insertMember(ctx context.Context, w *write, principalID, princip
 	return memberID, nil
 }
 
-// removeMember removes an active member: its bindings go, removed_at is set,
-// and member.removed is written. Final.
+// removeMember removes an active member: its direct bindings and group
+// memberships go, removed_at is set, and member.removed is written. Final.
 func (s *Store) removeMember(ctx context.Context, w *write, m *memberRow) error {
 	if _, err := w.tx.Exec(ctx, `DELETE FROM bindings WHERE member_id = $1`, m.id); err != nil {
+		return err
+	}
+	if _, err := w.tx.Exec(ctx, `DELETE FROM group_members WHERE member_id = $1`, m.id); err != nil {
 		return err
 	}
 	if _, err := w.tx.Exec(ctx, `UPDATE members SET removed_at = $2 WHERE id = $1`, m.id, s.now().UTC()); err != nil {
@@ -185,7 +189,7 @@ func (s *Store) removeMember(ctx context.Context, w *write, m *memberRow) error 
 }
 
 // removeEmptyPeople removes each of memberIDs that is a person's active
-// member with no bindings left.
+// member with no direct bindings and no group memberships left.
 func (s *Store) removeEmptyPeople(ctx context.Context, w *write, memberIDs []string) error {
 	if len(memberIDs) == 0 {
 		return nil
@@ -194,6 +198,7 @@ func (s *Store) removeEmptyPeople(ctx context.Context, w *write, memberIDs []str
 		UPDATE members m SET removed_at = $2
 		WHERE m.id = ANY($1) AND m.principal = 'person' AND m.removed_at IS NULL
 		  AND NOT EXISTS (SELECT 1 FROM bindings b WHERE b.member_id = m.id)
+		  AND NOT EXISTS (SELECT 1 FROM group_members gm WHERE gm.member_id = m.id)
 		RETURNING m.id, m.root_id
 	`, memberIDs, s.now().UTC())
 	if err != nil {

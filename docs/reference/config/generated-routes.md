@@ -89,6 +89,10 @@ For a kind `K` with parent `P`. `<p>` is `K`'s permission prefix (`K`'s name, or
 | `K` | `/roles` | `GET` `any_member` | `/nodes/{K.id}/roles` |
 | `K`, a root | `/members` | `GET` `<p>:bindings:read` | `/nodes/{K.id}/members` |
 | `K`, a root | `/members/{member_id}` | `GET` `any_member`; `DELETE` `<p>:bindings:write` | `/nodes/{K.id}/members/{member_id}` |
+| `K`, a root | `/groups` | `GET` `<p>:bindings:read`; `POST` `<p>:bindings:write` | `/nodes/{K.id}/groups` |
+| `K`, a root | `/groups/{group_id}` | `GET` `<p>:bindings:read`; `PATCH`, `DELETE` `<p>:bindings:write` | `/nodes/{K.id}/groups/{group_id}` |
+| `K`, a root | `/groups/{group_id}/members` | `GET` `<p>:bindings:read`; `POST` `<p>:bindings:write` | `/nodes/{K.id}/groups/{group_id}/members` |
+| `K`, a root | `/groups/{group_id}/members/{member_id}` | `DELETE` `<p>:bindings:write` | `/nodes/{K.id}/groups/{group_id}/members/{member_id}` |
 | `user`, for a root `K` | `<collection>` | `POST` | `/roots/K` |
 | `user` | `/user` | `GET`, `PATCH`, `DELETE` | `/users/{user.id}` |
 | `user` | `/user/nodes` | `GET` | `/users/{user.id}/nodes` |
@@ -131,7 +135,7 @@ A node's events include everything below it ([`reference/api/audit.md`](../api/a
 | `<p>:create` | The parent | Creating one under the parent |
 | `<p>:write` | The node | Changing the display name |
 | `<p>:delete` | The node | Deleting and restoring |
-| `<p>:bindings:read` / `:write` | The node | Listing or changing who has access here, service accounts and their keys included. On a root, also listing and removing members, and invites to join |
+| `<p>:bindings:read` / `:write` | The node | Listing or changing who has access here, service accounts and their keys included. On a root, also listing and removing members, managing groups, and invites to join |
 | `guests:write` | The invite's node or an ancestor | Invites below the root, which can admit people outside the tree. Granted to no role (counting `*`), guests are off. A role bindable below the root that grants it, or `*`, lets its holders invite guests there |
 | `audit:read` | The node or an ancestor | Reading audit for the node and below |
 

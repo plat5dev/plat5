@@ -60,15 +60,33 @@ CREATE TABLE members (                                -- one per principal per t
 );
 CREATE UNIQUE INDEX members_active_uidx ON members (principal_id, root_id) WHERE removed_at IS NULL;
 
-CREATE TABLE bindings (
+CREATE TABLE groups (                                  -- flat collections of active members in one tree
     id          TEXT PRIMARY KEY,
-    member_id   TEXT NOT NULL REFERENCES members (id),
-    node_id     TEXT NOT NULL REFERENCES nodes (id),   -- under the member's root
-    role        TEXT NOT NULL,                         -- grants nothing if the role is gone
+    root_id     TEXT NOT NULL REFERENCES nodes (id),
+    name        TEXT NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE UNIQUE INDEX bindings_uidx ON bindings (member_id, node_id);
+
+CREATE TABLE group_members (
+    group_id    TEXT NOT NULL REFERENCES groups (id) ON DELETE CASCADE,
+    member_id   TEXT NOT NULL REFERENCES members (id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (group_id, member_id)
+);
+
+CREATE TABLE bindings (
+    id          TEXT PRIMARY KEY,
+    member_id   TEXT REFERENCES members (id),
+    group_id    TEXT REFERENCES groups (id) ON DELETE CASCADE,
+    node_id     TEXT NOT NULL REFERENCES nodes (id),   -- under the member's or group's root
+    role        TEXT NOT NULL,                         -- grants nothing if the role is gone
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK ((member_id IS NOT NULL) <> (group_id IS NOT NULL))
+);
+CREATE UNIQUE INDEX bindings_member_uidx ON bindings (member_id, node_id) WHERE member_id IS NOT NULL;
+CREATE UNIQUE INDEX bindings_group_uidx ON bindings (group_id, node_id) WHERE group_id IS NOT NULL;
 
 CREATE TABLE api_keys (
     id            TEXT PRIMARY KEY,

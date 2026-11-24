@@ -17,8 +17,9 @@ On every request the gateway answers three questions: who is calling (the creden
 | **Principal** | A person (created at first sign-in, or when an admin adds them) or a service account (belongs to a node of an org's tree). Its id never leaves identity |
 | **User** | A person as their own routes see them. A person's user id is sent only on user routes (`X-Plat5-User-Id`) and in user events, never with a tree |
 | **Member** | A principal's presence in one tree: one per principal per tree, kept after removal. The id services see as the caller on tree routes (`X-Plat5-Member-Id`) |
-| **Binding** | A role for a member on one node of the member's tree. A member can have many |
-| **Guest** | A person's member with no binding on its tree's root, only on nodes below it. Created by redeeming an invite below the root. Derived, not stored. A service account is never a guest |
+| **Group** | A flat collection of active members in one tree, owned by its root. A group holds bindings like a member, and every member in the group inherits them |
+| **Binding** | A role for a member or a group on one node of its tree. A member or group can have many, at most one per node |
+| **Guest** | A person's member with no effective binding on its tree's root (neither directly nor through a group), only on nodes below it. Created by redeeming an invite below the root. Derived, not stored. A service account is never a guest |
 | **Role** | The deployment's name for a set of permissions, bindable at some kinds ([`concepts/access.md`](access.md)). Plat5 names no roles |
 | **Permission** | What a route can require, and what a service asks identity about outside a request. Only Plat5 decides who holds one |
 | **Route scope** | `scope: <kind>` addresses a node of that kind; `scope: user` is the caller as a person, with no node; `scope: public` has no caller ([`reference/config/services.md`](../reference/config/services.md)) |

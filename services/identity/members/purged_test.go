@@ -19,6 +19,7 @@ type purgedTree struct {
 	org, folder, project *nodes.Node
 	admin, bob           string // members of the org
 	binding              string // bob's on the project
+	group                string // on the org
 	sa, keyID            string // a service account on the project, and its key
 	invite               string // on the project
 }
@@ -31,6 +32,11 @@ func newPurgedTree(e *env) purgedTree {
 	tr.project = e.child(tr.folder, "project", "Site")
 	tr.bob = e.join(tr.org, "bob", "member")
 	tr.binding = e.bind(tr.project, tr.bob, "developer").ID
+	g, err := e.store.CreateGroup(e.ctx, tr.org.ID, "Team")
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	tr.group = g.ID
 	tr.sa, _ = e.serviceAccount(tr.project, "viewer")
 	k, err := e.store.CreateKey(e.ctx, KeyOwner{NodeID: tr.project.ID, MemberID: tr.sa}, "ci", nil)
 	if err != nil {
@@ -55,6 +61,9 @@ func (tr purgedTree) writes() []purgedWrite {
 		{"create a binding", "POST", p + "/bindings", fmt.Sprintf(`{"member_id": %q, "role": "viewer"}`, tr.admin)},
 		{"change a binding", "PATCH", p + "/bindings/" + tr.binding, `{"role": "viewer"}`},
 		{"add a member", "POST", o + "/members", `{"idp": {"issuer": "https://idp.test", "subject": "carol"}, "role": "member"}`},
+		{"create a group", "POST", o + "/groups", `{"name": "Ops"}`},
+		{"rename a group", "PATCH", o + "/groups/" + tr.group, `{"name": "Renamed"}`},
+		{"add a group member", "POST", o + "/groups/" + tr.group + "/members", fmt.Sprintf(`{"member_id": %q}`, tr.bob)},
 		{"create a service account", "POST", p + "/service-accounts", `{"name": "deploy", "role": "viewer"}`},
 		{"rename a service account", "PATCH", sa, `{"name": "renamed"}`},
 		{"create a key", "POST", sa + "/keys", `{"name": "another"}`},
@@ -103,6 +112,8 @@ func TestPurgedNodeIsReadOnly(t *testing.T) {
 		"/nodes/" + tr.project.ID + "/bindings/" + tr.binding,
 		"/nodes/" + tr.org.ID + "/members/" + tr.bob,
 		"/nodes/" + tr.org.ID + "/memberships/" + tr.bob,
+		"/nodes/" + tr.org.ID + "/groups/" + tr.group,
+		"/nodes/" + tr.org.ID + "/groups/" + tr.group + "/members/" + tr.bob,
 		"/nodes/" + tr.project.ID + "/service-accounts/" + tr.sa,
 	} {
 		e.expect(e.call("DELETE", path, "", ""), 204, "delete "+path)
@@ -127,7 +138,7 @@ func TestDeletedNodeTakesWrites(t *testing.T) {
 	if _, err := e.nodes.Delete(e.ctx, e.snap(), tr.org.ID); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]int{"create a child": 409, "create a binding": 201, "add a member": 201, "create a service account": 201, "create a key": 201, "create an invite": 201, "revoke a key": 204, "revoke an invite": 204}
+	want := map[string]int{"create a child": 409, "create a binding": 201, "add a member": 201, "create a group": 201, "add a group member": 201, "create a service account": 201, "create a key": 201, "create an invite": 201, "revoke a key": 204, "revoke an invite": 204}
 	for _, w := range tr.writes() {
 		status, ok := want[w.name]
 		if !ok {

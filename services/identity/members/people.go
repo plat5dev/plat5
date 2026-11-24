@@ -36,9 +36,14 @@ func (m *Member) Status() string {
 	return StatusActive
 }
 
-// guestSQL is whether member m is a guest.
+// guestSQL is whether member m is a guest: a person's active member with no
+// effective binding at its root (directly or through a group).
 const guestSQL = `(m.principal = 'person' AND m.removed_at IS NULL AND NOT EXISTS (
-	SELECT 1 FROM bindings gb WHERE gb.member_id = m.id AND gb.node_id = m.root_id))`
+	SELECT 1 FROM bindings gb
+	WHERE gb.node_id = m.root_id AND (
+		gb.member_id = m.id
+		OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = gb.group_id AND gm.member_id = m.id)
+	)))`
 
 // memberSelect reads Members; where uses $1 on.
 func memberSelect(where string) string {

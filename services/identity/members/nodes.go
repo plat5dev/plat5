@@ -274,7 +274,10 @@ func (s *Store) visible(ctx context.Context, snap *feed.Snapshot, cands []*liste
 		SELECT c.node_id, b.role
 		FROM unnest($1::text[], $2::text[]) AS c (node_id, member_id)
 		JOIN node_ancestors a ON a.node_id = c.node_id
-		JOIN bindings b ON b.node_id = a.ancestor_id AND b.member_id = c.member_id
+		JOIN bindings b ON b.node_id = a.ancestor_id AND (
+			b.member_id = c.member_id
+			OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = b.group_id AND gm.member_id = c.member_id)
+		)
 		JOIN nodes bn ON bn.id = b.node_id
 		WHERE (bn.status = 'active' OR bn.id = c.node_id) AND `+counts("$3", "$4"),
 		nodeIDs, memberIDs, kinds, roles)

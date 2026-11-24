@@ -22,11 +22,12 @@ const (
 	PermitOnFirstPermit = "permit_on_first_permit"
 )
 
-// MountAccess serves AuthZEN's access evaluation API on the internal port, at
-// /access/v1 (docs/reference/api/internal.md#access-evaluation).
+// MountAccess serves AuthZEN's access evaluation and resource search APIs on
+// the internal port, at /access/v1 (docs/reference/api/internal.md#access-evaluation).
 func (h *Handler) MountAccess(r fiber.Router) {
 	r.Post("/evaluation", h.Evaluation)
 	r.Post("/evaluations", h.Evaluations)
+	r.Post("/search/resource", h.SearchResource)
 }
 
 type decisionResponse struct {
@@ -35,6 +36,21 @@ type decisionResponse struct {
 
 type evaluationsResponse struct {
 	Evaluations []decisionResponse `json:"evaluations"`
+}
+
+type searchResourceItem struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+type searchPageResponse struct {
+	NextToken string `json:"next_token"`
+}
+
+type searchResourceResponse struct {
+	All     bool                 `json:"all"`
+	Results []searchResourceItem `json:"results"`
+	Page    *searchPageResponse  `json:"page,omitempty"`
 }
 
 // Evaluation is POST /access/v1/evaluation: one decision.
@@ -98,6 +114,126 @@ func (h *Handler) Evaluations(c fiber.Ctx) error {
 		out.Evaluations[i] = decisionResponse{Decision: d}
 	}
 	return c.JSON(out)
+}
+
+// SearchResource is POST /access/v1/search/resource: which live nodes of a kind
+// a member holds a permission on, under scope (or their root).
+func (h *Handler) SearchResource(c fiber.Ctx) error {
+	echoRequestID(c)
+	body, err := readBody(c)
+	if err != nil {
+		return err
+	}
+	in, err := readResourceSearch(body)
+	if err != nil {
+		return err
+	}
+	res, err := h.store.SearchResources(c.Context(), h.src.Current(), in)
+	if err != nil {
+		return httpx.MapDB(c.Context(), err, "failed to search accessible resources", httpx.DBErr{})
+	}
+	out := searchResourceResponse{
+		All:     res.All,
+		Results: make([]searchResourceItem, 0, len(res.NodeIDs)),
+	}
+	for _, nodeID := range res.NodeIDs {
+		out.Results = append(out.Results, searchResourceItem{Type: in.Kind, ID: nodeID})
+	}
+	if res.NextToken != "" {
+		out.Page = &searchPageResponse{NextToken: res.NextToken}
+	}
+	return c.JSON(out)
+}
+
+func readResourceSearch(obj map[string]json.RawMessage) (ResourceSearch, error) {
+	var in ResourceSearch
+	in.Limit = DefaultSearchLimit
+
+	s, err := objectAt(obj["subject"], "subject")
+	if err != nil {
+		return in, err
+	}
+	if s == nil {
+		return in, badRequest("subject is required.")
+	}
+	typ, err := stringAt(s, "subject.type")
+	if err != nil {
+		return in, err
+	}
+	if typ != "member" {
+		return in, badRequest("subject.type must be \"member\".")
+	}
+	in.MemberID, err = idAt(s, "subject.id", "a member id")
+	if err != nil {
+		return in, err
+	}
+
+	r, err := objectAt(obj["resource"], "resource")
+	if err != nil {
+		return in, err
+	}
+	if r == nil {
+		return in, badRequest("resource is required.")
+	}
+	in.Kind, err = stringAt(r, "resource.type")
+	if err != nil {
+		return in, err
+	}
+	if in.Kind == "" {
+		return in, badRequest("resource.type must be a kind name.")
+	}
+
+	a, err := objectAt(obj["action"], "action")
+	if err != nil {
+		return in, err
+	}
+	if a == nil {
+		return in, badRequest("action is required.")
+	}
+	in.Permission, err = stringAt(a, "action.name")
+	if err != nil {
+		return in, err
+	}
+	if in.Permission == "" {
+		return in, badRequest("action.name must be a permission.")
+	}
+
+	if sc, err := objectAt(obj["scope"], "scope"); err != nil {
+		return in, err
+	} else if sc != nil {
+		in.ScopeNodeID, err = idAt(sc, "scope.node_id", "a node id")
+		if err != nil {
+			return in, err
+		}
+	}
+
+	if pg, err := objectAt(obj["page"], "page"); err != nil {
+		return in, err
+	} else if pg != nil {
+		if raw := pg["limit"]; !absent(raw) {
+			var n int
+			if err := json.Unmarshal(raw, &n); err != nil {
+				return in, badRequest("page.limit must be an integer.")
+			}
+			if n < 1 || n > MaxSearchLimit {
+				return in, badRequest("page.limit must be between 1 and %d.", MaxSearchLimit)
+			}
+			in.Limit = n
+		}
+		if raw := pg["token"]; !absent(raw) {
+			tok, err := stringAt(pg, "page.token")
+			if err != nil {
+				return in, err
+			}
+			if tok != "" {
+				if !id.Valid(tok) {
+					return in, badRequest("page.token must be a node id.")
+				}
+				in.After = tok
+			}
+		}
+	}
+	return in, nil
 }
 
 // one answers e alone, as one decision.
