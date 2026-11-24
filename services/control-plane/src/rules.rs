@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::config::{Config, RateLimit, PUBLIC_SCOPE, USER_SCOPE};
+use crate::config::{Config, Keyword, RateLimit, Required, PUBLIC_SCOPE, USER_SCOPE};
 use crate::expand::{self, ExpandedRoute, Spec};
 use crate::schema::FieldError;
 
@@ -31,6 +31,7 @@ pub fn check(config: &Config) -> Result<(), Vec<FieldError>> {
         check_shapes(&valid, &mut errs);
         check_route_checks(&valid, &mut errs);
         check_roles(config, &mut errs);
+        check_permissions(config, &mut errs);
     }
     if errs.is_empty() {
         return Ok(());
@@ -190,6 +191,19 @@ fn check_roles(config: &Config, errs: &mut Vec<FieldError>) {
     }
 }
 
+fn check_permissions(config: &Config, errs: &mut Vec<FieldError>) {
+    for (perm, meta) in &config.permissions {
+        for (i, kind) in meta.bindable_at.iter().enumerate() {
+            if !config.kinds.contains_key(kind) {
+                errs.push(FieldError::new(
+                    format!("permissions.{perm}.bindable_at[{i}]"),
+                    format!("{kind:?} is not a kind"),
+                ));
+            }
+        }
+    }
+}
+
 fn include_cycle(config: &Config) -> Option<Vec<String>> {
     fn visit(
         config: &Config,
@@ -332,6 +346,39 @@ fn check_spec(config: &Config, spec: &Spec, errs: &mut Vec<FieldError>) -> bool 
         }
         if let (Scope::Public, Some(a)) = (&scope, &v.audit) {
             err(errs, &a.at, "a public route has no audit log".into());
+        }
+        if let Some(ap) = &v.allow_public {
+            match &scope {
+                Scope::User | Scope::Public => err(
+                    errs,
+                    &ap.at,
+                    format!("only in a kind scope; this is {}", spec.scope),
+                ),
+                Scope::Kind(chain) if ap.value => {
+                    if !chain.iter().any(|k| config.kinds[k].allow_public) {
+                        err(
+                            errs,
+                            &ap.at,
+                            format!(
+                                "allow_public requires allow_public: true on {} or an ancestor kind",
+                                spec.scope
+                            ),
+                        );
+                    }
+                    if matches!(
+                        v.required.as_ref().map(|r| &r.value),
+                        Some(Required::Keyword(Keyword::AnyMember))
+                    ) {
+                        err(
+                            errs,
+                            &ap.at,
+                            "allow_public routes must require explicit permissions, not any_member"
+                                .into(),
+                        );
+                    }
+                }
+                Scope::Kind(_) => {}
+            }
         }
         let (names, names_at): (Vec<String>, String) = match &v.rate_limit {
             Some(r) => match &r.value {
@@ -681,6 +728,56 @@ mod tests {
             "enterprise": { "requests": 5000, "window": "1s" }
         });
         run(c).unwrap();
+
+        // Tier 2: custom_roles, permissions catalog, and allow_public kinds/routes.
+        let mut c = base();
+        c["custom_roles"] = json!(true);
+        c["permissions"] = json!({
+            "reports:export": { "description": "Export reports", "bindable_at": ["project"] },
+            "internal:admin": { "custom_role_assignable": false }
+        });
+        run(c).unwrap();
+
+        let mut c = base();
+        c["permissions"] = json!({
+            "reports:export": { "bindable_at": ["ghost"] }
+        });
+        errors_at(c, "permissions.reports:export.bindable_at[0]");
+
+        // allow_public on a route requires allow_public on the kind or an ancestor, and explicit permissions.
+        let c = route(
+            "project",
+            json!({ "path": "/public-items", "methods": ["GET"], "required_permissions": ["project:read"], "allow_public": true }),
+        );
+        errors_at(c, &format!("{AT}.project.routes[0].allow_public"));
+
+        let mut c = route(
+            "project",
+            json!({ "path": "/public-items", "methods": ["GET"], "required_permissions": ["project:read"], "allow_public": true }),
+        );
+        c["kinds"]["project"]["allow_public"] = json!(true);
+        run(c).unwrap();
+
+        // Ancestor allow_public also enables descendant allow_public routes.
+        let mut c = route(
+            "project",
+            json!({ "path": "/public-items", "methods": ["GET"], "required_permissions": ["project:read"], "allow_public": true }),
+        );
+        c["kinds"]["organization"]["allow_public"] = json!(true);
+        run(c).unwrap();
+
+        let mut c = route(
+            "project",
+            json!({ "path": "/public-items", "methods": ["GET"], "required_permissions": "any_member", "allow_public": true }),
+        );
+        c["kinds"]["project"]["allow_public"] = json!(true);
+        errors_at(c, &format!("{AT}.project.routes[0].allow_public"));
+
+        let c = route(
+            "user",
+            json!({ "path": "/user/a", "methods": ["GET"], "allow_public": true }),
+        );
+        errors_at(c, &format!("{AT}.user.routes[0].allow_public"));
     }
 
     #[test]

@@ -43,6 +43,8 @@ pub struct RouteDoc {
     pub rate_limit: Vec<String>,
     pub audit: bool,
     pub allow_deleted: bool,
+    #[serde(default)]
+    pub allow_public: bool,
 }
 
 /// A list of permissions, or `"any_member"`.
@@ -182,6 +184,7 @@ pub struct Route {
     pub policies: Vec<Policy>,
     pub audit: bool,
     pub allow_deleted: bool,
+    pub allow_public: bool,
     pub timeouts: Timeouts,
     pub max_body_bytes: u64,
 }
@@ -424,6 +427,7 @@ fn build_route(
             policies,
             audit: doc.audit,
             allow_deleted: doc.allow_deleted,
+            allow_public: doc.allow_public,
             timeouts,
             max_body_bytes: service.max_body_bytes,
         }),

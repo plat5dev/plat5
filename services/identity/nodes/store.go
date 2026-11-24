@@ -782,6 +782,12 @@ func (s *Store) purgeTree(ctx context.Context, rootID string, now time.Time) (in
 		if _, err := tx.Exec(ctx, `DELETE FROM groups WHERE root_id = $1`, rootID); err != nil {
 			return 0, err
 		}
+		if _, err := tx.Exec(ctx, `DELETE FROM org_roles WHERE root_id = $1`, rootID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM root_security_policies WHERE root_id = $1`, rootID); err != nil {
+			return 0, err
+		}
 	}
 	rows, err = tx.Query(ctx, `
 		WITH deleted AS (

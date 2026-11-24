@@ -4,9 +4,12 @@
 //! stored with the revision; the feeds serve them as stored, and the plan
 //! compares them.
 
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 
-use crate::config::Config;
+use crate::config::{Config, Required};
 use crate::expand;
 
 /// A revision's two feed bodies, without their revision.
@@ -54,16 +57,91 @@ pub fn gateway_body(c: &Config) -> Value {
     })
 }
 
+/// One entry in the identity feed's derived permission catalog.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+struct ServedPermission {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    description: String,
+    bindable_at: Vec<String>,
+    custom_role_assignable: bool,
+}
+
+/// Derives the deployment's permission catalog from kinds (`list_permission`),
+/// service routes (`required_permissions`), predefined roles (excluding `*`),
+/// and explicit `permissions:` metadata.
+fn permission_catalog(c: &Config) -> BTreeMap<String, ServedPermission> {
+    let mut all_keys: BTreeSet<String> = c.permissions.keys().cloned().collect();
+    for kind in c.kinds.values() {
+        if kind.list_permission != "*" {
+            all_keys.insert(kind.list_permission.clone());
+        }
+    }
+    for spec in expand::specs(c) {
+        if !c.kinds.contains_key(&spec.scope) {
+            continue;
+        }
+        for verb in &spec.verbs {
+            if let Some(req) = &verb.required {
+                if let Required::Permissions(perms) = &req.value {
+                    for p in perms {
+                        if p != "*" {
+                            all_keys.insert(p.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for role in c.roles.values() {
+        for p in &role.permissions {
+            if p != "*" {
+                all_keys.insert(p.clone());
+            }
+        }
+    }
+
+    let mut out = BTreeMap::new();
+    for perm in all_keys {
+        let (description, bindable_at, custom_role_assignable) = match c.permissions.get(&perm) {
+            Some(meta) => {
+                let mut bindable = meta.bindable_at.clone();
+                bindable.sort();
+                (
+                    meta.description.clone(),
+                    bindable,
+                    meta.custom_role_assignable,
+                )
+            }
+            None => (String::new(), Vec::new(), true),
+        };
+        out.insert(
+            perm,
+            ServedPermission {
+                description,
+                bindable_at,
+                custom_role_assignable,
+            },
+        );
+    }
+    out
+}
+
 /// The body of `GET /internal/identity`: settings, kinds and roles, with
 /// defaults filled in. Roles as written, with their includes.
 pub fn identity_body(c: &Config) -> Value {
-    json!({
-        "deletion_grace": c.deletion_grace,
-        "reserved_slugs": c.reserved_slugs,
-        "kinds": c.kinds,
-        "roles": c.roles,
-        "creator_role": c.creator_role,
-    })
+    let mut out = Map::new();
+    out.insert("deletion_grace".into(), json!(c.deletion_grace));
+    out.insert("reserved_slugs".into(), json!(c.reserved_slugs));
+    out.insert("kinds".into(), json!(c.kinds));
+    out.insert("roles".into(), json!(c.roles));
+    out.insert("creator_role".into(), json!(c.creator_role));
+    if c.custom_roles {
+        out.insert("custom_roles".into(), json!(true));
+    }
+    if c.custom_roles || !c.permissions.is_empty() {
+        out.insert("permissions".into(), json!(permission_catalog(c)));
+    }
+    Value::Object(out)
 }
 
 #[cfg(test)]
@@ -113,5 +191,26 @@ mod tests {
         assert_eq!(identity["deletion_grace"], json!("30d"));
         assert_eq!(identity["reserved_slugs"], json!([]));
         assert!(identity.get("services").is_none());
+        assert!(identity.get("custom_roles").is_none());
+        assert!(identity.get("permissions").is_none());
+
+        let mut custom = base();
+        custom["custom_roles"] = json!(true);
+        custom["permissions"] = json!({
+            "project:read": { "description": "Read projects" },
+            "internal:secret": { "custom_role_assignable": false }
+        });
+        let identity = identity_feed(5, &custom);
+        assert_eq!(identity["custom_roles"], json!(true));
+        assert_eq!(
+            identity["permissions"]["project:read"],
+            json!({ "description": "Read projects", "bindable_at": [], "custom_role_assignable": true })
+        );
+        assert_eq!(
+            identity["permissions"]["internal:secret"],
+            json!({ "bindable_at": [], "custom_role_assignable": false })
+        );
+        assert!(identity["permissions"].get("organization:read").is_some());
+        assert!(identity["permissions"].get("*").is_none());
     }
 }

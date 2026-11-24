@@ -57,7 +57,8 @@ pub struct Limit {
 /// The caller, once admitted on a kind or user route.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Caller {
-    pub auth_type: AuthType,
+    /// Credential kind. `None` for anonymous callers on `allow_public` routes.
+    pub auth_type: Option<AuthType>,
     /// The key's id, from admit. None for a JWT.
     pub key_id: Option<String>,
     /// A JWT's key id, for the request span.
@@ -225,8 +226,16 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         };
         // Before the rate limit, so only callers the route lets through spend
         // its budgets. Counted with admit's 403, so the two stay one answer.
+        // Anonymous callers on `allow_public` routes get a uniform 401 so
+        // missing vs. non-public nodes never differ.
         if let Err(denied) = authorize(route, &admitted) {
-            let rejection = self.count_refusal(ip).await.unwrap_or(denied);
+            let base = match &admitted {
+                Admitted::Caller(c) if c.auth_type.is_none() => {
+                    unauthorized(AuthError::MissingAuthorization, None, route.scope.name())
+                }
+                _ => denied,
+            };
+            let rejection = self.count_refusal(ip).await.unwrap_or(base);
             return Err(Refused {
                 rejection,
                 caller: caller(),
@@ -253,6 +262,37 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         cred: &mut RequestCredential,
     ) -> Result<Caller, Rejection> {
         let route = &matched.route;
+        if matches!(presented, Err(AuthError::MissingAuthorization)) && route.allow_public {
+            let req = admit_request(matched, AdmitCredential::Anonymous(true));
+            let answer = self
+                .admit
+                .get(&req)
+                .await
+                .map_err(|_| Rejection::Unavailable)?;
+            if !answer.valid || !answer.allows_org_ip(ip) || answer.refused(&req) {
+                let rejection =
+                    unauthorized(AuthError::MissingAuthorization, None, route.scope.name());
+                return Err(self.count_refusal(ip).await.unwrap_or(rejection));
+            }
+            let caller = Caller {
+                auth_type: None,
+                key_id: None,
+                kid: None,
+                principal: answer
+                    .principal
+                    .clone()
+                    .unwrap_or_else(|| "anonymous".to_string()),
+                nodes: answer.nodes.clone(),
+                member_id: None,
+                user_id: None,
+                permissions: answer.permissions.clone(),
+                rate_limit_tier: answer.rate_limit_tier.clone(),
+            };
+            cred.principal = Some(caller.principal.clone());
+            cred.root_id = caller.root_id().map(str::to_string);
+            cred.node_id = caller.node_id().map(str::to_string);
+            return Ok(caller);
+        }
         let presented = match presented {
             Ok(p) => p,
             // Refused here, without identity: not counted.
@@ -296,11 +336,18 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
             cred.principal = answer.principal.clone();
             return Err(Rejection::ScopedCredential);
         }
+        if !answer.allows_org_ip(ip) {
+            info!(
+                client_ip = ip,
+                "caller rejected by root security policy ip allowlist"
+            );
+            return Err(self.count_refusal(ip).await.unwrap_or(Rejection::NotFound));
+        }
         if answer.refused(&req) {
             return Err(self.count_refusal(ip).await.unwrap_or(Rejection::NotFound));
         }
         let caller = Caller {
-            auth_type,
+            auth_type: Some(auth_type),
             key_id: answer.key_id.clone(),
             kid,
             principal: answer.principal.clone().unwrap_or_default(),
@@ -397,6 +444,7 @@ fn admit_request(matched: &Matched, credential: AdmitCredential) -> AdmitRequest
             })
             .collect(),
         allow_deleted: route.allow_deleted,
+        allow_public: route.allow_public,
     }
 }
 
@@ -410,6 +458,7 @@ impl Presented {
                 subject,
                 name,
                 scopes,
+                policy_claims,
                 kid,
             } => (
                 AdmitCredential::Idp {
@@ -417,6 +466,7 @@ impl Presented {
                     subject,
                     name,
                     scopes,
+                    claims: policy_claims,
                 },
                 kid,
             ),
@@ -473,7 +523,8 @@ pub fn buckets(route: &Route, ip: &str, admitted: &Admitted) -> Vec<Bucket> {
                     (Some(member), _) => {
                         format!("{}:{member}", c.node_id().unwrap_or_default())
                     }
-                    (None, user) => format!("user:{}", user.as_deref().unwrap_or_default()),
+                    (None, Some(user)) => format!("user:{user}"),
+                    (None, None) => format!("{}:ip:{ip}", c.node_id().unwrap_or_default()),
                 },
             };
             let (requests, window_seconds) = policy.effective(tier);

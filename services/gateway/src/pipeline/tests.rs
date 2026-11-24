@@ -33,6 +33,7 @@ fn jwt() -> Presented {
         subject: "sub-1".into(),
         name: Some("Dana".into()),
         scopes: None,
+        policy_claims: BTreeMap::new(),
         kid: Some("kid-1".into()),
     }
 }
@@ -576,6 +577,7 @@ async fn a_jwt_is_sent_to_admit_as_its_issuer_subject_and_name() {
             subject: "sub-1".into(),
             name: Some("Dana".into()),
             scopes: None,
+            claims: BTreeMap::new(),
         }
     );
     let Admitted::Caller(c) = admitted else {
@@ -583,7 +585,7 @@ async fn a_jwt_is_sent_to_admit_as_its_issuer_subject_and_name() {
     };
     assert_eq!(
         (c.auth_type, c.kid.as_deref(), c.key_id),
-        (AuthType::Jwt, Some("kid-1"), None)
+        (Some(AuthType::Jwt), Some("kid-1"), None)
     );
 }
 
@@ -1646,6 +1648,7 @@ async fn jwt_scopes_are_forwarded_to_admit() {
         subject: "sub-1".into(),
         name: Some("Dana".into()),
         scopes: Some(vec!["project:read".into()]),
+        policy_claims: BTreeMap::from([("amr".into(), vec!["mfa".into()])]),
         kid: Some("kid-1".into()),
     };
     assert!(h.decide(&read, Ok(scoped_jwt)).await.is_ok());
@@ -1656,8 +1659,99 @@ async fn jwt_scopes_are_forwarded_to_admit() {
             subject: "sub-1".into(),
             name: Some("Dana".into()),
             scopes: Some(vec!["project:read".into()]),
+            claims: BTreeMap::from([("amr".into(), vec!["mfa".into()])]),
         }
     );
+}
+
+#[tokio::test]
+async fn org_ip_allowlist_blocks_with_403_and_counts_refusal() {
+    let snapshot = catalog();
+    let read = project_read(&snapshot);
+    let mut ans = answer_for(&read.route, &["project:read"]);
+    ans.org_allowed_cidrs = vec!["10.0.0.0/8".into()];
+    let h = harness(Ok(ans));
+    let (res, _) = h.run(&read, Ok(jwt())).await;
+    assert_eq!(res.unwrap_err(), Rejection::NotFound);
+    assert_eq!(h.counter.count(IP_BUCKET), 1);
+
+    // Matching CIDR passes.
+    let mut ans_ok = answer_for(&read.route, &["project:read"]);
+    ans_ok.org_allowed_cidrs = vec!["203.0.113.0/24".into()];
+    let h_ok = harness(Ok(ans_ok));
+    assert!(h_ok.decide(&read, Ok(jwt())).await.is_ok());
+}
+
+#[tokio::test]
+async fn allow_public_kind_route_admits_anonymous_and_forwards_without_member_id() {
+    let pub_svc = json!({
+        "docs": {
+            "url": "http://docs:3000",
+            "timeouts": { "connect": "1s", "read": "5s" },
+            "max_body_bytes": 1024,
+            "routes": [{
+                "path": "/orgs/{organization}/projects/{project}/public-doc",
+                "method": "GET",
+                "scope": "project",
+                "upstream": "/projects/{project.id}/public-doc",
+                "required_permissions": ["project:read"],
+                "rate_limit": ["standard"],
+                "audit": false,
+                "allow_deleted": false,
+                "allow_public": true
+            }]
+        }
+    });
+    let snapshot = snapshot_with(pub_svc, json!({}));
+    let route = find(&snapshot, "GET", "/orgs/acme/projects/web/public-doc");
+
+    // 1. Anonymous caller admitted via all_users binding -> forwarded with node IDs and no member_id.
+    let mut anon_ans = answer_for(&route.route, &["project:read"]);
+    anon_ans.principal = Some("anonymous".into());
+    anon_ans.key_id = None;
+    anon_ans.member_id = None;
+    let h = harness(Ok(anon_ans));
+    let (admitted, _) = h
+        .decide(&route, Err(AuthError::MissingAuthorization))
+        .await
+        .unwrap();
+    assert_eq!(
+        h.last_request().credential,
+        AdmitCredential::Anonymous(true)
+    );
+    assert!(h.last_request().allow_public);
+    let fwd = forward(&route, &admitted).unwrap();
+    assert!(fwd.headers.iter().any(|(k, _)| k == "X-Plat5-Project-Id"));
+    assert!(fwd
+        .headers
+        .iter()
+        .any(|(k, v)| k == PRINCIPAL_HEADER && v == "anonymous"));
+    assert!(!fwd.headers.iter().any(|(k, _)| k == MEMBER_ID_HEADER));
+
+    // 2. Anonymous caller when node isn't public -> uniform 401 counted by failed-auth limiter.
+    let mut not_pub = not_in_tree();
+    not_pub.principal = Some("anonymous".into());
+    let h_denied = harness(Ok(not_pub));
+    let (res, _) = h_denied
+        .run(&route, Err(AuthError::MissingAuthorization))
+        .await;
+    assert_eq!(
+        res.unwrap_err(),
+        Rejection::Unauthorized(AuthError::MissingAuthorization)
+    );
+    assert_eq!(h_denied.counter.count(IP_BUCKET), 1);
+
+    // 3. Authenticated non-member with all_authenticated_users binding -> admitted with member_id=None.
+    let mut auth_pub = answer_for(&route.route, &["project:read"]);
+    auth_pub.member_id = None;
+    let h_auth = harness(Ok(auth_pub));
+    let (admitted, _) = h_auth.decide(&route, Ok(jwt())).await.unwrap();
+    let fwd = forward(&route, &admitted).unwrap();
+    assert!(fwd
+        .headers
+        .iter()
+        .any(|(k, v)| k == PRINCIPAL_HEADER && v == "person"));
+    assert!(!fwd.headers.iter().any(|(k, _)| k == MEMBER_ID_HEADER));
 }
 
 #[tokio::test]

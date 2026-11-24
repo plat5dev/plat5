@@ -89,27 +89,25 @@ func (s *Store) SearchResources(ctx context.Context, snap *feed.Snapshot, in Res
 	}
 
 	kinds, roles := grantingPairs(snap, in.Permission)
-	if len(kinds) == 0 {
-		op.OK("no roles")
-		return &ResourceSearchResult{}, nil
+	if kinds == nil {
+		kinds, roles = []string{}, []string{}
 	}
 
 	now := s.now().UTC()
 	// Short-circuit: a binding on the scope or an ancestor granting the
 	// permission covers every live node of in.Kind at or below scopeID.
-	held, err := heldOnChains(ctx, tx, snap, []memberChain{{memberID: in.MemberID, nodes: chain}}, now)
+	held, heldCustom, err := heldOnChains(ctx, tx, snap, []memberChain{{memberID: in.MemberID, nodes: chain}}, now)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
-	if Resolve(snap, held[0]).Has(in.Permission) {
+	if ResolveWithCustom(snap, held[0], heldCustom[0]).Has(in.Permission) {
 		op.OK("all")
 		return &ResourceSearchResult{All: true}, nil
 	}
 
 	// Sparse case: anchor on the member's granting bindings (direct and via
-	// groups) at or below scopeID, then expand downward to matching live nodes.
-	// This keeps work proportional to the member's bindings rather than the
-	// total number of nodes under scopeID.
+	// groups, static or custom roles) at or below scopeID, then expand downward
+	// to matching live nodes.
 	rows, err := tx.Query(ctx, `
 		WITH granting_nodes AS (
 			SELECT DISTINCT b.node_id
@@ -124,7 +122,15 @@ func (s *Store) SearchResources(ctx context.Context, snap *feed.Snapshot, in Res
 			JOIN nodes bn ON bn.id = b.node_id
 			JOIN node_ancestors in_scope ON in_scope.node_id = bn.id AND in_scope.ancestor_id = $1
 			WHERE bn.status = 'active'
-			  AND `+CountsSQL("$5", "$6")+`
+			  AND (
+				(bn.kind, b.role) IN (SELECT * FROM unnest($5::text[], $6::text[]))
+				OR EXISTS (
+					SELECT 1 FROM org_roles cr
+					WHERE cr.id = b.role AND cr.root_id = bn.root_id
+					  AND bn.kind = ANY(cr.bindable_at)
+					  AND $9 <> '*' AND $9 = ANY(cr.permissions)
+				)
+			  )
 		)
 		SELECT DISTINCT n.id
 		FROM granting_nodes g
@@ -139,7 +145,7 @@ func (s *Store) SearchResources(ctx context.Context, snap *feed.Snapshot, in Res
 		  )
 		ORDER BY n.id ASC
 		LIMIT $7
-	`, scopeID, in.Kind, in.After, in.MemberID, kinds, roles, limit+1, now)
+	`, scopeID, in.Kind, in.After, in.MemberID, kinds, roles, limit+1, now, in.Permission)
 	if err != nil {
 		return nil, op.Fail(err)
 	}

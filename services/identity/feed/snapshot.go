@@ -23,6 +23,39 @@ type Snapshot struct {
 	Kinds         map[string]Kind
 	Roles         map[string]Role
 	CreatorRole   string
+	CustomRoles   bool
+	Permissions   map[string]PermissionMeta
+}
+
+// PermissionMeta describes one entry in the deployment's permission catalog
+// for custom roles.
+type PermissionMeta struct {
+	Description          string
+	BindableAt           []string
+	CustomRoleAssignable bool
+}
+
+// PermissionCatalog returns the snapshot's permission catalog, falling back to
+// permissions referenced by kinds and predefined roles (excluding "*") when
+// the feed omitted the catalog.
+func (s *Snapshot) PermissionCatalog() map[string]PermissionMeta {
+	if len(s.Permissions) > 0 {
+		return s.Permissions
+	}
+	out := make(map[string]PermissionMeta)
+	for _, k := range s.Kinds {
+		if k.ListPermission != "" && k.ListPermission != "*" {
+			out[k.ListPermission] = PermissionMeta{CustomRoleAssignable: true}
+		}
+	}
+	for _, r := range s.Roles {
+		for _, p := range r.Permissions {
+			if p != "*" {
+				out[p] = PermissionMeta{CustomRoleAssignable: true}
+			}
+		}
+	}
+	return out
 }
 
 // Role is one entry of the roles document (docs/reference/config/roles.md).
@@ -70,6 +103,9 @@ type Kind struct {
 	// BindCreator is whether creating a node of this kind gives its creator
 	// creator_role on it (docs/concepts/access.md#assigning).
 	BindCreator bool
+	// AllowPublic is whether nodes of this kind accept public principal
+	// bindings (all_users, all_authenticated_users).
+	AllowPublic bool
 }
 
 // Kind looks a kind up by name.
@@ -103,6 +139,7 @@ type wireKind struct {
 	ListPermission string `json:"list_permission"`
 	// BindCreator is sent only when off: missing is on.
 	BindCreator *bool `json:"bind_creator"`
+	AllowPublic bool  `json:"allow_public"`
 }
 
 type wireRole struct {
@@ -111,13 +148,21 @@ type wireRole struct {
 	BindableAt  []string `json:"bindable_at"`
 }
 
+type wirePermissionMeta struct {
+	Description          string   `json:"description"`
+	BindableAt           []string `json:"bindable_at"`
+	CustomRoleAssignable *bool    `json:"custom_role_assignable"`
+}
+
 type wireSnapshot struct {
-	Revision      int64               `json:"revision"`
-	DeletionGrace string              `json:"deletion_grace"`
-	ReservedSlugs []string            `json:"reserved_slugs"`
-	Kinds         map[string]wireKind `json:"kinds"`
-	Roles         map[string]wireRole `json:"roles"`
-	CreatorRole   string              `json:"creator_role"`
+	Revision      int64                         `json:"revision"`
+	DeletionGrace string                        `json:"deletion_grace"`
+	ReservedSlugs []string                      `json:"reserved_slugs"`
+	Kinds         map[string]wireKind           `json:"kinds"`
+	Roles         map[string]wireRole           `json:"roles"`
+	CreatorRole   string                        `json:"creator_role"`
+	CustomRoles   bool                          `json:"custom_roles"`
+	Permissions   map[string]wirePermissionMeta `json:"permissions"`
 }
 
 // Parse reads a feed body. The control plane validated the config at apply;
@@ -138,6 +183,20 @@ func Parse(body []byte) (*Snapshot, error) {
 		ReservedSlugs: make(map[string]bool, len(w.ReservedSlugs)),
 		Kinds:         make(map[string]Kind, len(w.Kinds)),
 		CreatorRole:   w.CreatorRole,
+		CustomRoles:   w.CustomRoles,
+		Permissions:   make(map[string]PermissionMeta, len(w.Permissions)),
+	}
+	for perm, wm := range w.Permissions {
+		if perm == "*" {
+			continue
+		}
+		bindable := append([]string(nil), wm.BindableAt...)
+		sort.Strings(bindable)
+		s.Permissions[perm] = PermissionMeta{
+			Description:          wm.Description,
+			BindableAt:           bindable,
+			CustomRoleAssignable: wm.CustomRoleAssignable == nil || *wm.CustomRoleAssignable,
+		}
 	}
 	for _, slug := range w.ReservedSlugs {
 		s.ReservedSlugs[slug] = true
@@ -157,6 +216,7 @@ func Parse(body []byte) (*Snapshot, error) {
 			Parent:         wk.Parent,
 			ListPermission: wk.ListPermission,
 			BindCreator:    wk.BindCreator == nil || *wk.BindCreator,
+			AllowPublic:    wk.AllowPublic,
 		}
 	}
 	for name, k := range s.Kinds {

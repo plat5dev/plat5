@@ -33,8 +33,8 @@ Each is optional: without it, nobody is bound, and the list is the full list. A 
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `GET` | `/nodes/{node_id}/bindings` | Every [binding](#binding) that counts here (member and group): on this node (`inherited: false`) and on each ancestor (`true`). `?inherited=false` for this node's own |
-| `POST` | `/nodes/{node_id}/bindings` | `{ member_id, role, expires_at?, expires_in? }` or `{ group_id, role, expires_at?, expires_in? }` (exactly one of `member_id` or `group_id`; at most one of `expires_at` or `expires_in`). **422** if the member or group isn't in the node's tree, the role isn't bindable at the kind, or the expiry is invalid. **409** if that member or group already holds that role here. Returns the binding, **201** |
+| `GET` | `/nodes/{node_id}/bindings` | Every [binding](#binding) that counts here (member, group, and public): on this node (`inherited: false`) and on each ancestor (`true`). `?inherited=false` for this node's own |
+| `POST` | `/nodes/{node_id}/bindings` | `{ member_id, role, expires_at?, expires_in? }`, `{ group_id, role, expires_at?, expires_in? }`, or `{ public_principal, role, expires_at?, expires_in? }` (exactly one of `member_id`, `group_id`, or `public_principal`; at most one of `expires_at` or `expires_in`). `public_principal` is `all_users` or `all_authenticated_users` and requires `allow_public: true` on the node's kind or an ancestor. **422** if the member or group isn't in the node's tree, `allow_public` isn't enabled, the role isn't bindable at the kind, or the expiry is invalid. **409** if that subject already holds that role here. Returns the binding, **201** |
 | `PATCH` | `/nodes/{node_id}/bindings/{binding_id}` | `{ role?, expires_at?, expires_in? }`, at least one required (`expires_at: null` clears expiry; `expires_at` and `expires_in` are mutually exclusive). **409** if changing `role` collides with an existing binding for that member or group here |
 | `DELETE` | `/nodes/{node_id}/bindings/{binding_id}` | **204**, and again **204** once it's gone. A person's member left with no direct bindings and no group memberships is removed. A service account's isn't |
 | `GET` | `/nodes/{node_id}/memberships/{member_id}` | [Membership](#membership): every binding that counts for that member here (direct and through groups) |
@@ -115,19 +115,33 @@ Tokens are `{brand}-i-1-{secret}` ([secrets](#secrets)), hashed at rest and show
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `GET` | `/nodes/{node_id}/roles` | Roles bindable at this node's kind, for role pickers |
+| `GET` | `/nodes/{node_id}/roles` | Roles bindable at this node's kind (predefined `system` roles and this root's `custom` roles), for role pickers. On a root, `?all=true` returns every role in the root regardless of `bindable_at` |
+| `POST` | `/nodes/{root_id}/roles` | Create a custom role in this root (requires `custom_roles: true` in config; root only, **404** otherwise): `{ name, description?, permissions, bindable_at }`. Permissions must be in the assignable catalog (never `*`). **409** if `name` (case-insensitive) already exists in this root. Returns the role, **201** |
+| `GET` | `/nodes/{root_id}/roles/{role_id}` | Get a predefined role (by slug) or custom role (by id) in this root |
+| `PATCH` | `/nodes/{root_id}/roles/{role_id}` | Update a custom role (`{ name?, description?, permissions?, bindable_at? }`). **422** on a predefined system role |
+| `DELETE` | `/nodes/{root_id}/roles/{role_id}` | Delete a custom role (**204**; already deleted **204**). **422** on a predefined system role. Existing bindings keep the role id and grant nothing |
+| `GET` | `/nodes/{root_id}/permissions` | The deployment's permission catalog (`{ permissions: [{ name, description, bindable_at, custom_role_assignable }] }`), for custom role editors. Root only |
 
 ```json
 {
   "roles": [
-    { "slug": "admin", "permissions": ["*"] },
-    { "slug": "developer", "permissions": ["organization:read", "project:bindings:read", "project:create", "project:read", "project:write"] }
+    { "id": "admin", "slug": "admin", "source": "system", "name": "admin", "description": null, "bindable_at": ["organization", "project"], "permissions": ["*"] },
+    { "id": "01jby…", "slug": "01jby…", "source": "custom", "name": "Billing Auditor", "description": "Read-only billing access", "bindable_at": ["organization"], "permissions": ["billing:read"] }
   ],
   "creator_role": "admin"
 }
 ```
 
-Sorted by slug. `permissions` are what the role grants, its `includes` resolved, sorted, with `*` as the role wrote it. Not paginated: the document is the whole list. With the [example roles](../config/roles.md), a project lists `admin` and `developer`, and an org lists `member` too.
+System roles appear first (sorted by slug), followed by custom roles (sorted by name). `permissions` are what each role grants, with `includes` resolved for system roles, sorted, with `*` as written. Not paginated.
+
+## Security policy
+
+`/nodes/{root_id}/security-policy` takes a root; any other node is **404**.
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `GET` | `/nodes/{root_id}/security-policy` | The root's [security policy](#security-policy-shape) (defaults when no row exists yet) |
+| `PATCH` | `/nodes/{root_id}/security-policy` | `{ allow_personal_keys?, allowed_cidrs?, required_idp_claims? }`, at least one required. `allowed_cidrs` accepts up to 50 IPv4/IPv6 addresses or CIDRs (`[]` or `null` clears). `required_idp_claims` is a map of up to 16 dotted claim paths to required string/bool/number values or non-empty arrays of allowed values (`{}` or `null` clears). Returns the updated policy |
 
 ## Shapes
 
@@ -139,7 +153,11 @@ Lists are [paginated](../lists.md) under the plural key. Times are RFC 3339, UTC
 
 #### Binding
 
-`{ id, member_id, group_id, node_id, role, inherited, guest, principal, name, expires_at, created_at, updated_at }`. Exactly one of `member_id` or `group_id` is set; the other is `null`. `node_id` is where the binding sits; `inherited` is true when that's an ancestor of the node listed. `expires_at` is RFC 3339 UTC or `null`. For a member binding, `guest`, `principal` (`person` or `service_account`) and `name` are the member's; for a group binding, `guest` is `false`, `principal` is `group`, and `name` is the group's name.
+`{ id, member_id, group_id, public_principal, node_id, role, inherited, guest, principal, name, expires_at, created_at, updated_at }`. Exactly one of `member_id`, `group_id`, or `public_principal` (`all_users` or `all_authenticated_users`) is set; the others are `null`. `node_id` is where the binding sits; `inherited` is true when that's an ancestor of the node listed. `expires_at` is RFC 3339 UTC or `null`. For a member binding, `guest`, `principal` (`person` or `service_account`) and `name` are the member's; for a group binding, `guest` is `false`, `principal` is `group`, and `name` is the group's name; for a public binding, `guest` is `false`, `principal` is `public`, and `name` is the `public_principal` value.
+
+#### Security policy shape
+
+<a id="security-policy-shape"></a>`{ allow_personal_keys, allowed_cidrs, required_idp_claims, updated_at }`. Defaults: `allow_personal_keys: true`, `allowed_cidrs: []`, `required_idp_claims: {}`, `updated_at: null`.
 
 #### Group
 

@@ -69,6 +69,7 @@ With the kinds in [kinds](kinds.md), the versions route is `GET` and `POST /orgs
 | `rate_limit` | `array<string> \| false?` | Policies from `rate_limits` ([rate limits](rate-limits.md)). Omitted: `defaults.rate_limit` if set, else unlimited. `false`: unlimited |
 | `audit` | `bool?` | Omitted: the method default. Not in `public` |
 | `allow_deleted` | `bool?` | Default `false`. `true` lets the route's node be deleted (not purged); its own bindings are kept until purge and still count here, so whoever managed the node can restore it. For identity's restore route ([`reference/api/internal.md`](../api/internal.md#admit)). Kind scopes only |
+| `allow_public` | `bool?` | Default `false`. Kind scopes only, when this kind or an ancestor sets `allow_public: true`. Lets unauthenticated (`all_users`) and non-member authenticated (`all_authenticated_users`) callers reach the route when a public binding grants a required permission |
 <!-- end generated -->
 
 Unknown fields are **422**.

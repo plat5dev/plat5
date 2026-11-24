@@ -27,6 +27,8 @@ Who can do what, in one place: the ancestor rule, who can be in a tree, roles an
 
 - **Groups.** A flat group of active members (people or service accounts) belonging to one root tree. Groups never nest and never cross trees. A group can hold bindings on any node of its tree, and every member of the group inherits those bindings.
 
+- **Public principals.** On kinds and kind-scoped routes that opt in with `allow_public: true`, nodes may also hold bindings for `all_users` (anonymous and authenticated callers) or `all_authenticated_users` (any valid credential, including callers outside the tree). Public bindings grant read/access permissions without creating a member; a suspended member of that tree cannot bypass suspension through a public binding.
+
 - **Closed world.** A tree's data refers only to its own nodes and members. Plat5 guarantees half of this by never sending a principal id, and sending a user id only on user routes and in user events, which carry no tree; the other half is a convention services follow. People cross trees; data doesn't. This is a data-isolation convention, not a privacy boundary: services and the team can still correlate a person across trees, and an operator plane can show which trees a user is in.
 
 
@@ -44,6 +46,10 @@ Roles are always on. There's no deployment-wide switch: a deployment where somet
 
 A credential may optionally be narrowed below its principal: API keys support permission `scopes`, `allowed_roots` (for personal keys), IP allowlists (`allowed_cidrs`), and `expires_at`; JWTs support optional permission scopes via `AUTH_SCOPE_CLAIM`. Effective permissions are the intersection of the member's resolved permissions and the credential's scopes.
 
+A root may also define an **org security policy** (`GET/PATCH /nodes/{root_id}/security-policy`) with `allow_personal_keys` (disable personal API keys in that tree), `allowed_cidrs` (root-wide IP allowlist enforced by the gateway), and `required_idp_claims` (JWT claim requirements checked against claims forwarded via `AUTH_POLICY_CLAIMS`).
+
+When `custom_roles: true` is enabled in config, each root can create its own ULID-keyed custom roles via identity's API alongside predefined roles; custom roles draw from the deployment's permission catalog and can never grant `*`.
+
 Bindings may carry an optional `expires_at` (set via `expires_at` or `expires_in`). Expired bindings grant no permissions and are excluded from admit, evaluation, search, and lists; the member row remains so re-binding keeps the same `member_id`.
 
 The roles document's fields: [`reference/config/roles.md`](../reference/config/roles.md). The permissions identity's and audit's routes require by default: [`reference/config/generated-routes.md`](../reference/config/generated-routes.md#the-generated-permissions).
@@ -52,9 +58,9 @@ The roles document's fields: [`reference/config/roles.md`](../reference/config/r
 
 Identity resolves permissions at admit, for one member on one node chain ([`reference/api/internal.md`](../reference/api/internal.md#admit)).
 
-1. Take the member's direct bindings and the bindings of every group the member belongs to, on every node in the chain: the route's node and each ancestor.
-2. Drop any binding whose role isn't in the document, or isn't bindable at its node's kind.
-3. `permissions` is the union of the remaining roles' permissions, each role's `includes` resolved.
+1. Take the member's direct bindings and the bindings of every group the member belongs to, on every node in the chain: the route's node and each ancestor. On `allow_public: true` routes, also include `all_users` bindings (and `all_authenticated_users` bindings when authenticated), unless the caller is a suspended member of that tree.
+2. Drop any binding whose role isn't in the roles document or the root's custom roles, or isn't bindable at its node's kind.
+3. `permissions` is the union of the remaining roles' permissions, each predefined role's `includes` resolved.
 
 `*` is every permission: the gateway matches it to any route permission. A route can't require `*` itself. `GET …/membership` shows a caller the same answer for themselves.
 
@@ -97,7 +103,7 @@ Any credential works on any route in a kind scope: a person's JWT or personal ke
 Every route, in order:
 
 1. **Match.** Unmatched → **404**. Take the chain params from the path, root first (`{organization}`, `{project}`).
-2. **Authenticate and admit.** Verify the JWT, or take the key; then admit, from cache when possible ([admit](../reference/api/internal.md#what-the-gateway-answers)). A JWT refused locally → **401**. `valid: false` (the credential itself is bad) → **401**. On a user route, a service account → **403** "Service accounts can't use this route." On a kind route, `member_id: null` (the node doesn't exist, or the caller isn't in its tree) → **403** "permission denied, or it may not exist".
+2. **Authenticate and admit.** Verify the JWT, or take the key; on a kind route with `allow_public: true` and no `Authorization` header, run an anonymous admit. Then admit, from cache when possible ([admit](../reference/api/internal.md#what-the-gateway-answers)). A JWT refused locally → **401**. `valid: false` (the credential itself is bad) or a refused anonymous admit → **401**. On a user route, a service account → **403** "Service accounts can't use this route." On a kind route, if the root's `allowed_cidrs` excludes the client IP, or admit grants neither a member nor public permissions (the node doesn't exist, or the caller isn't admitted) → **403** "permission denied, or it may not exist" (or **401** for an anonymous caller).
 3. **Permissions.** On a kind route, the caller's permissions share none with the route's (and the route isn't `any_member`) → **403** "permission denied, or it may not exist", with `required_permissions` in `details`. `*` matches any permission.
 4. **Rate limit.** When rate limiting is enabled and the route has policies, every policy on the route is checked at once and counted only if all pass ([rate limits](../reference/config/rate-limits.md)). Otherwise **429**.
 5. **Fill.** Substitute the placeholders in `upstream`. A param value of `.` or `..`, or one holding `/`, `?` or `#`, is **400**.
@@ -113,7 +119,7 @@ On a `public` route, authenticate and admit is skipped and there is no caller. O
 
 ## How fast changes reach the edge
 
-The gateway caches each admit ([`reference/gateway.md`](../reference/gateway.md#cache)) and long-polls identity's invalidation feed (`GET /internal/admit-invalidations`). A removed binding, group change, role config apply, deleted/restored/purged node, suspended or deleted person, deleted service account, revoked key, or key IP allowlist change reaches every gateway replica within about a second (milliseconds on a single identity replica). `ADMIT_CACHE_TTL` bounds staleness if the invalidation feed is disconnected. A refusal is cached only for `ADMIT_NEGATIVE_CACHE_TTL`, so a fresh invitee or a new node works within seconds.
+The gateway caches each admit ([`reference/gateway.md`](../reference/gateway.md#cache)) and long-polls identity's invalidation feed (`GET /internal/admit-invalidations`). A removed binding, group change, custom role or security policy edit, role config apply, deleted/restored/purged node, suspended or deleted person, deleted service account, revoked key, or key IP allowlist change reaches every gateway replica within about a second (milliseconds on a single identity replica). `ADMIT_CACHE_TTL` bounds staleness if the invalidation feed is disconnected. A refusal is cached only for `ADMIT_NEGATIVE_CACHE_TTL`, so a fresh invitee or a new node works within seconds.
 
 ## Outside a request
 

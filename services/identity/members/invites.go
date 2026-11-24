@@ -104,7 +104,7 @@ func (s *Store) CreateInvite(ctx context.Context, snap *feed.Snapshot, nodeID st
 	if err != nil {
 		return nil, op.Reject(err, nodes.ErrNotFound)
 	}
-	if err := checkRole(snap, in.Role, n.Kind, "role"); err != nil {
+	if err := checkRoleTx(ctx, w.tx, snap, n.RootID, in.Role, n.Kind, "role"); err != nil {
 		return nil, op.Expected("invalid", err)
 	}
 	grants, err := s.checkGrants(ctx, w, snap, n, in.Grants)
@@ -182,7 +182,7 @@ func (s *Store) checkGrants(ctx context.Context, w *write, snap *feed.Snapshot, 
 			return nil, err
 		}
 		seen[g.NodeID] = true
-		if err := checkRole(snap, g.Role, kind, field+".role"); err != nil {
+		if err := checkRoleTx(ctx, w.tx, snap, n.RootID, g.Role, kind, field+".role"); err != nil {
 			return nil, err
 		}
 		out = append(out, Grant{NodeID: g.NodeID, Role: g.Role})

@@ -198,7 +198,7 @@ func (s *Store) addMember(ctx context.Context, snap *feed.Snapshot, rootID strin
 	if err := nodes.Writable(root); err != nil {
 		return nil, nil, op.Reject(err)
 	}
-	if err := checkRole(snap, in.Role, root.Kind, "role"); err != nil {
+	if err := checkRoleTx(ctx, w.tx, snap, root.ID, in.Role, root.Kind, "role"); err != nil {
 		return nil, nil, op.Expected("invalid", err)
 	}
 	principalID, err := s.ensurePerson(ctx, w, issuer, subject)

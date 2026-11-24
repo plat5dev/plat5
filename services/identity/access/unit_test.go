@@ -64,6 +64,47 @@ func TestResolve(t *testing.T) {
 	if got := IntersectScopes(admin, []string{}); len(got) != 0 {
 		t.Fatalf("IntersectScopes(admin, empty) = %v", got)
 	}
+
+	// ResolveWithCustom unions custom permissions and ignores "*".
+	custom := ResolveWithCustom(snap, []string{"viewer"}, []string{"billing:read", "*", "project:read"})
+	if custom.All || !custom.Has("billing:read") || !custom.Has("project:read") || custom.Has("other:perm") {
+		t.Fatalf("ResolveWithCustom = %+v", custom)
+	}
+}
+
+func TestMatchesRequiredClaims(t *testing.T) {
+	req := map[string][]string{
+		"amr":            {"mfa", "hwk"},
+		"idp_connection": {"okta-acme"},
+	}
+	if !matchesRequiredClaims(map[string][]string{"amr": {"pwd", "mfa"}, "idp_connection": {"okta-acme"}}, req) {
+		t.Fatal("expected matching claims to pass")
+	}
+	if matchesRequiredClaims(map[string][]string{"amr": {"pwd"}, "idp_connection": {"okta-acme"}}, req) {
+		t.Fatal("expected missing amr value to fail")
+	}
+	if matchesRequiredClaims(map[string][]string{"amr": {"mfa"}}, req) {
+		t.Fatal("expected missing idp_connection to fail")
+	}
+	if !matchesRequiredClaims(nil, nil) {
+		t.Fatal("expected empty required claims to pass")
+	}
+}
+
+func TestCheckAdmitTier2(t *testing.T) {
+	if err := checkAdmit(AdmitInput{Anonymous: true, AllowPublic: true, Chain: []ChainRef{{Kind: "organization", Ref: "acme"}}}); err != nil {
+		t.Fatalf("expected anonymous allow_public kind admit valid, got %v", err)
+	}
+	if err := checkAdmit(AdmitInput{Anonymous: true, AllowPublic: false, Chain: []ChainRef{{Kind: "organization", Ref: "acme"}}}); err == nil {
+		t.Fatal("expected anonymous without allow_public to fail")
+	}
+	if err := checkAdmit(AdmitInput{Anonymous: true, AllowPublic: true}); err == nil {
+		t.Fatal("expected anonymous on user route to fail")
+	}
+	cred := "k"
+	if err := checkAdmit(AdmitInput{Credential: &cred, Anonymous: true, AllowPublic: true, Chain: []ChainRef{{Kind: "organization", Ref: "acme"}}}); err == nil {
+		t.Fatal("expected credential + anonymous to fail")
+	}
 }
 
 func TestKindAtOrBelow(t *testing.T) {

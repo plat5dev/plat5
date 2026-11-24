@@ -31,7 +31,7 @@ In-process per replica, backed by identity's invalidation feed (`GET {IDENTITY_I
 
 | | |
 |--|--|
-| Key | The credential (a key as presented, or a verified JWT's issuer, subject, and forwarded scopes when `AUTH_SCOPE_CLAIM` is set), `allow_deleted`, and the chain refs as written in the path |
+| Key | The credential (a key as presented, anonymous flag, or a verified JWT's issuer, subject, forwarded scopes when `AUTH_SCOPE_CLAIM` is set, and forwarded policy claims when `AUTH_POLICY_CLAIMS` is set), `allow_deleted`, `allow_public`, and the chain refs as written in the path |
 | Invalidation | Targeted epoch checks (`key_id`, `user_id`, `member_id`, `root_id`, global reset, and identity's `config_revision`) driven by identity's invalidation feed; entries stamped before the admit call so in-flight revocations are never pinned. A lagging identity replica returning an older `config_revision` is served without caching |
 | TTL | `ADMIT_CACHE_TTL` (default `5m`), capped at `expires_at - now` when admit returns a key or binding expiry — fallback upper bound if the invalidation feed is disconnected |
 | Negative entries | For invalid credentials and `member_id: null`, for `ADMIT_NEGATIVE_CACHE_TTL` (default `10s`). Never for identity errors |

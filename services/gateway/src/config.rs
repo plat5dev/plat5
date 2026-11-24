@@ -39,6 +39,8 @@ pub struct GatewayConfig {
     pub auth_name_claims: NameClaims,
     /// Optional dotted claim path for JWT OAuth scopes (`AUTH_SCOPE_CLAIM`).
     pub auth_scope_claim: Option<Vec<String>>,
+    /// Optional dotted claim paths forwarded to identity for per-root auth policy checks (`AUTH_POLICY_CLAIMS`).
+    pub auth_policy_claims: Vec<(String, Vec<String>)>,
 
     /// Identity's internal base URL (`IDENTITY_INTERNAL_URL`); admit is at `/internal/admit`.
     pub identity_internal_url: String,
@@ -98,6 +100,8 @@ impl GatewayConfig {
             &env::var("AUTH_NAME_CLAIMS").unwrap_or_else(|_| DEFAULT_NAME_CLAIMS.to_string()),
         );
         let auth_scope_claim = parse_scope_claim(env::var("AUTH_SCOPE_CLAIM").ok().as_deref());
+        let auth_policy_claims =
+            parse_policy_claims(env::var("AUTH_POLICY_CLAIMS").ok().as_deref())?;
         let identity_internal_url = base_url(require_env("IDENTITY_INTERNAL_URL")?);
         let control_plane_url = base_url(require_env("CONTROL_PLANE_URL")?);
         let valkey_url = optional_module_url(
@@ -159,6 +163,7 @@ impl GatewayConfig {
             ),
             auth_name_claims,
             auth_scope_claim,
+            auth_policy_claims,
 
             identity_internal_url,
 
@@ -205,6 +210,34 @@ fn parse_name_claims(raw: &str) -> NameClaims {
 fn parse_scope_claim(raw: Option<&str>) -> Option<Vec<String>> {
     let parts = parse_claim_path(raw?);
     (!parts.is_empty()).then_some(parts)
+}
+
+const MAX_POLICY_CLAIMS: usize = 16;
+
+fn parse_policy_claims(
+    raw: Option<&str>,
+) -> Result<Vec<(String, Vec<String>)>, GatewayConfigError> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for item in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let parts = parse_claim_path(item);
+        if parts.is_empty() {
+            continue;
+        }
+        let canonical = parts.join(".");
+        if !out.iter().any(|(name, _)| name == &canonical) {
+            out.push((canonical, parts));
+        }
+    }
+    if out.len() > MAX_POLICY_CLAIMS {
+        return Err(GatewayConfigError::Invalid {
+            key: "AUTH_POLICY_CLAIMS",
+            message: format!("at most {MAX_POLICY_CLAIMS} claim paths are allowed"),
+        });
+    }
+    Ok(out)
 }
 
 fn base_url(raw: String) -> String {
@@ -442,6 +475,22 @@ mod tests {
             parse_scope_claim(Some("auth.scp")),
             Some(vec!["auth".into(), "scp".into()])
         );
+        assert_eq!(parse_policy_claims(None).unwrap(), vec![]);
+        assert_eq!(
+            parse_policy_claims(Some("amr, org.idp_connection, amr")).unwrap(),
+            vec![
+                ("amr".into(), vec!["amr".into()]),
+                (
+                    "org.idp_connection".into(),
+                    vec!["org".into(), "idp_connection".into()]
+                ),
+            ]
+        );
+        let too_many = (0..=MAX_POLICY_CLAIMS)
+            .map(|i| format!("c{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(parse_policy_claims(Some(&too_many)).is_err());
     }
 
     #[test]

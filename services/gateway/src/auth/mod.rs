@@ -7,6 +7,8 @@ pub mod call;
 pub mod invalidations;
 pub mod jwt;
 
+use std::collections::BTreeMap;
+
 use pingora::http::RequestHeader;
 use serde_json::Value;
 
@@ -43,6 +45,7 @@ pub enum Presented {
         subject: String,
         name: Option<String>,
         scopes: Option<Vec<String>>,
+        policy_claims: BTreeMap<String, Vec<String>>,
         kid: Option<String>,
     },
 }
@@ -118,6 +121,7 @@ pub struct Authenticator {
     jwt_cache: JwtCache,
     subject_claim: Vec<String>,
     scope_claim: Option<Vec<String>>,
+    policy_claims: Vec<(String, Vec<String>)>,
 }
 
 impl Authenticator {
@@ -125,12 +129,14 @@ impl Authenticator {
         jwt_validator: JwtValidatorState,
         subject_claim: Vec<String>,
         scope_claim: Option<Vec<String>>,
+        policy_claims: Vec<(String, Vec<String>)>,
     ) -> Self {
         Self {
             jwt_validator,
             jwt_cache: JwtCache::new(JWT_CACHE_CAPACITY, JWT_CACHE_TTL_BUFFER_SECS),
             subject_claim,
             scope_claim,
+            policy_claims,
         }
     }
 
@@ -194,12 +200,14 @@ impl Authenticator {
             .scope_claim
             .as_deref()
             .and_then(|path| extract_scopes(&claims, path));
+        let policy_claims = extract_policy_claims(&claims, &self.policy_claims);
         Ok(Presented::Jwt {
             // Validation checked `iss` against the configured issuer.
             issuer: self.jwt_validator.get_issuer(),
             subject,
             name: first_name(&claims, name_claims),
             scopes,
+            policy_claims,
             kid,
         })
     }
@@ -257,6 +265,64 @@ pub fn extract_scopes(claims: &Value, path: &[String]) -> Option<Vec<String>> {
     scopes.sort();
     scopes.dedup();
     Some(scopes)
+}
+
+/// Extract discrete claim values configured by `AUTH_POLICY_CLAIMS` from JWT
+/// claims JSON. Accepts string, bool, number, or an array of those values,
+/// returning sorted, deduplicated strings per claim name.
+pub fn extract_policy_claims(
+    claims: &Value,
+    paths: &[(String, Vec<String>)],
+) -> BTreeMap<String, Vec<String>> {
+    let mut out = BTreeMap::new();
+    for (canonical, path) in paths {
+        if path.is_empty() {
+            continue;
+        }
+        let mut cur = claims;
+        let mut found = true;
+        for key in path {
+            let Some(next) = cur.get(key) else {
+                found = false;
+                break;
+            };
+            cur = next;
+        }
+        if !found {
+            continue;
+        }
+        let mut vals: Vec<String> = match cur {
+            Value::String(s) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![t.to_string()]
+                }
+            }
+            Value::Bool(b) => vec![b.to_string()],
+            Value::Number(n) => vec![n.to_string()],
+            Value::Array(items) => items
+                .iter()
+                .filter_map(|item| match item {
+                    Value::String(s) => {
+                        let t = s.trim();
+                        (!t.is_empty()).then(|| t.to_string())
+                    }
+                    Value::Bool(b) => Some(b.to_string()),
+                    Value::Number(n) => Some(n.to_string()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        vals.sort();
+        vals.dedup();
+        if !vals.is_empty() {
+            out.insert(canonical.clone(), vals);
+        }
+    }
+    out
 }
 
 /// The first of `paths` that holds a string with something besides spaces,
@@ -379,7 +445,43 @@ mod tests {
             ),
             parse_subject_claim("sub"),
             None,
+            Vec::new(),
         )
+    }
+
+    #[test]
+    fn extract_policy_claims_handles_scalars_arrays_and_nested() {
+        let claims = json!({
+            "amr": ["mfa", "pwd", "mfa", " "],
+            "acr": "urn:okta:loa:2fa",
+            "email_verified": true,
+            "org": { "idp_connection": "okta-acme" },
+            "empty": "",
+            "obj": { "a": 1 }
+        });
+        let paths = vec![
+            ("amr".into(), parse_claim_path("amr")),
+            ("acr".into(), parse_claim_path("acr")),
+            ("email_verified".into(), parse_claim_path("email_verified")),
+            (
+                "org.idp_connection".into(),
+                parse_claim_path("org.idp_connection"),
+            ),
+            ("empty".into(), parse_claim_path("empty")),
+            ("missing".into(), parse_claim_path("missing")),
+            ("obj".into(), parse_claim_path("obj")),
+        ];
+        let got = extract_policy_claims(&claims, &paths);
+        assert_eq!(got.get("amr"), Some(&vec!["mfa".into(), "pwd".into()]));
+        assert_eq!(got.get("acr"), Some(&vec!["urn:okta:loa:2fa".into()]));
+        assert_eq!(got.get("email_verified"), Some(&vec!["true".into()]));
+        assert_eq!(
+            got.get("org.idp_connection"),
+            Some(&vec!["okta-acme".into()])
+        );
+        assert!(!got.contains_key("empty"));
+        assert!(!got.contains_key("missing"));
+        assert!(!got.contains_key("obj"));
     }
 
     #[test]

@@ -2,6 +2,7 @@ package access
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"strings"
 	"time"
@@ -17,24 +18,32 @@ import (
 	"github.com/plat5dev/plat5/identity/nodes"
 )
 
+const principalAnonymous = "anonymous"
+
 // AdmitInput is POST /internal/admit (docs/reference/api/internal.md#admit):
-// a credential, or the IdP's issuer and subject, and the route's node chain.
-// An empty chain is a user route.
+// a credential, the IdP's issuer and subject, or anonymous: true (on an
+// allow_public kind route), plus the route's node chain. An empty chain is a
+// user route.
 type AdmitInput struct {
 	Credential   *string
 	IdP          *IdPClaims
+	Anonymous    bool
 	Chain        []ChainRef
 	AllowDeleted bool
+	AllowPublic  bool
 }
 
 // IdPClaims is what the gateway read from a verified JWT. Name is the first
 // non-empty claim of AUTH_NAME_CLAIMS. When HasScopes is true, effective
-// permissions on kind routes are intersected with Scopes.
+// permissions on kind routes are intersected with Scopes. PolicyClaims carries
+// the discrete claims configured via AUTH_POLICY_CLAIMS for per-root policy
+// enforcement.
 type IdPClaims struct {
 	Issuer, Subject string
 	Name            *string
 	HasScopes       bool
 	Scopes          []string
+	PolicyClaims    map[string][]string
 }
 
 // ChainRef is one chain param from the path: an id when it starts with a
@@ -54,6 +63,7 @@ type Admitted struct {
 	Principal       string
 	KeyID           string
 	AllowedCIDRs    []string
+	OrgAllowedCIDRs []string
 	Nodes           []ChainNode
 	MemberID        string
 	UserID          string
@@ -62,6 +72,32 @@ type Admitted struct {
 	ExpiresAt       *time.Time
 	InvalidationSeq int64
 	ConfigRevision  int64
+}
+
+type rootSecurityPolicy struct {
+	allowPersonalKeys bool
+	allowedCIDRs      []string
+	requiredIdPClaims map[string][]string
+}
+
+func matchesRequiredClaims(have, required map[string][]string) bool {
+	for claim, wantVals := range required {
+		if len(wantVals) == 0 {
+			continue
+		}
+		gotVals := have[claim]
+		matched := false
+		for _, g := range gotVals {
+			if slices.Contains(wantVals, g) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 // admitPrincipal is the principal behind a credential.
@@ -98,16 +134,48 @@ func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (
 	if err := checkAdmit(in); err != nil {
 		return nil, op.Expected("invalid", err)
 	}
+	var configRev int64
+	if snap != nil {
+		configRev = snap.Revision
+	}
+
+	if in.Anonymous {
+		chain, _, roles, customPerms, rootTier, minBindingExp, policy, chainSeq, err := s.resolveAdmitChain(
+			ctx, snap, "", in.Chain, in.AllowDeleted, true, true,
+		)
+		if err != nil {
+			return nil, op.Fail(err)
+		}
+		out := &Admitted{
+			Valid:           true,
+			Principal:       principalAnonymous,
+			OrgAllowedCIDRs: policy.allowedCIDRs,
+			InvalidationSeq: chainSeq,
+			ConfigRevision:  configRev,
+		}
+		if chain == nil {
+			op.OK("not found")
+			return out, nil
+		}
+		perms := ResolveWithCustom(snap, roles, customPerms).List()
+		if len(perms) == 0 {
+			op.OK("not public")
+			return out, nil
+		}
+		out.Nodes = chain
+		out.Permissions = perms
+		out.RateLimitTier = rootTier
+		out.ExpiresAt = minBindingExp
+		op.OK("admitted")
+		return out, nil
+	}
+
 	userRoute := len(in.Chain) == 0
 
 	// 1. Principal.
 	p, seq, err := s.admitPrincipal(ctx, in)
 	if err != nil {
 		return nil, op.Fail(err)
-	}
-	var configRev int64
-	if snap != nil {
-		configRev = snap.Revision
 	}
 	if p == nil {
 		op.OK("invalid")
@@ -133,9 +201,12 @@ func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (
 	}
 
 	// 2–4. Resolve the node chain, the principal's active unsuspended member in
-	// its root, the root's rate_limit_tier, and the member's unexpired counting
-	// roles along the chain in one query.
-	chain, memberID, roles, rootTier, minBindingExp, chainSeq, err := s.resolveAdmitChain(ctx, snap, p.id, in.Chain, in.AllowDeleted)
+	// its root, the root's rate_limit_tier and security policy, and the
+	// unexpired counting roles (predefined + custom + public when allow_public)
+	// along the chain in one query.
+	chain, memberID, roles, customPerms, rootTier, minBindingExp, policy, chainSeq, err := s.resolveAdmitChain(
+		ctx, snap, p.id, in.Chain, in.AllowDeleted, false, in.AllowPublic,
+	)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
@@ -148,25 +219,48 @@ func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (
 		op.OK("not found")
 		return out, nil
 	}
-	if memberID == "" {
-		op.OK("no member")
-		return out, nil
-	}
+	out.OrgAllowedCIDRs = policy.allowedCIDRs
+
 	if len(p.allowedRoots) > 0 && !slices.Contains(p.allowedRoots, chain[0].ID) {
 		op.OK("root disallowed")
 		return out, nil
 	}
-	out.Nodes, out.MemberID, out.RateLimitTier = chain, memberID, rootTier
-	out.ExpiresAt = earliestTime(p.expiresAt, minBindingExp)
-	resolved := Resolve(snap, roles)
+	// Enforce per-root auth & security policies.
+	if in.Credential != nil && p.kind == principalPerson && !policy.allowPersonalKeys {
+		op.OK("personal keys disallowed")
+		return out, nil
+	}
+	if in.IdP != nil && len(policy.requiredIdPClaims) > 0 && !matchesRequiredClaims(in.IdP.PolicyClaims, policy.requiredIdPClaims) {
+		op.OK("idp policy denied")
+		return out, nil
+	}
+
+	resolved := ResolveWithCustom(snap, roles, customPerms)
+	var perms []string
 	switch {
 	case len(p.scopes) > 0:
-		out.Permissions = IntersectScopes(resolved, p.scopes)
+		perms = IntersectScopes(resolved, p.scopes)
 	case in.IdP != nil && in.IdP.HasScopes:
-		out.Permissions = IntersectScopes(resolved, in.IdP.Scopes)
+		perms = IntersectScopes(resolved, in.IdP.Scopes)
 	default:
-		out.Permissions = resolved.List()
+		perms = resolved.List()
 	}
+
+	if memberID == "" {
+		if !in.AllowPublic || len(perms) == 0 {
+			op.OK("no member")
+			return out, nil
+		}
+		out.Nodes = chain
+		out.RateLimitTier = rootTier
+		out.ExpiresAt = earliestTime(p.expiresAt, minBindingExp)
+		out.Permissions = perms
+		op.OK("admitted public")
+		return out, nil
+	}
+	out.Nodes, out.MemberID, out.RateLimitTier = chain, memberID, rootTier
+	out.ExpiresAt = earliestTime(p.expiresAt, minBindingExp)
+	out.Permissions = perms
 	op.OK("admitted")
 	return out, nil
 }
@@ -175,11 +269,24 @@ func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (
 // matched by name only, never against the config: a gateway on another
 // revision gets member_id null, not an error.
 func checkAdmit(in AdmitInput) error {
-	if (in.Credential == nil) == (in.IdP == nil) {
-		return errors.FieldError("credential", "Send a credential or idp.")
+	count := 0
+	if in.Credential != nil {
+		count++
+	}
+	if in.IdP != nil {
+		count++
+	}
+	if in.Anonymous {
+		count++
+	}
+	if count != 1 {
+		return errors.FieldError("credential", "Send exactly one of credential, idp, or anonymous.")
 	}
 	if in.IdP != nil && (strings.TrimSpace(in.IdP.Issuer) == "" || strings.TrimSpace(in.IdP.Subject) == "") {
 		return errors.FieldError("idp", errors.FallbackValidation)
+	}
+	if in.Anonymous && (len(in.Chain) == 0 || !in.AllowPublic) {
+		return errors.FieldError("anonymous", "Anonymous admit requires allow_public on a kind route.")
 	}
 	return nil
 }
@@ -303,7 +410,10 @@ func (s *Store) resolveAdmitChain(
 	principalID string,
 	refs []ChainRef,
 	allowDeleted bool,
-) ([]ChainNode, string, []string, *string, *time.Time, int64, error) {
+	anonymous bool,
+	allowPublic bool,
+) ([]ChainNode, string, []string, []string, *string, *time.Time, rootSecurityPolicy, int64, error) {
+	defaultPolicy := rootSecurityPolicy{allowPersonalKeys: true}
 	n := len(refs)
 	pos := make([]int32, n)
 	kinds := make([]string, n)
@@ -312,7 +422,7 @@ func (s *Store) resolveAdmitChain(
 	for i, c := range refs {
 		isID := id.IsID(c.Ref)
 		if isID && !id.Valid(c.Ref) {
-			return nil, "", nil, nil, nil, 0, nil
+			return nil, "", nil, nil, nil, nil, defaultPolicy, 0, nil
 		}
 		pos[i] = int32(i + 1)
 		kinds[i] = c.Kind
@@ -328,8 +438,12 @@ func (s *Store) resolveAdmitChain(
 	var nodeIDs []string
 	var memberID *string
 	var roles []string
+	var customPerms []string
 	var rootTier *string
 	var minExpiresAt *time.Time
+	var allowPersonalKeys *bool
+	var orgAllowedCIDRs []string
+	var requiredClaimsRaw []byte
 	var invSeq int64
 	err := s.pool.QueryRow(ctx, `
 		WITH RECURSIVE
@@ -382,51 +496,88 @@ func (s *Store) resolveAdmitChain(
 				) n
 			),
 			resolved AS (
-				SELECT pos, kind, id
-				FROM chain
+				SELECT c.pos, c.kind, c.id, (SELECT id FROM chain WHERE pos = 1) AS root_id
+				FROM chain c
 				WHERE (SELECT count(*) FROM chain) = $5
 			),
 			member AS (
 				SELECT m.id
 				FROM members m
 				JOIN resolved r ON r.pos = 1 AND m.root_id = r.id
-				WHERE m.principal_id = $7 AND m.removed_at IS NULL AND m.suspended_at IS NULL
+				WHERE NOT $11 AND m.principal_id = $7 AND m.removed_at IS NULL AND m.suspended_at IS NULL
+			),
+			suspended_here AS (
+				SELECT EXISTS (
+					SELECT 1
+					FROM members m
+					JOIN resolved r ON r.pos = 1 AND m.root_id = r.id
+					WHERE NOT $11 AND m.principal_id = $7 AND m.removed_at IS NULL AND m.suspended_at IS NOT NULL
+				) AS is_suspended
 			),
 			roles AS (
-				SELECT b.role, b.expires_at
+				SELECT b.role, b.expires_at, cr.permissions AS custom_perms
 				FROM resolved bn
-				JOIN member m ON true
-				JOIN bindings b ON b.node_id = bn.id AND (
-					b.member_id = m.id
-					OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = b.group_id AND gm.member_id = m.id)
-				)
+				JOIN bindings b ON b.node_id = bn.id
+				LEFT JOIN org_roles cr ON cr.id = b.role AND cr.root_id = bn.root_id AND bn.kind = ANY(cr.bindable_at)
 				WHERE (b.expires_at IS NULL OR b.expires_at > $10)
 				  AND `+CountsSQL("$8", "$9")+`
+				  AND (
+					(NOT $11 AND (
+						b.member_id = (SELECT id FROM member)
+						OR EXISTS (
+							SELECT 1 FROM group_members gm
+							WHERE gm.group_id = b.group_id AND gm.member_id = (SELECT id FROM member)
+						)
+					))
+					OR ($12 AND NOT (SELECT is_suspended FROM suspended_here) AND (
+						b.public_principal = 'all_users'
+						OR (NOT $11 AND b.public_principal = 'all_authenticated_users')
+					))
+				  )
 			)
 		SELECT
 			(SELECT array_agg(id ORDER BY pos) FROM resolved),
 			(SELECT id FROM member),
 			(SELECT array_agg(DISTINCT role) FROM roles),
+			(SELECT array_agg(DISTINCT p) FROM roles, unnest(COALESCE(custom_perms, '{}')) AS p),
 			(SELECT n.rate_limit_tier FROM resolved r JOIN nodes n ON n.id = r.id WHERE r.pos = 1),
 			(SELECT MIN(expires_at) FROM roles WHERE expires_at IS NOT NULL),
+			(SELECT rsp.allow_personal_keys FROM resolved r JOIN root_security_policies rsp ON rsp.root_id = r.id WHERE r.pos = 1),
+			(SELECT rsp.allowed_cidrs FROM resolved r JOIN root_security_policies rsp ON rsp.root_id = r.id WHERE r.pos = 1),
+			(SELECT rsp.required_idp_claims FROM resolved r JOIN root_security_policies rsp ON rsp.root_id = r.id WHERE r.pos = 1),
 			COALESCE((SELECT MAX(id) FROM admit_invalidations), 0)
-	`, pos, kinds, refVals, isIDs, n, allowDeleted, principalID, bindKinds, bindRoles, now).Scan(
-		&nodeIDs, &memberID, &roles, &rootTier, &minExpiresAt, &invSeq,
+	`, pos, kinds, refVals, isIDs, n, allowDeleted, principalID, bindKinds, bindRoles, now, anonymous, allowPublic).Scan(
+		&nodeIDs, &memberID, &roles, &customPerms, &rootTier, &minExpiresAt,
+		&allowPersonalKeys, &orgAllowedCIDRs, &requiredClaimsRaw, &invSeq,
 	)
 	if err != nil {
-		return nil, "", nil, nil, nil, 0, err
+		return nil, "", nil, nil, nil, nil, defaultPolicy, 0, err
 	}
 	if len(nodeIDs) != n {
-		return nil, "", nil, nil, nil, invSeq, nil
+		return nil, "", nil, nil, nil, nil, defaultPolicy, invSeq, nil
 	}
 	out := make([]ChainNode, n)
 	for i, nodeID := range nodeIDs {
 		out[i] = ChainNode{Kind: refs[i].Kind, ID: nodeID}
 	}
-	if memberID == nil {
-		return out, "", nil, rootTier, nil, invSeq, nil
+	policy := defaultPolicy
+	if allowPersonalKeys != nil {
+		policy.allowPersonalKeys = *allowPersonalKeys
 	}
-	return out, *memberID, roles, rootTier, minExpiresAt, invSeq, nil
+	if len(orgAllowedCIDRs) > 0 {
+		policy.allowedCIDRs = orgAllowedCIDRs
+	}
+	if len(requiredClaimsRaw) > 0 {
+		var req map[string][]string
+		if err := json.Unmarshal(requiredClaimsRaw, &req); err == nil && len(req) > 0 {
+			policy.requiredIdPClaims = req
+		}
+	}
+	mID := ""
+	if memberID != nil {
+		mID = *memberID
+	}
+	return out, mID, roles, customPerms, rootTier, minExpiresAt, policy, invSeq, nil
 }
 
 // liveInChain is whether a node lets its chain resolve: live, or, with
@@ -446,10 +597,11 @@ type queryer interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// heldOnChains is, for each pair, the roles of the member's unexpired bindings
-// on the chain's nodes that count there (bindable at the node's kind): what
-// Resolve unions. Evaluations and resource search share it.
-func heldOnChains(ctx context.Context, q queryer, snap *feed.Snapshot, pairs []memberChain, now time.Time) ([][]string, error) {
+// heldOnChains is, for each pair, the roles and custom-role permissions of the
+// member's unexpired bindings on the chain's nodes that count there (bindable
+// at the node's kind): what ResolveWithCustom unions. Evaluations and resource
+// search share it.
+func heldOnChains(ctx context.Context, q queryer, snap *feed.Snapshot, pairs []memberChain, now time.Time) ([][]string, [][]string, error) {
 	var idx []int32
 	var memberIDs, nodeIDs []string
 	for i, p := range pairs {
@@ -459,32 +611,38 @@ func heldOnChains(ctx context.Context, q queryer, snap *feed.Snapshot, pairs []m
 			nodeIDs = append(nodeIDs, n.ID)
 		}
 	}
-	out := make([][]string, len(pairs))
+	outRoles := make([][]string, len(pairs))
+	outCustom := make([][]string, len(pairs))
 	if len(idx) == 0 {
-		return out, nil
+		return outRoles, outCustom, nil
 	}
 	kinds, roles := BindablePairs(snap)
 	rows, err := q.Query(ctx, `
-		SELECT c.i, b.role
+		SELECT c.i, b.role, COALESCE(cr.permissions, '{}')
 		FROM unnest($1::int[], $2::text[], $3::text[]) AS c (i, member_id, node_id)
 		JOIN bindings b ON b.node_id = c.node_id AND (
 			b.member_id = c.member_id
 			OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = b.group_id AND gm.member_id = c.member_id)
 		)
 		JOIN nodes bn ON bn.id = b.node_id
+		LEFT JOIN org_roles cr ON cr.id = b.role AND cr.root_id = bn.root_id AND bn.kind = ANY(cr.bindable_at)
 		WHERE (b.expires_at IS NULL OR b.expires_at > $6)
 		  AND `+CountsSQL("$4", "$5"),
 		idx, memberIDs, nodeIDs, kinds, roles, now)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var i int32
 	var role string
-	if _, err := pgx.ForEachRow(rows, []any{&i, &role}, func() error {
-		out[i] = append(out[i], role)
+	var perms []string
+	if _, err := pgx.ForEachRow(rows, []any{&i, &role, &perms}, func() error {
+		outRoles[i] = append(outRoles[i], role)
+		if len(perms) > 0 {
+			outCustom[i] = append(outCustom[i], perms...)
+		}
 		return nil
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return out, nil
+	return outRoles, outCustom, nil
 }

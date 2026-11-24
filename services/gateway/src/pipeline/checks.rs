@@ -174,11 +174,12 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
                 Err(CheckRefused::Unavailable) => return Err(Rejection::Unavailable),
                 Err(CheckRefused::Credential) => {
                     let auth_type = match credential {
-                        AdmitCredential::Credential(_) => crate::auth::AuthType::ApiKey,
-                        AdmitCredential::Idp { .. } => crate::auth::AuthType::Jwt,
+                        AdmitCredential::Credential(_) => Some(crate::auth::AuthType::ApiKey),
+                        AdmitCredential::Idp { .. } => Some(crate::auth::AuthType::Jwt),
+                        AdmitCredential::Anonymous(_) => None,
                     };
                     let rejection =
-                        unauthorized(AuthError::InvalidCredential, Some(auth_type), CHECKS_SCOPE);
+                        unauthorized(AuthError::InvalidCredential, auth_type, CHECKS_SCOPE);
                     return Err(self.count_refusal(ip).await.unwrap_or(rejection));
                 }
             }
@@ -225,8 +226,8 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         {
             return Ok(false);
         }
-        // No such node, or not in its tree: what a request would get as a 403.
-        if answer.refused(&req) {
+        // Org IP allowlist, missing node, or not in tree: what a request would get as a 403.
+        if !answer.allows_org_ip(ip) || answer.refused(&req) {
             return Ok(false);
         }
         // The permission check. A user route requires nothing of a person.

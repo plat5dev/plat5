@@ -78,19 +78,41 @@ CREATE TABLE group_members (
     PRIMARY KEY (group_id, member_id)
 );
 
-CREATE TABLE bindings (
-    id          TEXT PRIMARY KEY,
-    member_id   TEXT REFERENCES members (id),
-    group_id    TEXT REFERENCES groups (id) ON DELETE CASCADE,
-    node_id     TEXT NOT NULL REFERENCES nodes (id),   -- under the member's or group's root
-    role        TEXT NOT NULL,                         -- grants nothing if the role is gone
-    expires_at  TIMESTAMPTZ,                           -- optional JIT expiry
+CREATE TABLE root_security_policies (
+    root_id             TEXT PRIMARY KEY REFERENCES nodes (id) ON DELETE CASCADE,
+    allow_personal_keys BOOLEAN NOT NULL DEFAULT TRUE,
+    allowed_cidrs       TEXT[] NOT NULL DEFAULT '{}',
+    required_idp_claims JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE org_roles (
+    id          TEXT PRIMARY KEY,                      -- ULID; never collides with letter-prefixed predefined slugs
+    root_id     TEXT NOT NULL REFERENCES nodes (id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    description TEXT,
+    permissions TEXT[] NOT NULL,                       -- never '*'
+    bindable_at TEXT[] NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CHECK ((member_id IS NOT NULL) <> (group_id IS NOT NULL))
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX org_roles_root_name_uidx ON org_roles (root_id, LOWER(name));
+
+CREATE TABLE bindings (
+    id               TEXT PRIMARY KEY,
+    member_id        TEXT REFERENCES members (id),
+    group_id         TEXT REFERENCES groups (id) ON DELETE CASCADE,
+    public_principal TEXT CHECK (public_principal IN ('all_users', 'all_authenticated_users')),
+    node_id          TEXT NOT NULL REFERENCES nodes (id),   -- under the member's or group's root
+    role             TEXT NOT NULL,                         -- predefined slug or root org_role id; grants nothing if gone
+    expires_at       TIMESTAMPTZ,                           -- optional JIT expiry
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (((member_id IS NOT NULL)::int + (group_id IS NOT NULL)::int + (public_principal IS NOT NULL)::int) = 1)
 );
 CREATE UNIQUE INDEX bindings_member_role_uidx ON bindings (member_id, node_id, role) WHERE member_id IS NOT NULL;
 CREATE UNIQUE INDEX bindings_group_role_uidx ON bindings (group_id, node_id, role) WHERE group_id IS NOT NULL;
+CREATE UNIQUE INDEX bindings_public_role_uidx ON bindings (public_principal, node_id, role) WHERE public_principal IS NOT NULL;
 
 CREATE TABLE api_keys (
     id            TEXT PRIMARY KEY,

@@ -17,9 +17,48 @@
       "title": "creator_role",
       "description": "Required. What the creator of a node gets on it, where its kind binds its creator (`bind_creator`). Bindable at every kind.",
       "$ref": "#/$defs/role_slug"
+    },
+    "custom_roles": {
+      "title": "custom_roles",
+      "description": "Optional. Enables root-scoped custom roles managed through identity's API alongside predefined roles. Default `false`.",
+      "type": "boolean",
+      "default": false
+    },
+    "permissions": {
+      "title": "permissions",
+      "description": "Optional map of permission → metadata (`description`, `bindable_at`, `custom_role_assignable`) augmenting the permission catalog derived from routes and kinds for custom roles.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/permission" },
+      "additionalProperties": { "$ref": "#/$defs/permission_meta" }
     }
   },
   "$defs": {
+    "permission_meta": {
+      "title": "permission_meta",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "title": "description",
+          "description": "Optional human-readable description shown by the permissions catalog API.",
+          "type": "string",
+          "maxLength": 256
+        },
+        "bindable_at": {
+          "title": "bindable_at",
+          "description": "Optional kinds where custom roles holding this permission may be bound. Omitted allows any kind.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "kinds.json#/$defs/kind_name" }
+        },
+        "custom_role_assignable": {
+          "title": "custom_role_assignable",
+          "description": "Whether org custom roles may include this permission. Default `true`.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
     "role_slug": {
       "title": "slug",
       "description": "`[a-z0-9:._-]+`, max 64. Opaque to Plat5.",

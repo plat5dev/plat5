@@ -86,7 +86,7 @@ func (s *Store) CreateServiceAccount(ctx context.Context, snap *feed.Snapshot, n
 	if err != nil {
 		return nil, nil, op.Reject(err, nodes.ErrNotFound)
 	}
-	if err := checkRole(snap, role, n.Kind, "role"); err != nil {
+	if err := checkRoleTx(ctx, w.tx, snap, n.RootID, role, n.Kind, "role"); err != nil {
 		return nil, nil, op.Expected("invalid", err)
 	}
 	now := s.now().UTC()

@@ -25,9 +25,11 @@ import (
 )
 
 const (
-	PrincipalPerson         = "person"
-	PrincipalServiceAccount = "service_account"
-	PrincipalGroup          = "group"
+	PrincipalPerson                = "person"
+	PrincipalServiceAccount        = "service_account"
+	PrincipalGroup                 = "group"
+	PrincipalAllUsers              = "all_users"
+	PrincipalAllAuthenticatedUsers = "all_authenticated_users"
 
 	StatusActive    = "active"
 	StatusSuspended = "suspended"
@@ -243,21 +245,35 @@ func (s *Store) removeEmptyPeople(ctx context.Context, w *write, memberIDs []str
 
 // --- roles ---
 
-// checkRole is the rule for any binding a write makes: a role is given, is in
-// the document, and is bindable at the node's kind
-// (docs/concepts/access.md#assigning). field names the role in errors.
-func checkRole(snap *feed.Snapshot, roleSlug, kind, field string) error {
-	if roleSlug == "" {
+// checkRoleTx is the rule for any binding a write makes: a role is given, is
+// either a predefined role in snap or a custom role of rootID, and is bindable
+// at kind (docs/concepts/access.md#assigning). field names the role in errors.
+func checkRoleTx(ctx context.Context, q dbx.Querier, snap *feed.Snapshot, rootID, roleRef, kind, field string) error {
+	if roleRef == "" {
 		return errors.FieldError(field, "Choose a role.")
 	}
-	role, ok := snap.Role(roleSlug)
-	if !ok {
-		return errors.FieldError(field, "That role doesn't exist.")
+	if role, ok := snap.Role(roleRef); ok {
+		if !role.BindableAtKind(kind) {
+			return errors.FieldError(field, fmt.Sprintf("That role can't be given on this %s.", kind))
+		}
+		return nil
 	}
-	if !role.BindableAtKind(kind) {
-		return errors.FieldError(field, fmt.Sprintf("That role can't be given on this %s.", kind))
+	if id.Valid(roleRef) && q != nil && rootID != "" {
+		var bindableAt []string
+		err := q.QueryRow(ctx, `SELECT bindable_at FROM org_roles WHERE id = $1 AND root_id = $2`, roleRef, rootID).Scan(&bindableAt)
+		if err == nil {
+			for _, k := range bindableAt {
+				if k == kind {
+					return nil
+				}
+			}
+			return errors.FieldError(field, fmt.Sprintf("That role can't be given on this %s.", kind))
+		}
+		if !dbx.IsNoRows(err) {
+			return err
+		}
 	}
-	return nil
+	return errors.FieldError(field, "That role doesn't exist.")
 }
 
 // page trims a limit+1 read to limit and says whether there was more.

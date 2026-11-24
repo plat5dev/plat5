@@ -272,7 +272,7 @@ func (s *Store) visible(ctx context.Context, snap *feed.Snapshot, cands []*liste
 	}
 	kinds, roles := access.BindablePairs(snap)
 	rows, err := s.pool.Query(ctx, `
-		SELECT c.node_id, b.role
+		SELECT c.node_id, b.role, COALESCE(cr.permissions, '{}')
 		FROM unnest($1::text[], $2::text[]) AS c (node_id, member_id)
 		JOIN node_ancestors a ON a.node_id = c.node_id
 		JOIN bindings b ON b.node_id = a.ancestor_id AND (
@@ -280,6 +280,7 @@ func (s *Store) visible(ctx context.Context, snap *feed.Snapshot, cands []*liste
 			OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = b.group_id AND gm.member_id = c.member_id)
 		)
 		JOIN nodes bn ON bn.id = b.node_id
+		LEFT JOIN org_roles cr ON cr.id = b.role AND cr.root_id = bn.root_id AND bn.kind = ANY(cr.bindable_at)
 		WHERE (bn.status = 'active' OR bn.id = c.node_id)
 		  AND (b.expires_at IS NULL OR b.expires_at > $5)
 		  AND `+access.CountsSQL("$3", "$4"),
@@ -288,16 +289,21 @@ func (s *Store) visible(ctx context.Context, snap *feed.Snapshot, cands []*liste
 		return nil, err
 	}
 	held := map[string][]string{}
+	heldCustom := map[string][]string{}
 	var nodeID, role string
-	if _, err := pgx.ForEachRow(rows, []any{&nodeID, &role}, func() error {
+	var perms []string
+	if _, err := pgx.ForEachRow(rows, []any{&nodeID, &role, &perms}, func() error {
 		held[nodeID] = append(held[nodeID], role)
+		if len(perms) > 0 {
+			heldCustom[nodeID] = append(heldCustom[nodeID], perms...)
+		}
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 	for _, c := range cands {
 		k, ok := snap.Kind(c.Kind)
-		out[c.ID] = ok && access.Resolve(snap, held[c.ID]).Has(k.ListPermission)
+		out[c.ID] = ok && access.ResolveWithCustom(snap, held[c.ID], heldCustom[c.ID]).Has(k.ListPermission)
 	}
 	return out, nil
 }

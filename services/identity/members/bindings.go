@@ -16,21 +16,22 @@ import (
 	"github.com/plat5dev/plat5/identity/nodes"
 )
 
-// Binding is a role for a member or a group on one node of its tree, as listed
-// at a node: Inherited when it sits on an ancestor of that node.
+// Binding is a role for a member, group, or public principal on one node of its
+// tree, as listed at a node: Inherited when it sits on an ancestor of that node.
 type Binding struct {
-	ID        string
-	MemberID  *string
-	GroupID   *string
-	NodeID    string
-	Role      string
-	Inherited bool
-	Guest     bool
-	Principal string
-	Name      *string
-	ExpiresAt *time.Time
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID              string
+	MemberID        *string
+	GroupID         *string
+	PublicPrincipal *string
+	NodeID          string
+	Role            string
+	Inherited       bool
+	Guest           bool
+	Principal       string
+	Name            *string
+	ExpiresAt       *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 	// nodeKind is the kind of the node it sits on, which decides whether its
 	// role counts.
 	nodeKind string
@@ -46,10 +47,18 @@ type BindingPatch struct {
 // bindingSelect reads Bindings as listed at node $1; where uses $2 on.
 func bindingSelect(where string) string {
 	return `
-		SELECT b.id, b.member_id, b.group_id, b.node_id, b.role, b.node_id <> $1,
+		SELECT b.id, b.member_id, b.group_id, b.public_principal, b.node_id, b.role, b.node_id <> $1,
 		       COALESCE(` + guestSQL + `, false),
-		       CASE WHEN b.group_id IS NOT NULL THEN 'group' ELSE m.principal END,
-		       CASE WHEN b.group_id IS NOT NULL THEN g.name ELSE p.name END,
+		       CASE
+		           WHEN b.group_id IS NOT NULL THEN 'group'
+		           WHEN b.public_principal IS NOT NULL THEN b.public_principal
+		           ELSE m.principal
+		       END,
+		       CASE
+		           WHEN b.group_id IS NOT NULL THEN g.name
+		           WHEN b.public_principal IS NOT NULL THEN NULL
+		           ELSE p.name
+		       END,
 		       b.expires_at, b.created_at, b.updated_at, bn.kind
 		FROM bindings b
 		JOIN nodes bn ON bn.id = b.node_id
@@ -61,7 +70,7 @@ func bindingSelect(where string) string {
 
 func scanBinding(row dbx.Scannable) (*Binding, error) {
 	var b Binding
-	if err := row.Scan(&b.ID, &b.MemberID, &b.GroupID, &b.NodeID, &b.Role, &b.Inherited, &b.Guest, &b.Principal, &b.Name,
+	if err := row.Scan(&b.ID, &b.MemberID, &b.GroupID, &b.PublicPrincipal, &b.NodeID, &b.Role, &b.Inherited, &b.Guest, &b.Principal, &b.Name,
 		&b.ExpiresAt, &b.CreatedAt, &b.UpdatedAt, &b.nodeKind); err != nil {
 		return nil, err
 	}
@@ -125,7 +134,7 @@ func (s *Store) CreateGroupBinding(ctx context.Context, snap *feed.Snapshot, nod
 	if err != nil {
 		return nil, op.Reject(err, nodes.ErrNotFound)
 	}
-	if err := checkRole(snap, role, n.Kind, "role"); err != nil {
+	if err := checkRoleTx(ctx, w.tx, snap, n.RootID, role, n.Kind, "role"); err != nil {
 		return nil, op.Expected("invalid", err)
 	}
 	if err := s.checkGroupInTree(ctx, w, n, groupID); err != nil {
@@ -134,6 +143,58 @@ func (s *Store) CreateGroupBinding(ctx context.Context, snap *feed.Snapshot, nod
 	b, err := s.insertGroupBinding(ctx, w, groupID, n.ID, role, expiresAt)
 	if err != nil {
 		return nil, op.Reject(err)
+	}
+	w.invalidate(lifecycle.InvalidateRoot(n.RootID))
+	if err := w.commit(ctx); err != nil {
+		return nil, op.Fail(err)
+	}
+	op.OK("created")
+	return b, nil
+}
+
+// CreatePublicBinding binds role for a public principal (all_users or
+// all_authenticated_users) on a node whose kind sets allow_public: true.
+func (s *Store) CreatePublicBinding(ctx context.Context, snap *feed.Snapshot, nodeID, publicPrincipal, role string, expiresAt *time.Time) (*Binding, error) {
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_public_binding", dbx.DefaultTimeout)
+	defer cancel()
+	defer op.End()
+
+	if publicPrincipal != PrincipalAllUsers && publicPrincipal != PrincipalAllAuthenticatedUsers {
+		return nil, op.Expected("invalid", errors.FieldError("public_principal", "Must be all_users or all_authenticated_users."))
+	}
+	if expiresAt != nil && !expiresAt.After(s.now().UTC()) {
+		return nil, op.Expected("invalid", errors.FieldError("expires_at", "Expiry must be in the future."))
+	}
+	w, err := s.begin(ctx)
+	if err != nil {
+		return nil, op.Fail(err)
+	}
+	defer w.rollback(ctx)
+	n, err := s.nodes.LockedWritable(ctx, w.tx, nodeID)
+	if err != nil {
+		return nil, op.Reject(err, nodes.ErrNotFound)
+	}
+	if k, ok := snap.Kind(n.Kind); !ok || !k.AllowPublic {
+		return nil, op.Expected("not allowed", errors.FieldError("public_principal", fmt.Sprintf("Public bindings are not allowed on %s.", n.Kind)))
+	}
+	if err := checkRoleTx(ctx, w.tx, snap, n.RootID, role, n.Kind, "role"); err != nil {
+		return nil, op.Expected("invalid", err)
+	}
+	bindingID := id.New()
+	now := s.now().UTC()
+	_, err = w.tx.Exec(ctx, `
+		INSERT INTO bindings (id, public_principal, node_id, role, expires_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $6)
+	`, bindingID, publicPrincipal, n.ID, role, expiresAt, now)
+	if dbx.IsUniqueViolation(err) {
+		return nil, op.Expected("conflict", errors.ConflictError("This public principal already has that role here.", "role", role))
+	}
+	if err != nil {
+		return nil, op.Fail(err)
+	}
+	b, err := scanBinding(w.tx.QueryRow(ctx, bindingSelect(`b.id = $2`), n.ID, bindingID))
+	if err != nil {
+		return nil, op.Fail(err)
 	}
 	w.invalidate(lifecycle.InvalidateRoot(n.RootID))
 	if err := w.commit(ctx); err != nil {
@@ -161,7 +222,7 @@ func (s *Store) CreateBinding(ctx context.Context, snap *feed.Snapshot, nodeID, 
 	if err != nil {
 		return nil, op.Reject(err, nodes.ErrNotFound)
 	}
-	if err := checkRole(snap, role, n.Kind, "role"); err != nil {
+	if err := checkRoleTx(ctx, w.tx, snap, n.RootID, role, n.Kind, "role"); err != nil {
 		return nil, op.Expected("invalid", err)
 	}
 	if err := s.checkInTree(ctx, w, n, memberID); err != nil {
@@ -245,7 +306,7 @@ func (s *Store) PatchBinding(ctx context.Context, snap *feed.Snapshot, nodeID, b
 	}
 	role := before.Role
 	if patch.Role != nil {
-		if err := checkRole(snap, *patch.Role, n.Kind, "role"); err != nil {
+		if err := checkRoleTx(ctx, w.tx, snap, n.RootID, *patch.Role, n.Kind, "role"); err != nil {
 			return nil, nil, op.Expected("invalid", err)
 		}
 		role = *patch.Role
@@ -262,6 +323,8 @@ func (s *Store) PatchBinding(ctx context.Context, snap *feed.Snapshot, nodeID, b
 			msg := "This member already has that role here."
 			if before.GroupID != nil {
 				msg = "This group already has that role here."
+			} else if before.PublicPrincipal != nil {
+				msg = "This public principal already has that role here."
 			}
 			return nil, nil, op.Expected("conflict", errors.ConflictError(msg, "role", role))
 		}
@@ -274,7 +337,7 @@ func (s *Store) PatchBinding(ctx context.Context, snap *feed.Snapshot, nodeID, b
 	if changed {
 		if before.MemberID != nil {
 			w.invalidate(lifecycle.InvalidateMember(*before.MemberID))
-		} else if before.GroupID != nil {
+		} else if before.GroupID != nil || before.PublicPrincipal != nil {
 			w.invalidate(lifecycle.InvalidateRoot(n.RootID))
 		}
 	}
@@ -339,7 +402,7 @@ func (s *Store) DeleteBinding(ctx context.Context, nodeID, bindingID string) (*B
 		if err := s.removeEmptyPeople(ctx, w, []string{*b.MemberID}); err != nil {
 			return nil, op.Fail(err)
 		}
-	} else if b.GroupID != nil {
+	} else if b.GroupID != nil || b.PublicPrincipal != nil {
 		w.invalidate(lifecycle.InvalidateRoot(n.RootID))
 	}
 	if err := w.commit(ctx); err != nil {
@@ -386,17 +449,49 @@ func (s *Store) Membership(ctx context.Context, snap *feed.Snapshot, nodeID, mem
 		return nil, op.Fail(err)
 	}
 	var held []string
+	var customIDs []string
+	customKinds := map[string]map[string]bool{}
 	now := s.now().UTC()
 	if !m.Removed && !m.Suspended {
 		for _, b := range bindings {
 			if b.ExpiresAt != nil && !b.ExpiresAt.After(now) {
 				continue
 			}
-			if r, ok := snap.Role(b.Role); ok && r.BindableAtKind(b.nodeKind) {
-				held = append(held, b.Role)
+			if r, ok := snap.Role(b.Role); ok {
+				if r.BindableAtKind(b.nodeKind) {
+					held = append(held, b.Role)
+				}
+			} else if id.Valid(b.Role) {
+				if customKinds[b.Role] == nil {
+					customKinds[b.Role] = map[string]bool{}
+					customIDs = append(customIDs, b.Role)
+				}
+				customKinds[b.Role][b.nodeKind] = true
 			}
 		}
 	}
+	var customPerms []string
+	if len(customIDs) > 0 {
+		crows, err := s.pool.Query(ctx, `
+			SELECT id, bindable_at, permissions FROM org_roles WHERE root_id = $1 AND id = ANY($2)
+		`, n.RootID, customIDs)
+		if err != nil {
+			return nil, op.Fail(err)
+		}
+		var cid string
+		var bindableAt, perms []string
+		if _, err := pgx.ForEachRow(crows, []any{&cid, &bindableAt, &perms}, func() error {
+			for _, k := range bindableAt {
+				if customKinds[cid][k] {
+					customPerms = append(customPerms, perms...)
+					break
+				}
+			}
+			return nil
+		}); err != nil {
+			return nil, op.Fail(err)
+		}
+	}
 	op.OK("ok")
-	return &Membership{MemberID: m.ID, Bindings: bindings, Permissions: access.Resolve(snap, held).List()}, nil
+	return &Membership{MemberID: m.ID, Bindings: bindings, Permissions: access.ResolveWithCustom(snap, held, customPerms).List()}, nil
 }

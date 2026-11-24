@@ -357,6 +357,20 @@ fn settings(s: &Served) -> BTreeMap<String, Value> {
         ("reserved_slugs".into(), Value::Array(slugs)),
         ("defaults".into(), s.gateway["defaults"].clone()),
         ("creator_role".into(), s.identity["creator_role"].clone()),
+        (
+            "custom_roles".into(),
+            s.identity
+                .get("custom_roles")
+                .cloned()
+                .unwrap_or_else(|| json!(false)),
+        ),
+        (
+            "permissions".into(),
+            s.identity
+                .get("permissions")
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+        ),
     ])
 }
 
@@ -367,6 +381,8 @@ fn default_settings() -> BTreeMap<String, Value> {
         ("deletion_grace".into(), json!(DEFAULT_DELETION_GRACE)),
         ("reserved_slugs".into(), json!([])),
         ("defaults".into(), json!({ "rate_limit": [] })),
+        ("custom_roles".into(), json!(false)),
+        ("permissions".into(), json!({})),
     ])
 }
 

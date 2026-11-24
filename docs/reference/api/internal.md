@@ -11,9 +11,10 @@ One call that turns a credential and the route's node chain into the member and 
 ```
 POST /internal/admit
 {
-  "credential": "e10s-k-2-…",          // or "idp": { "issuer", "subject", "name"?, "scopes"? }
+  "credential": "e10s-k-2-…",          // or "idp": { "issuer", "subject", "name"?, "scopes"?, "claims"? }, or "anonymous": true
   "chain": [ { "kind": "organization", "ref": "gruow" }, { "kind": "project", "ref": "gatheroom" } ],
-  "allow_deleted": false
+  "allow_deleted": false,
+  "allow_public": false
 }
 → 200
 {
@@ -21,6 +22,7 @@ POST /internal/admit
   "principal": "service_account",
   "key_id": "01jbz…",
   "allowed_cidrs": ["203.0.113.0/24"],
+  "org_allowed_cidrs": ["198.51.100.0/24"],
   "nodes": [ { "kind": "organization", "id": "01jbw…" }, { "kind": "project", "id": "01jbx…" } ],
   "member_id": "01jby…",
   "user_id": null,
@@ -32,10 +34,10 @@ POST /internal/admit
 }
 ```
 
-1. **Principal.** Hash the key, or look up the IdP link. A new IdP subject creates the person. `name`, the first non-empty claim of `AUTH_NAME_CLAIMS`, sets the person's name if it is currently empty ([a person's name](../idp.md#a-persons-name)). `valid` means only that the credential is good: a known, unrevoked, unexpired key, or an IdP subject, of an active principal. A suspended person, an unknown, revoked or expired key, a key identity can't read, or a service account whose node is deleted is `valid: false`, on any chain.
+1. **Principal.** Hash the key, look up the IdP link, or accept an `anonymous: true` admit (requires `allow_public: true` and a non-empty `chain`). A new IdP subject creates the person. `name`, the first non-empty claim of `AUTH_NAME_CLAIMS`, sets the person's name if it is currently empty ([a person's name](../idp.md#a-persons-name)). `valid` means only that the credential is good: a known, unrevoked, unexpired key, an IdP subject of an active principal, or a valid anonymous public request. A suspended person, an unknown, revoked or expired key, a key identity can't read, or a service account whose node is deleted is `valid: false`, on any chain.
 2. **Nodes.** Resolve each `ref` (slug or id) under the previous node, by kind. A missing, purged or deleted node ends here. With `allow_deleted`, the last node may be deleted (not purged), and its own bindings still count. Nothing else ever counts a deleted node's bindings.
-3. **Member.** The principal's active, unsuspended member in the chain's tree. If a key specifies `allowed_roots` and the resolved root isn't in `allowed_roots`, admit answers `member_id: null`.
-4. **Permissions.** The union of the roles of that member's unexpired direct bindings and group bindings on any node in the chain, includes resolved ([`concepts/access.md`](../../concepts/access.md#resolution)), intersected with the key's `scopes` (when non-empty) or the JWT's `scopes` (when sent). `rate_limit_tier` is the resolved root's tier (`null` when unset or on a user route). `expires_at` is the earliest RFC 3339 UTC expiration among the key and the counting bindings (`null` when none expire), used by the gateway to cap its admit cache TTL.
+3. **Root security policy & member.** Load the resolved root's security policy (`org_allowed_cidrs`, `allow_personal_keys`, `required_idp_claims`). For a personal key when `allow_personal_keys` is `false`, or a JWT whose forwarded `idp.claims` fail `required_idp_claims`, admit refuses access in this tree (`member_id: null`, empty `nodes` and `permissions`). Otherwise find the principal's active, unsuspended member in the chain's tree (or if `allowed_roots` on a key excludes the root, `member_id: null`). A suspended member of the tree is refused and never falls back to public bindings.
+4. **Permissions.** The union of the roles (predefined and custom) of that member's unexpired direct bindings and group bindings on any node in the chain, includes resolved ([`concepts/access.md`](../../concepts/access.md#resolution)), plus matching `all_users` / `all_authenticated_users` bindings when `allow_public: true` (and the caller is not a suspended member of the tree), intersected with the key's `scopes` (when non-empty) or the JWT's `scopes` (when sent). `rate_limit_tier` is the resolved root's tier (`null` when unset or on a user route). `expires_at` is the earliest RFC 3339 UTC expiration among the key and the counting bindings (`null` when none expire), used by the gateway to cap its admit cache TTL.
 
 An empty `chain` is a user route: `nodes`, `member_id` and `permissions` are empty, and `rate_limit_tier` is `null`. For a person with an unrestricted credential, `user_id` is the person's. A valid service account, or a personal key narrowed by `scopes` or `allowed_roots`, answers `valid: true` with `user_id: null`, and the gateway refuses it with **403** on a user route. On a tree route `user_id` is `null`.
 
@@ -47,9 +49,10 @@ Identity resolves `chain` by kind name only and doesn't check it against its kin
 
 | Admit result | Status |
 |--------------|--------|
-| `valid: false`, or `allowed_cidrs` non-empty and doesn't contain the [client IP](../gateway.md#client-ip) | **401** |
+| `valid: false`, or `allowed_cidrs` non-empty and doesn't contain the [client IP](../gateway.md#client-ip), or an anonymous `allow_public` request denied at any check | **401** |
 | `principal: "service_account"` on a user route | **403** |
-| `member_id: null` on a kind route | **403** |
+| `org_allowed_cidrs` non-empty and doesn't contain the [client IP](../gateway.md#client-ip) (authenticated request) | **403** |
+| `member_id: null` (and no public access on an `allow_public` route) on a kind route | **403** |
 | `permissions` share none with the route, and the route isn't `any_member` | **403** |
 | Otherwise | Forwarded |
 | Transport error, non-2xx, missing fields | **503** |

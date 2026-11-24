@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::config::{
-    audited_by_default, Config, FilledTimeouts, MethodConfig, RateLimit, Required, Service,
-    PUBLIC_SCOPE, VERBS,
+    audited_by_default, is_false, Config, FilledTimeouts, MethodConfig, RateLimit, Required,
+    Service, PUBLIC_SCOPE, VERBS,
 };
 
 /// One route as the gateway matches it.
@@ -28,6 +28,8 @@ pub struct ExpandedRoute {
     pub rate_limit: Vec<String>,
     pub audit: bool,
     pub allow_deleted: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub allow_public: bool,
     /// The field path of the route's path, for errors.
     #[serde(skip)]
     pub at: String,
@@ -79,6 +81,7 @@ pub struct VerbSpec {
     pub required: Option<At<Required>>,
     pub rate_limit: Option<At<RateLimit>>,
     pub audit: Option<At<bool>>,
+    pub allow_public: Option<At<bool>>,
 }
 
 pub fn verb_order(method: &str) -> usize {
@@ -111,6 +114,7 @@ fn route_specs(name: &str, service: &Service) -> Vec<Spec> {
                 required_permissions: route.required_permissions.clone(),
                 rate_limit: route.rate_limit.clone(),
                 audit: route.audit,
+                allow_public: route.allow_public,
             };
             let mut verbs: Vec<VerbSpec> = match &route.methods {
                 crate::config::Methods::List(list) => list
@@ -181,6 +185,14 @@ fn verb_spec(
             .audit
             .map(|a| at(a, field("audit", true)))
             .or_else(|| route.audit.map(|a| at(a, field("audit", false)))),
+        allow_public: own
+            .allow_public
+            .map(|a| at(a, field("allow_public", true)))
+            .or_else(|| {
+                route
+                    .allow_public
+                    .map(|a| at(a, field("allow_public", false)))
+            }),
     }
 }
 
@@ -250,6 +262,7 @@ pub fn expand_spec(config: &Config, spec: &Spec) -> Vec<ExpandedRoute> {
                     .as_ref()
                     .map_or(audited_by_default(&v.method), |a| a.value),
             allow_deleted: spec.allow_deleted.as_ref().is_some_and(|a| a.value),
+            allow_public: v.allow_public.as_ref().is_some_and(|a| a.value),
             at: spec.path_at.clone(),
         })
         .collect()

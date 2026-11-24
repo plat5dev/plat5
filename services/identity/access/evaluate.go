@@ -73,13 +73,13 @@ func (s *Store) Evaluate(ctx context.Context, snap *feed.Snapshot, evals []Evalu
 		}
 		pairIdx[i] = p
 	}
-	held, err := heldOnChains(ctx, tx, snap, pairs, s.now().UTC())
+	held, heldCustom, err := heldOnChains(ctx, tx, snap, pairs, s.now().UTC())
 	if err != nil {
 		return nil, op.Fail(err)
 	}
 	granted := make([]Permissions, len(pairs))
 	for p := range pairs {
-		granted[p] = Resolve(snap, held[p])
+		granted[p] = ResolveWithCustom(snap, held[p], heldCustom[p])
 	}
 	for i, e := range evals {
 		out[i] = pairIdx[i] >= 0 && granted[pairIdx[i]].Has(e.Permission)

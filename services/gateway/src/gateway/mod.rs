@@ -68,6 +68,7 @@ impl Gateway {
                 jwt_validator,
                 cfg.auth_subject_claim.clone(),
                 cfg.auth_scope_claim.clone(),
+                cfg.auth_policy_claims.clone(),
             ),
             name_claims: cfg.auth_name_claims.clone(),
             pipeline: Pipeline::new(
@@ -498,7 +499,9 @@ fn audit_intent(
             member_id: caller.member_id.clone(),
             user_id: caller.user_id.clone(),
             principal: caller.principal.clone(),
-            auth_type: caller.auth_type.as_str(),
+            auth_type: caller
+                .auth_type
+                .map_or("none", crate::auth::AuthType::as_str),
             key_id: caller.key_id.clone(),
         },
         service: matched.route.service.clone(),

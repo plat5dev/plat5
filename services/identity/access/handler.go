@@ -53,16 +53,19 @@ func (h *Handler) MountAccess(r fiber.Router) {
 type AdmitRequest struct {
 	Credential *string `json:"credential"`
 	IdP        *struct {
-		Issuer  string    `json:"issuer"`
-		Subject string    `json:"subject"`
-		Name    *string   `json:"name"`
-		Scopes  *[]string `json:"scopes"`
+		Issuer  string              `json:"issuer"`
+		Subject string              `json:"subject"`
+		Name    *string             `json:"name"`
+		Scopes  *[]string           `json:"scopes"`
+		Claims  map[string][]string `json:"claims"`
 	} `json:"idp"`
-	Chain []struct {
+	Anonymous bool `json:"anonymous"`
+	Chain     []struct {
 		Kind string `json:"kind"`
 		Ref  string `json:"ref"`
 	} `json:"chain"`
 	AllowDeleted bool `json:"allow_deleted"`
+	AllowPublic  bool `json:"allow_public"`
 }
 
 type AdmitNode struct {
@@ -77,6 +80,7 @@ type AdmitResponse struct {
 	Principal       *string     `json:"principal"`
 	KeyID           *string     `json:"key_id"`
 	AllowedCIDRs    []string    `json:"allowed_cidrs"`
+	OrgAllowedCIDRs []string    `json:"org_allowed_cidrs"`
 	Nodes           []AdmitNode `json:"nodes"`
 	MemberID        *string     `json:"member_id"`
 	UserID          *string     `json:"user_id"`
@@ -92,9 +96,19 @@ func (h *Handler) Admit(c fiber.Ctx) error {
 	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
-	in := AdmitInput{Credential: req.Credential, AllowDeleted: req.AllowDeleted}
+	in := AdmitInput{
+		Credential:   req.Credential,
+		Anonymous:    req.Anonymous,
+		AllowDeleted: req.AllowDeleted,
+		AllowPublic:  req.AllowPublic,
+	}
 	if req.IdP != nil {
-		claims := &IdPClaims{Issuer: req.IdP.Issuer, Subject: req.IdP.Subject, Name: req.IdP.Name}
+		claims := &IdPClaims{
+			Issuer:       req.IdP.Issuer,
+			Subject:      req.IdP.Subject,
+			Name:         req.IdP.Name,
+			PolicyClaims: req.IdP.Claims,
+		}
 		if req.IdP.Scopes != nil {
 			claims.HasScopes = true
 			claims.Scopes = *req.IdP.Scopes
@@ -117,6 +131,7 @@ func admitResponse(a *Admitted) AdmitResponse {
 		Principal:       nullable(a.Principal),
 		KeyID:           nullable(a.KeyID),
 		AllowedCIDRs:    a.AllowedCIDRs,
+		OrgAllowedCIDRs: a.OrgAllowedCIDRs,
 		Nodes:           make([]AdmitNode, 0, len(a.Nodes)),
 		MemberID:        nullable(a.MemberID),
 		UserID:          nullable(a.UserID),
@@ -128,6 +143,9 @@ func admitResponse(a *Admitted) AdmitResponse {
 	}
 	if out.AllowedCIDRs == nil {
 		out.AllowedCIDRs = []string{}
+	}
+	if out.OrgAllowedCIDRs == nil {
+		out.OrgAllowedCIDRs = []string{}
 	}
 	if out.Permissions == nil {
 		out.Permissions = []string{}

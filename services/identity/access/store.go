@@ -76,10 +76,11 @@ func BindablePairs(snap *feed.Snapshot) (kinds, roles []string) {
 }
 
 // CountsSQL is the SQL condition for a binding b on node bn that counts: its
-// role is in the document and bindable at bn's kind. kinds and roles are the
-// parameter placeholders for BindablePairs's slices.
+// role is in the document and bindable at bn's kind, or is an org custom role
+// of bn's root bindable at bn's kind. kinds and roles are the parameter
+// placeholders for BindablePairs's slices.
 func CountsSQL(kinds, roles string) string {
-	return `(bn.kind, b.role) IN (SELECT * FROM unnest(` + kinds + `::text[], ` + roles + `::text[]))`
+	return `((bn.kind, b.role) IN (SELECT * FROM unnest(` + kinds + `::text[], ` + roles + `::text[])) OR EXISTS (SELECT 1 FROM org_roles cr WHERE cr.id = b.role AND cr.root_id = bn.root_id AND bn.kind = ANY(cr.bindable_at)))`
 }
 
 // Permissions is the union of the permissions of roles a member holds at a
@@ -92,6 +93,13 @@ type Permissions struct {
 // Resolve unions the permissions of roles, which must already count
 // (bindable where they sit). A role gone from the document grants nothing.
 func Resolve(snap *feed.Snapshot, roles []string) Permissions {
+	return ResolveWithCustom(snap, roles, nil)
+}
+
+// ResolveWithCustom unions predefined role permissions from snap with
+// customPerms collected from matching org_roles rows. "*" in customPerms is
+// ignored: custom roles never grant wildcard access.
+func ResolveWithCustom(snap *feed.Snapshot, roles []string, customPerms []string) Permissions {
 	out := Permissions{Set: map[string]bool{}}
 	for _, slug := range roles {
 		role, ok := snap.Role(slug)
@@ -104,6 +112,12 @@ func Resolve(snap *feed.Snapshot, roles []string) Permissions {
 			}
 			out.Set[p] = true
 		}
+	}
+	for _, p := range customPerms {
+		if p == "" || p == "*" {
+			continue
+		}
+		out.Set[p] = true
 	}
 	return out
 }

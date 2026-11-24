@@ -123,6 +123,11 @@
           "title": "allow_deleted",
           "description": "Default `false`. `true` lets the route's node be deleted (not purged); its own bindings are kept until purge and still count here, so whoever managed the node can restore it. For identity's restore route ([`reference/api/internal.md`](../api/internal.md#admit)). Kind scopes only.",
           "type": "boolean"
+        },
+        "allow_public": {
+          "title": "allow_public",
+          "description": "Default `false`. Kind scopes only, when this kind or an ancestor sets `allow_public: true`. Lets unauthenticated (`all_users`) and non-member authenticated (`all_authenticated_users`) callers reach the route when a public binding grants a required permission.",
+          "type": "boolean"
         }
       }
     },
@@ -146,7 +151,8 @@
       "properties": {
         "required_permissions": { "$ref": "#/$defs/required_permissions" },
         "rate_limit": { "$ref": "#/$defs/rate_limit" },
-        "audit": { "type": "boolean" }
+        "audit": { "type": "boolean" },
+        "allow_public": { "type": "boolean" }
       }
     },
     "required_permissions": {

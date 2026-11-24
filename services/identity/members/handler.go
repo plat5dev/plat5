@@ -39,6 +39,13 @@ func (h *Handler) Mount(r fiber.Router) {
 	r.Post("/nodes/:node_id/children/:kind", h.CreateChild)
 	r.Post("/roots/:kind", h.CreateRoot)
 	r.Get("/nodes/:node_id/roles", h.Roles)
+	r.Post("/nodes/:node_id/roles", h.CreateRole)
+	r.Get("/nodes/:node_id/roles/:role_id", h.GetRole)
+	r.Patch("/nodes/:node_id/roles/:role_id", h.PatchRole)
+	r.Delete("/nodes/:node_id/roles/:role_id", h.DeleteRole)
+	r.Get("/nodes/:node_id/permissions", h.ListPermissions)
+	r.Get("/nodes/:node_id/security-policy", h.GetSecurityPolicy)
+	r.Patch("/nodes/:node_id/security-policy", h.PatchSecurityPolicy)
 
 	r.Get("/nodes/:node_id/bindings", h.ListBindings)
 	r.Post("/nodes/:node_id/bindings", h.CreateBinding)
@@ -95,18 +102,19 @@ func (h *Handler) Mount(r fiber.Router) {
 // --- shapes (docs/reference/api/identity.md#shapes) ---
 
 type BindingResponse struct {
-	ID        string  `json:"id"`
-	MemberID  *string `json:"member_id"`
-	GroupID   *string `json:"group_id"`
-	NodeID    string  `json:"node_id"`
-	Role      string  `json:"role"`
-	Inherited bool    `json:"inherited"`
-	Guest     bool    `json:"guest"`
-	Principal string  `json:"principal"`
-	Name      *string `json:"name"`
-	ExpiresAt *string `json:"expires_at"`
-	CreatedAt string  `json:"created_at"`
-	UpdatedAt string  `json:"updated_at"`
+	ID              string  `json:"id"`
+	MemberID        *string `json:"member_id"`
+	GroupID         *string `json:"group_id"`
+	PublicPrincipal *string `json:"public_principal"`
+	NodeID          string  `json:"node_id"`
+	Role            string  `json:"role"`
+	Inherited       bool    `json:"inherited"`
+	Guest           bool    `json:"guest"`
+	Principal       string  `json:"principal"`
+	Name            *string `json:"name"`
+	ExpiresAt       *string `json:"expires_at"`
+	CreatedAt       string  `json:"created_at"`
+	UpdatedAt       string  `json:"updated_at"`
 }
 
 type GroupResponse struct {
@@ -173,13 +181,58 @@ type InviteResponse struct {
 }
 
 type RoleResponse struct {
+	ID          string   `json:"id"`
 	Slug        string   `json:"slug"`
+	DisplayName string   `json:"display_name"`
+	Description string   `json:"description,omitempty"`
+	Source      string   `json:"source"`
 	Permissions []string `json:"permissions"`
+	BindableAt  []string `json:"bindable_at"`
+	CreatedAt   *string  `json:"created_at,omitempty"`
+	UpdatedAt   *string  `json:"updated_at,omitempty"`
 }
 
 type RolesResponse struct {
 	Roles       []RoleResponse `json:"roles"`
 	CreatorRole string         `json:"creator_role"`
+}
+
+type SecurityPolicyResponse struct {
+	AllowPersonalKeys bool                `json:"allow_personal_keys"`
+	AllowedCIDRs      []string            `json:"allowed_cidrs"`
+	RequiredIdPClaims map[string][]string `json:"required_idp_claims"`
+	UpdatedAt         *string             `json:"updated_at"`
+}
+
+func roleResponse(r RoleView) RoleResponse {
+	return RoleResponse{
+		ID:          r.ID,
+		Slug:        r.Slug,
+		DisplayName: r.DisplayName,
+		Description: r.Description,
+		Source:      r.Source,
+		Permissions: r.Permissions,
+		BindableAt:  r.BindableAt,
+		CreatedAt:   httpx.FormatTimePtr(r.CreatedAt),
+		UpdatedAt:   httpx.FormatTimePtr(r.UpdatedAt),
+	}
+}
+
+func securityPolicyResponse(p *RootSecurityPolicy) SecurityPolicyResponse {
+	cidrs := p.AllowedCIDRs
+	if cidrs == nil {
+		cidrs = []string{}
+	}
+	claims := p.RequiredIdPClaims
+	if claims == nil {
+		claims = map[string][]string{}
+	}
+	return SecurityPolicyResponse{
+		AllowPersonalKeys: p.AllowPersonalKeys,
+		AllowedCIDRs:      cidrs,
+		RequiredIdPClaims: claims,
+		UpdatedAt:         httpx.FormatTimePtr(p.UpdatedAt),
+	}
 }
 
 type RedeemResponse struct {
@@ -189,7 +242,7 @@ type RedeemResponse struct {
 
 func bindingResponse(b *Binding) BindingResponse {
 	return BindingResponse{
-		ID: b.ID, MemberID: b.MemberID, GroupID: b.GroupID, NodeID: b.NodeID, Role: b.Role, Inherited: b.Inherited, Guest: b.Guest,
+		ID: b.ID, MemberID: b.MemberID, GroupID: b.GroupID, PublicPrincipal: b.PublicPrincipal, NodeID: b.NodeID, Role: b.Role, Inherited: b.Inherited, Guest: b.Guest,
 		Principal: b.Principal, Name: b.Name, ExpiresAt: httpx.FormatTimePtr(b.ExpiresAt),
 		CreatedAt: httpx.FormatTime(b.CreatedAt), UpdatedAt: httpx.FormatTime(b.UpdatedAt),
 	}
@@ -349,15 +402,170 @@ func (h *Handler) ListChildren(c fiber.Ctx) error {
 
 func (h *Handler) Roles(c fiber.Ctx) error {
 	snap := h.src.Current()
-	roles, err := h.store.Roles(c.Context(), snap, httpx.PathParam(c, "node_id"))
+	all := false
+	switch c.Query("all") {
+	case "", "false":
+	case "true":
+		all = true
+	default:
+		return errors.FieldError("all", errors.FallbackValidation)
+	}
+	roles, err := h.store.ListRoles(c.Context(), snap, httpx.PathParam(c, "node_id"), all)
 	if err != nil {
 		return mapErr(c, err, "failed to list roles", "node", "")
 	}
 	out := RolesResponse{Roles: make([]RoleResponse, 0, len(roles)), CreatorRole: snap.CreatorRole}
 	for _, r := range roles {
-		out.Roles = append(out.Roles, RoleResponse{Slug: r.Slug, Permissions: r.Permissions})
+		out.Roles = append(out.Roles, roleResponse(r))
 	}
 	return c.JSON(out)
+}
+
+type CreateRoleRequest struct {
+	DisplayName string   `json:"display_name"`
+	Description string   `json:"description"`
+	Permissions []string `json:"permissions"`
+	BindableAt  []string `json:"bindable_at"`
+}
+
+type PatchRoleRequest struct {
+	DisplayName *string   `json:"display_name"`
+	Description *string   `json:"description"`
+	Permissions *[]string `json:"permissions"`
+	BindableAt  *[]string `json:"bindable_at"`
+}
+
+func (h *Handler) CreateRole(c fiber.Ctx) error {
+	var req CreateRoleRequest
+	if err := httpx.Body(c, &req); err != nil {
+		return err
+	}
+	r, err := h.store.CreateCustomRole(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), CustomRoleInput{
+		DisplayName: req.DisplayName,
+		Description: req.Description,
+		Permissions: req.Permissions,
+		BindableAt:  req.BindableAt,
+	})
+	if err != nil {
+		return mapErr(c, err, "failed to create role", "role", "")
+	}
+	auditx.Set(c, auditx.Details{"role_id": r.ID})
+	auditx.SetCreated(c, r.ID)
+	return c.Status(fiber.StatusCreated).JSON(roleResponse(*r))
+}
+
+func (h *Handler) GetRole(c fiber.Ctx) error {
+	roleID := httpx.PathParam(c, "role_id")
+	r, err := h.store.GetRole(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), roleID)
+	if err != nil {
+		return mapErr(c, err, "failed to get role", "role", roleID)
+	}
+	return c.JSON(roleResponse(*r))
+}
+
+func (h *Handler) PatchRole(c fiber.Ctx) error {
+	var req PatchRoleRequest
+	if err := httpx.Body(c, &req); err != nil {
+		return err
+	}
+	roleID := httpx.PathParam(c, "role_id")
+	before, after, err := h.store.PatchCustomRole(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), roleID, CustomRolePatch{
+		DisplayName: req.DisplayName,
+		Description: req.Description,
+		Permissions: req.Permissions,
+		BindableAt:  req.BindableAt,
+	})
+	if err != nil {
+		return mapErr(c, err, "failed to update role", "role", roleID)
+	}
+	d := auditx.Details{"role_id": after.ID}
+	d.Changed("display_name", before.DisplayName, after.DisplayName)
+	d.Changed("description", before.Description, after.Description)
+	if !slices.Equal(before.Permissions, after.Permissions) {
+		d["permissions"] = auditx.Change{From: before.Permissions, To: after.Permissions}
+	}
+	if !slices.Equal(before.BindableAt, after.BindableAt) {
+		d["bindable_at"] = auditx.Change{From: before.BindableAt, To: after.BindableAt}
+	}
+	auditx.Set(c, d)
+	return c.JSON(roleResponse(*after))
+}
+
+func (h *Handler) DeleteRole(c fiber.Ctx) error {
+	roleID := httpx.PathParam(c, "role_id")
+	r, err := h.store.DeleteCustomRole(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), roleID)
+	if err != nil {
+		return mapErr(c, err, "failed to delete role", "role", roleID)
+	}
+	if r != nil {
+		auditx.Set(c, auditx.Details{"role_id": r.ID, "display_name": auditx.Change{From: r.DisplayName, To: nil}})
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (h *Handler) ListPermissions(c fiber.Ctx) error {
+	snap := h.src.Current()
+	perms, err := h.store.ListPermissions(c.Context(), snap, httpx.PathParam(c, "node_id"))
+	if err != nil {
+		return mapErr(c, err, "failed to list permissions", "node", "")
+	}
+	return c.JSON(fiber.Map{"permissions": perms, "custom_roles": snap.CustomRoles})
+}
+
+type PatchSecurityPolicyRequest struct {
+	AllowPersonalKeys *bool           `json:"allow_personal_keys"`
+	AllowedCIDRs      json.RawMessage `json:"allowed_cidrs"`
+	RequiredIdPClaims json.RawMessage `json:"required_idp_claims"`
+}
+
+func (h *Handler) GetSecurityPolicy(c fiber.Ctx) error {
+	pol, err := h.store.GetSecurityPolicy(c.Context(), httpx.PathParam(c, "node_id"))
+	if err != nil {
+		return mapErr(c, err, "failed to get security policy", "node", "")
+	}
+	return c.JSON(securityPolicyResponse(pol))
+}
+
+func (h *Handler) PatchSecurityPolicy(c fiber.Ctx) error {
+	var req PatchSecurityPolicyRequest
+	if err := httpx.Body(c, &req); err != nil {
+		return err
+	}
+	var patch SecurityPolicyPatch
+	patch.AllowPersonalKeys = req.AllowPersonalKeys
+	if len(req.AllowedCIDRs) > 0 {
+		patch.AllowedCIDRsSet = true
+		if strings.TrimSpace(string(req.AllowedCIDRs)) != "null" {
+			var cidrs []string
+			if err := json.Unmarshal(req.AllowedCIDRs, &cidrs); err != nil {
+				return errors.FieldError("allowed_cidrs", errors.FallbackValidation)
+			}
+			patch.AllowedCIDRs = cidrs
+		}
+	}
+	if len(req.RequiredIdPClaims) > 0 {
+		patch.RequiredIdPClaimsSet = true
+		if strings.TrimSpace(string(req.RequiredIdPClaims)) != "null" {
+			var claims map[string][]string
+			if err := json.Unmarshal(req.RequiredIdPClaims, &claims); err != nil {
+				return errors.FieldError("required_idp_claims", errors.FallbackValidation)
+			}
+			patch.RequiredIdPClaims = claims
+		}
+	}
+	before, after, err := h.store.PatchSecurityPolicy(c.Context(), httpx.PathParam(c, "node_id"), patch)
+	if err != nil {
+		return mapErr(c, err, "failed to update security policy", "node", "")
+	}
+	d := auditx.Details{}
+	if before.AllowPersonalKeys != after.AllowPersonalKeys {
+		d["allow_personal_keys"] = auditx.Change{From: before.AllowPersonalKeys, To: after.AllowPersonalKeys}
+	}
+	if !slices.Equal(before.AllowedCIDRs, after.AllowedCIDRs) {
+		d["allowed_cidrs"] = auditx.Change{From: before.AllowedCIDRs, To: after.AllowedCIDRs}
+	}
+	auditx.Set(c, d)
+	return c.JSON(securityPolicyResponse(after))
 }
 
 // parseExpiry reads optional expires_at (RFC 3339 or null) and expires_in
@@ -405,11 +613,12 @@ func parseExpiry(expiresAtRaw, expiresInRaw json.RawMessage, now time.Time) (set
 // --- bindings ---
 
 type CreateBindingRequest struct {
-	MemberID  string          `json:"member_id"`
-	GroupID   string          `json:"group_id"`
-	Role      string          `json:"role"`
-	ExpiresAt json.RawMessage `json:"expires_at"`
-	ExpiresIn json.RawMessage `json:"expires_in"`
+	MemberID        string          `json:"member_id"`
+	GroupID         string          `json:"group_id"`
+	PublicPrincipal string          `json:"public_principal"`
+	Role            string          `json:"role"`
+	ExpiresAt       json.RawMessage `json:"expires_at"`
+	ExpiresIn       json.RawMessage `json:"expires_in"`
 }
 
 type PatchBindingRequest struct {
@@ -445,22 +654,34 @@ func (h *Handler) CreateBinding(c fiber.Ctx) error {
 	}
 	memberID := strings.TrimSpace(req.MemberID)
 	groupID := strings.TrimSpace(req.GroupID)
-	if (memberID == "") == (groupID == "") {
-		if memberID != "" {
-			return errors.FieldError("group_id", "Send either member_id or group_id, not both.")
+	publicPrincipal := strings.TrimSpace(req.PublicPrincipal)
+	subjects := 0
+	if memberID != "" {
+		subjects++
+	}
+	if groupID != "" {
+		subjects++
+	}
+	if publicPrincipal != "" {
+		subjects++
+	}
+	if subjects != 1 {
+		if subjects == 0 {
+			return errors.FieldError("member_id", "Choose a member, group, or public_principal.")
 		}
-		return errors.FieldError("member_id", "Choose a member or a group.")
+		return errors.FieldError("group_id", "Send only one of member_id, group_id, or public_principal.")
 	}
 	_, expiresAt, err := parseExpiry(req.ExpiresAt, req.ExpiresIn, h.store.now().UTC())
 	if err != nil {
 		return err
 	}
-	var (
-		b *Binding
-	)
-	if groupID != "" {
+	var b *Binding
+	switch {
+	case groupID != "":
 		b, err = h.store.CreateGroupBinding(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), groupID, req.Role, expiresAt)
-	} else {
+	case publicPrincipal != "":
+		b, err = h.store.CreatePublicBinding(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), publicPrincipal, req.Role, expiresAt)
+	default:
 		b, err = h.store.CreateBinding(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), memberID, req.Role, expiresAt)
 	}
 	if err != nil {
@@ -514,6 +735,8 @@ func (h *Handler) DeleteBinding(c fiber.Ctx) error {
 			d["member_id"] = *b.MemberID
 		} else if b.GroupID != nil {
 			d["group_id"] = *b.GroupID
+		} else if b.PublicPrincipal != nil {
+			d["public_principal"] = *b.PublicPrincipal
 		}
 		auditx.Set(c, d)
 	}

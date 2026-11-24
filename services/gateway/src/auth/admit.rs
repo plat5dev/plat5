@@ -1,6 +1,7 @@
 //! Identity's admit (docs/reference/api/internal.md#admit) and the gateway's cache
 //! of its answers (docs/reference/gateway.md#cache).
 
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -19,6 +20,10 @@ use crate::metrics;
 
 const CACHE_CAPACITY: u64 = 50_000;
 
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// One admit call: a credential and the route's chain. An empty chain is a user route.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AdmitRequest {
@@ -26,6 +31,8 @@ pub struct AdmitRequest {
     pub credential: AdmitCredential,
     pub chain: Vec<ChainRef>,
     pub allow_deleted: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allow_public: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -33,7 +40,8 @@ pub struct AdmitRequest {
 pub enum AdmitCredential {
     /// A bearer value that isn't a JWT, as presented.
     Credential(String),
-    /// A verified JWT's issuer, subject, optional name and optional OAuth scopes.
+    /// A verified JWT's issuer, subject, optional name, optional OAuth scopes,
+    /// and optional policy claims (`AUTH_POLICY_CLAIMS`).
     Idp {
         issuer: String,
         subject: String,
@@ -41,7 +49,11 @@ pub enum AdmitCredential {
         name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         scopes: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        claims: BTreeMap<String, Vec<String>>,
     },
+    /// Unauthenticated caller on an `allow_public: true` kind route.
+    Anonymous(bool),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -67,6 +79,8 @@ pub struct AdmitAnswer {
     #[serde(deserialize_with = "Option::deserialize")]
     pub key_id: Option<String>,
     pub allowed_cidrs: Vec<String>,
+    #[serde(default)]
+    pub org_allowed_cidrs: Vec<String>,
     pub nodes: Vec<NodeRef>,
     #[serde(deserialize_with = "Option::deserialize")]
     pub member_id: Option<String>,
@@ -82,24 +96,47 @@ pub struct AdmitAnswer {
 }
 
 impl AdmitAnswer {
-    /// A refusal: an invalid credential, or no member on a tree route.
+    /// A refusal: an invalid credential, or on a tree route no member (and on
+    /// `allow_public` routes, no public node/permission admission either).
     pub fn refused(&self, req: &AdmitRequest) -> bool {
-        !self.valid || (!req.chain.is_empty() && self.member_id.is_none())
+        if !self.valid {
+            return true;
+        }
+        if req.chain.is_empty() {
+            return false;
+        }
+        if self.member_id.is_some() {
+            return false;
+        }
+        if req.allow_public {
+            return self.nodes.is_empty() || self.permissions.is_empty();
+        }
+        true
     }
 
     /// Whether the client IP is permitted by the key's IP allowlist.
     /// An empty allowlist permits any IP.
     pub fn allows_ip(&self, ip: &str) -> bool {
-        if self.allowed_cidrs.is_empty() {
-            return true;
-        }
-        let Ok(addr) = ip.parse::<IpAddr>() else {
-            return false;
-        };
-        self.allowed_cidrs
-            .iter()
-            .any(|raw| Cidr::parse(raw).is_ok_and(|c| c.contains(addr)))
+        cidrs_allow(&self.allowed_cidrs, ip)
     }
+
+    /// Whether the client IP is permitted by the root org's security policy IP
+    /// allowlist. An empty allowlist permits any IP.
+    pub fn allows_org_ip(&self, ip: &str) -> bool {
+        cidrs_allow(&self.org_allowed_cidrs, ip)
+    }
+}
+
+fn cidrs_allow(cidrs: &[String], ip: &str) -> bool {
+    if cidrs.is_empty() {
+        return true;
+    }
+    let Ok(addr) = ip.parse::<IpAddr>() else {
+        return false;
+    };
+    cidrs
+        .iter()
+        .any(|raw| Cidr::parse(raw).is_ok_and(|c| c.contains(addr)))
 }
 
 /// Identity didn't answer usably: transport, non-2xx, or a malformed body. **503**.
@@ -236,7 +273,13 @@ impl<A: Admit> AdmitCache<A> {
                     .admit(req)
                     .await
                     .map_err(ComputeErr::Unavailable)?;
-                if answer.valid && answer.allowed_cidrs.iter().any(|c| Cidr::parse(c).is_err()) {
+                if answer.valid
+                    && (answer.allowed_cidrs.iter().any(|c| Cidr::parse(c).is_err())
+                        || answer
+                            .org_allowed_cidrs
+                            .iter()
+                            .any(|c| Cidr::parse(c).is_err()))
+                {
                     warn!(
                         error_message = "allowed_cidrs",
                         "admit answered with an invalid CIDR"
@@ -351,6 +394,7 @@ fn hash_credential(h: &mut blake3::Hasher, credential: &AdmitCredential) {
             issuer,
             subject,
             scopes,
+            claims,
             ..
         } => {
             hash_part(h, "idp");
@@ -363,6 +407,20 @@ fn hash_credential(h: &mut blake3::Hasher, credential: &AdmitCredential) {
                     hash_part(h, scope);
                 }
             }
+            if !claims.is_empty() {
+                hash_part(h, "claims");
+                hash_part(h, &claims.len().to_string());
+                for (k, vals) in claims {
+                    hash_part(h, k);
+                    hash_part(h, &vals.len().to_string());
+                    for v in vals {
+                        hash_part(h, v);
+                    }
+                }
+            }
+        }
+        AdmitCredential::Anonymous(_) => {
+            hash_part(h, "anonymous");
         }
     }
 }
@@ -488,11 +546,12 @@ pub fn credential_hash(credential: &AdmitCredential) -> String {
     h.finalize().to_hex().to_string()
 }
 
-/// A hash of the credential, `allow_deleted` and the chain refs as written.
+/// A hash of the credential, `allow_deleted`, `allow_public`, and the chain refs as written.
 fn cache_key(req: &AdmitRequest) -> String {
     let mut h = blake3::Hasher::new();
     hash_credential(&mut h, &req.credential);
     hash_part(&mut h, if req.allow_deleted { "1" } else { "0" });
+    hash_part(&mut h, if req.allow_public { "1" } else { "0" });
     for link in &req.chain {
         hash_part(&mut h, &link.kind);
         hash_part(&mut h, &link.reference);
@@ -564,6 +623,7 @@ pub mod tests {
             principal: Some("person".into()),
             key_id: Some(KEY_ID.into()),
             allowed_cidrs: vec![],
+            org_allowed_cidrs: vec![],
             nodes: nodes
                 .iter()
                 .map(|(kind, id)| NodeRef {
@@ -588,6 +648,7 @@ pub mod tests {
             principal: Some("person".into()),
             key_id: None,
             allowed_cidrs: vec![],
+            org_allowed_cidrs: vec![],
             nodes: vec![],
             member_id: None,
             user_id: Some(USER.into()),
@@ -606,6 +667,7 @@ pub mod tests {
             principal: Some("service_account".into()),
             key_id: Some(KEY_ID.into()),
             allowed_cidrs: vec![],
+            org_allowed_cidrs: vec![],
             nodes: vec![],
             member_id: None,
             user_id: None,
@@ -624,6 +686,7 @@ pub mod tests {
             principal: Some("person".into()),
             key_id: Some(KEY_ID.into()),
             allowed_cidrs: vec![],
+            org_allowed_cidrs: vec![],
             nodes: vec![],
             member_id: None,
             user_id: None,
@@ -642,6 +705,7 @@ pub mod tests {
             principal: Some("person".into()),
             key_id: Some(KEY_ID.into()),
             allowed_cidrs: vec![],
+            org_allowed_cidrs: vec![],
             nodes: vec![],
             member_id: None,
             user_id: None,
@@ -659,6 +723,7 @@ pub mod tests {
             principal: None,
             key_id: None,
             allowed_cidrs: vec![],
+            org_allowed_cidrs: vec![],
             nodes: vec![],
             member_id: None,
             user_id: None,
@@ -685,6 +750,7 @@ pub mod tests {
                 })
                 .collect(),
             allow_deleted,
+            allow_public: false,
         }
     }
 
@@ -698,6 +764,7 @@ pub mod tests {
             subject: subject.into(),
             name: name.map(str::to_string),
             scopes: None,
+            claims: BTreeMap::new(),
         }
     }
 
@@ -813,18 +880,21 @@ pub mod tests {
             subject: "s".into(),
             name: None,
             scopes: Some(vec!["project:read".into()]),
+            claims: BTreeMap::new(),
         };
         let scoped_b = AdmitCredential::Idp {
             issuer: "https://auth".into(),
             subject: "s".into(),
             name: None,
             scopes: Some(vec!["project:write".into()]),
+            claims: BTreeMap::new(),
         };
         let scoped_empty = AdmitCredential::Idp {
             issuer: "https://auth".into(),
             subject: "s".into(),
             name: None,
             scopes: Some(vec![]),
+            claims: BTreeMap::new(),
         };
         assert_ne!(
             cache_key(&request(idp("s", None), &[], false)),
@@ -837,6 +907,49 @@ pub mod tests {
         assert_ne!(
             cache_key(&request(idp("s", None), &[], false)),
             cache_key(&request(scoped_empty, &[], false))
+        );
+        // Different policy claims must not share a cache entry.
+        let mfa = AdmitCredential::Idp {
+            issuer: "https://auth".into(),
+            subject: "s".into(),
+            name: None,
+            scopes: None,
+            claims: BTreeMap::from([("amr".into(), vec!["mfa".into()])]),
+        };
+        let pwd = AdmitCredential::Idp {
+            issuer: "https://auth".into(),
+            subject: "s".into(),
+            name: None,
+            scopes: None,
+            claims: BTreeMap::from([("amr".into(), vec!["pwd".into()])]),
+        };
+        assert_ne!(
+            cache_key(&request(mfa, &[], false)),
+            cache_key(&request(pwd, &[], false))
+        );
+        // allow_public must not share a cache entry with allow_public=false.
+        let mut pub_req = request(idp("s", None), &[("organization", "acme")], false);
+        let priv_key = cache_key(&pub_req);
+        pub_req.allow_public = true;
+        assert_ne!(priv_key, cache_key(&pub_req));
+        // Anonymous request serializes cleanly.
+        let anon = AdmitRequest {
+            credential: AdmitCredential::Anonymous(true),
+            chain: vec![ChainRef {
+                kind: "organization".into(),
+                reference: "acme".into(),
+            }],
+            allow_deleted: false,
+            allow_public: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&anon).unwrap(),
+            serde_json::json!({
+                "anonymous": true,
+                "chain": [{ "kind": "organization", "ref": "acme" }],
+                "allow_deleted": false,
+                "allow_public": true
+            })
         );
     }
 

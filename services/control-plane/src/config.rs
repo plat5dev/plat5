@@ -32,6 +32,10 @@ pub struct Config {
     pub roles: BTreeMap<String, Role>,
     pub creator_role: String,
     #[serde(default)]
+    pub custom_roles: bool,
+    #[serde(default)]
+    pub permissions: BTreeMap<String, PermissionMeta>,
+    #[serde(default)]
     pub rate_limits: BTreeMap<String, Policy>,
     #[serde(default)]
     pub cors: Cors,
@@ -120,6 +124,10 @@ pub struct Kind {
     /// Optional hostname template on a root kind: `{<kind>}.<domain>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// Allows public principal bindings (`all_users`, `all_authenticated_users`)
+    /// on nodes of this kind and `allow_public` routes in or below its scope.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allow_public: bool,
 }
 
 /// The kinds, each `list_permission` filled in where the config leaves it out.
@@ -141,6 +149,10 @@ fn yes() -> bool {
 
 fn is_yes(b: &bool) -> bool {
     *b
+}
+
+pub(crate) fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Kind {
@@ -177,6 +189,17 @@ pub struct Role {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub includes: Vec<String>,
     pub bindable_at: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PermissionMeta {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bindable_at: Vec<String>,
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub custom_role_assignable: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -242,6 +265,8 @@ pub struct Route {
     pub audit: Option<bool>,
     #[serde(default)]
     pub allow_deleted: Option<bool>,
+    #[serde(default)]
+    pub allow_public: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -261,6 +286,8 @@ pub struct MethodConfig {
     pub rate_limit: Option<RateLimit>,
     #[serde(default)]
     pub audit: Option<bool>,
+    #[serde(default)]
+    pub allow_public: Option<bool>,
 }
 
 /// `required_permissions`: a list, any one of which admits, or `any_member`.
