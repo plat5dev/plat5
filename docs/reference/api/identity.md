@@ -203,10 +203,10 @@ All responses use the [Plat5 error envelope](../errors.md).
 | Case | Status |
 |------|--------|
 | A node, member, group, user, binding, key or invite not under the address given | **404** (service API). Through the gateway a missing node is already a **403** |
-| Slug taken by a sibling, or by a root's tombstone; a person already a member; a member or group already bound on the node; a member already in a group | **409** `CONFLICT` (`{ field, value }`) |
+| Slug taken by a sibling, or by a root's tombstone; a person already a member; a member, group or public principal already holding that role on the node; a member already in a group; a custom role name already taken in the root | **409** `CONFLICT` (`{ field, value }`) |
 | Slug malformed or reserved | **422** |
-| Role not in the roles document, or not bindable at the kind | **422** |
-| Direct binding for a member who isn't active in the node's tree, or a group not in the node's tree, or sending neither/both of `member_id` and `group_id` | **422**: a member or group belongs to one tree, and a removed member is never active again |
+| Role not in the roles document or the root's custom roles, or not bindable at the kind | **422** |
+| Direct binding for a member who isn't active in the node's tree, a group not in the node's tree, a public binding where `allow_public` isn't enabled, or sending none or more than one of `member_id`, `group_id` and `public_principal` | **422**: a member or group belongs to one tree, and a removed member is never active again |
 | Child kind, on a list or a create, that isn't a kind whose parent is this node's kind | **422** |
 | `X-Plat5-Member-Id` naming no active member of the node's tree, or `X-Plat5-User-Id` naming no active user | **400** |
 | An invite without `role`, or below a root with `grants` | **422** |
@@ -217,7 +217,7 @@ All responses use the [Plat5 error envelope](../errors.md).
 | Any write to a purged node or to what hangs off it ([lifecycle](../../concepts/lifecycle.md#deleting-restoring-and-purging)): `PATCH`, a child create, adding or changing a binding, member or service account, creating, changing or revoking a service account's key or an invite. Not a slug release, and not a delete that finds nothing left (**204**) | **409** `NODE_PURGED` |
 | Changing a revoked key (`PATCH`) | **409** `KEY_REVOKED` |
 | Redeem of an invite that's redeemed, revoked or expired, or whose node is deleted | **409** `INVITE_NOT_REDEEMABLE` (`{ reason }`) |
-| Postgres unavailable | **503** `SERVICE_UNAVAILABLE` |
+| Postgres or kind-level external authorizer unavailable | **503** `SERVICE_UNAVAILABLE` |
 
 ## Audit details
 

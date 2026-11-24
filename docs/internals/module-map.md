@@ -7,11 +7,13 @@ Internal dependency structure of the four Plat5 services (`services/gateway` and
 ```mermaid
 flowchart LR
   client([clients]) --> gateway
-  gateway -->|admit, evaluations<br/>IDENTITY_INTERNAL_URL| identity
+  gateway -->|admit, invalidations<br/>IDENTITY_INTERNAL_URL| identity
   gateway -->|"/internal/gateway feed<br/>CONTROL_PLANE_URL"| cp[control-plane]
   gateway -->|audited writes<br/>AUDIT_URL| audit
   gateway --> valkey[(Valkey<br/>rate limits)]
-  identity -->|identity feed: kinds, roles<br/>blocks boot| cp
+  gateway -.->|optional AuthZEN 1.0<br/>authorizers| pdp([external PDP])
+  identity -->|identity feed: kinds, roles, authorizers<br/>blocks boot| cp
+  identity -.->|optional AuthZEN 1.0<br/>kind authorizers| pdp
   cp -.->|plan counts, only when a plan<br/>removes a kind or changes a parent| identity
   identity --> pg[(Postgres)]
   audit --> pg
@@ -27,15 +29,16 @@ The dotted `control-plane → identity` edge closes a cycle with `identity → c
 ```mermaid
 flowchart TD
   main --> lib --> gw[gateway<br/>request handler]
-  gw --> pipeline & route_map & rate_limit & error & audit & control_plane & config & auth & cors & client_ip & telemetry & internal_http
-  pipeline --> route_map & auth & rate_limit & control_plane & error & kinds
+  gw --> pipeline & route_map & rate_limit & error & audit & control_plane & config & auth & authorizer & cors & client_ip & telemetry & internal_http
+  pipeline --> route_map & auth & authorizer & rate_limit & control_plane & error & kinds
   route_map --> kinds & duration
   error --> route_map
   auth --> error & internal_http & client_ip
+  authorizer --> internal_http & route_map
   audit --> auth & error & internal_http
   control_plane --> route_map & cors & kinds & duration
   config --> auth & client_ip & duration & rate_limit & gw
-  health --> auth & rate_limit
+  health --> auth & authorizer & rate_limit
   telemetry --> metrics
 ```
 
@@ -91,11 +94,12 @@ No cycles. `events` is the only domain package.
 
 | Module | Responsibility | Depends on | Used by |
 |---|---|---|---|
-| **gateway** (service) | The public edge: routing, auth, rate limits, CORS, upstream signing, audit emission | identity, control-plane, audit, Valkey | clients, e2e |
+| **gateway** (service) | The public edge: routing, auth, outbound AuthZEN, rate limits, CORS, upstream signing, audit emission | identity, control-plane, audit, Valkey, optional AuthZEN PDP | clients, e2e |
 | gw `gateway` | Pingora request handler, upstream peer resolution/SSRF checks, Ed25519 request signing | nearly every module | `lib`, `config` (`signing`) |
-| gw `pipeline` | Per-request decision: admit, permissions, rate limits, route checks, upstream fill | route_map, auth, rate_limit, control_plane, error, kinds, metrics | gateway |
-| gw `route_map` | Route table built from the control-plane snapshot, with compiled upstream templates | kinds, duration | gateway, pipeline, control_plane, error |
-| gw `auth` | JWT validation, admit calls and cache, admit invalidation follower/epochs, IP allowlist checks | error, internal_http, client_ip, metrics | gateway, pipeline, audit, config, health |
+| gw `pipeline` | Per-request decision: admit, permissions, outbound authorizer composition, rate limits, route checks, upstream fill | route_map, auth, authorizer, rate_limit, control_plane, error, kinds, metrics | gateway |
+| gw `route_map` | Route table built from the control-plane snapshot, subdomain host matching, compiled upstream templates | kinds, duration | gateway, pipeline, control_plane, error |
+| gw `auth` | JWT validation (including scope and policy claims), admit calls and cache, admit invalidation follower/epochs, IP allowlist checks | error, internal_http, client_ip, metrics | gateway, pipeline, audit, config, health |
+| gw `authorizer` | Outbound OpenID AuthZEN 1.0 client, response caching, active cache invalidation | internal_http, route_map, metrics | gateway, pipeline, health |
 | gw `control_plane` | Follows the control-plane feed, swaps snapshots atomically | route_map, cors, kinds, duration, metrics | gateway, pipeline |
 | gw `cors` | CORS policy compiled from the control plane's `cors` document | none | gateway, control_plane |
 | gw `client_ip` | Trusted proxies, CIDR parsing, client IP and scheme extraction | none | gateway, auth, config |
@@ -110,9 +114,9 @@ No cycles. `events` is the only domain package.
 | cp `rules`, `expand`, `schema`, `config` | Config validation and expansion | schema, config, expand | apply, plan |
 | cp `store` | Postgres storage of revisions and replica status | served | api, apply, feed, main |
 | cp `feed`, `counts` | Long-poll feeds; HTTP client for identity's plan counts | store / none | main, api, apply, plan |
-| **identity** (service) | Tree of nodes, principals, members, groups, bindings, keys, lifecycle log, access decisions | control-plane (feed), Postgres | gateway, control-plane |
-| id `access` | Read/decision plane: gateway admit, AuthZEN evaluation and resource search, role-to-permission resolution | nodes, feed, internal/*, errors, metrics | main, members |
-| id `members` | Users, people, service accounts, groups, invites, bindings, keys | access, nodes, lifecycle, feed, internal/*, errors, metrics | main |
+| **identity** (service) | Tree of nodes, principals, members, groups, custom roles, security policies, bindings, keys, lifecycle log, access decisions | control-plane (feed), Postgres, optional AuthZEN PDP | gateway, control-plane |
+| id `access` | Read/decision plane: gateway admit, AuthZEN evaluation and resource search, outbound AuthZEN PDP client (`pdp.go`), role-to-permission resolution | nodes, feed, internal/*, errors, metrics | main, members |
+| id `members` | Users, people, service accounts, groups, custom roles, security policies, invites, bindings, keys | access, nodes, lifecycle, feed, internal/*, errors, metrics | main |
 | id `nodes` | Node tree, slugs, purge sweeper, plan counts | lifecycle, feed, internal/*, errors, metrics | main, members |
 | id `lifecycle` | Commit-ordered lifecycle event log and admit invalidations feed | errors, internal/dbx, internal/httpx | main, members, nodes |
 | id `feed` | Follows the control plane's identity feed | none | main, members, nodes |

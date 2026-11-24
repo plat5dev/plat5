@@ -44,8 +44,18 @@ Concepts hold the rules, reference holds the wire and config shapes, guides walk
 | Doc | Contents |
 |-----|----------|
 | [write a service](guides/write-a-service.md) | What a service must do for isolation, and which Plat5 standards to follow for extra capabilities |
-| [build a console](guides/build-a-console.md) | Signing in, navigating, `/access/routes`, invites, restore |
+| [build a console](guides/build-a-console.md) | Signing in, navigating, `/access/routes`, roles, policies, invites, restore |
 | [deploy](guides/deploy.md) | Self-hosting images, Compose, TLS, optional modules, upgrades |
+
+## Playbooks
+
+End-to-end recipes combining Plat5 features for common SaaS architectures:
+
+| Playbook | Setup |
+|----------|-------|
+| [Enterprise B2B SaaS](playbooks/enterprise-b2b.md) | Custom roles, per-org SSO/MFA & IP policies, scoped keys, reversible suspension, JIT bindings, tiered rate limits |
+| [Record-level auth with Topaz](playbooks/record-level-auth-topaz.md) | Outbound AuthZEN 1.0 PDP, Topaz ReBAC manifest, `or`/`and`/`replace` modes, active cache invalidation |
+| [Public portals & subdomain routing](playbooks/public-and-subdomain-saas.md) | `kind.host` subdomains, `allow_public` (`all_users` / `all_authenticated_users`), guest invites, anonymous service handlers |
 
 ## Runtime standards & internals
 

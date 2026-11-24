@@ -6,9 +6,9 @@ A service behind Plat5 is a plain HTTP server in any language. This guide separa
 
 Requests arrive from a front door on the private network:
 
-- **Tree routes:** resolved node ids in the path (and in `X-Plat5-<Kind>-Id`), the caller's member id in `X-Plat5-Member-Id`, and `X-Plat5-Principal` (`person` or `service_account`).
+- **Tree routes:** resolved node ids in the path (and in `X-Plat5-<Kind>-Id`), `X-Plat5-Member-Id` (omitted on anonymous or non-member `allow_public` requests), and `X-Plat5-Principal` (`person`, `service_account`, or `anonymous`).
 - **User routes:** the caller's user id in the path (and in `X-Plat5-User-Id`), and `X-Plat5-Principal`.
-- **Every route:** `X-Request-ID` and `traceparent`.
+- **Every route:** `X-Request-ID`, `traceparent`, and (when `UPSTREAM_SIGNING_KEY` is set) `X-Plat5-Signature`.
 
 Full header list: [`reference/headers.md`](../reference/headers.md). Services never receive slugs, `Authorization`, principal ids, or the caller's role or permissions.
 
@@ -26,7 +26,7 @@ These three rules keep multi-tenant isolation intact:
    SELECT * FROM tasks WHERE project_id = $1 AND id = $2;
    ```
    A record in another node returns the same **404** as one that doesn't exist. Inserts take the node id from the request, never from the body. (You may also store ancestor ids from `X-Plat5-<Kind>-Id` alongside the node id for roll-ups or Postgres RLS, never instead of it.)
-3. **Leave auth and access decisions to the front door.** Don't validate JWTs, parse `Authorization`, implement CORS, or check roles yourself. Document which `X-Plat5-*` headers your endpoints require (e.g. `X-Plat5-Member-Id` when recording an author) and answer **400** if a required header is missing.
+3. **Leave auth and access decisions to the front door.** Don't validate JWTs, parse `Authorization`, implement CORS, or check roles yourself. Document which `X-Plat5-*` headers your endpoints require (e.g. `X-Plat5-Member-Id` when recording an author) and answer **400** if a required header is missing. On routes with `allow_public: true`, treat `X-Plat5-Member-Id` as optional and handle `X-Plat5-Principal: anonymous`.
 
 Key tree data by node id (and `X-Plat5-Member-Id` when logic needs an author or owner). Key per-person data that is the same across every tree by `X-Plat5-User-Id` on user routes ([where a field goes](../concepts/model.md#where-a-field-goes)).
 
@@ -91,6 +91,9 @@ POST {IDENTITY_INTERNAL_URL}/access/v1/search/resource
 ```
 
 When `all` is `true`, the member holds the permission on every live node of that kind under `scope`; otherwise filter by the returned `results` ids.
+
+### Record-level auth & external PDP cache invalidation
+If your routes attach an external AuthZEN 1.0 authorizer with `resource: { type, id }` ([authorizers](../reference/config/authorizers.md)), the gateway enforces record-level decisions before requests reach your handler. When your service writes a relation or policy change to the external PDP (for example, creating or unsharing a document) and the authorizer sets a non-zero `cache_ttl` or `negative_cache_ttl`, call `POST {GATEWAY_INTERNAL_URL}/internal/authorizer-cache/invalidate` ([gateway internal API](../reference/api/internal.md#authorizer-cache-invalidation)) so cached decisions evict immediately. See the [Topaz playbook](../playbooks/record-level-auth-topaz.md).
 
 ## Nodes with service fields
 

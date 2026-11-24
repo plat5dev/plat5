@@ -148,6 +148,7 @@ The [schema](../../concepts/config.md#schema) defines the shape, and the control
 - `methods` not empty; map keys are uppercase verbs other than `OPTIONS`
 - Placeholders and upstreams as [above](#upstream)
 - `required_permissions` stated for every verb in a kind scope; absent in `user` and `public`
-- `allow_deleted` only in a kind scope; `audit` not in `public`
+- `allow_deleted`, `allow_public`, and `authorizer` only in kind scopes (`allow_public: true` requires `allow_public: true` on the scope's kind or an ancestor); `audit` not in `public`
+- Every `authorizer` names an entry in `authorizers`, and any `resource.id` placeholders exist in the scope's chain or route params
 - Every `rate_limit` name is a policy; a policy with `count_at` only in a kind scope, at that kind or an ancestor
 - Timeouts are durations; `max_body_bytes` at least 1

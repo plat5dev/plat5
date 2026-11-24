@@ -43,7 +43,7 @@ An empty `chain` is a user route: `nodes`, `member_id` and `permissions` are emp
 
 Every field is in every answer, so the gateway never sees a missing one. With `valid: false`, `principal`, `key_id`, `member_id` and `user_id` are `null`, and `allowed_cidrs`, `nodes` and `permissions` are empty. A missing node and a caller outside the tree both answer `member_id: null` with empty `nodes` and `permissions`. `key_id` is the key's id for a key, `null` for a JWT. `allowed_cidrs` is the key's IP allowlist (`[]` for a JWT or an unrestricted key). `permissions` is sorted, with `*` as the role wrote it. `invalidation_seq` is the commit-ordered head of identity's invalidation log as of this read, and `config_revision` is the control-plane revision identity used to resolve permissions.
 
-Identity resolves `chain` by kind name only and doesn't check it against its kinds: a gateway a revision ahead or behind gets `member_id: null`, not an error. A body identity can't read is **422**: neither or both of `credential` and `idp`, or an `idp` without `issuer` or `subject`.
+Identity resolves `chain` by kind name only and doesn't check it against its kinds: a gateway a revision ahead or behind gets `member_id: null`, not an error. A body identity can't read is **422**: none or more than one of `credential`, `idp`, and `anonymous: true`, an `idp` without `issuer` or `subject`, or `anonymous: true` without `allow_public: true` and a non-empty `chain`.
 
 #### What the gateway answers
 
@@ -171,10 +171,10 @@ POST /access/v1/evaluation
 `decision` is `true` only when every step holds. Admit's resolution decides each one ([admit](#admit)):
 
 1. **Node.** The node exists, its kind is `resource.type`, and it and every node above it are live.
-2. **Member.** The member is active in the node's tree, and admit would accept its principal: a person who isn't suspended, or a service account whose node is live.
-3. **Permission.** The union of the roles of the member's direct bindings and group bindings on the node and its ancestors grants `action.name`: `includes` resolved, `*` granting every permission ([resolution](../../concepts/access.md#resolution)).
+2. **Member.** The member is active and unsuspended in the node's tree, and admit would accept its principal: a person who isn't suspended, or a service account whose node is live.
+3. **Permission.** The union of the roles (predefined and custom) of the member's unexpired direct bindings and group bindings on the node and its ancestors grants `action.name`: `includes` resolved, `*` granting every permission ([resolution](../../concepts/access.md#resolution)). When the node's kind declares an external `authorizer` ([authorizers](../config/authorizers.md)), identity composes this result with the external AuthZEN PDP according to its mode (`replace`, `and`, or `or`), batching multiple items per authorizer.
 
-Anything else is `false`, never an error: a deleted, purged or unknown node, a `resource.type` that isn't the node's kind, a removed or unknown member, a member of another tree, or no binding that grants the permission. Identity keeps no cache for these answers: each one reads the bindings as they are, and roles as identity has them ([config](../../concepts/config.md#how-a-change-reaches-readers)).
+Anything else is `false`, never an error: a deleted, purged or unknown node, a `resource.type` that isn't the node's kind, a removed, suspended or unknown member, a member of another tree, or no binding/authorizer grant. Identity keeps no cache for these answers: each one reads the bindings as they are, and roles as identity has them ([config](../../concepts/config.md#how-a-change-reaches-readers)). An unavailable external authorizer answers **503** `SERVICE_UNAVAILABLE`.
 
 #### Batch
 
@@ -242,9 +242,9 @@ POST /access/v1/search/resource
 | `page` | Optional. `{ limit?, token? }`: `limit` 1 to 1000 (default 100); `token` is a lowercase ULID cursor (`id > token`) |
 | `context` | Optional. Accepted and ignored |
 
-- **Short-circuit (`all: true`).** When the member is admissible, `scope` (or their root) is live with live ancestors, `resource.type` is a kind at or below `scope`'s kind, and the member's direct or group bindings on `scope` or its ancestors already grant `action.name`, identity answers `{ "all": true, "results": [] }` without enumerating descendants: the caller holds `action.name` on every live node of `resource.type` under `scope`.
-- **Explicit results (`all: false`).** Otherwise, `results` lists each live node of `resource.type` at or below `scope` (whose ancestors are all live) on which the member holds `action.name` through direct or group bindings, ordered by `id` ascending. When more results follow, `page.next_token` is the last id returned.
-- **No matches.** An unknown, removed, or inadmissible member, a missing/deleted/purged scope, a scope in another tree, or an unknown/unreachable kind answers `{ "all": false, "results": [] }`, never an error. Identity keeps no cache for these answers.
+- **Short-circuit (`all: true`).** When the member is admissible, `scope` (or their root) is live with live ancestors, `resource.type` is a kind at or below `scope`'s kind, and the member's unexpired direct or group bindings on `scope` or its ancestors already grant `action.name`, identity answers `{ "all": true, "results": [] }` without enumerating descendants — unless the target kind has an external `authorizer` in `replace` or `and` mode (which can still deny individual nodes; `or` mode still short-circuits when built-in RBAC allows).
+- **Explicit results (`all: false`).** Otherwise, `results` lists each live node of `resource.type` at or below `scope` (whose ancestors are all live) on which the member holds `action.name` through direct/group bindings composed with any kind-level external `authorizer`, ordered by `id` ascending. When more results follow, `page.next_token` is the last id returned.
+- **No matches.** An unknown, removed, suspended, or inadmissible member, a missing/deleted/purged scope, a scope in another tree, or an unknown/unreachable kind answers `{ "all": false, "results": [] }`, never an error. Identity keeps no cache for these answers.
 
 #### Errors
 
@@ -252,7 +252,7 @@ POST /access/v1/search/resource
 |--------|----------|
 | Answered | **200**, whatever the decisions |
 | A body identity can't read: not sent as `application/json`, or not a JSON object; a `subject`, `resource` or `action` missing, after defaults; a `subject.type` other than `member`; an id that isn't a lowercase ULID; an empty `resource.type` or `action.name`; a field of the wrong type; an unknown `evaluations_semantic`; more than 100 items; or invalid `scope.node_id`, `page.limit` (outside 1–1000) or `page.token` | **400** `INVALID_REQUEST`, in the [error envelope](../errors.md). `message` says which field, with its path (`evaluations[2].subject.id`) |
-| Postgres unavailable | **503** `SERVICE_UNAVAILABLE`. No decision: the caller acts as if it were `false`, and retries later |
+| Postgres or external authorizer unavailable | **503** `SERVICE_UNAVAILABLE`. No decision: the caller acts as if it were `false`, and retries later |
 
 AuthZEN gives an error status and a message string, with no shape for the body; the message is the envelope's `message`. An `X-Request-ID` on the request comes back on the response, as AuthZEN asks.
 
@@ -262,18 +262,19 @@ On `INTERNAL_PORT`. Each is one read, at one head, in one Postgres snapshot. Eac
 
 | Path | Reader | `200` body |
 |------|--------|------------|
-| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "rate_limits", "defaults", "cors" }`. **404** before the first apply. `defaults` is `{ "rate_limit" }` (empty array when `defaults.rate_limit` is unset), used to rate-limit `POST /access/routes` |
-| `GET /internal/identity` | identity | `{ "revision", "deletion_grace", "reserved_slugs", "kinds", "roles", "creator_role" }`. **404** before the first apply |
+| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "rate_limits", "defaults", "cors", "authorizers"? }`. **404** before the first apply. `defaults` is `{ "rate_limit" }` (empty array when `defaults.rate_limit` is unset), used to rate-limit `POST /access/routes`. `authorizers` is omitted when empty |
+| `GET /internal/identity` | identity | `{ "revision", "deletion_grace", "reserved_slugs", "kinds", "roles", "creator_role", "custom_roles"?, "permissions"?, "authorizers"? }`. **404** before the first apply. `custom_roles` is included when `true`; `permissions` is the derived permission catalog when `custom_roles` is `true` or `permissions` metadata is set; `authorizers` is omitted when empty |
 
 The gateway's `services` are expanded: each service's `url`, and its own `timeouts` and `max_body_bytes` with the config's `defaults` filled in, and its `routes` as the gateway matches them, one per method:
 
 ```json
 { "path": "/orgs/{organization}/projects/{project}/plans/{plan_id}/versions", "method": "POST",
   "scope": "project", "upstream": "/projects/{project.id}/plans/{plan_id}/versions",
-  "required_permissions": ["catalog:write"], "rate_limit": ["standard"], "audit": true, "allow_deleted": false }
+  "required_permissions": ["catalog:write"], "rate_limit": ["standard"], "audit": true,
+  "allow_deleted": false, "allow_public": false, "authorizer": null }
 ```
 
-`rate_limit` is resolved (`defaults.rate_limit` for a route that names none, or `[]` when `defaults.rate_limit` is unset or the route says `false`), `audit` is the method default filled in (`false` in `public`, which is never audited), and `required_permissions` is a list or `"any_member"` (`null` outside a kind scope). Roles are served as written, with `includes`; identity resolves them. Kinds are served with `list_permission` filled in. Other keys have defaults filled in: `deletion_grace` `30d`, `reserved_slugs` `[]`, `rate_limits` `{}`, and `cors` `{ "allowed_origins": [], "allowed_headers": [] }` when omitted.
+`rate_limit` is resolved (`defaults.rate_limit` for a route that names none, or `[]` when `defaults.rate_limit` is unset or the route says `false`), `audit` is the method default filled in (`false` in `public`, which is never audited), `authorizer` is resolved across service → scope → route → verb inheritance (omitted when none applies), and `required_permissions` is a list or `"any_member"` (`null` outside a kind scope). Roles are served as written, with `includes`; identity resolves them. Kinds are served with `list_permission` filled in (plus `host`, `allow_public`, and `authorizer` when set). Other keys have defaults filled in: `deletion_grace` `30d`, `reserved_slugs` `[]`, `rate_limits` `{}` (each policy including `tiers` when set), and `cors` `{ "allowed_origins": [], "allowed_headers": [] }` when omitted.
 
 Without `after`, the answer is immediate. With `?after={revision}`, the control plane waits until the head is past `after`, for up to 25 seconds. Nothing newer in that time is **204**, and the reader asks again. A cursor ahead of the head (the store was reset) is answered at once.
 
@@ -331,3 +332,24 @@ PATCH /internal/events/{request_id}
 ### Completed and rejected (single write)
 
 A gateway refusal after admit (a permission **403**, a **400** on a param, a **500**) — and any forwarded audited request when `AUDIT_MODE=async` — is sent as one background `PUT /internal/events/{request_id}` carrying the intent fields plus the final outcome fields (`outcome`, `status`, and optionally `details`, `created_id`, `named_node_ids`, `named_member_id`). Audit inserts the row already final and adds the corresponding `audit_log_keys` (`created_id`, and `named_node_ids` on user routes) in one transaction. It answers as an intent does.
+
+## Gateway
+
+### Authorizer cache invalidation
+
+Actively flushes cached external AuthZEN decisions on a gateway replica (`POST {GATEWAY_INTERNAL_URL}/internal/authorizer-cache/invalidate`), for services that write tuples or policy changes to an external PDP when `cache_ttl` or `negative_cache_ttl` is non-zero ([authorizers](../config/authorizers.md)).
+
+```
+POST /internal/authorizer-cache/invalidate
+{
+  "authorizer": "topaz",
+  "subject_id": "01jby…",
+  "resource_type": "document",
+  "resource_id": "doc-42",
+  "all": false
+}
+→ 200
+{ "invalidated": true }
+```
+
+Set `all: true` or at least one of `authorizer`, `subject_id`, `resource_type`, or `resource_id`; multiple fields intersect (narrowing which cached entries are evicted). Max body 64 KiB (**413**). Invalid JSON or an empty selector returns **400**. Each gateway replica holds its own in-process cache, so multi-replica deployments broadcast invalidations to all replicas (or keep `cache_ttl` short).

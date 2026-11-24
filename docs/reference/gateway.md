@@ -19,8 +19,9 @@ Every credential is `Authorization: Bearer`. Three dot-separated segments is a J
 
 ```
 POST {IDENTITY_INTERNAL_URL}/internal/admit
-{ "credential" | "idp", "chain": [{ "kind", "ref" }], "allow_deleted" }
-→ { "valid", "principal", "key_id", "allowed_cidrs", "nodes": [{ "kind", "id" }], "member_id", "user_id", "permissions" }
+{ "credential" | "idp" | "anonymous": true, "chain": [{ "kind", "ref" }], "allow_deleted", "allow_public" }
+→ { "valid", "principal", "key_id", "allowed_cidrs", "org_allowed_cidrs", "nodes": [{ "kind", "id" }],
+    "member_id", "user_id", "permissions", "rate_limit_tier", "expires_at", "invalidation_seq", "config_revision" }
 ```
 
 On identity's `INTERNAL_PORT`. An empty chain is a user route. Contract: [`reference/api/internal.md`](api/internal.md#admit).
@@ -114,7 +115,7 @@ Each `allowed` runs the gateway's own route match, admit (using the admit cache)
 | None matches the path and method | `false` |
 | `public` | `true` |
 | `user` | `true` for a person, `false` for a service account |
-| A kind | `true` when admit finds the caller's member on the chain (a deleted node only on an `allow_deleted` route) and the caller's permissions meet `required_permissions` or `any_member` |
+| A kind | `true` when admit accepts the caller on the chain (a deleted node only on an `allow_deleted` route; public principals when `allow_public: true`), the root's `allowed_cidrs` permits the client IP, and built-in permissions plus any attached outbound `authorizer` (batched per authorizer) allow the route |
 
 - **Credential.** Missing, malformed, or locally refused JWT → **401**. Any admit answering `valid: false` makes the whole call **401** (counted once by the failed-auth limiter when enabled). A batch that needs no admit (all `public` or unmatched) never calls identity.
 - **Rate limit.** When rate limiting is enabled and `defaults.rate_limit` is set, counted once per call against `defaults.rate_limit` per credential (a key's hash, or a JWT's issuer and subject), with `X-RateLimit-*` on 200 and 429.
@@ -167,14 +168,14 @@ The gateway listens only once it has a control-plane snapshot. `/health/ready` i
 
 | Case | Code |
 |------|------|
-| Bad or missing credential | `UNAUTHORIZED` (401) |
-| Node not found, not in the tree, or no route permission held | `FORBIDDEN` (403) |
-| A service account on a user route | `FORBIDDEN` (403) |
+| Bad or missing credential, key IP allowlist refusal, or denied anonymous `allow_public` request | `UNAUTHORIZED` (401) |
+| Node not found, not in the tree, org security policy/IP refusal, or permission/authorizer denied | `FORBIDDEN` (403) |
+| A service account or narrowed personal key on a user route | `FORBIDDEN` (403) |
 | Route not registered | `NOT_FOUND` (404) |
 | Request body too large | `PAYLOAD_TOO_LARGE` (413) |
 | Bad `/access/routes` body | `VALIDATION_ERROR` (422) |
 | Rate limit (route policy or failed-auth IP) | `RATE_LIMITED` (429) |
-| JWKS, identity, or sync audit intent down | `SERVICE_UNAVAILABLE` (503) |
+| JWKS, identity, outbound authorizer, or sync audit intent down | `SERVICE_UNAVAILABLE` (503) |
 | Upstream unreachable, timed out, or failing mid-proxy | **502** `SERVICE_UNAVAILABLE` |
 | Path param `.` / `..` or containing `/` / `?` / `#` | `INVALID_REQUEST` (400) |
 

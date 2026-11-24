@@ -44,9 +44,12 @@ When a creation form includes product-specific fields owned by one of your servi
 
 ## Who has access
 
-- `GET …/bindings` lists every binding that counts at the node, with `inherited` and `guest` flags.
-- `GET /orgs/{organization}/members` lists the org's members, guests marked.
-- `GET …/roles` lists roles bindable at that node, for role pickers.
+- `GET …/bindings` lists every binding that counts at the node (member, group, and public), with `inherited`, `guest`, and `expires_at` fields. A member or group can hold multiple distinct roles on the same node.
+- `GET /orgs/{organization}/members` lists the org's non-removed members (active and suspended), guests marked. Use `PATCH /orgs/{organization}/members/{member_id}/status` to reversibly suspend or reactivate a member without rotating their `member_id`.
+- `GET /orgs/{organization}/groups` and `…/groups/{group_id}/members` manage in-tree groups; bind a group on any node just like a member.
+- `GET …/roles` lists system and custom roles bindable at that node, for role pickers (`GET /orgs/{organization}/roles?all=true` returns every role in the org). When `custom_roles: true`, use `GET /orgs/{organization}/permissions` to populate a custom-role editor and `POST`/`PATCH`/`DELETE /orgs/{organization}/roles` to manage custom roles.
+- `GET`/`PATCH /orgs/{organization}/security-policy` configures org-wide `allow_personal_keys`, `allowed_cidrs`, and `required_idp_claims`.
+- `GET`/`POST`/`PATCH`/`DELETE /user/keys` and `…/service-accounts/{id}/keys` manage API keys, including optional `allowed_cidrs`, `scopes`, `allowed_roots` (personal keys), and `expires_at` / `expires_in`.
 - Removing a person's last binding in a tree permanently removes their member ([members](../concepts/lifecycle.md#members)). To move someone's only access, add the new binding before removing the old one.
 - Adding a member by IdP subject (`POST /orgs/{organization}/members`) is not exposed in the default routes; offer it only when `POST /access/routes` answers `true` for it.
 

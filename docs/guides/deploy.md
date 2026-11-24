@@ -41,8 +41,12 @@ Required in `.env`:
 Optional tuning:
 - `AUTH_SUBJECT_CLAIM` — defaults to `sub` (set `properties.user_id` if using [Plat5 Auth](https://github.com/plat5dev/auth))
 - `AUTH_NAME_CLAIMS` — defaults to `name,preferred_username`
+- `AUTH_SCOPE_CLAIM` — optional JWT claim path for narrowing token permissions
+- `AUTH_POLICY_CLAIMS` — optional comma-separated JWT claim paths forwarded to admit for per-org `required_idp_claims` enforcement
 - `SECRET_BRAND` — prefix for API keys and invite tokens (default `plat5`)
 - `TRUSTED_PROXIES` — CIDR/IP list of your edge proxy so `X-Forwarded-For` and `X-Forwarded-Proto` are honored
+- `UPSTREAM_SIGNING_KEY` / `UPSTREAM_SIGNING_KEY_ID` — optional Ed25519 signing of forwarded upstream requests ([signing](../reference/headers.md#upstream-request-signing))
+- `UPSTREAM_BLOCK_PRIVATE_IPS` — set `true` when forwarding to external/untrusted upstreams or external PDPs to block private-IP SSRF
 - `OTEL_EXPORTER_OTLP_ENDPOINT` — optional OTLP collector ([`reference/telemetry.md`](../reference/telemetry.md))
 
 ### Optional modules
@@ -51,6 +55,7 @@ Both **audit** and **rate limiting** default to on (`AUDIT_URL` and `VALKEY_URL`
 
 - **Without audit:** set `AUDIT_ENABLED=false` on the gateway and don't run the `audit` container (and omit `audit` from your control-plane `services` config). With audit on, set `AUDIT_MODE=async` if you prefer lower write latency over `sync` fail-closed intent durability.
 - **Without rate limiting:** set `RATE_LIMIT_ENABLED=false` on the gateway and don't run `valkey`. Rate-limit policies in your config are still accepted at apply and ignored at runtime. When enabled, rate limiting fails open if Valkey is unreachable and resumes automatically when Valkey recovers.
+- **With an external AuthZEN PDP:** put the PDP on `plat5_plat5` (or point `authorizers.<name>.url` at an HTTPS endpoint) and set any `token_env` environment variables on both `gateway` and `identity` ([authorizers](../reference/config/authorizers.md)).
 
 Full env reference: [`reference/env.md`](../reference/env.md).
 
