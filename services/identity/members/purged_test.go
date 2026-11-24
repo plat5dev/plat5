@@ -38,7 +38,7 @@ func newPurgedTree(e *env) purgedTree {
 	}
 	tr.group = g.ID
 	tr.sa, _ = e.serviceAccount(tr.project, "viewer")
-	k, err := e.store.CreateKey(e.ctx, KeyOwner{NodeID: tr.project.ID, MemberID: tr.sa}, "ci", nil)
+	k, err := e.store.CreateKey(e.ctx, KeyOwner{NodeID: tr.project.ID, MemberID: tr.sa}, KeyCreate{Name: "ci"})
 	if err != nil {
 		e.t.Fatal(err)
 	}

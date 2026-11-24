@@ -40,9 +40,11 @@ pub fn check(config: &Config) -> Result<(), Vec<FieldError>> {
     Err(errs)
 }
 
-/// Rule 1: every parent is a kind, no cycles, and each kind's path param is
-/// its own name.
+/// Rule 1: every parent is a kind, no cycles, each kind's path param is
+/// its own name, and optional `host` templates sit only on root kinds with
+/// distinct domain suffixes.
 fn check_kinds(config: &Config, errs: &mut Vec<FieldError>) {
+    let mut host_suffixes: BTreeMap<String, String> = BTreeMap::new();
     for (name, kind) in &config.kinds {
         if let Some(parent) = &kind.parent {
             if !config.kinds.contains_key(parent) {
@@ -60,6 +62,24 @@ fn check_kinds(config: &Config, errs: &mut Vec<FieldError>) {
                     kind.collection()
                 ),
             ));
+        }
+        if let Some((param, suffix)) = kind.host_parts() {
+            if kind.parent.is_some() {
+                errs.push(FieldError::new(
+                    format!("kinds.{name}.host"),
+                    "host is only allowed on root kinds",
+                ));
+            } else if param != name {
+                errs.push(FieldError::new(
+                    format!("kinds.{name}.host"),
+                    format!("the host param must be the kind's name: {{{name}}}{suffix}"),
+                ));
+            } else if let Some(other) = host_suffixes.insert(suffix.to_string(), name.clone()) {
+                errs.push(FieldError::new(
+                    format!("kinds.{name}.host"),
+                    format!("host suffix {suffix:?} is already used by kind {other:?}"),
+                ));
+            }
         }
     }
     let mut reported = BTreeSet::new();
@@ -631,6 +651,36 @@ mod tests {
         let mut c = base();
         c["kinds"]["project"]["path"] = json!("/projects/{id}");
         errors_at(c, "kinds.project.path");
+
+        // host template on root kind passes; child kind, wrong param, and duplicate suffix fail.
+        let mut c = base();
+        c["kinds"]["organization"]["host"] = json!("{organization}.api.example.com");
+        run(c).unwrap();
+
+        let mut c = base();
+        c["kinds"]["project"]["host"] = json!("{project}.api.example.com");
+        errors_at(c, "kinds.project.host");
+
+        let mut c = base();
+        c["kinds"]["organization"]["host"] = json!("{org}.api.example.com");
+        errors_at(c, "kinds.organization.host");
+
+        let mut c = base();
+        c["kinds"]["organization"]["host"] = json!("{organization}.api.example.com");
+        c["kinds"]["workspace"] = json!({
+            "path": "/workspaces/{workspace}",
+            "host": "{workspace}.api.example.com"
+        });
+        c["roles"]["admin"]["bindable_at"] = json!(["organization", "project", "workspace"]);
+        errors_at(c, "kinds.workspace.host");
+
+        // rate_limits tiers pass schema and rules.
+        let mut c = base();
+        c["rate_limits"]["per-org"]["tiers"] = json!({
+            "pro": { "requests": 1000, "window": "1s" },
+            "enterprise": { "requests": 5000, "window": "1s" }
+        });
+        run(c).unwrap();
     }
 
     #[test]

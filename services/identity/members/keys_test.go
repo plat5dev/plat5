@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/internal/auditx"
+	"github.com/plat5dev/plat5/identity/internal/id"
 )
 
 func TestNormalizeAllowedCIDRs(t *testing.T) {
@@ -69,6 +71,63 @@ func TestNormalizeAllowedCIDRs(t *testing.T) {
 	}
 	if _, err := normalizeAllowedCIDRs(tooMany); err == nil {
 		t.Fatal("expected error over MaxAllowedCIDRs")
+	}
+}
+
+func TestNormalizeScopesAndAllowedRootsAndExpiry(t *testing.T) {
+	got, err := normalizeScopes([]string{"project:write", " project:read ", "project:read"})
+	if err != nil || !slices.Equal(got, []string{"project:read", "project:write"}) {
+		t.Fatalf("scopes: got %v, err %v", got, err)
+	}
+	for _, bad := range [][]string{{"*"}, {""}, {"Bad:Perm"}, {"a b"}} {
+		if _, err := normalizeScopes(bad); err == nil {
+			t.Errorf("scopes %v: expected error", bad)
+		}
+	}
+
+	r1, r2 := id.New(), id.New()
+	roots, err := normalizeAllowedRoots([]string{r2, r1, r1}, false)
+	wantRoots := []string{r1, r2}
+	slices.Sort(wantRoots)
+	if err != nil || !slices.Equal(roots, wantRoots) {
+		t.Fatalf("allowed_roots: got %v, want %v, err %v", roots, wantRoots, err)
+	}
+	if _, err := normalizeAllowedRoots([]string{r1}, true); err == nil {
+		t.Fatal("service account key must reject allowed_roots")
+	}
+	if _, err := normalizeAllowedRoots([]string{"not-a-ulid"}, false); err == nil {
+		t.Fatal("invalid ULID must be rejected")
+	}
+
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	set, val, err := parseExpiry(nil, nil, now)
+	if err != nil || set || val != nil {
+		t.Fatalf("none: set=%v val=%v err=%v", set, val, err)
+	}
+	set, val, err = parseExpiry(json.RawMessage(`"2026-11-25T12:00:00Z"`), nil, now)
+	if err != nil || !set || val == nil || !val.Equal(now.Add(24*time.Hour)) {
+		t.Fatalf("expires_at: set=%v val=%v err=%v", set, val, err)
+	}
+	set, val, err = parseExpiry(nil, json.RawMessage(`"2h"`), now)
+	if err != nil || !set || val == nil || !val.Equal(now.Add(2*time.Hour)) {
+		t.Fatalf("expires_in: set=%v val=%v err=%v", set, val, err)
+	}
+	set, val, err = parseExpiry(json.RawMessage(`null`), nil, now)
+	if err != nil || !set || val != nil {
+		t.Fatalf("clear: set=%v val=%v err=%v", set, val, err)
+	}
+	// Mutually exclusive, past timestamp, and invalid duration fail.
+	if _, _, err := parseExpiry(json.RawMessage(`"2026-11-25T12:00:00Z"`), json.RawMessage(`"1h"`), now); err == nil {
+		t.Fatal("both expires_at and expires_in must fail")
+	}
+	if _, _, err := parseExpiry(json.RawMessage(`"2026-11-24T11:00:00Z"`), nil, now); err == nil {
+		t.Fatal("past expires_at must fail")
+	}
+	if _, _, err := parseExpiry(nil, json.RawMessage(`"bad"`), now); err == nil {
+		t.Fatal("invalid expires_in must fail")
+	}
+	if _, _, err := parseExpiry(nil, json.RawMessage(`null`), now); err == nil {
+		t.Fatal("null expires_in must fail")
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -40,21 +41,25 @@ const (
 	maxSlugTries        = 1000
 )
 
-var ErrNotFound = stderrors.New("node not found")
+var (
+	ErrNotFound     = stderrors.New("node not found")
+	rateLimitTierRe = regexp.MustCompile(`^[a-z0-9:._-]{1,64}$`)
+)
 
 type Node struct {
-	ID          string
-	Kind        string
-	ParentID    *string
-	RootID      string
-	Slug        *string
-	DisplayName string
-	Status      string
-	DeletedAt   *time.Time
-	PurgeAfter  *time.Time
-	DeletionID  *string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID            string
+	Kind          string
+	ParentID      *string
+	RootID        string
+	Slug          *string
+	DisplayName   string
+	Status        string
+	RateLimitTier *string
+	DeletedAt     *time.Time
+	PurgeAfter    *time.Time
+	DeletionID    *string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // Store changes the tree. Every write that changes a tree's structure holds
@@ -84,7 +89,7 @@ func (s *Store) WithClock(now func() time.Time) *Store {
 	return &c
 }
 
-const nodeColumns = `id, kind, parent_id, root_id, slug, display_name, status, deleted_at, purge_after, deletion_id, created_at, updated_at`
+const nodeColumns = `id, kind, parent_id, root_id, slug, display_name, status, rate_limit_tier, deleted_at, purge_after, deletion_id, created_at, updated_at`
 
 // Columns is the node columns qualified by alias, in ScanNode's order.
 func Columns(alias string) string {
@@ -99,7 +104,7 @@ func Columns(alias string) string {
 func ScanNode(row dbx.Scannable, extra ...any) (*Node, error) {
 	var n Node
 	dest := append([]any{&n.ID, &n.Kind, &n.ParentID, &n.RootID, &n.Slug, &n.DisplayName, &n.Status,
-		&n.DeletedAt, &n.PurgeAfter, &n.DeletionID, &n.CreatedAt, &n.UpdatedAt}, extra...)
+		&n.RateLimitTier, &n.DeletedAt, &n.PurgeAfter, &n.DeletionID, &n.CreatedAt, &n.UpdatedAt}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return nil, err
 	}
@@ -356,6 +361,61 @@ func (s *Store) UpdateDisplayName(ctx context.Context, nodeID, name string) (str
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", nil, op.Fail(err)
+	}
+	op.OK("ok")
+	return before, n, nil
+}
+
+// SetRateLimitTier sets or clears a root node's opaque rate_limit_tier.
+// Non-root nodes return 422. Changing the tier emits a root admit invalidation.
+func (s *Store) SetRateLimitTier(ctx context.Context, nodeID string, tier *string) (*string, *Node, error) {
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "set_node_rate_limit_tier", dbx.DefaultTimeout)
+	defer cancel()
+	defer op.End()
+	var normalized *string
+	if tier != nil {
+		t := strings.TrimSpace(*tier)
+		if !rateLimitTierRe.MatchString(t) {
+			return nil, nil, op.Expected("invalid", errors.FieldError("rate_limit_tier", "Tier must be 1 to 64 lowercase letters, digits, ':', '.', '_' or '-'."))
+		}
+		normalized = &t
+	}
+	if !id.Valid(nodeID) {
+		return nil, nil, op.Expected("not found", ErrNotFound)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, nil, op.Fail(err)
+	}
+	defer tx.Rollback(ctx)
+	locked, err := s.LockedWritable(ctx, tx, nodeID)
+	if err != nil {
+		return nil, nil, op.Reject(err, ErrNotFound)
+	}
+	if locked.ParentID != nil {
+		return nil, nil, op.Expected("not root", errors.FieldError("rate_limit_tier", "Rate limit tier can only be set on a root node."))
+	}
+	before := locked.RateLimitTier
+	n, err := scanNode(tx.QueryRow(ctx, `
+		UPDATE nodes
+		SET rate_limit_tier = $2,
+		    updated_at = CASE WHEN rate_limit_tier IS NOT DISTINCT FROM $2 THEN updated_at ELSE $3 END
+		WHERE id = $1
+		RETURNING `+nodeColumns, nodeID, normalized, s.now().UTC()))
+	if err != nil {
+		return nil, nil, op.Fail(err)
+	}
+	changed := (before == nil) != (normalized == nil) || (before != nil && normalized != nil && *before != *normalized)
+	if changed {
+		if err := lifecycle.RecordCommit(ctx, tx, nil, []lifecycle.Invalidation{lifecycle.InvalidateRoot(n.ID)}); err != nil {
+			return nil, nil, op.Fail(err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, op.Fail(err)
+	}
+	if changed && s.onInvalidate != nil {
+		s.onInvalidate(ctx)
 	}
 	op.OK("ok")
 	return before, n, nil

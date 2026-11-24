@@ -11,7 +11,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::duration::parse_duration;
-use crate::kinds::Kinds;
+use crate::kinds::{resolve_host, Kinds, RootHost};
 
 mod upstream;
 
@@ -53,6 +53,13 @@ pub enum RequiredDoc {
     Word(String),
 }
 
+/// Per-tier limit override inside a rate-limit policy.
+#[derive(Clone, Debug, Deserialize)]
+pub struct TierLimitDoc {
+    pub requests: u64,
+    pub window: String,
+}
+
 /// A rate-limit policy from the feed's `rate_limits`.
 #[derive(Clone, Debug, Deserialize)]
 pub struct PolicyDoc {
@@ -60,6 +67,8 @@ pub struct PolicyDoc {
     pub window: String,
     #[serde(default)]
     pub count_at: Option<String>,
+    #[serde(default)]
+    pub tiers: BTreeMap<String, TierLimitDoc>,
 }
 
 /// What a route addresses.
@@ -95,6 +104,12 @@ pub enum Required {
     AnyOf(Vec<String>),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TierLimit {
+    pub requests: u64,
+    pub window_seconds: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
     pub name: String,
@@ -102,6 +117,46 @@ pub struct Policy {
     pub window_seconds: u64,
     /// The chain position of the `count_at` kind. None = each caller at the route's node.
     pub count_at: Option<usize>,
+    /// Optional per-root-tier overrides keyed by the root's `rate_limit_tier`.
+    pub tiers: BTreeMap<String, TierLimit>,
+}
+
+impl Policy {
+    /// Effective `(requests, window_seconds)` for an optional root tier.
+    pub fn effective(&self, tier: Option<&str>) -> (u64, u64) {
+        if let Some(limit) = tier.and_then(|name| self.tiers.get(name)) {
+            (limit.requests, limit.window_seconds)
+        } else {
+            (self.requests, self.window_seconds)
+        }
+    }
+}
+
+pub fn parse_tiers(
+    policy_name: &str,
+    tiers: &BTreeMap<String, TierLimitDoc>,
+) -> Result<BTreeMap<String, TierLimit>, String> {
+    tiers
+        .iter()
+        .map(|(tier, doc)| {
+            let window_seconds = parse_duration(&doc.window)
+                .filter(|d| *d >= Duration::from_secs(1))
+                .ok_or_else(|| {
+                    format!(
+                        "rate_limit {policy_name} tier {tier:?} has invalid window {:?} (must be at least 1s)",
+                        doc.window
+                    )
+                })?
+                .as_secs();
+            Ok((
+                tier.clone(),
+                TierLimit {
+                    requests: doc.requests,
+                    window_seconds,
+                },
+            ))
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -157,6 +212,8 @@ struct CompiledRoute {
 pub struct RouteMap {
     /// Per method, in match order: a literal segment beats a param, from the left.
     by_method: HashMap<String, Vec<CompiledRoute>>,
+    /// Host templates on root kinds for subdomain-based root resolution.
+    host_routes: Vec<RootHost>,
 }
 
 impl RouteMap {
@@ -197,7 +254,10 @@ impl RouteMap {
                     .then_with(|| a.route.service.cmp(&b.route.service))
             });
         }
-        Ok(Self { by_method })
+        Ok(Self {
+            by_method,
+            host_routes: kinds.host_routes().to_vec(),
+        })
     }
 
     pub fn find_route(&self, path: &str, method: &str) -> Option<Matched> {
@@ -206,6 +266,38 @@ impl RouteMap {
             .get(method)?
             .iter()
             .find_map(|compiled| match_segments(compiled, &request))
+    }
+
+    /// Match a request using the `Host` header when it matches a root kind's
+    /// subdomain template. On a tenant subdomain, kind routes are matched only
+    /// under that tenant's resolved root prefix; `public` and `user` routes
+    /// remain reachable as normal, while cross-tenant kind paths return `None`.
+    pub fn find_route_with_host(
+        &self,
+        path: &str,
+        method: &str,
+        host: Option<&str>,
+    ) -> Option<Matched> {
+        if let Some((root_host, root_ref)) = host.and_then(|h| resolve_host(&self.host_routes, h)) {
+            let synthetic = if path == "/" {
+                format!("{}/{root_ref}", root_host.prefix)
+            } else {
+                format!("{}/{root_ref}{path}", root_host.prefix)
+            };
+            if let Some(matched) = self.find_route(&synthetic, method) {
+                if matched.route.chain.first().map(String::as_str) == Some(root_host.kind.as_str())
+                {
+                    return Some(matched);
+                }
+            }
+            if let Some(matched) = self.find_route(path, method) {
+                if matches!(matched.route.scope, Scope::Public | Scope::User) {
+                    return Some(matched);
+                }
+            }
+            return None;
+        }
+        self.find_route(path, method)
     }
 
     pub fn route_count(&self) -> usize {
@@ -307,11 +399,13 @@ fn build_route(
                     )
                 })?
                 .as_secs();
+            let tiers = parse_tiers(name, &policy.tiers)?;
             Ok(Policy {
                 name: name.clone(),
                 requests: policy.requests,
                 window_seconds,
                 count_at,
+                tiers,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -496,16 +590,134 @@ mod tests {
                     name: "per-caller".into(),
                     requests: 100,
                     window_seconds: 1,
-                    count_at: None
+                    count_at: None,
+                    tiers: BTreeMap::new(),
                 },
                 Policy {
                     name: "evals-org".into(),
                     requests: 300,
                     window_seconds: 1,
-                    count_at: Some(0)
+                    count_at: Some(0),
+                    tiers: BTreeMap::new(),
                 },
             ]
         );
+    }
+
+    #[test]
+    fn policy_tiers_override_requests_and_window() {
+        let mut r = route("/orgs/{organization}/x", "GET", "organization", "/x");
+        r["rate_limit"] = json!(["tiered"]);
+        let map = build_with(
+            json!({ "svc": service(vec![r]) }),
+            json!({
+                "tiered": {
+                    "requests": 10,
+                    "window": "1m",
+                    "tiers": {
+                        "enterprise": { "requests": 1000, "window": "10s" }
+                    }
+                }
+            }),
+        )
+        .unwrap();
+        let m = map.find_route("/orgs/acme/x", "GET").unwrap();
+        let policy = &m.route.policies[0];
+        assert_eq!(policy.effective(None), (10, 60));
+        assert_eq!(policy.effective(Some("unknown")), (10, 60));
+        assert_eq!(policy.effective(Some("enterprise")), (1000, 10));
+
+        // Invalid tier window is rejected.
+        let mut bad = route("/orgs/{organization}/x", "GET", "organization", "/x");
+        bad["rate_limit"] = json!(["tiered"]);
+        let err = build_with(
+            json!({ "svc": service(vec![bad]) }),
+            json!({
+                "tiered": {
+                    "requests": 10,
+                    "window": "1m",
+                    "tiers": { "bad": { "requests": 5, "window": "0s" } }
+                }
+            }),
+        )
+        .err()
+        .unwrap();
+        assert!(err.contains("invalid window"), "{err}");
+    }
+
+    #[test]
+    fn host_based_routing_resolves_root_and_blocks_cross_tenant_paths() {
+        let kinds = Kinds::from_feed(
+            &serde_json::from_value(json!({
+                "organization": {
+                    "path": "/orgs/{organization}",
+                    "host": "{organization}.api.example.com"
+                },
+                "project": {
+                    "parent": "organization",
+                    "path": "/projects/{project}"
+                }
+            }))
+            .unwrap(),
+        );
+        let services: BTreeMap<String, ServiceDoc> = serde_json::from_value(json!({
+            "svc": service(vec![
+                route("/orgs/{organization}", "GET", "organization", "/nodes/{organization.id}"),
+                route("/orgs/{organization}/projects/{project}", "GET", "project", "/projects/{project.id}"),
+                route("/user", "GET", "user", "/users/{user.id}"),
+                route("/health", "GET", "public", "/health"),
+            ])
+        }))
+        .unwrap();
+        let map = RouteMap::from_feed(&services, &BTreeMap::new(), &kinds).unwrap();
+
+        // Subdomain `/` resolves to the root route.
+        let m = map
+            .find_route_with_host("/", "GET", Some("acme.api.example.com"))
+            .unwrap();
+        assert_eq!(m.route.path, "/orgs/{organization}");
+        assert_eq!(m.refs, vec!["acme"]);
+
+        // Subdomain `/projects/web` resolves to the child route with `acme` as root ref.
+        let m = map
+            .find_route_with_host("/projects/web", "GET", Some("ACME.api.example.com:443"))
+            .unwrap();
+        assert_eq!(m.route.path, "/orgs/{organization}/projects/{project}");
+        assert_eq!(m.refs, vec!["acme", "web"]);
+
+        // Public and user routes remain accessible on tenant subdomains.
+        assert_eq!(
+            map.find_route_with_host("/user", "GET", Some("acme.api.example.com"))
+                .unwrap()
+                .route
+                .path,
+            "/user"
+        );
+        assert_eq!(
+            map.find_route_with_host("/health", "GET", Some("acme.api.example.com"))
+                .unwrap()
+                .route
+                .path,
+            "/health"
+        );
+
+        // Cross-tenant path on a tenant subdomain MUST NOT match another org.
+        assert!(map
+            .find_route_with_host("/orgs/other", "GET", Some("acme.api.example.com"))
+            .is_none());
+        assert!(map
+            .find_route_with_host(
+                "/orgs/other/projects/web",
+                "GET",
+                Some("acme.api.example.com")
+            )
+            .is_none());
+
+        // Path-based routing still works on the base API host.
+        let m = map
+            .find_route_with_host("/orgs/other", "GET", Some("api.example.com"))
+            .unwrap();
+        assert_eq!(m.refs, vec!["other"]);
     }
 
     #[test]

@@ -73,7 +73,7 @@ func (s *Store) Evaluate(ctx context.Context, snap *feed.Snapshot, evals []Evalu
 		}
 		pairIdx[i] = p
 	}
-	held, err := heldOnChains(ctx, tx, snap, pairs)
+	held, err := heldOnChains(ctx, tx, snap, pairs, s.now().UTC())
 	if err != nil {
 		return nil, op.Fail(err)
 	}
@@ -128,7 +128,7 @@ func admissibleMembers(ctx context.Context, q queryer, memberIDs []string) (map[
 		FROM members m
 		JOIN principals p ON p.id = m.principal_id
 		LEFT JOIN nodes sn ON sn.id = p.node_id
-		WHERE m.id = ANY($1) AND m.removed_at IS NULL
+		WHERE m.id = ANY($1) AND m.removed_at IS NULL AND m.suspended_at IS NULL
 	`, distinct(memberIDs))
 	if err != nil {
 		return nil, err

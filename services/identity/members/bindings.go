@@ -28,11 +28,19 @@ type Binding struct {
 	Guest     bool
 	Principal string
 	Name      *string
+	ExpiresAt *time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	// nodeKind is the kind of the node it sits on, which decides whether its
 	// role counts.
 	nodeKind string
+}
+
+// BindingPatch is what PATCH /nodes/{node_id}/bindings/{binding_id} changes.
+type BindingPatch struct {
+	Role         *string
+	ExpiresAtSet bool
+	ExpiresAt    *time.Time
 }
 
 // bindingSelect reads Bindings as listed at node $1; where uses $2 on.
@@ -42,7 +50,7 @@ func bindingSelect(where string) string {
 		       COALESCE(` + guestSQL + `, false),
 		       CASE WHEN b.group_id IS NOT NULL THEN 'group' ELSE m.principal END,
 		       CASE WHEN b.group_id IS NOT NULL THEN g.name ELSE p.name END,
-		       b.created_at, b.updated_at, bn.kind
+		       b.expires_at, b.created_at, b.updated_at, bn.kind
 		FROM bindings b
 		JOIN nodes bn ON bn.id = b.node_id
 		LEFT JOIN members m ON m.id = b.member_id
@@ -54,7 +62,7 @@ func bindingSelect(where string) string {
 func scanBinding(row dbx.Scannable) (*Binding, error) {
 	var b Binding
 	if err := row.Scan(&b.ID, &b.MemberID, &b.GroupID, &b.NodeID, &b.Role, &b.Inherited, &b.Guest, &b.Principal, &b.Name,
-		&b.CreatedAt, &b.UpdatedAt, &b.nodeKind); err != nil {
+		&b.ExpiresAt, &b.CreatedAt, &b.UpdatedAt, &b.nodeKind); err != nil {
 		return nil, err
 	}
 	return &b, nil
@@ -64,16 +72,16 @@ func collectBindings(rows pgx.Rows) ([]*Binding, error) {
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (*Binding, error) { return scanBinding(r) })
 }
 
-// insertBinding binds role for a member on a node. One binding per member per
-// node: a second is 409.
-func (s *Store) insertBinding(ctx context.Context, w *write, memberID, nodeID, role string) (*Binding, error) {
+// insertBinding binds role for a member on a node. Multiple distinct roles per
+// member per node are allowed; repeating the same role on the node is 409.
+func (s *Store) insertBinding(ctx context.Context, w *write, memberID, nodeID, role string, expiresAt *time.Time) (*Binding, error) {
 	bindingID := id.New()
 	now := s.now().UTC()
 	_, err := w.tx.Exec(ctx, `
-		INSERT INTO bindings (id, member_id, node_id, role, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)
-	`, bindingID, memberID, nodeID, role, now)
+		INSERT INTO bindings (id, member_id, node_id, role, expires_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $6)
+	`, bindingID, memberID, nodeID, role, expiresAt, now)
 	if dbx.IsUniqueViolation(err) {
-		return nil, errors.ConflictError("This member already has a role here.", "member_id", memberID)
+		return nil, errors.ConflictError("This member already has that role here.", "role", role)
 	}
 	if err != nil {
 		return nil, err
@@ -82,16 +90,16 @@ func (s *Store) insertBinding(ctx context.Context, w *write, memberID, nodeID, r
 	return scanBinding(w.tx.QueryRow(ctx, bindingSelect(`b.id = $2`), nodeID, bindingID))
 }
 
-// insertGroupBinding binds role for a group on a node. One binding per group
-// per node: a second is 409.
-func (s *Store) insertGroupBinding(ctx context.Context, w *write, groupID, nodeID, role string) (*Binding, error) {
+// insertGroupBinding binds role for a group on a node. Multiple distinct roles
+// per group per node are allowed; repeating the same role on the node is 409.
+func (s *Store) insertGroupBinding(ctx context.Context, w *write, groupID, nodeID, role string, expiresAt *time.Time) (*Binding, error) {
 	bindingID := id.New()
 	now := s.now().UTC()
 	_, err := w.tx.Exec(ctx, `
-		INSERT INTO bindings (id, group_id, node_id, role, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)
-	`, bindingID, groupID, nodeID, role, now)
+		INSERT INTO bindings (id, group_id, node_id, role, expires_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $6)
+	`, bindingID, groupID, nodeID, role, expiresAt, now)
 	if dbx.IsUniqueViolation(err) {
-		return nil, errors.ConflictError("This group already has a role here.", "group_id", groupID)
+		return nil, errors.ConflictError("This group already has that role here.", "role", role)
 	}
 	if err != nil {
 		return nil, err
@@ -100,11 +108,14 @@ func (s *Store) insertGroupBinding(ctx context.Context, w *write, groupID, nodeI
 }
 
 // CreateGroupBinding binds role for a group belonging to the node's tree.
-func (s *Store) CreateGroupBinding(ctx context.Context, snap *feed.Snapshot, nodeID, groupID, role string) (*Binding, error) {
+func (s *Store) CreateGroupBinding(ctx context.Context, snap *feed.Snapshot, nodeID, groupID, role string, expiresAt *time.Time) (*Binding, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_group_binding", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
+	if expiresAt != nil && !expiresAt.After(s.now().UTC()) {
+		return nil, op.Expected("invalid", errors.FieldError("expires_at", "Expiry must be in the future."))
+	}
 	w, err := s.begin(ctx)
 	if err != nil {
 		return nil, op.Fail(err)
@@ -120,7 +131,7 @@ func (s *Store) CreateGroupBinding(ctx context.Context, snap *feed.Snapshot, nod
 	if err := s.checkGroupInTree(ctx, w, n, groupID); err != nil {
 		return nil, op.Reject(err)
 	}
-	b, err := s.insertGroupBinding(ctx, w, groupID, n.ID, role)
+	b, err := s.insertGroupBinding(ctx, w, groupID, n.ID, role, expiresAt)
 	if err != nil {
 		return nil, op.Reject(err)
 	}
@@ -133,11 +144,14 @@ func (s *Store) CreateGroupBinding(ctx context.Context, snap *feed.Snapshot, nod
 }
 
 // CreateBinding binds role for a member already in the node's tree.
-func (s *Store) CreateBinding(ctx context.Context, snap *feed.Snapshot, nodeID, memberID, role string) (*Binding, error) {
+func (s *Store) CreateBinding(ctx context.Context, snap *feed.Snapshot, nodeID, memberID, role string, expiresAt *time.Time) (*Binding, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_binding", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
+	if expiresAt != nil && !expiresAt.After(s.now().UTC()) {
+		return nil, op.Expected("invalid", errors.FieldError("expires_at", "Expiry must be in the future."))
+	}
 	w, err := s.begin(ctx)
 	if err != nil {
 		return nil, op.Fail(err)
@@ -153,7 +167,7 @@ func (s *Store) CreateBinding(ctx context.Context, snap *feed.Snapshot, nodeID, 
 	if err := s.checkInTree(ctx, w, n, memberID); err != nil {
 		return nil, op.Reject(err)
 	}
-	b, err := s.insertBinding(ctx, w, memberID, n.ID, role)
+	b, err := s.insertBinding(ctx, w, memberID, n.ID, role, expiresAt)
 	if err != nil {
 		return nil, op.Reject(err)
 	}
@@ -202,12 +216,19 @@ func (s *Store) ListBindings(ctx context.Context, nodeID string, inherited bool,
 	return out, hasMore, nil
 }
 
-// PatchBinding changes a binding's role. It returns the binding before and
-// after.
-func (s *Store) PatchBinding(ctx context.Context, snap *feed.Snapshot, nodeID, bindingID, role string) (*Binding, *Binding, error) {
+// PatchBinding changes a binding's role and/or expires_at. It returns the
+// binding before and after.
+func (s *Store) PatchBinding(ctx context.Context, snap *feed.Snapshot, nodeID, bindingID string, patch BindingPatch) (*Binding, *Binding, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "patch_binding", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
+
+	if patch.Role == nil && !patch.ExpiresAtSet {
+		return nil, nil, op.Expected("invalid", errors.FieldError("", "Nothing to update."))
+	}
+	if patch.ExpiresAtSet && patch.ExpiresAt != nil && !patch.ExpiresAt.After(s.now().UTC()) {
+		return nil, nil, op.Expected("invalid", errors.FieldError("expires_at", "Expiry must be in the future."))
+	}
 
 	w, err := s.begin(ctx)
 	if err != nil {
@@ -222,19 +243,35 @@ func (s *Store) PatchBinding(ctx context.Context, snap *feed.Snapshot, nodeID, b
 	if err != nil {
 		return nil, nil, op.Reject(err, ErrNotFound)
 	}
-	if err := checkRole(snap, role, n.Kind, "role"); err != nil {
-		return nil, nil, op.Expected("invalid", err)
+	role := before.Role
+	if patch.Role != nil {
+		if err := checkRole(snap, *patch.Role, n.Kind, "role"); err != nil {
+			return nil, nil, op.Expected("invalid", err)
+		}
+		role = *patch.Role
 	}
+	expiresAt := before.ExpiresAt
+	if patch.ExpiresAtSet {
+		expiresAt = patch.ExpiresAt
+	}
+	changed := before.Role != role || !timesEqual(before.ExpiresAt, expiresAt)
 	if _, err := w.tx.Exec(ctx, `
-		UPDATE bindings SET role = $2, updated_at = CASE WHEN role = $2 THEN updated_at ELSE $3 END WHERE id = $1
-	`, before.ID, role, s.now().UTC()); err != nil {
+		UPDATE bindings SET role = $2, expires_at = $3, updated_at = CASE WHEN $4 THEN $5 ELSE updated_at END WHERE id = $1
+	`, before.ID, role, expiresAt, changed, s.now().UTC()); err != nil {
+		if dbx.IsUniqueViolation(err) {
+			msg := "This member already has that role here."
+			if before.GroupID != nil {
+				msg = "This group already has that role here."
+			}
+			return nil, nil, op.Expected("conflict", errors.ConflictError(msg, "role", role))
+		}
 		return nil, nil, op.Fail(err)
 	}
 	after, err := scanBinding(w.tx.QueryRow(ctx, bindingSelect(`b.id = $2`), n.ID, before.ID))
 	if err != nil {
 		return nil, nil, op.Fail(err)
 	}
-	if before.Role != role {
+	if changed {
 		if before.MemberID != nil {
 			w.invalidate(lifecycle.InvalidateMember(*before.MemberID))
 		} else if before.GroupID != nil {
@@ -246,6 +283,16 @@ func (s *Store) PatchBinding(ctx context.Context, snap *feed.Snapshot, nodeID, b
 	}
 	op.OK("ok")
 	return before, after, nil
+}
+
+func timesEqual(a, b *time.Time) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Equal(*b)
 }
 
 // lockedBinding reads a binding sitting on nodeID.
@@ -339,9 +386,15 @@ func (s *Store) Membership(ctx context.Context, snap *feed.Snapshot, nodeID, mem
 		return nil, op.Fail(err)
 	}
 	var held []string
-	for _, b := range bindings {
-		if r, ok := snap.Role(b.Role); ok && r.BindableAtKind(b.nodeKind) {
-			held = append(held, b.Role)
+	now := s.now().UTC()
+	if !m.Removed && !m.Suspended {
+		for _, b := range bindings {
+			if b.ExpiresAt != nil && !b.ExpiresAt.After(now) {
+				continue
+			}
+			if r, ok := snap.Role(b.Role); ok && r.BindableAtKind(b.nodeKind) {
+				held = append(held, b.Role)
+			}
 		}
 	}
 	op.OK("ok")

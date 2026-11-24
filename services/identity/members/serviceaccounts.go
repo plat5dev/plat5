@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -99,7 +101,7 @@ func (s *Store) CreateServiceAccount(ctx context.Context, snap *feed.Snapshot, n
 	if err != nil {
 		return nil, nil, op.Fail(err)
 	}
-	b, err := s.insertBinding(ctx, w, memberID, n.ID, role)
+	b, err := s.insertBinding(ctx, w, memberID, n.ID, role, nil)
 	if err != nil {
 		return nil, nil, op.Fail(err)
 	}
@@ -257,8 +259,16 @@ func (s *Store) DeleteServiceAccount(ctx context.Context, nodeID, memberID strin
 
 // --- keys ---
 
-// MaxAllowedCIDRs is the most entries an API key's IP allowlist may hold.
-const MaxAllowedCIDRs = 50
+const (
+	// MaxAllowedCIDRs is the most entries an API key's IP allowlist may hold.
+	MaxAllowedCIDRs = 50
+	// MaxKeyScopes is the most permission scopes an API key may hold.
+	MaxKeyScopes = 64
+	// MaxAllowedRoots is the most root node IDs a personal API key may allow.
+	MaxAllowedRoots = 50
+)
+
+var scopePermRe = regexp.MustCompile(`^[a-z0-9:._-]{1,64}$`)
 
 // Key is an API key, on a person or a service account.
 type Key struct {
@@ -266,29 +276,109 @@ type Key struct {
 	Name         string
 	KeyPrefix    string
 	AllowedCIDRs []string
+	Scopes       []string
+	AllowedRoots []string
+	ExpiresAt    *time.Time
 	CreatedAt    time.Time
 	RevokedAt    *time.Time
 	// Secret is set once, on create.
 	Secret string
 }
 
+// KeyCreate is what POST .../keys accepts.
+type KeyCreate struct {
+	Name         string
+	AllowedCIDRs []string
+	Scopes       []string
+	AllowedRoots []string
+	ExpiresAt    *time.Time
+}
+
 // KeyPatch is what PATCH .../keys/{key_id} changes. A nil field is left alone.
 type KeyPatch struct {
 	Name         *string
 	AllowedCIDRs *[]string
+	Scopes       *[]string
+	AllowedRoots *[]string
+	ExpiresAtSet bool
+	ExpiresAt    *time.Time
 }
 
-const keyColumns = `id, name, key_prefix, allowed_cidrs, created_at, revoked_at`
+const keyColumns = `id, name, key_prefix, allowed_cidrs, scopes, allowed_roots, expires_at, created_at, revoked_at`
 
 func scanKey(row dbx.Scannable) (*Key, error) {
 	var k Key
-	if err := row.Scan(&k.ID, &k.Name, &k.KeyPrefix, &k.AllowedCIDRs, &k.CreatedAt, &k.RevokedAt); err != nil {
+	if err := row.Scan(&k.ID, &k.Name, &k.KeyPrefix, &k.AllowedCIDRs, &k.Scopes, &k.AllowedRoots, &k.ExpiresAt, &k.CreatedAt, &k.RevokedAt); err != nil {
 		return nil, err
 	}
 	if k.AllowedCIDRs == nil {
 		k.AllowedCIDRs = []string{}
 	}
+	if k.Scopes == nil {
+		k.Scopes = []string{}
+	}
+	if k.AllowedRoots == nil {
+		k.AllowedRoots = []string{}
+	}
 	return &k, nil
+}
+
+// normalizeScopes validates, deduplicates, and sorts a key's permission scopes.
+// Empty means unrestricted; "*" is rejected so callers omit scopes instead.
+func normalizeScopes(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return []string{}, nil
+	}
+	if len(raw) > MaxKeyScopes {
+		return nil, errors.FieldError("scopes", fmt.Sprintf("At most %d scopes are allowed.", MaxKeyScopes))
+	}
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for i, entry := range raw {
+		s := strings.TrimSpace(entry)
+		if s == "*" {
+			return nil, errors.FieldError(fmt.Sprintf("scopes[%d]", i), "Omit scopes or send [] for unrestricted access.")
+		}
+		if !scopePermRe.MatchString(s) {
+			return nil, errors.FieldError(fmt.Sprintf("scopes[%d]", i), "Must be a valid permission name.")
+		}
+		if _, dup := seen[s]; dup {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+// normalizeAllowedRoots validates, deduplicates, and sorts a personal key's
+// root node ID allowlist. Service account keys cannot set allowed_roots.
+func normalizeAllowedRoots(raw []string, isServiceAccount bool) ([]string, error) {
+	if len(raw) == 0 {
+		return []string{}, nil
+	}
+	if isServiceAccount {
+		return nil, errors.FieldError("allowed_roots", "Service account keys are already scoped to their own tree.")
+	}
+	if len(raw) > MaxAllowedRoots {
+		return nil, errors.FieldError("allowed_roots", fmt.Sprintf("At most %d roots are allowed.", MaxAllowedRoots))
+	}
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for i, entry := range raw {
+		s := strings.TrimSpace(entry)
+		if !id.Valid(s) {
+			return nil, errors.FieldError(fmt.Sprintf("allowed_roots[%d]", i), "Must be a valid node id.")
+		}
+		if _, dup := seen[s]; dup {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 // normalizeAllowedCIDRs parses, canonicalizes, and deduplicates an IP/CIDR
@@ -390,20 +480,31 @@ func (s *Store) ListKeys(ctx context.Context, owner KeyOwner, limit int, startin
 
 // CreateKey mints a key for the owner. The secret is returned once and stored
 // only as its hash.
-func (s *Store) CreateKey(ctx context.Context, owner KeyOwner, name string, allowedCIDRs []string) (*Key, error) {
+func (s *Store) CreateKey(ctx context.Context, owner KeyOwner, in KeyCreate) (*Key, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_key", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
-	name = strings.TrimSpace(name)
+	name := strings.TrimSpace(in.Name)
 	if name == "" {
 		name = secret.DefaultName
 	}
 	if utf8.RuneCountInString(name) > secret.MaxNameLen {
 		return nil, op.Expected("invalid", errors.FieldError("name", "Name is too long."))
 	}
-	cidrs, err := normalizeAllowedCIDRs(allowedCIDRs)
+	cidrs, err := normalizeAllowedCIDRs(in.AllowedCIDRs)
 	if err != nil {
 		return nil, op.Expected("invalid", err)
+	}
+	scopes, err := normalizeScopes(in.Scopes)
+	if err != nil {
+		return nil, op.Expected("invalid", err)
+	}
+	allowedRoots, err := normalizeAllowedRoots(in.AllowedRoots, owner.UserID == "")
+	if err != nil {
+		return nil, op.Expected("invalid", err)
+	}
+	if in.ExpiresAt != nil && !in.ExpiresAt.After(s.now().UTC()) {
+		return nil, op.Expected("invalid", errors.FieldError("expires_at", "Expiry must be in the future."))
 	}
 	w, err := s.begin(ctx)
 	if err != nil {
@@ -420,9 +521,11 @@ func (s *Store) CreateKey(ctx context.Context, owner KeyOwner, name string, allo
 		return nil, op.Fail(err)
 	}
 	k, err := scanKey(w.tx.QueryRow(ctx, `
-		INSERT INTO api_keys (id, principal_id, name, key_prefix, key_hash, allowed_cidrs, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING `+keyColumns, id.New(), principalID, name, secret.DisplayPrefix(key, prefix), secret.Hash(key), cidrs, s.now().UTC()))
+		INSERT INTO api_keys (id, principal_id, name, key_prefix, key_hash, allowed_cidrs, scopes, allowed_roots, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING `+keyColumns,
+		id.New(), principalID, name, secret.DisplayPrefix(key, prefix), secret.Hash(key),
+		cidrs, scopes, allowedRoots, in.ExpiresAt, s.now().UTC()))
 	if dbx.IsForeignKeyViolation(err) {
 		return nil, op.Expected("not found", ErrNotFound) // the owner went meanwhile
 	}
@@ -437,13 +540,13 @@ func (s *Store) CreateKey(ctx context.Context, owner KeyOwner, name string, allo
 	return k, nil
 }
 
-// UpdateKey changes a live key's name and/or IP allowlist. Editing a revoked
-// key returns 409 KEY_REVOKED.
+// UpdateKey changes a live key's name, IP allowlist, scopes, allowed roots,
+// and/or expiry. Editing a revoked key returns 409 KEY_REVOKED.
 func (s *Store) UpdateKey(ctx context.Context, owner KeyOwner, keyID string, patch KeyPatch) (*Key, *Key, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "update_key", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
-	if patch.Name == nil && patch.AllowedCIDRs == nil {
+	if patch.Name == nil && patch.AllowedCIDRs == nil && patch.Scopes == nil && patch.AllowedRoots == nil && !patch.ExpiresAtSet {
 		return nil, nil, op.Expected("invalid", errors.FieldError("", "Nothing to update."))
 	}
 	var newName *string
@@ -461,6 +564,25 @@ func (s *Store) UpdateKey(ctx context.Context, owner KeyOwner, keyID string, pat
 			return nil, nil, op.Expected("invalid", err)
 		}
 		newCIDRs = cidrs
+	}
+	var newScopes []string
+	if patch.Scopes != nil {
+		scopes, err := normalizeScopes(*patch.Scopes)
+		if err != nil {
+			return nil, nil, op.Expected("invalid", err)
+		}
+		newScopes = scopes
+	}
+	var newAllowedRoots []string
+	if patch.AllowedRoots != nil {
+		roots, err := normalizeAllowedRoots(*patch.AllowedRoots, owner.UserID == "")
+		if err != nil {
+			return nil, nil, op.Expected("invalid", err)
+		}
+		newAllowedRoots = roots
+	}
+	if patch.ExpiresAtSet && patch.ExpiresAt != nil && !patch.ExpiresAt.After(s.now().UTC()) {
+		return nil, nil, op.Expected("invalid", errors.FieldError("expires_at", "Expiry must be in the future."))
 	}
 	w, err := s.begin(ctx)
 	if err != nil {
@@ -494,14 +616,26 @@ func (s *Store) UpdateKey(ctx context.Context, owner KeyOwner, keyID string, pat
 	if patch.AllowedCIDRs != nil {
 		cidrs = newCIDRs
 	}
+	scopes := before.Scopes
+	if patch.Scopes != nil {
+		scopes = newScopes
+	}
+	allowedRoots := before.AllowedRoots
+	if patch.AllowedRoots != nil {
+		allowedRoots = newAllowedRoots
+	}
+	expiresAt := before.ExpiresAt
+	if patch.ExpiresAtSet {
+		expiresAt = patch.ExpiresAt
+	}
 	after, err := scanKey(w.tx.QueryRow(ctx, `
-		UPDATE api_keys SET name = $3, allowed_cidrs = $4
+		UPDATE api_keys SET name = $3, allowed_cidrs = $4, scopes = $5, allowed_roots = $6, expires_at = $7
 		WHERE id = $1 AND principal_id = $2
-		RETURNING `+keyColumns, keyID, principalID, name, cidrs))
+		RETURNING `+keyColumns, keyID, principalID, name, cidrs, scopes, allowedRoots, expiresAt))
 	if err != nil {
 		return nil, nil, op.Fail(err)
 	}
-	if patch.AllowedCIDRs != nil {
+	if patch.AllowedCIDRs != nil || patch.Scopes != nil || patch.AllowedRoots != nil || patch.ExpiresAtSet {
 		w.invalidate(lifecycle.InvalidateKey(keyID))
 	}
 	if err := w.commit(ctx); err != nil {
@@ -535,8 +669,10 @@ func (s *Store) RevokeKey(ctx context.Context, owner KeyOwner, keyID string) (*K
 		UPDATE api_keys k SET revoked_at = COALESCE(k.revoked_at, $3)
 		FROM (SELECT id, revoked_at FROM api_keys WHERE id = $1 AND principal_id = $2 FOR UPDATE) old
 		WHERE k.id = old.id
-		RETURNING k.id, k.name, k.key_prefix, k.allowed_cidrs, k.created_at, k.revoked_at, old.revoked_at IS NULL
-	`, keyID, principalID, s.now().UTC()).Scan(&k.ID, &k.Name, &k.KeyPrefix, &k.AllowedCIDRs, &k.CreatedAt, &k.RevokedAt, &changed)
+		RETURNING k.id, k.name, k.key_prefix, k.allowed_cidrs, k.scopes, k.allowed_roots, k.expires_at, k.created_at, k.revoked_at, old.revoked_at IS NULL
+	`, keyID, principalID, s.now().UTC()).Scan(
+		&k.ID, &k.Name, &k.KeyPrefix, &k.AllowedCIDRs, &k.Scopes, &k.AllowedRoots, &k.ExpiresAt, &k.CreatedAt, &k.RevokedAt, &changed,
+	)
 	if dbx.IsNoRows(err) {
 		return nil, false, op.Expected("not found", ErrNotFound)
 	}
@@ -545,6 +681,12 @@ func (s *Store) RevokeKey(ctx context.Context, owner KeyOwner, keyID string) (*K
 	}
 	if k.AllowedCIDRs == nil {
 		k.AllowedCIDRs = []string{}
+	}
+	if k.Scopes == nil {
+		k.Scopes = []string{}
+	}
+	if k.AllowedRoots == nil {
+		k.AllowedRoots = []string{}
 	}
 	if changed {
 		w.invalidate(lifecycle.InvalidateKey(k.ID))

@@ -27,6 +27,7 @@ defaults:
 | `requests` | Required. Greater than 0 |
 | `window` | Required. Fixed window length as a duration (`60s`, `1m`) |
 | `count_at` | Optional. A kind: everyone at that kind's node shares one budget. Omitted: each caller has their own budget at the route's node |
+| `tiers` | Optional. Map of opaque root `rate_limit_tier` name to `{ requests, window }` overrides. Used on kind routes when the resolved root carries a matching tier; falls back to the policy's base `requests` and `window` |
 <!-- end generated -->
 
 ## On a route

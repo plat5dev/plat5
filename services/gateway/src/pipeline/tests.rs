@@ -12,7 +12,8 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::auth::admit::tests::{
-    admitted, invalid, not_in_tree, service_account_user, user, FakeAdmit, KEY_ID, MEMBER, USER,
+    admitted, invalid, not_in_tree, scoped_personal_user, service_account_user, user, FakeAdmit,
+    KEY_ID, MEMBER, USER,
 };
 use crate::auth::admit::AdmitAnswer;
 use crate::control_plane::{build, Snapshot};
@@ -31,6 +32,7 @@ fn jwt() -> Presented {
         issuer: "https://auth".into(),
         subject: "sub-1".into(),
         name: Some("Dana".into()),
+        scopes: None,
         kid: Some("kid-1".into()),
     }
 }
@@ -573,6 +575,7 @@ async fn a_jwt_is_sent_to_admit_as_its_issuer_subject_and_name() {
             issuer: "https://auth".into(),
             subject: "sub-1".into(),
             name: Some("Dana".into()),
+            scopes: None,
         }
     );
     let Admitted::Caller(c) = admitted else {
@@ -1040,6 +1043,7 @@ async fn run_checks(
             credential,
             &checks(list),
             IP,
+            None,
         )
         .await
         .map(|c| c.allowed)
@@ -1409,6 +1413,7 @@ async fn route_checks_count_the_defaults_once_a_call_per_credential() {
                 &credential,
                 &checks(&three),
                 IP,
+                None,
             )
             .await
         }
@@ -1592,9 +1597,152 @@ async fn rate_limiting_fails_open_when_valkey_is_unavailable() {
                 path: "/health".into(),
             }],
             "198.51.100.1",
+            None,
         )
         .await
         .expect("route checks fail open");
     assert_eq!(checked.allowed, vec![true]);
     assert!(checked.rate_limit.is_none());
+}
+
+#[tokio::test]
+async fn a_scoped_personal_key_on_a_user_route_is_403_and_false_in_route_checks() {
+    let snapshot = catalog();
+    let me = find(&snapshot, "GET", "/user");
+    let h = harness(Ok(scoped_personal_user()));
+    let (r, cred) = h.run(&me, Ok(key())).await;
+    let rejection = r.err().unwrap();
+    assert_eq!(rejection, Rejection::ScopedCredential);
+    assert_eq!(rejection.status(), 403);
+    let body = rejection.body(&me.route);
+    assert_eq!(
+        (body.code.as_str(), body.message.as_str(), body.details),
+        ("FORBIDDEN", "Scoped API keys can't use this route.", None)
+    );
+    assert!(h.counter.buckets().is_empty());
+    assert_eq!(cred.principal.as_deref(), Some("person"));
+
+    let identity = ByChain::with(&[("", scoped_personal_user()), ("acme", org(&["*"]))]);
+    let (p, counter) = checks_pipeline(identity, AUTH_FAILURE);
+    let got = run_checks(
+        &p,
+        &snapshot,
+        &key_credential(),
+        &[("GET", "/user"), ("GET", "/orgs/acme")],
+    )
+    .await
+    .unwrap();
+    assert_eq!(got, vec![false, true]);
+    assert_eq!(counter.count(IP_BUCKET), 0);
+}
+
+#[tokio::test]
+async fn jwt_scopes_are_forwarded_to_admit() {
+    let snapshot = catalog();
+    let read = project_read(&snapshot);
+    let h = harness(Ok(answer_for(&read.route, &["project:read"])));
+    let scoped_jwt = Presented::Jwt {
+        issuer: "https://auth".into(),
+        subject: "sub-1".into(),
+        name: Some("Dana".into()),
+        scopes: Some(vec!["project:read".into()]),
+        kid: Some("kid-1".into()),
+    };
+    assert!(h.decide(&read, Ok(scoped_jwt)).await.is_ok());
+    assert_eq!(
+        h.last_request().credential,
+        AdmitCredential::Idp {
+            issuer: "https://auth".into(),
+            subject: "sub-1".into(),
+            name: Some("Dana".into()),
+            scopes: Some(vec!["project:read".into()]),
+        }
+    );
+}
+
+#[tokio::test]
+async fn rate_limit_tiers_apply_per_root_tier() {
+    let limits = json!({
+        "evals-caller": { "requests": 100, "window": "1s" },
+        "evals-org": {
+            "requests": 1,
+            "window": "10s",
+            "count_at": "organization",
+            "tiers": {
+                "enterprise": { "requests": 5, "window": "60s" }
+            }
+        }
+    });
+    let snapshot = snapshot_with(e10s(), limits);
+    let check = find(&snapshot, "POST", "/orgs/acme/projects/web/check");
+
+    // Default (no tier) gets limit 1 / 10s.
+    let h = harness(Ok(answer_for(&check.route, &["check"])));
+    let passed = h.run(&check, Ok(key())).await.0.unwrap();
+    assert_eq!(
+        passed.rate_limit,
+        Some(RateLimitInfo {
+            limit: 1,
+            remaining: 0,
+            reset_epoch: 10
+        })
+    );
+
+    // Enterprise tier gets limit 5 / 60s.
+    let mut ent = answer_for(&check.route, &["check"]);
+    ent.rate_limit_tier = Some("enterprise".into());
+    let h_ent = harness(Ok(ent));
+    let passed = h_ent.run(&check, Ok(key())).await.0.unwrap();
+    assert_eq!(
+        passed.rate_limit,
+        Some(RateLimitInfo {
+            limit: 5,
+            remaining: 4,
+            reset_epoch: 60
+        })
+    );
+
+    // Unknown tier falls back to policy default (1 / 10s).
+    let mut unknown = answer_for(&check.route, &["check"]);
+    unknown.rate_limit_tier = Some("custom".into());
+    let h_unk = harness(Ok(unknown));
+    let passed = h_unk.run(&check, Ok(key())).await.0.unwrap();
+    assert_eq!(
+        passed.rate_limit,
+        Some(RateLimitInfo {
+            limit: 1,
+            remaining: 0,
+            reset_epoch: 10
+        })
+    );
+}
+
+#[tokio::test]
+async fn host_based_route_checks_resolve_against_request_host() {
+    let mut feed = fixture("catalog/gateway-feed.json");
+    feed["kinds"]["organization"]["host"] = json!("{organization}.api.example.com");
+    let snapshot = build(feed).unwrap();
+    let identity = ByChain::with(&[
+        ("acme", org(&["organization:read"])),
+        ("acme/web", project(&["project:read"])),
+        ("", user()),
+    ]);
+    let (p, _) = checks_pipeline(identity, AUTH_FAILURE);
+    let checked = p
+        .check_routes(
+            &snapshot.routes,
+            &snapshot.default_policies,
+            &jwt_credential(),
+            &checks(&[
+                ("GET", "/"),
+                ("GET", "/projects/web"),
+                ("GET", "/user"),
+                ("GET", "/orgs/other"),
+            ]),
+            IP,
+            Some("acme.api.example.com"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(checked.allowed, vec![true, true, true, false]);
 }

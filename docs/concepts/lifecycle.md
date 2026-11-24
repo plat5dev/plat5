@@ -38,7 +38,7 @@ A kind is removed, or changes parent, only while it has no nodes, deleted ones i
 
 - **Members.** One active member per principal per tree, created with its first binding. Removal sets `removed_at`, deletes its direct bindings and group memberships, and emits `member.removed`; it's never undone, and re-adding makes a new member. A person's member left with no direct bindings and no group memberships — by a binding delete, a group delete, a group-member removal, or a purge — is removed. A service account's member is removed only with the service account (deleted directly, or at purge of the node it belongs to: either way its principal and keys are deleted); with no bindings or groups its keys still authenticate and are refused everywhere, so a team can re-bind it.
 
-- **Suspension.** A suspended person's credentials are all invalid. There's no per-member suspension: remove the member instead.
+- **Suspension.** A suspended person's credentials are all invalid across every tree. Individual members can also be reversibly suspended within one tree (`PATCH /nodes/{root_id}/members/{member_id}/status`), keeping their `member_id`, bindings and group memberships intact while blocking access until reactivated.
 
 ### Deleting an account
 

@@ -161,12 +161,13 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         credential: &AdmitCredential,
         checks: &[Check],
         ip: &str,
+        host: Option<&str>,
     ) -> Result<Checked, Rejection> {
         let rate_limit = self.limit_credential(defaults, credential).await?;
         let mut allowed = Vec::with_capacity(checks.len());
         for check in checks {
             match self
-                .check(routes, &check.method, &check.path, credential, ip)
+                .check(routes, &check.method, &check.path, credential, ip, host)
                 .await
             {
                 Ok(answer) => allowed.push(answer),
@@ -197,9 +198,10 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         path: &str,
         credential: &AdmitCredential,
         ip: &str,
+        host: Option<&str>,
     ) -> Result<bool, CheckRefused> {
         // Match. No route, or not this method: what a request would get as a 404.
-        let Some(matched) = routes.find_route(path, method) else {
+        let Some(matched) = routes.find_route_with_host(path, method, host) else {
             return Ok(false);
         };
         let route = &matched.route;
@@ -217,8 +219,10 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         if !answer.valid || !answer.allows_ip(ip) {
             return Err(CheckRefused::Credential);
         }
-        // A service account on a user route: what a request would get as a 403.
-        if super::service_account_on_user_route(&req, &answer) {
+        // A service account or narrowed personal key on a user route: what a request would get as a 403.
+        if super::service_account_on_user_route(&req, &answer)
+            || super::scoped_key_on_user_route(&req, &answer)
+        {
             return Ok(false);
         }
         // No such node, or not in its tree: what a request would get as a 403.

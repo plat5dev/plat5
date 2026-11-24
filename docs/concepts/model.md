@@ -18,7 +18,7 @@ On every request the gateway answers three questions: who is calling (the creden
 | **User** | A person as their own routes see them. A person's user id is sent only on user routes (`X-Plat5-User-Id`) and in user events, never with a tree |
 | **Member** | A principal's presence in one tree: one per principal per tree, kept after removal. The id services see as the caller on tree routes (`X-Plat5-Member-Id`) |
 | **Group** | A flat collection of active members in one tree, owned by its root. A group holds bindings like a member, and every member in the group inherits them |
-| **Binding** | A role for a member or a group on one node of its tree. A member or group can have many, at most one per node |
+| **Binding** | A role for a member or a group on one node of its tree, optionally expiring (`expires_at`). A member or group can hold multiple distinct roles on the same node |
 | **Guest** | A person's member with no effective binding on its tree's root (neither directly nor through a group), only on nodes below it. Created by redeeming an invite below the root. Derived, not stored. A service account is never a guest |
 | **Role** | The deployment's name for a set of permissions, bindable at some kinds ([`concepts/access.md`](access.md)). Plat5 names no roles |
 | **Permission** | What a route can require, and what a service asks identity about outside a request. Only Plat5 decides who holds one |
@@ -92,4 +92,3 @@ Data about the person themselves, the same in every tree (a profile, a setting),
 | How nodes and members are created, deleted, restored and purged | [`concepts/lifecycle.md`](lifecycle.md) |
 | How the deployment's config is applied | [`concepts/config.md`](config.md) |
 | What gets audited | [`concepts/audit.md`](audit.md) |
-| What Plat5 won't do, and how it can grow | [`concepts/boundaries.md`](boundaries.md) |

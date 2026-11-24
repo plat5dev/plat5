@@ -186,7 +186,7 @@ func (e *env) join(root *nodes.Node, subject, role string) string {
 
 func (e *env) bind(n *nodes.Node, memberID, role string) *Binding {
 	e.t.Helper()
-	b, err := e.store.CreateBinding(e.ctx, e.snap(), n.ID, memberID, role)
+	b, err := e.store.CreateBinding(e.ctx, e.snap(), n.ID, memberID, role, nil)
 	if err != nil {
 		e.t.Fatalf("bind %s on %s: %v", role, n.ID, err)
 	}
@@ -204,7 +204,7 @@ func (e *env) bindingOf(memberID, nodeID string) string {
 
 func (e *env) key(owner KeyOwner) string {
 	e.t.Helper()
-	k, err := e.store.CreateKey(e.ctx, owner, "", nil)
+	k, err := e.store.CreateKey(e.ctx, owner, KeyCreate{})
 	if err != nil {
 		e.t.Fatal(err)
 	}

@@ -37,6 +37,8 @@ pub struct GatewayConfig {
     pub auth_subject_claim: Vec<String>,
     /// Dotted claim paths checked in order to seed a person's name on first sign-in (`AUTH_NAME_CLAIMS`).
     pub auth_name_claims: NameClaims,
+    /// Optional dotted claim path for JWT OAuth scopes (`AUTH_SCOPE_CLAIM`).
+    pub auth_scope_claim: Option<Vec<String>>,
 
     /// Identity's internal base URL (`IDENTITY_INTERNAL_URL`); admit is at `/internal/admit`.
     pub identity_internal_url: String,
@@ -95,6 +97,7 @@ impl GatewayConfig {
         let auth_name_claims = parse_name_claims(
             &env::var("AUTH_NAME_CLAIMS").unwrap_or_else(|_| DEFAULT_NAME_CLAIMS.to_string()),
         );
+        let auth_scope_claim = parse_scope_claim(env::var("AUTH_SCOPE_CLAIM").ok().as_deref());
         let identity_internal_url = base_url(require_env("IDENTITY_INTERNAL_URL")?);
         let control_plane_url = base_url(require_env("CONTROL_PLANE_URL")?);
         let valkey_url = optional_module_url(
@@ -155,6 +158,7 @@ impl GatewayConfig {
                     .unwrap_or_else(|_| DEFAULT_SUBJECT_CLAIM.to_string()),
             ),
             auth_name_claims,
+            auth_scope_claim,
 
             identity_internal_url,
 
@@ -196,6 +200,11 @@ fn parse_name_claims(raw: &str) -> NameClaims {
         .map(parse_claim_path)
         .filter(|p| !p.is_empty())
         .collect()
+}
+
+fn parse_scope_claim(raw: Option<&str>) -> Option<Vec<String>> {
+    let parts = parse_claim_path(raw?);
+    (!parts.is_empty()).then_some(parts)
 }
 
 fn base_url(raw: String) -> String {
@@ -424,6 +433,14 @@ mod tests {
         assert_eq!(
             parse_name_claims("profile.display_name, name"),
             vec![vec!["profile", "display_name"], vec!["name"]]
+        );
+        assert_eq!(parse_scope_claim(None), None);
+        assert_eq!(parse_scope_claim(Some("")), None);
+        assert_eq!(parse_scope_claim(Some("  . ")), None);
+        assert_eq!(parse_scope_claim(Some("scope")), Some(vec!["scope".into()]));
+        assert_eq!(
+            parse_scope_claim(Some("auth.scp")),
+            Some(vec!["auth".into(), "scp".into()])
         );
     }
 

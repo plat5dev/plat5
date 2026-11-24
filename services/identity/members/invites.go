@@ -383,7 +383,7 @@ func (s *Store) bindIfNotHeld(ctx context.Context, w *write, memberID, nodeID, r
 	if held {
 		return nil, nil
 	}
-	return s.insertBinding(ctx, w, memberID, nodeID, role)
+	return s.insertBinding(ctx, w, memberID, nodeID, role, nil)
 }
 
 // applyGrants binds each grant on a node still live where the member has no
@@ -403,7 +403,7 @@ func (s *Store) applyGrants(ctx context.Context, w *write, memberID string, gran
 		if !live || held {
 			continue
 		}
-		if _, err := s.insertBinding(ctx, w, memberID, g.NodeID, g.Role); err != nil {
+		if _, err := s.insertBinding(ctx, w, memberID, g.NodeID, g.Role, nil); err != nil {
 			return false, err
 		}
 		bound = true

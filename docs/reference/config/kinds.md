@@ -23,6 +23,7 @@ kinds:
 | `path` | Required. The kind's piece of every public path: `/<collection>/{<kind name>}`, such as `/projects/{project}`. The collection has the slug shape. Plat5 joins the pieces root first, so a project's routes sit under `/orgs/{organization}/projects/{project}` |
 | `list_permission` | The permission that shows a node of this kind in a list, live or deleted ([lists](../../concepts/access.md#lists)). Default: `<kind name>:read` |
 | `bind_creator` | Whether creating a node of this kind gives its creator `creator_role` on it ([assigning](../../concepts/access.md#assigning)). Default `true`. Off, the creator reaches the node through bindings above it; on a root kind, a new root has no member until a front door such as an operator plane adds one |
+| `host` | Optional, root kinds only. Hostname template resolving the leading subdomain label as this kind's slug or id: `{<kind name>}.<domain>`, such as `{organization}.api.example.com`. Requests to matching hosts resolve routes relative to the root alongside the path form |
 <!-- end generated -->
 
 Plat5 derives no permission names from a kind: routes name theirs literally. A kind reached through another kind's permissions says so in its routes and its `list_permission`, as `environment` does above with `project:*`.

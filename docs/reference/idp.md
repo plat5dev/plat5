@@ -11,6 +11,7 @@ Plat5's gateway accepts signed JWT access tokens from any issuer (OAuth 2.0 JWT 
 | Allowed audiences (`aud`) | `AUTH_ALLOWED_AUDIENCES` (required; comma-separated, or `*` to accept any) |
 | Subject claim path | `AUTH_SUBJECT_CLAIM` (dotted JSON path, default `sub`) |
 | Name claim paths | `AUTH_NAME_CLAIMS` (comma-separated dotted JSON paths, default `name,preferred_username`) |
+| Scope claim path | `AUTH_SCOPE_CLAIM` (optional dotted JSON path; space-delimited string or string array intersected with resolved permissions on kind routes) |
 
 Each token is checked for `iss`, `aud`, `exp`, a `kid` header matching a key in JWKS, signature validity, and a non-empty subject claim.
 

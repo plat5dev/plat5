@@ -80,7 +80,7 @@ func TestGroupsAndGroupBindings(t *testing.T) {
 	if r.body["member_id"] != nil || r.str("group_id") != g1 || r.str("principal") != "group" || r.str("name") != "Platform" || r.body["guest"] != false {
 		t.Fatalf("group binding %v", r.body)
 	}
-	e.expect(e.call("POST", "/nodes/"+f.ID+"/bindings", "", fmt.Sprintf(`{"group_id": %q, "role": "browser"}`, g1)), 409, "duplicate group binding")
+	e.expect(e.call("POST", "/nodes/"+f.ID+"/bindings", "", fmt.Sprintf(`{"group_id": %q, "role": "developer"}`, g1)), 409, "duplicate group role binding")
 
 	r = e.call("POST", "/nodes/"+p1.ID+"/bindings", "", fmt.Sprintf(`{"group_id": %q, "role": "admin"}`, g2))
 	e.expect(r, 201, "bind g2 on p1")

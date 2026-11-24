@@ -21,26 +21,32 @@ type Member struct {
 	RootID    string
 	Principal string
 	Name      *string
+	Suspended bool
 	Removed   bool
-	// Guest is a person's active member with no binding at its root
-	// (docs/concepts/model.md). Derived, not stored.
+	// Guest is a person's non-removed member with no unexpired binding at its
+	// root (docs/concepts/model.md). Derived, not stored.
 	Guest     bool
 	CreatedAt time.Time
 }
 
-// Status is the member's status on the wire: active or removed.
+// Status is the member's status on the wire: active, suspended, or removed.
 func (m *Member) Status() string {
 	if m.Removed {
 		return StatusRemoved
 	}
+	if m.Suspended {
+		return StatusSuspended
+	}
 	return StatusActive
 }
 
-// guestSQL is whether member m is a guest: a person's active member with no
-// effective binding at its root (directly or through a group).
+// guestSQL is whether member m is a guest: a person's non-removed member with no
+// unexpired effective binding at its root (directly or through a group).
 const guestSQL = `(m.principal = 'person' AND m.removed_at IS NULL AND NOT EXISTS (
 	SELECT 1 FROM bindings gb
-	WHERE gb.node_id = m.root_id AND (
+	WHERE gb.node_id = m.root_id
+	  AND (gb.expires_at IS NULL OR gb.expires_at > CURRENT_TIMESTAMP)
+	  AND (
 		gb.member_id = m.id
 		OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = gb.group_id AND gm.member_id = m.id)
 	)))`
@@ -48,14 +54,14 @@ const guestSQL = `(m.principal = 'person' AND m.removed_at IS NULL AND NOT EXIST
 // memberSelect reads Members; where uses $1 on.
 func memberSelect(where string) string {
 	return `
-		SELECT m.id, m.root_id, m.principal, p.name, m.removed_at IS NOT NULL, ` + guestSQL + `, m.created_at
+		SELECT m.id, m.root_id, m.principal, p.name, m.suspended_at IS NOT NULL, m.removed_at IS NOT NULL, ` + guestSQL + `, m.created_at
 		FROM members m LEFT JOIN principals p ON p.id = m.principal_id
 		WHERE ` + where
 }
 
 func scanMember(row dbx.Scannable) (*Member, error) {
 	var m Member
-	err := row.Scan(&m.ID, &m.RootID, &m.Principal, &m.Name, &m.Removed, &m.Guest, &m.CreatedAt)
+	err := row.Scan(&m.ID, &m.RootID, &m.Principal, &m.Name, &m.Suspended, &m.Removed, &m.Guest, &m.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +219,7 @@ func (s *Store) addMember(ctx context.Context, snap *feed.Snapshot, rootID strin
 	if err != nil {
 		return nil, nil, op.Fail(err)
 	}
-	b, err := s.insertBinding(ctx, w, memberID, root.ID, in.Role)
+	b, err := s.insertBinding(ctx, w, memberID, root.ID, in.Role, nil)
 	if err != nil {
 		return nil, nil, op.Reject(err)
 	}
@@ -308,4 +314,63 @@ func (s *Store) RemoveMember(ctx context.Context, rootID, memberID string) (bool
 	}
 	op.OK("removed")
 	return true, nil
+}
+
+// SetMemberStatus reversibly suspends or reactivates a member within one tree
+// without deleting its bindings or rotating its member id. Returns the status
+// before and the updated member.
+func (s *Store) SetMemberStatus(ctx context.Context, rootID, memberID, status string) (string, *Member, error) {
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "set_member_status", dbx.DefaultTimeout)
+	defer cancel()
+	defer op.End()
+
+	if status != StatusActive && status != StatusSuspended {
+		return "", nil, op.Expected("invalid", errors.FieldError("status", errors.FallbackValidation))
+	}
+	w, err := s.begin(ctx)
+	if err != nil {
+		return "", nil, op.Fail(err)
+	}
+	defer w.rollback(ctx)
+	root, err := s.lockedRoot(ctx, w, rootID)
+	if err != nil {
+		return "", nil, op.Reject(err, nodes.ErrNotFound)
+	}
+	if err := nodes.Writable(root); err != nil {
+		return "", nil, op.Reject(err)
+	}
+	m, err := s.lockedMember(ctx, w, memberID)
+	if err == nil && m.rootID != root.ID {
+		err = ErrNotFound
+	}
+	if err != nil {
+		return "", nil, op.Reject(err, ErrNotFound)
+	}
+	if m.removed {
+		return "", nil, op.Expected("removed", errors.FieldError("status", "A removed member's status can't be changed."))
+	}
+	before := StatusActive
+	if m.suspended {
+		before = StatusSuspended
+	}
+	if before != status {
+		var suspendedAt *time.Time
+		if status == StatusSuspended {
+			now := s.now().UTC()
+			suspendedAt = &now
+		}
+		if _, err := w.tx.Exec(ctx, `UPDATE members SET suspended_at = $2 WHERE id = $1`, m.id, suspendedAt); err != nil {
+			return "", nil, op.Fail(err)
+		}
+		w.invalidate(lifecycle.InvalidateMember(m.id))
+	}
+	after, err := s.getMember(ctx, w.tx, m.id)
+	if err != nil {
+		return "", nil, op.Fail(err)
+	}
+	if err := w.commit(ctx); err != nil {
+		return "", nil, op.Fail(err)
+	}
+	op.OK("ok")
+	return before, after, nil
 }

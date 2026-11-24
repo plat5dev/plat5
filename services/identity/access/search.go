@@ -94,9 +94,10 @@ func (s *Store) SearchResources(ctx context.Context, snap *feed.Snapshot, in Res
 		return &ResourceSearchResult{}, nil
 	}
 
+	now := s.now().UTC()
 	// Short-circuit: a binding on the scope or an ancestor granting the
 	// permission covers every live node of in.Kind at or below scopeID.
-	held, err := heldOnChains(ctx, tx, snap, []memberChain{{memberID: in.MemberID, nodes: chain}})
+	held, err := heldOnChains(ctx, tx, snap, []memberChain{{memberID: in.MemberID, nodes: chain}}, now)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
@@ -113,12 +114,12 @@ func (s *Store) SearchResources(ctx context.Context, snap *feed.Snapshot, in Res
 		WITH granting_nodes AS (
 			SELECT DISTINCT b.node_id
 			FROM (
-				SELECT node_id, role FROM bindings WHERE member_id = $4
+				SELECT node_id, role FROM bindings WHERE member_id = $4 AND (expires_at IS NULL OR expires_at > $8)
 				UNION ALL
 				SELECT b.node_id, b.role
 				FROM group_members gm
 				JOIN bindings b ON b.group_id = gm.group_id
-				WHERE gm.member_id = $4
+				WHERE gm.member_id = $4 AND (b.expires_at IS NULL OR b.expires_at > $8)
 			) b
 			JOIN nodes bn ON bn.id = b.node_id
 			JOIN node_ancestors in_scope ON in_scope.node_id = bn.id AND in_scope.ancestor_id = $1
@@ -138,7 +139,7 @@ func (s *Store) SearchResources(ctx context.Context, snap *feed.Snapshot, in Res
 		  )
 		ORDER BY n.id ASC
 		LIMIT $7
-	`, scopeID, in.Kind, in.After, in.MemberID, kinds, roles, limit+1)
+	`, scopeID, in.Kind, in.After, in.MemberID, kinds, roles, limit+1, now)
 	if err != nil {
 		return nil, op.Fail(err)
 	}

@@ -463,23 +463,36 @@ mod tests {
 
         assert_eq!(
             resolver
-                .resolve_with("api.example.com:443", lookup(calls.clone(), Some(vec![a, b])))
+                .resolve_with(
+                    "api.example.com:443",
+                    lookup(calls.clone(), Some(vec![a, b]))
+                )
                 .await,
             Some(a)
         );
         assert_eq!(
             resolver
-                .resolve_with("api.example.com:443", lookup(calls.clone(), Some(vec![a, b])))
+                .resolve_with(
+                    "api.example.com:443",
+                    lookup(calls.clone(), Some(vec![a, b]))
+                )
                 .await,
             Some(b)
         );
         assert_eq!(
             resolver
-                .resolve_with("api.example.com:443", lookup(calls.clone(), Some(vec![a, b])))
+                .resolve_with(
+                    "api.example.com:443",
+                    lookup(calls.clone(), Some(vec![a, b]))
+                )
                 .await,
             Some(a)
         );
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "subsequent calls hit cache");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "subsequent calls hit cache"
+        );
 
         // After TTL expires, the resolver looks up again.
         tokio::time::sleep(Duration::from_millis(120)).await;
@@ -529,12 +542,8 @@ mod tests {
         let resolver = PeerResolver::with_ttl(true, Duration::from_secs(60));
         let v4_a: SocketAddr = "93.184.216.34:443".parse().unwrap();
         let v4_b: SocketAddr = "93.184.216.35:443".parse().unwrap();
-        let v6_a: SocketAddr = "[2606:2800:220:1:248:1893:25c8:1946]:443"
-            .parse()
-            .unwrap();
-        let v6_b: SocketAddr = "[2606:2800:220:1:248:1893:25c8:1947]:443"
-            .parse()
-            .unwrap();
+        let v6_a: SocketAddr = "[2606:2800:220:1:248:1893:25c8:1946]:443".parse().unwrap();
+        let v6_b: SocketAddr = "[2606:2800:220:1:248:1893:25c8:1947]:443".parse().unwrap();
         let v6_private: SocketAddr = "[::1]:443".parse().unwrap();
 
         let give = |res: Vec<SocketAddr>| move |_addr: String| async move { Some(res) };
@@ -617,7 +626,10 @@ mod tests {
         assert_eq!(peer_address("http://api:3000"), "api:3000");
         assert_eq!(peer_address("api:3000"), "api:3000");
         assert_eq!(peer_address("http://api"), "api:80");
-        assert_eq!(peer_address("https://api.example.com"), "api.example.com:443");
+        assert_eq!(
+            peer_address("https://api.example.com"),
+            "api.example.com:443"
+        );
         assert_eq!(
             peer_address("https://api.example.com:8443"),
             "api.example.com:8443"

@@ -72,6 +72,8 @@ pub struct Caller {
     pub user_id: Option<String>,
     /// The caller's permissions on the route's node. Log only: never sent on.
     pub permissions: Vec<String>,
+    /// Optional opaque rate-limit tier from the root node.
+    pub rate_limit_tier: Option<String>,
 }
 
 impl Caller {
@@ -139,6 +141,8 @@ pub enum Rejection {
     Denied,
     /// **403** before the rate limit: a service account on a user route.
     ServiceAccount,
+    /// **403** before the rate limit: a scoped or root-restricted personal API key on a user route.
+    ScopedCredential,
     /// **429**. `info` is set on an admitted route, None on the failed-auth limiter.
     RateLimited {
         retry_after: u64,
@@ -154,7 +158,10 @@ impl Rejection {
     pub fn status(&self) -> u16 {
         match self {
             Rejection::Unauthorized(_) => 401,
-            Rejection::NotFound | Rejection::Denied | Rejection::ServiceAccount => 403,
+            Rejection::NotFound
+            | Rejection::Denied
+            | Rejection::ServiceAccount
+            | Rejection::ScopedCredential => 403,
             Rejection::RateLimited { .. } => 429,
             Rejection::BadPathParam => 400,
             Rejection::Unavailable => 503,
@@ -167,6 +174,7 @@ impl Rejection {
             Rejection::Unauthorized(err) => ApiError::unauthorized_for(&route.scope, err.details()),
             Rejection::NotFound | Rejection::Denied => ApiError::forbidden(&route.required),
             Rejection::ServiceAccount => ApiError::service_account_forbidden(),
+            Rejection::ScopedCredential => ApiError::scoped_credential_forbidden(),
             Rejection::RateLimited { retry_after, .. } => ApiError::rate_limited(*retry_after),
             Rejection::BadPathParam => ApiError::invalid_request(),
             Rejection::Unavailable => ApiError::service_unavailable(),
@@ -284,6 +292,10 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
             cred.principal = answer.principal.clone();
             return Err(Rejection::ServiceAccount);
         }
+        if scoped_key_on_user_route(&req, &answer) {
+            cred.principal = answer.principal.clone();
+            return Err(Rejection::ScopedCredential);
+        }
         if answer.refused(&req) {
             return Err(self.count_refusal(ip).await.unwrap_or(Rejection::NotFound));
         }
@@ -296,6 +308,7 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
             member_id: answer.member_id.clone().filter(|_| !req.chain.is_empty()),
             user_id: answer.user_id.clone().filter(|_| req.chain.is_empty()),
             permissions: answer.permissions.clone(),
+            rate_limit_tier: answer.rate_limit_tier.clone(),
         };
         cred.principal = Some(caller.principal.clone());
         cred.member_id = caller.member_id.clone();
@@ -359,6 +372,15 @@ fn service_account_on_user_route(req: &AdmitRequest, answer: &AdmitAnswer) -> bo
     answer.valid && req.chain.is_empty() && answer.principal.as_deref() == Some(SERVICE_ACCOUNT)
 }
 
+/// A narrowed (scoped or root-restricted) personal API key on a user route:
+/// identity returns `user_id: null` so it cannot manage user-level resources.
+fn scoped_key_on_user_route(req: &AdmitRequest, answer: &AdmitAnswer) -> bool {
+    answer.valid
+        && req.chain.is_empty()
+        && answer.user_id.is_none()
+        && answer.principal.as_deref() != Some(SERVICE_ACCOUNT)
+}
+
 /// Admit's request for a matched route: the credential, the chain refs as
 /// written in the path, and the route's `allow_deleted`.
 fn admit_request(matched: &Matched, credential: AdmitCredential) -> AdmitRequest {
@@ -387,12 +409,14 @@ impl Presented {
                 issuer,
                 subject,
                 name,
+                scopes,
                 kid,
             } => (
                 AdmitCredential::Idp {
                     issuer,
                     subject,
                     name,
+                    scopes,
                 },
                 kid,
             ),
@@ -434,6 +458,10 @@ fn tightest(infos: Vec<RateLimitInfo>) -> Option<RateLimitInfo> {
 /// Each policy's bucket (docs/reference/config/rate-limits.md#buckets): per caller
 /// at the route's node, at the `count_at` node, per user, or per client IP.
 pub fn buckets(route: &Route, ip: &str, admitted: &Admitted) -> Vec<Bucket> {
+    let tier = match admitted {
+        Admitted::Caller(c) => c.rate_limit_tier.as_deref(),
+        Admitted::Public => None,
+    };
     route
         .policies
         .iter()
@@ -448,10 +476,11 @@ pub fn buckets(route: &Route, ip: &str, admitted: &Admitted) -> Vec<Bucket> {
                     (None, user) => format!("user:{}", user.as_deref().unwrap_or_default()),
                 },
             };
+            let (requests, window_seconds) = policy.effective(tier);
             Bucket {
                 key: format!("{}:{at}", policy.name),
-                requests: policy.requests,
-                window_seconds: policy.window_seconds,
+                requests,
+                window_seconds,
             }
         })
         .collect()

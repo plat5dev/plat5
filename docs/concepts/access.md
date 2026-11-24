@@ -42,9 +42,9 @@ The gateway checks the caller's permissions on the route's node against the rout
 
 Roles are always on. There's no deployment-wide switch: a deployment where something else decides access gives its roles `["*"]`.
 
-A credential carries its principal's bindings in the tree it's used in. Keys have no permissions of their own. To give a machine less, give it a service account with fewer or narrower bindings.
+A credential may optionally be narrowed below its principal: API keys support permission `scopes`, `allowed_roots` (for personal keys), IP allowlists (`allowed_cidrs`), and `expires_at`; JWTs support optional permission scopes via `AUTH_SCOPE_CLAIM`. Effective permissions are the intersection of the member's resolved permissions and the credential's scopes.
 
-Bindings don't expire. Time-boxed access, such as support for a week, is a binding someone adds and removes.
+Bindings may carry an optional `expires_at` (set via `expires_at` or `expires_in`). Expired bindings grant no permissions and are excluded from admit, evaluation, search, and lists; the member row remains so re-binding keeps the same `member_id`.
 
 The roles document's fields: [`reference/config/roles.md`](../reference/config/roles.md). The permissions identity's and audit's routes require by default: [`reference/config/generated-routes.md`](../reference/config/generated-routes.md#the-generated-permissions).
 
@@ -72,7 +72,7 @@ Identity resolves permissions at admit, for one member on one node chain ([`refe
 
 A role not in the document, or not bindable at the node's kind, is **422**. A direct binding for someone who isn't in the tree, or for a group of another tree, is **422**: guests come through invites.
 
-One binding per member per node, and one binding per group per node. Changing a binding's role on a node is a `PATCH` of that binding.
+A member or group may hold multiple distinct roles on the same node; `(member_id, node_id, role)` and `(group_id, node_id, role)` are unique. Changing a binding's role or expiry is a `PATCH` of that binding.
 
 ### Who may assign
 

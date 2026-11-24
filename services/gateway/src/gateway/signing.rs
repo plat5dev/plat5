@@ -86,7 +86,10 @@ impl UpstreamSigner {
         );
         let sig = self.key.sign(payload.as_bytes());
         let encoded = URL_SAFE_NO_PAD.encode(sig.to_bytes());
-        format!("{SIGNATURE_VERSION},kid={},t={timestamp},sig={encoded}", self.kid)
+        format!(
+            "{SIGNATURE_VERSION},kid={},t={timestamp},sig={encoded}",
+            self.kid
+        )
     }
 }
 
@@ -258,7 +261,10 @@ mod tests {
     fn default_kid_is_16_hex_chars_from_public_key_sha256() {
         let signer = UpstreamSigner::from_seed_b64url(&test_seed_b64(), None).unwrap();
         assert_eq!(signer.kid().len(), 16);
-        assert!(signer.kid().bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));
+        assert!(signer
+            .kid()
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));
         // Deterministic for the same seed.
         let signer2 = UpstreamSigner::from_seed_b64url(&test_seed_b64(), None).unwrap();
         assert_eq!(signer.kid(), signer2.kid());
@@ -267,7 +273,9 @@ mod tests {
     #[test]
     fn rejects_invalid_seed_and_kid() {
         assert!(UpstreamSigner::from_seed_b64url("not-base64!!!", None).is_err());
-        assert!(UpstreamSigner::from_seed_b64url(&URL_SAFE_NO_PAD.encode([1u8; 16]), None).is_err());
+        assert!(
+            UpstreamSigner::from_seed_b64url(&URL_SAFE_NO_PAD.encode([1u8; 16]), None).is_err()
+        );
         assert!(UpstreamSigner::from_seed_b64url(&test_seed_b64(), Some("")).is_err());
         assert!(UpstreamSigner::from_seed_b64url(&test_seed_b64(), Some("bad kid")).is_err());
         assert!(UpstreamSigner::from_seed_b64url(&test_seed_b64(), Some("a,b")).is_err());

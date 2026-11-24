@@ -140,6 +140,7 @@ type memberRow struct {
 	rootID      string
 	principalID *string
 	principal   string
+	suspended   bool
 	removed     bool
 }
 
@@ -148,16 +149,17 @@ func (s *Store) lockedMember(ctx context.Context, w *write, memberID string) (*m
 		return nil, ErrNotFound
 	}
 	var m memberRow
-	var removedAt *time.Time
+	var suspendedAt, removedAt *time.Time
 	err := w.tx.QueryRow(ctx, `
-		SELECT id, root_id, principal_id, principal, removed_at FROM members WHERE id = $1 FOR UPDATE
-	`, memberID).Scan(&m.id, &m.rootID, &m.principalID, &m.principal, &removedAt)
+		SELECT id, root_id, principal_id, principal, suspended_at, removed_at FROM members WHERE id = $1 FOR UPDATE
+	`, memberID).Scan(&m.id, &m.rootID, &m.principalID, &m.principal, &suspendedAt, &removedAt)
 	if dbx.IsNoRows(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
+	m.suspended = suspendedAt != nil
 	m.removed = removedAt != nil
 	return &m, nil
 }
@@ -199,7 +201,7 @@ func (s *Store) removeMember(ctx context.Context, w *write, m *memberRow) error 
 	if _, err := w.tx.Exec(ctx, `DELETE FROM group_members WHERE member_id = $1`, m.id); err != nil {
 		return err
 	}
-	if _, err := w.tx.Exec(ctx, `UPDATE members SET removed_at = $2 WHERE id = $1`, m.id, s.now().UTC()); err != nil {
+	if _, err := w.tx.Exec(ctx, `UPDATE members SET removed_at = $2, suspended_at = NULL WHERE id = $1`, m.id, s.now().UTC()); err != nil {
 		return err
 	}
 	w.event(lifecycle.MemberEvent(lifecycle.TypeMemberRemoved, m.id, m.rootID, m.principal))

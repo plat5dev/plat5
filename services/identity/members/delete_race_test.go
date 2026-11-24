@@ -119,7 +119,7 @@ func TestDeleteAccountRemovesALateMember(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.store.insertBinding(e.ctx, w, late, other.ID, "member"); err != nil {
+	if _, err := e.store.insertBinding(e.ctx, w, late, other.ID, "member", nil); err != nil {
 		t.Fatal(err)
 	}
 

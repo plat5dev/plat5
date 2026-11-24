@@ -53,9 +53,10 @@ func (h *Handler) MountAccess(r fiber.Router) {
 type AdmitRequest struct {
 	Credential *string `json:"credential"`
 	IdP        *struct {
-		Issuer  string  `json:"issuer"`
-		Subject string  `json:"subject"`
-		Name    *string `json:"name"`
+		Issuer  string    `json:"issuer"`
+		Subject string    `json:"subject"`
+		Name    *string   `json:"name"`
+		Scopes  *[]string `json:"scopes"`
 	} `json:"idp"`
 	Chain []struct {
 		Kind string `json:"kind"`
@@ -80,6 +81,8 @@ type AdmitResponse struct {
 	MemberID        *string     `json:"member_id"`
 	UserID          *string     `json:"user_id"`
 	Permissions     []string    `json:"permissions"`
+	RateLimitTier   *string     `json:"rate_limit_tier"`
+	ExpiresAt       *string     `json:"expires_at"`
 	InvalidationSeq int64       `json:"invalidation_seq"`
 	ConfigRevision  int64       `json:"config_revision"`
 }
@@ -91,7 +94,12 @@ func (h *Handler) Admit(c fiber.Ctx) error {
 	}
 	in := AdmitInput{Credential: req.Credential, AllowDeleted: req.AllowDeleted}
 	if req.IdP != nil {
-		in.IdP = &IdPClaims{Issuer: req.IdP.Issuer, Subject: req.IdP.Subject, Name: req.IdP.Name}
+		claims := &IdPClaims{Issuer: req.IdP.Issuer, Subject: req.IdP.Subject, Name: req.IdP.Name}
+		if req.IdP.Scopes != nil {
+			claims.HasScopes = true
+			claims.Scopes = *req.IdP.Scopes
+		}
+		in.IdP = claims
 	}
 	for _, ref := range req.Chain {
 		in.Chain = append(in.Chain, ChainRef{Kind: ref.Kind, Ref: ref.Ref})
@@ -113,6 +121,8 @@ func admitResponse(a *Admitted) AdmitResponse {
 		MemberID:        nullable(a.MemberID),
 		UserID:          nullable(a.UserID),
 		Permissions:     a.Permissions,
+		RateLimitTier:   a.RateLimitTier,
+		ExpiresAt:       httpx.FormatTimePtr(a.ExpiresAt),
 		InvalidationSeq: a.InvalidationSeq,
 		ConfigRevision:  a.ConfigRevision,
 	}

@@ -37,14 +37,14 @@ func (s *Store) CreateChild(ctx context.Context, snap *feed.Snapshot, parentID s
 	var b *Binding
 	if callerID != "" {
 		m, err := s.lockedMember(ctx, w, callerID)
-		if err == ErrNotFound || (err == nil && (m.removed || m.rootID != n.RootID)) {
+		if err == ErrNotFound || (err == nil && (m.removed || m.suspended || m.rootID != n.RootID)) {
 			return nil, nil, op.Expected("bad caller", ErrBadCaller)
 		}
 		if err != nil {
 			return nil, nil, op.Fail(err)
 		}
 		if k, _ := snap.Kind(n.Kind); k.BindCreator {
-			if b, err = s.insertBinding(ctx, w, m.id, n.ID, snap.CreatorRole); err != nil {
+			if b, err = s.insertBinding(ctx, w, m.id, n.ID, snap.CreatorRole, nil); err != nil {
 				return nil, nil, op.Fail(err)
 			}
 		}
@@ -97,7 +97,7 @@ func (s *Store) CreateRoot(ctx context.Context, snap *feed.Snapshot, in nodes.Cr
 		if err != nil {
 			return nil, "", op.Fail(err)
 		}
-		if _, err := s.insertBinding(ctx, w, memberID, n.ID, snap.CreatorRole); err != nil {
+		if _, err := s.insertBinding(ctx, w, memberID, n.ID, snap.CreatorRole, nil); err != nil {
 			return nil, "", op.Fail(err)
 		}
 	}
@@ -139,7 +139,7 @@ func (s *Store) ListChildren(ctx context.Context, snap *feed.Snapshot, parentID,
 		var active bool
 		if id.Valid(callerID) {
 			if err := s.pool.QueryRow(ctx, `
-				SELECT EXISTS (SELECT 1 FROM members WHERE id = $1 AND root_id = $2 AND removed_at IS NULL)
+				SELECT EXISTS (SELECT 1 FROM members WHERE id = $1 AND root_id = $2 AND removed_at IS NULL AND suspended_at IS NULL)
 			`, callerID, parent.RootID).Scan(&active); err != nil {
 				return nil, false, op.Fail(err)
 			}
@@ -186,7 +186,7 @@ func (s *Store) ListUserNodes(ctx context.Context, snap *feed.Snapshot, userID, 
 		rows, err := s.pool.Query(ctx, `
 			SELECT `+nodes.Columns("n")+`, m.id
 			FROM nodes n
-			JOIN members m ON m.root_id = n.root_id AND m.principal_id = $1 AND m.removed_at IS NULL
+			JOIN members m ON m.root_id = n.root_id AND m.principal_id = $1 AND m.removed_at IS NULL AND m.suspended_at IS NULL
 			WHERE ($2 = '' OR n.kind = $2) AND n.status = $3 AND n.id > $4
 			  AND NOT EXISTS (
 			      SELECT 1 FROM node_ancestors a JOIN nodes an ON an.id = a.ancestor_id
@@ -280,8 +280,10 @@ func (s *Store) visible(ctx context.Context, snap *feed.Snapshot, cands []*liste
 			OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = b.group_id AND gm.member_id = c.member_id)
 		)
 		JOIN nodes bn ON bn.id = b.node_id
-		WHERE (bn.status = 'active' OR bn.id = c.node_id) AND `+access.CountsSQL("$3", "$4"),
-		nodeIDs, memberIDs, kinds, roles)
+		WHERE (bn.status = 'active' OR bn.id = c.node_id)
+		  AND (b.expires_at IS NULL OR b.expires_at > $5)
+		  AND `+access.CountsSQL("$3", "$4"),
+		nodeIDs, memberIDs, kinds, roles, s.now().UTC())
 	if err != nil {
 		return nil, err
 	}

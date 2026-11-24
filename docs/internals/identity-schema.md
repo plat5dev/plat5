@@ -13,11 +13,13 @@ CREATE TABLE nodes (
     slug         TEXT,                                  -- NULL once a purge or a release frees it
     display_name TEXT NOT NULL,
     status       TEXT NOT NULL CHECK (status IN ('active', 'deleted', 'purged')),
+    rate_limit_tier TEXT,                               -- root nodes only: opaque tier name
     deleted_at   TIMESTAMPTZ,
     purge_after  TIMESTAMPTZ,                           -- deleted_at + deletion_grace, fixed at delete
     deletion_id  TEXT,                                  -- one per delete; restore undoes exactly that one
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (parent_id IS NULL OR rate_limit_tier IS NULL)
 );
 -- A purged root keeps its slug as a tombstone; a purged node below a root frees it.
 CREATE UNIQUE INDEX nodes_slug_uidx ON nodes (COALESCE(parent_id, ''), kind, slug) WHERE slug IS NOT NULL;
@@ -54,6 +56,7 @@ CREATE TABLE members (                                -- one per principal per t
     principal_id  TEXT REFERENCES principals (id) ON DELETE SET NULL,
     principal     TEXT NOT NULL CHECK (principal IN ('person', 'service_account')),  -- outlives the principal
     root_id       TEXT NOT NULL REFERENCES nodes (id),
+    suspended_at  TIMESTAMPTZ,                         -- reversible per-tree suspension
     removed_at    TIMESTAMPTZ,                         -- set once; never cleared
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK (removed_at IS NOT NULL OR principal_id IS NOT NULL)  -- an active member always has its principal
@@ -81,12 +84,13 @@ CREATE TABLE bindings (
     group_id    TEXT REFERENCES groups (id) ON DELETE CASCADE,
     node_id     TEXT NOT NULL REFERENCES nodes (id),   -- under the member's or group's root
     role        TEXT NOT NULL,                         -- grants nothing if the role is gone
+    expires_at  TIMESTAMPTZ,                           -- optional JIT expiry
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK ((member_id IS NOT NULL) <> (group_id IS NOT NULL))
 );
-CREATE UNIQUE INDEX bindings_member_uidx ON bindings (member_id, node_id) WHERE member_id IS NOT NULL;
-CREATE UNIQUE INDEX bindings_group_uidx ON bindings (group_id, node_id) WHERE group_id IS NOT NULL;
+CREATE UNIQUE INDEX bindings_member_role_uidx ON bindings (member_id, node_id, role) WHERE member_id IS NOT NULL;
+CREATE UNIQUE INDEX bindings_group_role_uidx ON bindings (group_id, node_id, role) WHERE group_id IS NOT NULL;
 
 CREATE TABLE api_keys (
     id            TEXT PRIMARY KEY,
@@ -95,6 +99,9 @@ CREATE TABLE api_keys (
     key_prefix    TEXT NOT NULL,
     key_hash      TEXT NOT NULL UNIQUE,
     allowed_cidrs TEXT[] NOT NULL DEFAULT '{}',
+    scopes        TEXT[] NOT NULL DEFAULT '{}',
+    allowed_roots TEXT[] NOT NULL DEFAULT '{}',
+    expires_at    TIMESTAMPTZ,
     revoked_at    TIMESTAMPTZ,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );

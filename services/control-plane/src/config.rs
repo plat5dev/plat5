@@ -117,6 +117,9 @@ pub struct Kind {
     /// Sent only when off, so a reader takes a missing value as on.
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub bind_creator: bool,
+    /// Optional hostname template on a root kind: `{<kind>}.<domain>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
 }
 
 /// The kinds, each `list_permission` filled in where the config leaves it out.
@@ -156,6 +159,14 @@ impl Kind {
             .map(|(_, p)| p.trim_end_matches('}'))
             .unwrap_or_default()
     }
+
+    /// For `host: "{organization}.api.example.com"`, returns `("organization", ".api.example.com")`.
+    pub fn host_parts(&self) -> Option<(&str, &str)> {
+        let host = self.host.as_deref()?;
+        let rest = host.strip_prefix('{')?;
+        let (param, suffix) = rest.split_once('}')?;
+        Some((param, suffix))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -170,11 +181,20 @@ pub struct Role {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+pub struct TierLimit {
+    pub requests: u64,
+    pub window: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Policy {
     pub requests: u64,
     pub window: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub count_at: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tiers: BTreeMap<String, TierLimit>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]

@@ -53,6 +53,17 @@ func TestResolve(t *testing.T) {
 	if !admin.All || !admin.Has("anything:at-all") {
 		t.Fatalf("admin should match all permissions: %+v", admin)
 	}
+
+	// IntersectScopes narrows both concrete permissions and "*".
+	if got := IntersectScopes(p, []string{"project:read", "project:write", "project:read"}); !slices.Equal(got, []string{"project:read"}) {
+		t.Fatalf("IntersectScopes(p) = %v", got)
+	}
+	if got := IntersectScopes(admin, []string{"project:write", "project:read", "*"}); !slices.Equal(got, []string{"project:read", "project:write"}) {
+		t.Fatalf("IntersectScopes(admin) = %v", got)
+	}
+	if got := IntersectScopes(admin, []string{}); len(got) != 0 {
+		t.Fatalf("IntersectScopes(admin, empty) = %v", got)
+	}
 }
 
 func TestKindAtOrBelow(t *testing.T) {

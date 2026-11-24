@@ -123,6 +123,28 @@ func (p Permissions) List() []string {
 	return out
 }
 
+// IntersectScopes narrows resolved permissions to those also present in scopes,
+// returning a sorted, deduplicated list. A role granting "*" narrows to scopes
+// itself rather than keeping "*".
+func IntersectScopes(p Permissions, scopes []string) []string {
+	seen := make(map[string]struct{}, len(scopes))
+	out := make([]string, 0, len(scopes))
+	for _, s := range scopes {
+		if s == "" || s == "*" {
+			continue
+		}
+		if _, dup := seen[s]; dup {
+			continue
+		}
+		if p.Has(s) {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // page trims a limit+1 read to limit and says whether there was more.
 func page[T any](items []T, limit int) ([]T, bool) {
 	if len(items) > limit {

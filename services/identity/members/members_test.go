@@ -185,13 +185,17 @@ func TestBindings(t *testing.T) {
 		r.str("principal") != "person" || r.str("role") != "viewer" {
 		t.Fatalf("binding %v", r.body)
 	}
-	if _, ok := r.body["expires_at"]; ok {
-		t.Fatal("bindings don't expire")
+	if v, ok := r.body["expires_at"]; !ok || v != nil {
+		t.Fatalf("expected expires_at: null, got %v", r.body)
 	}
-	r = e.call("POST", "/nodes/"+p.ID+"/bindings", "", `{"member_id": "`+m+`", "role": "developer"}`)
-	if r.status != 409 || r.message() != "This member already has a role here." {
-		t.Fatalf("second binding: %d %s", r.status, r.message())
+	// Repeating the same role on the same node is 409; a second distinct role succeeds.
+	r = e.call("POST", "/nodes/"+p.ID+"/bindings", "", `{"member_id": "`+m+`", "role": "viewer"}`)
+	if r.status != 409 || r.message() != "This member already has that role here." {
+		t.Fatalf("duplicate role binding: %d %s", r.status, r.message())
 	}
+	extra := e.call("POST", "/nodes/"+p.ID+"/bindings", "", `{"member_id": "`+m+`", "role": "admin"}`)
+	e.expect(extra, 201, "second distinct role on same node")
+	e.expect(e.call("DELETE", "/nodes/"+p.ID+"/bindings/"+extra.str("id"), "", ""), 204, "cleanup second role")
 	e.expect(e.call("POST", "/nodes/"+p.ID+"/bindings", "", `{"member_id": "`+m+`", "role": "member"}`), 422, "role not bindable at project")
 	e.expect(e.call("POST", "/nodes/"+p.ID+"/bindings", "", `{"member_id": "`+m+`"}`), 422, "role required")
 

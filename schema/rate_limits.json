@@ -41,6 +41,32 @@
           "title": "count_at",
           "description": "Optional. A kind: everyone at that kind's node shares one budget. Omitted: each caller has their own budget at the route's node.",
           "$ref": "kinds.json#/$defs/kind_name"
+        },
+        "tiers": {
+          "title": "tiers",
+          "description": "Optional. Map of opaque root `rate_limit_tier` name to `{ requests, window }` overrides. Used on kind routes when the resolved root carries a matching tier; falls back to the policy's base `requests` and `window`.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/policy_name" },
+          "additionalProperties": { "$ref": "#/$defs/tier_limit" }
+        }
+      }
+    },
+    "tier_limit": {
+      "title": "tier limit",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requests", "window"],
+      "properties": {
+        "requests": {
+          "title": "requests",
+          "description": "Required. Greater than 0.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "window": {
+          "title": "window",
+          "description": "Required. Fixed window length as a duration (`60s`, `1m`).",
+          "$ref": "settings.json#/$defs/duration"
         }
       }
     }

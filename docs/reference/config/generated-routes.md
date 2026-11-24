@@ -89,6 +89,7 @@ For a kind `K` with parent `P`. `<p>` is `K`'s permission prefix (`K`'s name, or
 | `K` | `/roles` | `GET` `any_member` | `/nodes/{K.id}/roles` |
 | `K`, a root | `/members` | `GET` `<p>:bindings:read` | `/nodes/{K.id}/members` |
 | `K`, a root | `/members/{member_id}` | `GET` `any_member`; `DELETE` `<p>:bindings:write` | `/nodes/{K.id}/members/{member_id}` |
+| `K`, a root | `/members/{member_id}/status` | `PATCH` `<p>:bindings:write` | `/nodes/{K.id}/members/{member_id}/status` |
 | `K`, a root | `/groups` | `GET` `<p>:bindings:read`; `POST` `<p>:bindings:write` | `/nodes/{K.id}/groups` |
 | `K`, a root | `/groups/{group_id}` | `GET` `<p>:bindings:read`; `PATCH`, `DELETE` `<p>:bindings:write` | `/nodes/{K.id}/groups/{group_id}` |
 | `K`, a root | `/groups/{group_id}/members` | `GET` `<p>:bindings:read`; `POST` `<p>:bindings:write` | `/nodes/{K.id}/groups/{group_id}/members` |

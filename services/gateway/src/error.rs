@@ -131,6 +131,16 @@ impl ApiError {
         }
     }
 
+    /// A scoped or root-restricted personal API key on a user route.
+    pub fn scoped_credential_forbidden() -> Self {
+        Self {
+            error_type: "invalid_request_error".to_string(),
+            code: "FORBIDDEN".to_string(),
+            message: "Scoped API keys can't use this route.".to_string(),
+            details: None,
+        }
+    }
+
     pub fn not_found() -> Self {
         Self {
             error_type: "invalid_request_error".to_string(),

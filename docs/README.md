@@ -23,7 +23,6 @@ Concepts hold the rules, reference holds the wire and config shapes, guides walk
 | [lifecycle](concepts/lifecycle.md) | Creating, deleting, restoring and purging; members; the lifecycle log |
 | [config](concepts/config.md) | Control-plane config, validation, plan and apply, revisions, readers |
 | [audit](concepts/audit.md) | What's recorded, in which log, delivery guarantee, optional service enrichment headers |
-| [boundaries](concepts/boundaries.md) | What Plat5 is for, what it won't do, extension points |
 
 ### Reference
 

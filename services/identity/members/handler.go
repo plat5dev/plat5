@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v3"
 
@@ -51,6 +52,7 @@ func (h *Handler) Mount(r fiber.Router) {
 	r.Get("/nodes/:node_id/members", h.ListMembers)
 	r.Post("/nodes/:node_id/members", h.AddMember)
 	r.Get("/nodes/:node_id/members/:member_id", h.GetMember)
+	r.Patch("/nodes/:node_id/members/:member_id/status", h.SetMemberStatus)
 	r.Delete("/nodes/:node_id/members/:member_id", h.RemoveMember)
 	r.Get("/members/:member_id/user", h.MemberUser)
 
@@ -102,6 +104,7 @@ type BindingResponse struct {
 	Guest     bool    `json:"guest"`
 	Principal string  `json:"principal"`
 	Name      *string `json:"name"`
+	ExpiresAt *string `json:"expires_at"`
 	CreatedAt string  `json:"created_at"`
 	UpdatedAt string  `json:"updated_at"`
 }
@@ -147,6 +150,9 @@ type KeyResponse struct {
 	Name         string   `json:"name"`
 	KeyPrefix    string   `json:"key_prefix"`
 	AllowedCIDRs []string `json:"allowed_cidrs"`
+	Scopes       []string `json:"scopes"`
+	AllowedRoots []string `json:"allowed_roots"`
+	ExpiresAt    *string  `json:"expires_at"`
 	CreatedAt    string   `json:"created_at"`
 	RevokedAt    *string  `json:"revoked_at"`
 	Key          string   `json:"key,omitempty"`
@@ -184,7 +190,8 @@ type RedeemResponse struct {
 func bindingResponse(b *Binding) BindingResponse {
 	return BindingResponse{
 		ID: b.ID, MemberID: b.MemberID, GroupID: b.GroupID, NodeID: b.NodeID, Role: b.Role, Inherited: b.Inherited, Guest: b.Guest,
-		Principal: b.Principal, Name: b.Name, CreatedAt: httpx.FormatTime(b.CreatedAt), UpdatedAt: httpx.FormatTime(b.UpdatedAt),
+		Principal: b.Principal, Name: b.Name, ExpiresAt: httpx.FormatTimePtr(b.ExpiresAt),
+		CreatedAt: httpx.FormatTime(b.CreatedAt), UpdatedAt: httpx.FormatTime(b.UpdatedAt),
 	}
 }
 
@@ -221,8 +228,21 @@ func keyResponse(k *Key) KeyResponse {
 	if cidrs == nil {
 		cidrs = []string{}
 	}
-	return KeyResponse{ID: k.ID, Name: k.Name, KeyPrefix: k.KeyPrefix, AllowedCIDRs: cidrs,
-		CreatedAt: httpx.FormatTime(k.CreatedAt), RevokedAt: httpx.FormatTimePtr(k.RevokedAt), Key: k.Secret}
+	scopes := k.Scopes
+	if scopes == nil {
+		scopes = []string{}
+	}
+	roots := k.AllowedRoots
+	if roots == nil {
+		roots = []string{}
+	}
+	return KeyResponse{
+		ID: k.ID, Name: k.Name, KeyPrefix: k.KeyPrefix,
+		AllowedCIDRs: cidrs, Scopes: scopes, AllowedRoots: roots,
+		ExpiresAt: httpx.FormatTimePtr(k.ExpiresAt),
+		CreatedAt: httpx.FormatTime(k.CreatedAt), RevokedAt: httpx.FormatTimePtr(k.RevokedAt),
+		Key: k.Secret,
+	}
 }
 
 func inviteResponse(inv *Invite) InviteResponse {
@@ -340,16 +360,62 @@ func (h *Handler) Roles(c fiber.Ctx) error {
 	return c.JSON(out)
 }
 
+// parseExpiry reads optional expires_at (RFC 3339 or null) and expires_in
+// (duration string like 7d), mutually exclusive. Returns set=true when either
+// field was sent.
+func parseExpiry(expiresAtRaw, expiresInRaw json.RawMessage, now time.Time) (set bool, val *time.Time, err error) {
+	hasAt := len(expiresAtRaw) > 0
+	hasIn := len(expiresInRaw) > 0
+	if hasAt && hasIn {
+		return false, nil, errors.FieldError("expires_in", "Send either expires_at or expires_in, not both.")
+	}
+	if !hasAt && !hasIn {
+		return false, nil, nil
+	}
+	if hasAt {
+		if strings.TrimSpace(string(expiresAtRaw)) == "null" {
+			return true, nil, nil
+		}
+		var raw string
+		if err := json.Unmarshal(expiresAtRaw, &raw); err != nil {
+			return false, nil, errors.FieldError("expires_at", "Must be an RFC 3339 timestamp in the future.")
+		}
+		t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(raw))
+		if err != nil || !t.After(now) {
+			return false, nil, errors.FieldError("expires_at", "Must be an RFC 3339 timestamp in the future.")
+		}
+		utc := t.UTC()
+		return true, &utc, nil
+	}
+	if strings.TrimSpace(string(expiresInRaw)) == "null" {
+		return false, nil, errors.FieldError("expires_in", "Must be a positive duration such as 1h or 7d.")
+	}
+	var raw string
+	if err := json.Unmarshal(expiresInRaw, &raw); err != nil || strings.TrimSpace(raw) == "" {
+		return false, nil, errors.FieldError("expires_in", "Must be a positive duration such as 1h or 7d.")
+	}
+	d, err := feed.ParseDuration(strings.TrimSpace(raw))
+	if err != nil || d < time.Second {
+		return false, nil, errors.FieldError("expires_in", "Must be a positive duration such as 1h or 7d.")
+	}
+	utc := now.UTC().Add(d)
+	return true, &utc, nil
+}
+
 // --- bindings ---
 
 type CreateBindingRequest struct {
-	MemberID string `json:"member_id"`
-	GroupID  string `json:"group_id"`
-	Role     string `json:"role"`
+	MemberID  string          `json:"member_id"`
+	GroupID   string          `json:"group_id"`
+	Role      string          `json:"role"`
+	ExpiresAt json.RawMessage `json:"expires_at"`
+	ExpiresIn json.RawMessage `json:"expires_in"`
 }
 
 type PatchBindingRequest struct {
-	Role string `json:"role"`
+	Role      json.RawMessage `json:"role"`
+	ExpiresAt json.RawMessage `json:"expires_at"`
+	ExpiresIn json.RawMessage `json:"expires_in"`
 }
 
 func (h *Handler) ListBindings(c fiber.Ctx) error {
@@ -385,14 +451,17 @@ func (h *Handler) CreateBinding(c fiber.Ctx) error {
 		}
 		return errors.FieldError("member_id", "Choose a member or a group.")
 	}
+	_, expiresAt, err := parseExpiry(req.ExpiresAt, req.ExpiresIn, h.store.now().UTC())
+	if err != nil {
+		return err
+	}
 	var (
-		b   *Binding
-		err error
+		b *Binding
 	)
 	if groupID != "" {
-		b, err = h.store.CreateGroupBinding(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), groupID, req.Role)
+		b, err = h.store.CreateGroupBinding(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), groupID, req.Role, expiresAt)
 	} else {
-		b, err = h.store.CreateBinding(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), memberID, req.Role)
+		b, err = h.store.CreateBinding(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), memberID, req.Role, expiresAt)
 	}
 	if err != nil {
 		return mapErr(c, err, "failed to create binding", "binding", "")
@@ -407,13 +476,28 @@ func (h *Handler) PatchBinding(c fiber.Ctx) error {
 	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
+	var patch BindingPatch
+	if req.Role != nil {
+		var role string
+		if strings.TrimSpace(string(req.Role)) == "null" || json.Unmarshal(req.Role, &role) != nil {
+			return errors.FieldError("role", errors.FallbackValidation)
+		}
+		patch.Role = &role
+	}
+	expSet, expVal, err := parseExpiry(req.ExpiresAt, req.ExpiresIn, h.store.now().UTC())
+	if err != nil {
+		return err
+	}
+	patch.ExpiresAtSet = expSet
+	patch.ExpiresAt = expVal
 	bindingID := httpx.PathParam(c, "binding_id")
-	before, after, err := h.store.PatchBinding(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), bindingID, req.Role)
+	before, after, err := h.store.PatchBinding(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), bindingID, patch)
 	if err != nil {
 		return mapErr(c, err, "failed to update binding", "binding", bindingID)
 	}
 	d := auditx.Details{}
 	d.Changed("role", before.Role, after.Role)
+	d.ChangedPtr("expires_at", httpx.FormatTimePtr(before.ExpiresAt), httpx.FormatTimePtr(after.ExpiresAt))
 	auditx.Set(c, d)
 	return c.JSON(bindingResponse(after))
 }
@@ -495,6 +579,24 @@ func (h *Handler) GetMember(c fiber.Ctx) error {
 	if err != nil {
 		return mapErr(c, err, "failed to get member", "member", memberID)
 	}
+	return c.JSON(memberResponse(m))
+}
+
+func (h *Handler) SetMemberStatus(c fiber.Ctx) error {
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := httpx.Body(c, &req); err != nil {
+		return err
+	}
+	memberID := httpx.PathParam(c, "member_id")
+	before, m, err := h.store.SetMemberStatus(c.Context(), httpx.PathParam(c, "node_id"), memberID, req.Status)
+	if err != nil {
+		return mapErr(c, err, "failed to set member status", "member", memberID)
+	}
+	d := auditx.Details{"member_id": memberID}
+	d.Changed("status", before, m.Status())
+	auditx.Set(c, d)
 	return c.JSON(memberResponse(m))
 }
 
@@ -858,13 +960,27 @@ func (h *Handler) ListKeys(c fiber.Ctx) error {
 
 func (h *Handler) CreateKey(c fiber.Ctx) error {
 	var req struct {
-		Name         string   `json:"name"`
-		AllowedCIDRs []string `json:"allowed_cidrs"`
+		Name         string          `json:"name"`
+		AllowedCIDRs []string        `json:"allowed_cidrs"`
+		Scopes       []string        `json:"scopes"`
+		AllowedRoots []string        `json:"allowed_roots"`
+		ExpiresAt    json.RawMessage `json:"expires_at"`
+		ExpiresIn    json.RawMessage `json:"expires_in"`
 	}
 	if err := httpx.OptionalBody(c, &req); err != nil {
 		return err
 	}
-	k, err := h.store.CreateKey(c.Context(), keyOwner(c), req.Name, req.AllowedCIDRs)
+	_, expiresAt, err := parseExpiry(req.ExpiresAt, req.ExpiresIn, h.store.now().UTC())
+	if err != nil {
+		return err
+	}
+	k, err := h.store.CreateKey(c.Context(), keyOwner(c), KeyCreate{
+		Name:         req.Name,
+		AllowedCIDRs: req.AllowedCIDRs,
+		Scopes:       req.Scopes,
+		AllowedRoots: req.AllowedRoots,
+		ExpiresAt:    expiresAt,
+	})
 	if err != nil {
 		return mapErr(c, err, "failed to create key", "key", "")
 	}
@@ -877,11 +993,15 @@ func (h *Handler) PatchKey(c fiber.Ctx) error {
 	var req struct {
 		Name         json.RawMessage `json:"name"`
 		AllowedCIDRs json.RawMessage `json:"allowed_cidrs"`
+		Scopes       json.RawMessage `json:"scopes"`
+		AllowedRoots json.RawMessage `json:"allowed_roots"`
+		ExpiresAt    json.RawMessage `json:"expires_at"`
+		ExpiresIn    json.RawMessage `json:"expires_in"`
 	}
 	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
-	if req.Name == nil && req.AllowedCIDRs == nil {
+	if req.Name == nil && req.AllowedCIDRs == nil && req.Scopes == nil && req.AllowedRoots == nil && req.ExpiresAt == nil && req.ExpiresIn == nil {
 		return errors.FieldError("", "Nothing to update.")
 	}
 	var patch KeyPatch
@@ -901,6 +1021,31 @@ func (h *Handler) PatchKey(c fiber.Ctx) error {
 		}
 		patch.AllowedCIDRs = &cidrs
 	}
+	if req.Scopes != nil {
+		var scopes []string
+		if strings.TrimSpace(string(req.Scopes)) == "null" {
+			scopes = []string{}
+		} else if err := json.Unmarshal(req.Scopes, &scopes); err != nil {
+			return errors.FieldError("scopes", errors.FallbackValidation)
+		}
+		patch.Scopes = &scopes
+	}
+	if req.AllowedRoots != nil {
+		var roots []string
+		if strings.TrimSpace(string(req.AllowedRoots)) == "null" {
+			roots = []string{}
+		} else if err := json.Unmarshal(req.AllowedRoots, &roots); err != nil {
+			return errors.FieldError("allowed_roots", errors.FallbackValidation)
+		}
+		patch.AllowedRoots = &roots
+	}
+	expSet, expVal, err := parseExpiry(req.ExpiresAt, req.ExpiresIn, h.store.now().UTC())
+	if err != nil {
+		return err
+	}
+	patch.ExpiresAtSet = expSet
+	patch.ExpiresAt = expVal
+
 	keyID := httpx.PathParam(c, "key_id")
 	before, after, err := h.store.UpdateKey(c.Context(), keyOwner(c), keyID, patch)
 	if err != nil {
@@ -911,6 +1056,13 @@ func (h *Handler) PatchKey(c fiber.Ctx) error {
 	if !slices.Equal(before.AllowedCIDRs, after.AllowedCIDRs) {
 		d["allowed_cidrs"] = auditx.Change{From: before.AllowedCIDRs, To: after.AllowedCIDRs}
 	}
+	if !slices.Equal(before.Scopes, after.Scopes) {
+		d["scopes"] = auditx.Change{From: before.Scopes, To: after.Scopes}
+	}
+	if !slices.Equal(before.AllowedRoots, after.AllowedRoots) {
+		d["allowed_roots"] = auditx.Change{From: before.AllowedRoots, To: after.AllowedRoots}
+	}
+	d.ChangedPtr("expires_at", httpx.FormatTimePtr(before.ExpiresAt), httpx.FormatTimePtr(after.ExpiresAt))
 	auditx.Set(c, d)
 	return c.JSON(keyResponse(after))
 }

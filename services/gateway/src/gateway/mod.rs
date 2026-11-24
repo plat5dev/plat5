@@ -64,7 +64,11 @@ impl Gateway {
     ) -> Self {
         let admit = HttpAdmit::new(&cfg.identity_internal_url, InternalHttpClient::new());
         Self {
-            authenticator: Authenticator::new(jwt_validator, cfg.auth_subject_claim.clone()),
+            authenticator: Authenticator::new(
+                jwt_validator,
+                cfg.auth_subject_claim.clone(),
+                cfg.auth_scope_claim.clone(),
+            ),
             name_claims: cfg.auth_name_claims.clone(),
             pipeline: Pipeline::new(
                 AdmitCache::with_tracker(
@@ -347,6 +351,7 @@ impl Gateway {
         };
 
         let ip = client_ip(session, &self.trusted_proxies);
+        let host = request_host(session.req_header()).map(str::to_string);
         let checked = self
             .pipeline
             .check_routes(
@@ -355,6 +360,7 @@ impl Gateway {
                 &credential,
                 &checks,
                 &ip,
+                host.as_deref(),
             )
             .await;
         let checked = match checked {
@@ -426,6 +432,14 @@ fn request_context(ctx: &GatewayContext) -> opentelemetry::Context {
     ctx.root_span()
         .map(|span| span.context())
         .unwrap_or_default()
+}
+
+/// The request's `Host` header (or HTTP/2 `:authority` URI host), for root host routing.
+fn request_host(req: &pingora::http::RequestHeader) -> Option<&str> {
+    req.headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| req.uri.host())
 }
 
 /// The client IP for audit and the IP limits ([`client_ip`]). A peer that is
@@ -683,7 +697,8 @@ impl ProxyHttp for Gateway {
             }
 
             // Unmatched: 404, not counted by the failed-auth limiter.
-            let Some(matched) = snapshot.routes.find_route(&path, &method) else {
+            let host = request_host(session.req_header());
+            let Some(matched) = snapshot.routes.find_route_with_host(&path, &method, host) else {
                 warn!("no matching route");
                 return response::write_json_error(
                     &self.cors(),

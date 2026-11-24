@@ -27,14 +27,15 @@ Each is optional: without it, nobody is bound, and the list is the full list. A 
 | `POST` | `/roots/{kind}` | `{ display_name, slug? }`. A root kind. Returns the node, **201** |
 | `GET` | `/nodes` | Every node, unfiltered: `?kind=`, `?parent_id=`, `?status=`. For other front doors |
 | `POST` | `/nodes/{node_id}/release-slug` | <a id="slug-release"></a>On a purged root: frees its slug for a new root. **409** `SLUG_NOT_RELEASABLE` on a node that isn't a purged root. For an operator plane |
+| `PATCH` | `/nodes/{root_id}/rate-limit-tier` | `{ rate_limit_tier }`: opaque tier name (`[a-z0-9:._-]+`, max 64) or `null` to clear. Root nodes only (**422** on a child node). For billing/operator front doors; not generated in customer routes. Returns the node |
 
 ## Bindings
 
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/nodes/{node_id}/bindings` | Every [binding](#binding) that counts here (member and group): on this node (`inherited: false`) and on each ancestor (`true`). `?inherited=false` for this node's own |
-| `POST` | `/nodes/{node_id}/bindings` | `{ member_id, role }` or `{ group_id, role }` (exactly one of `member_id` or `group_id`). **422** if the member or group isn't in the node's tree or the role isn't bindable at the kind. **409** if that member or group already has a binding here. Returns the binding, **201** |
-| `PATCH` | `/nodes/{node_id}/bindings/{binding_id}` | `{ role }` |
+| `POST` | `/nodes/{node_id}/bindings` | `{ member_id, role, expires_at?, expires_in? }` or `{ group_id, role, expires_at?, expires_in? }` (exactly one of `member_id` or `group_id`; at most one of `expires_at` or `expires_in`). **422** if the member or group isn't in the node's tree, the role isn't bindable at the kind, or the expiry is invalid. **409** if that member or group already holds that role here. Returns the binding, **201** |
+| `PATCH` | `/nodes/{node_id}/bindings/{binding_id}` | `{ role?, expires_at?, expires_in? }`, at least one required (`expires_at: null` clears expiry; `expires_at` and `expires_in` are mutually exclusive). **409** if changing `role` collides with an existing binding for that member or group here |
 | `DELETE` | `/nodes/{node_id}/bindings/{binding_id}` | **204**, and again **204** once it's gone. A person's member left with no direct bindings and no group memberships is removed. A service account's isn't |
 | `GET` | `/nodes/{node_id}/memberships/{member_id}` | [Membership](#membership): every binding that counts for that member here (direct and through groups) |
 | `DELETE` | `/nodes/{root_id}/memberships/{member_id}` | The same as `DELETE /nodes/{root_id}/members/{member_id}` ([members](#members)), so a public `…/membership` route reads and leaves through one upstream. A root only; any other node is **404** |
@@ -60,9 +61,10 @@ Each is optional: without it, nobody is bound, and the list is the full list. A 
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `GET` | `/nodes/{root_id}/members` | Active [members](#member) of the tree, guests marked |
+| `GET` | `/nodes/{root_id}/members` | Non-removed [members](#member) of the tree (active and suspended), guests marked |
 | `POST` | `/nodes/{root_id}/members` | `{ idp: { issuer, subject }, role }`, both required. Resolves the person, creating them if the subject is new. Binds `role` at the root. **409** if already a member. Returns the member, **201** |
 | `GET` | `/nodes/{root_id}/members/{member_id}` | [Member](#member). A removed member answers with `status: removed`. **404** if not in this tree |
+| `PATCH` | `/nodes/{root_id}/members/{member_id}/status` | `{ status: active \| suspended }`. Reversibly suspends or reactivates a member within this tree without deleting bindings or rotating `member_id`. **422** on a removed member. Returns the member |
 | `DELETE` | `/nodes/{root_id}/members/{member_id}` | Remove: bindings deleted, `member.removed`. Final. **204**; already removed: **204**, no change. A service account's member is **422**: delete the service account |
 | `GET` | `/members/{member_id}/user` | The [user](#user) behind a person's member, removed members included. **404** for a service account's member or a deleted account |
 
@@ -78,8 +80,8 @@ People, by user id. Not behind any generated public route except the caller's ow
 | `DELETE` | `/users/{user_id}` | [Delete the account](../../concepts/lifecycle.md#deleting-an-account). **204**; already deleted: **204** |
 | `PATCH` | `/users/{user_id}/status` | `{ status: active \| suspended }` |
 | `GET` | `/users/{user_id}/nodes` | `?kind=` across every tree (omitted: every kind), [filtered](../../concepts/access.md#lists) to what the person can read. `?status=deleted` for deleted ones. Nodes |
-| `GET`, `POST` | `/users/{user_id}/keys` | The person's personal [keys](#key). `POST { name?, allowed_cidrs? }` returns the key once, **201** |
-| `PATCH` | `/users/{user_id}/keys/{key_id}` | `{ name?, allowed_cidrs? }`, at least one required. `allowed_cidrs: []` or `null` clears the allowlist. Returns the key |
+| `GET`, `POST` | `/users/{user_id}/keys` | The person's personal [keys](#key). `POST { name?, allowed_cidrs?, scopes?, allowed_roots?, expires_at?, expires_in? }` returns the key once, **201** |
+| `PATCH` | `/users/{user_id}/keys/{key_id}` | `{ name?, allowed_cidrs?, scopes?, allowed_roots?, expires_at?, expires_in? }`, at least one required. `[]` or `null` clears list fields; `expires_at: null` clears expiry. Returns the key |
 | `DELETE` | `/users/{user_id}/keys/{key_id}` | Revoke. **204**, again **204** |
 | `POST` | `/users/{user_id}/invites/redeem` | `{ token }`. **200** `{ member_id, node }`: the person's member in the invite's tree, and the [node](#node) it was for |
 
@@ -90,8 +92,8 @@ People, by user id. Not behind any generated public route except the caller's ow
 | `GET` | `/nodes/{node_id}/service-accounts` | [Service accounts](#service-account) that belong to this node |
 | `POST` | `/nodes/{node_id}/service-accounts` | `{ name, role }`, both required. One transaction: principal, member in the node's tree, binding at the node, `member.created`. Returns the service account, **201** |
 | `GET`, `PATCH`, `DELETE` | `/nodes/{node_id}/service-accounts/{service_account_id}` | Addressed by its member id. **404** if it doesn't belong to this node. `PATCH { name }`. Delete, **204**: the principal and its keys are deleted and the member removed with `member.removed`; a lookup shows the removed member with no name. Already deleted: **204** |
-| `GET`, `POST` | `/nodes/{node_id}/service-accounts/{service_account_id}/keys` | [Keys](#key), revoked ones included. `POST { name?, allowed_cidrs? }` returns the key once, **201** |
-| `PATCH` | `/nodes/{node_id}/service-accounts/{service_account_id}/keys/{key_id}` | `{ name?, allowed_cidrs? }`, at least one required. `allowed_cidrs: []` or `null` clears the allowlist. Returns the key |
+| `GET`, `POST` | `/nodes/{node_id}/service-accounts/{service_account_id}/keys` | [Keys](#key), revoked ones included. `POST { name?, allowed_cidrs?, scopes?, expires_at?, expires_in? }` returns the key once, **201** |
+| `PATCH` | `/nodes/{node_id}/service-accounts/{service_account_id}/keys/{key_id}` | `{ name?, allowed_cidrs?, scopes?, expires_at?, expires_in? }`, at least one required (`allowed_roots` is not accepted on service-account keys). `[]` or `null` clears list fields; `expires_at: null` clears expiry. Returns the key |
 | `DELETE` | `/nodes/{node_id}/service-accounts/{service_account_id}/keys/{key_id}` | Revoke. **204**, again **204** |
 
 A service account is a principal like a person: its bindings can sit anywhere in its own tree (`POST /nodes/{node_id}/bindings` with its member id), never outside it.
@@ -133,11 +135,11 @@ Lists are [paginated](../lists.md) under the plural key. Times are RFC 3339, UTC
 
 #### Node
 
-`{ id, kind, parent_id, root_id, slug, display_name, status, deleted_at, purge_after, created_at, updated_at, ancestors }`, on every response that returns a node. `status` is `active`, `deleted` or `purged`. `purge_after` is when a deleted node is purged, `null` while live. `slug` is `null` once it's freed: on a purged node below a root, and on a root whose slug was [released](#slug-release), here and in `ancestors`. `ancestors` is `[{ id, kind, slug, display_name }]`, root first, without the node itself; `[]` on a root. A console builds its own URLs from it.
+`{ id, kind, parent_id, root_id, slug, display_name, status, rate_limit_tier, deleted_at, purge_after, created_at, updated_at, ancestors }`, on every response that returns a node. `status` is `active`, `deleted` or `purged`. `rate_limit_tier` is the opaque tier name on a root, or `null`. `purge_after` is when a deleted node is purged, `null` while live. `slug` is `null` once it's freed: on a purged node below a root, and on a root whose slug was [released](#slug-release), here and in `ancestors`. `ancestors` is `[{ id, kind, slug, display_name }]`, root first, without the node itself; `[]` on a root. A console builds its own URLs from it.
 
 #### Binding
 
-`{ id, member_id, group_id, node_id, role, inherited, guest, principal, name, created_at, updated_at }`. Exactly one of `member_id` or `group_id` is set; the other is `null`. `node_id` is where the binding sits; `inherited` is true when that's an ancestor of the node listed. For a member binding, `guest`, `principal` (`person` or `service_account`) and `name` are the member's; for a group binding, `guest` is `false`, `principal` is `group`, and `name` is the group's name.
+`{ id, member_id, group_id, node_id, role, inherited, guest, principal, name, expires_at, created_at, updated_at }`. Exactly one of `member_id` or `group_id` is set; the other is `null`. `node_id` is where the binding sits; `inherited` is true when that's an ancestor of the node listed. `expires_at` is RFC 3339 UTC or `null`. For a member binding, `guest`, `principal` (`person` or `service_account`) and `name` are the member's; for a group binding, `guest` is `false`, `principal` is `group`, and `name` is the group's name.
 
 #### Group
 
@@ -145,11 +147,11 @@ Lists are [paginated](../lists.md) under the plural key. Times are RFC 3339, UTC
 
 #### Membership
 
-`{ member_id, bindings, permissions }`: every [binding](#binding) that counts for that member at the node (both direct and through groups), and the permissions they grant there, sorted, with `*` as the role wrote it.
+`{ member_id, bindings, permissions }`: every [binding](#binding) that counts for that member at the node (both direct and through groups), and the permissions granted by unexpired bindings there (empty when the member is suspended or removed), sorted, with `*` as the role wrote it.
 
 #### Member
 
-`{ id, principal, name, status, guest }`. `principal` is `person` or `service_account`; `status` is `active` or `removed`; `guest` is true for a person's active member with no effective binding at the root (neither directly nor through a group), and always false for a service account. `name` is null for a person who hasn't signed in, or whose account was deleted.
+`{ id, principal, name, status, guest }`. `principal` is `person` or `service_account`; `status` is `active`, `suspended`, or `removed`; `guest` is true for a person's non-removed member with no unexpired effective binding at the root (neither directly nor through a group), and always false for a service account. `name` is null for a person who hasn't signed in, or whose account was deleted.
 
 #### User
 
@@ -161,7 +163,7 @@ Lists are [paginated](../lists.md) under the plural key. Times are RFC 3339, UTC
 
 #### Key
 
-`{ id, name, key_prefix, allowed_cidrs, created_at, revoked_at }`. `allowed_cidrs` is the canonicalized IP/CIDR allowlist (`[]` when unrestricted). On create, plus `key`, once.
+`{ id, name, key_prefix, allowed_cidrs, scopes, allowed_roots, expires_at, created_at, revoked_at }`. `allowed_cidrs` is the canonicalized IP/CIDR allowlist (`[]` when unrestricted); `scopes` is the sorted permission allowlist (`[]` when unrestricted); `allowed_roots` is the sorted root node ID allowlist (`[]` when unrestricted, personal keys only); `expires_at` is RFC 3339 UTC or `null`. On create, plus `key`, once.
 
 #### Invite
 

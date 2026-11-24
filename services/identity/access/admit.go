@@ -2,7 +2,9 @@ package access
 
 import (
 	"context"
+	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -26,10 +28,13 @@ type AdmitInput struct {
 }
 
 // IdPClaims is what the gateway read from a verified JWT. Name is the first
-// non-empty claim of AUTH_NAME_CLAIMS.
+// non-empty claim of AUTH_NAME_CLAIMS. When HasScopes is true, effective
+// permissions on kind routes are intersected with Scopes.
 type IdPClaims struct {
 	Issuer, Subject string
 	Name            *string
+	HasScopes       bool
+	Scopes          []string
 }
 
 // ChainRef is one chain param from the path: an id when it starts with a
@@ -53,6 +58,8 @@ type Admitted struct {
 	MemberID        string
 	UserID          string
 	Permissions     []string
+	RateLimitTier   *string
+	ExpiresAt       *time.Time
 	InvalidationSeq int64
 	ConfigRevision  int64
 }
@@ -61,7 +68,23 @@ type Admitted struct {
 type admitPrincipal struct {
 	id, kind, userID, keyID string
 	allowedCIDRs            []string
+	scopes                  []string
+	allowedRoots            []string
+	expiresAt               *time.Time
 	invalidationSeq         int64
+}
+
+func earliestTime(a, b *time.Time) *time.Time {
+	switch {
+	case a == nil:
+		return b
+	case b == nil:
+		return a
+	case b.Before(*a):
+		return b
+	default:
+		return a
+	}
 }
 
 // Admit turns a credential and a node chain into the member and permissions
@@ -95,20 +118,24 @@ func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (
 		Principal:       p.kind,
 		KeyID:           p.keyID,
 		AllowedCIDRs:    p.allowedCIDRs,
+		ExpiresAt:       p.expiresAt,
 		InvalidationSeq: p.invalidationSeq,
 		ConfigRevision:  configRev,
 	}
 	if userRoute {
-		// A person's user id. A service account has none: the gateway refuses
-		// it on a user route.
-		out.UserID = p.userID
+		// A person's user id. A service account, or a personal key narrowed by
+		// scopes or allowed_roots, gets no user_id and is refused with 403.
+		if len(p.scopes) == 0 && len(p.allowedRoots) == 0 {
+			out.UserID = p.userID
+		}
 		op.OK("admitted")
 		return out, nil
 	}
 
-	// 2–4. Resolve the node chain, the principal's active member in its root,
-	// and the member's counting roles along the chain in one query.
-	chain, memberID, roles, chainSeq, err := s.resolveAdmitChain(ctx, snap, p.id, in.Chain, in.AllowDeleted)
+	// 2–4. Resolve the node chain, the principal's active unsuspended member in
+	// its root, the root's rate_limit_tier, and the member's unexpired counting
+	// roles along the chain in one query.
+	chain, memberID, roles, rootTier, minBindingExp, chainSeq, err := s.resolveAdmitChain(ctx, snap, p.id, in.Chain, in.AllowDeleted)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
@@ -125,8 +152,21 @@ func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (
 		op.OK("no member")
 		return out, nil
 	}
-	out.Nodes, out.MemberID = chain, memberID
-	out.Permissions = Resolve(snap, roles).List()
+	if len(p.allowedRoots) > 0 && !slices.Contains(p.allowedRoots, chain[0].ID) {
+		op.OK("root disallowed")
+		return out, nil
+	}
+	out.Nodes, out.MemberID, out.RateLimitTier = chain, memberID, rootTier
+	out.ExpiresAt = earliestTime(p.expiresAt, minBindingExp)
+	resolved := Resolve(snap, roles)
+	switch {
+	case len(p.scopes) > 0:
+		out.Permissions = IntersectScopes(resolved, p.scopes)
+	case in.IdP != nil && in.IdP.HasScopes:
+		out.Permissions = IntersectScopes(resolved, in.IdP.Scopes)
+	default:
+		out.Permissions = resolved.List()
+	}
 	op.OK("admitted")
 	return out, nil
 }
@@ -165,20 +205,24 @@ func (s *Store) keyPrincipalFor(ctx context.Context, key string) (*admitPrincipa
 	var revoked bool
 	var nodeStatus *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT p.id, p.kind, p.user_id, k.id, k.allowed_cidrs, p.status, k.revoked_at IS NOT NULL, bn.status,
+		SELECT p.id, p.kind, p.user_id, k.id, k.allowed_cidrs, k.scopes, k.allowed_roots, k.expires_at,
+		       p.status, k.revoked_at IS NOT NULL, bn.status,
 		       COALESCE((SELECT MAX(id) FROM admit_invalidations), 0)
 		FROM api_keys k
 		JOIN principals p ON p.id = k.principal_id
 		LEFT JOIN nodes bn ON bn.id = p.node_id
 		WHERE k.key_hash = $1
-	`, secret.Hash(key)).Scan(&p.id, &p.kind, &userID, &p.keyID, &p.allowedCIDRs, &status, &revoked, &nodeStatus, &p.invalidationSeq)
+	`, secret.Hash(key)).Scan(
+		&p.id, &p.kind, &userID, &p.keyID, &p.allowedCIDRs, &p.scopes, &p.allowedRoots, &p.expiresAt,
+		&status, &revoked, &nodeStatus, &p.invalidationSeq,
+	)
 	if dbx.IsNoRows(err) {
 		return nil, 0, nil
 	}
 	if err != nil {
 		return nil, 0, err
 	}
-	if revoked || !admissible(status, nodeStatus) {
+	if revoked || (p.expiresAt != nil && !p.expiresAt.After(s.now().UTC())) || !admissible(status, nodeStatus) {
 		return nil, p.invalidationSeq, nil
 	}
 	if userID != nil {
@@ -259,7 +303,7 @@ func (s *Store) resolveAdmitChain(
 	principalID string,
 	refs []ChainRef,
 	allowDeleted bool,
-) ([]ChainNode, string, []string, int64, error) {
+) ([]ChainNode, string, []string, *string, *time.Time, int64, error) {
 	n := len(refs)
 	pos := make([]int32, n)
 	kinds := make([]string, n)
@@ -268,7 +312,7 @@ func (s *Store) resolveAdmitChain(
 	for i, c := range refs {
 		isID := id.IsID(c.Ref)
 		if isID && !id.Valid(c.Ref) {
-			return nil, "", nil, 0, nil
+			return nil, "", nil, nil, nil, 0, nil
 		}
 		pos[i] = int32(i + 1)
 		kinds[i] = c.Kind
@@ -279,10 +323,13 @@ func (s *Store) resolveAdmitChain(
 	if bindKinds == nil {
 		bindKinds, bindRoles = []string{}, []string{}
 	}
+	now := s.now().UTC()
 
 	var nodeIDs []string
 	var memberID *string
 	var roles []string
+	var rootTier *string
+	var minExpiresAt *time.Time
 	var invSeq int64
 	err := s.pool.QueryRow(ctx, `
 		WITH RECURSIVE
@@ -343,38 +390,43 @@ func (s *Store) resolveAdmitChain(
 				SELECT m.id
 				FROM members m
 				JOIN resolved r ON r.pos = 1 AND m.root_id = r.id
-				WHERE m.principal_id = $7 AND m.removed_at IS NULL
+				WHERE m.principal_id = $7 AND m.removed_at IS NULL AND m.suspended_at IS NULL
 			),
 			roles AS (
-				SELECT DISTINCT b.role
+				SELECT b.role, b.expires_at
 				FROM resolved bn
 				JOIN member m ON true
 				JOIN bindings b ON b.node_id = bn.id AND (
 					b.member_id = m.id
 					OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = b.group_id AND gm.member_id = m.id)
 				)
-				WHERE `+CountsSQL("$8", "$9")+`
+				WHERE (b.expires_at IS NULL OR b.expires_at > $10)
+				  AND `+CountsSQL("$8", "$9")+`
 			)
 		SELECT
 			(SELECT array_agg(id ORDER BY pos) FROM resolved),
 			(SELECT id FROM member),
-			(SELECT array_agg(role) FROM roles),
+			(SELECT array_agg(DISTINCT role) FROM roles),
+			(SELECT n.rate_limit_tier FROM resolved r JOIN nodes n ON n.id = r.id WHERE r.pos = 1),
+			(SELECT MIN(expires_at) FROM roles WHERE expires_at IS NOT NULL),
 			COALESCE((SELECT MAX(id) FROM admit_invalidations), 0)
-	`, pos, kinds, refVals, isIDs, n, allowDeleted, principalID, bindKinds, bindRoles).Scan(&nodeIDs, &memberID, &roles, &invSeq)
+	`, pos, kinds, refVals, isIDs, n, allowDeleted, principalID, bindKinds, bindRoles, now).Scan(
+		&nodeIDs, &memberID, &roles, &rootTier, &minExpiresAt, &invSeq,
+	)
 	if err != nil {
-		return nil, "", nil, 0, err
+		return nil, "", nil, nil, nil, 0, err
 	}
 	if len(nodeIDs) != n {
-		return nil, "", nil, invSeq, nil
+		return nil, "", nil, nil, nil, invSeq, nil
 	}
 	out := make([]ChainNode, n)
 	for i, nodeID := range nodeIDs {
 		out[i] = ChainNode{Kind: refs[i].Kind, ID: nodeID}
 	}
 	if memberID == nil {
-		return out, "", nil, invSeq, nil
+		return out, "", nil, rootTier, nil, invSeq, nil
 	}
-	return out, *memberID, roles, invSeq, nil
+	return out, *memberID, roles, rootTier, minExpiresAt, invSeq, nil
 }
 
 // liveInChain is whether a node lets its chain resolve: live, or, with
@@ -394,10 +446,10 @@ type queryer interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// heldOnChains is, for each pair, the roles of the member's bindings on the
-// chain's nodes that count there (bindable at the node's kind): what
+// heldOnChains is, for each pair, the roles of the member's unexpired bindings
+// on the chain's nodes that count there (bindable at the node's kind): what
 // Resolve unions. Evaluations and resource search share it.
-func heldOnChains(ctx context.Context, q queryer, snap *feed.Snapshot, pairs []memberChain) ([][]string, error) {
+func heldOnChains(ctx context.Context, q queryer, snap *feed.Snapshot, pairs []memberChain, now time.Time) ([][]string, error) {
 	var idx []int32
 	var memberIDs, nodeIDs []string
 	for i, p := range pairs {
@@ -420,8 +472,9 @@ func heldOnChains(ctx context.Context, q queryer, snap *feed.Snapshot, pairs []m
 			OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = b.group_id AND gm.member_id = c.member_id)
 		)
 		JOIN nodes bn ON bn.id = b.node_id
-		WHERE `+CountsSQL("$4", "$5"),
-		idx, memberIDs, nodeIDs, kinds, roles)
+		WHERE (b.expires_at IS NULL OR b.expires_at > $6)
+		  AND `+CountsSQL("$4", "$5"),
+		idx, memberIDs, nodeIDs, kinds, roles, now)
 	if err != nil {
 		return nil, err
 	}

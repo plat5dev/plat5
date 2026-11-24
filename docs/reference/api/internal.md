@@ -11,7 +11,7 @@ One call that turns a credential and the route's node chain into the member and 
 ```
 POST /internal/admit
 {
-  "credential": "e10s-k-2-…",          // or "idp": { "issuer", "subject", "name"? }
+  "credential": "e10s-k-2-…",          // or "idp": { "issuer", "subject", "name"?, "scopes"? }
   "chain": [ { "kind": "organization", "ref": "gruow" }, { "kind": "project", "ref": "gatheroom" } ],
   "allow_deleted": false
 }
@@ -25,17 +25,19 @@ POST /internal/admit
   "member_id": "01jby…",
   "user_id": null,
   "permissions": ["catalog:write", "project:read"],
+  "rate_limit_tier": "enterprise",
+  "expires_at": "2026-12-01T00:00:00Z",
   "invalidation_seq": 42,
   "config_revision": 7
 }
 ```
 
-1. **Principal.** Hash the key, or look up the IdP link. A new IdP subject creates the person. `name`, the first non-empty claim of `AUTH_NAME_CLAIMS`, sets the person's name if it is currently empty ([a person's name](../idp.md#a-persons-name)). `valid` means only that the credential is good: a known, unrevoked key, or an IdP subject, of an active principal. A suspended person, an unknown or revoked key, a key identity can't read, or a service account whose node is deleted is `valid: false`, on any chain.
+1. **Principal.** Hash the key, or look up the IdP link. A new IdP subject creates the person. `name`, the first non-empty claim of `AUTH_NAME_CLAIMS`, sets the person's name if it is currently empty ([a person's name](../idp.md#a-persons-name)). `valid` means only that the credential is good: a known, unrevoked, unexpired key, or an IdP subject, of an active principal. A suspended person, an unknown, revoked or expired key, a key identity can't read, or a service account whose node is deleted is `valid: false`, on any chain.
 2. **Nodes.** Resolve each `ref` (slug or id) under the previous node, by kind. A missing, purged or deleted node ends here. With `allow_deleted`, the last node may be deleted (not purged), and its own bindings still count. Nothing else ever counts a deleted node's bindings.
-3. **Member.** The principal's active member in the chain's tree.
-4. **Permissions.** The union of the roles of that member's direct bindings and group bindings on any node in the chain, includes resolved ([`concepts/access.md`](../../concepts/access.md#resolution)).
+3. **Member.** The principal's active, unsuspended member in the chain's tree. If a key specifies `allowed_roots` and the resolved root isn't in `allowed_roots`, admit answers `member_id: null`.
+4. **Permissions.** The union of the roles of that member's unexpired direct bindings and group bindings on any node in the chain, includes resolved ([`concepts/access.md`](../../concepts/access.md#resolution)), intersected with the key's `scopes` (when non-empty) or the JWT's `scopes` (when sent). `rate_limit_tier` is the resolved root's tier (`null` when unset or on a user route). `expires_at` is the earliest RFC 3339 UTC expiration among the key and the counting bindings (`null` when none expire), used by the gateway to cap its admit cache TTL.
 
-An empty `chain` is a user route: `nodes`, `member_id` and `permissions` are empty. For a person, `user_id` is the person's. A valid service account answers `valid: true` and `principal: "service_account"` with `user_id: null`: it has no user, and the gateway refuses it there. On a tree route `user_id` is `null`.
+An empty `chain` is a user route: `nodes`, `member_id` and `permissions` are empty, and `rate_limit_tier` is `null`. For a person with an unrestricted credential, `user_id` is the person's. A valid service account, or a personal key narrowed by `scopes` or `allowed_roots`, answers `valid: true` with `user_id: null`, and the gateway refuses it with **403** on a user route. On a tree route `user_id` is `null`.
 
 Every field is in every answer, so the gateway never sees a missing one. With `valid: false`, `principal`, `key_id`, `member_id` and `user_id` are `null`, and `allowed_cidrs`, `nodes` and `permissions` are empty. A missing node and a caller outside the tree both answer `member_id: null` with empty `nodes` and `permissions`. `key_id` is the key's id for a key, `null` for a JWT. `allowed_cidrs` is the key's IP allowlist (`[]` for a JWT or an unrestricted key). `permissions` is sorted, with `*` as the role wrote it. `invalidation_seq` is the commit-ordered head of identity's invalidation log as of this read, and `config_revision` is the control-plane revision identity used to resolve permissions.
 

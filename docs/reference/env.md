@@ -15,6 +15,7 @@ Internal ports (`INTERNAL_PORT`) take no token. Keep them inside the deployment'
 | `AUTH_ALLOWED_AUDIENCES` | Required. Comma-separated; `*` accepts any audience |
 | `AUTH_SUBJECT_CLAIM` | Dotted claim path for the person's stable IdP subject. Default `sub` |
 | `AUTH_NAME_CLAIMS` | Comma-separated dotted claim paths for seeding a person's display name on first sign-in. Default `name,preferred_username` |
+| `AUTH_SCOPE_CLAIM` | Optional dotted claim path for JWT permission scopes (space-delimited string or JSON string array). When set and present in a token, effective permissions on kind routes are intersected with the claim |
 | `ADMIT_CACHE_TTL` | Duration. Default `5m` ([cache](gateway.md#cache)) |
 | `ADMIT_NEGATIVE_CACHE_TTL` | Duration. Default `10s` |
 | `RATE_LIMIT_ENABLED` | Default `true`. Set `false` to run without Valkey or rate limiting ([rate limits](gateway.md#rate-limits)) |

@@ -21,7 +21,7 @@ use crate::cors::CorsPolicy;
 use crate::duration::parse_duration;
 use crate::kinds::{KindDoc, Kinds};
 use crate::metrics;
-use crate::route_map::{Policy, PolicyDoc, RouteMap, ServiceDoc};
+use crate::route_map::{parse_tiers, Policy, PolicyDoc, RouteMap, ServiceDoc};
 
 /// Longer than the control plane's long-poll wait, so an idle poll ends with 204.
 const POLL_TIMEOUT: Duration = Duration::from_secs(40);
@@ -274,11 +274,13 @@ pub fn build(feed: Value) -> Result<Snapshot, String> {
                         )
                     })?
                     .as_secs();
+                let tiers = parse_tiers(name, &p.tiers)?;
                 Ok(Policy {
                     name: name.clone(),
                     requests: p.requests,
                     window_seconds,
                     count_at: None,
+                    tiers,
                 })
             }
         })
@@ -378,13 +380,15 @@ mod tests {
                     name: "standard".into(),
                     requests: 60,
                     window_seconds: 30,
-                    count_at: None
+                    count_at: None,
+                    tiers: BTreeMap::new(),
                 },
                 Policy {
                     name: "burst".into(),
                     requests: 5,
                     window_seconds: 1,
-                    count_at: None
+                    count_at: None,
+                    tiers: BTreeMap::new(),
                 }
             ]
         );

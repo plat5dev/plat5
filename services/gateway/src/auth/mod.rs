@@ -42,6 +42,7 @@ pub enum Presented {
         issuer: String,
         subject: String,
         name: Option<String>,
+        scopes: Option<Vec<String>>,
         kid: Option<String>,
     },
 }
@@ -116,14 +117,20 @@ pub struct Authenticator {
     jwt_validator: JwtValidatorState,
     jwt_cache: JwtCache,
     subject_claim: Vec<String>,
+    scope_claim: Option<Vec<String>>,
 }
 
 impl Authenticator {
-    pub fn new(jwt_validator: JwtValidatorState, subject_claim: Vec<String>) -> Self {
+    pub fn new(
+        jwt_validator: JwtValidatorState,
+        subject_claim: Vec<String>,
+        scope_claim: Option<Vec<String>>,
+    ) -> Self {
         Self {
             jwt_validator,
             jwt_cache: JwtCache::new(JWT_CACHE_CAPACITY, JWT_CACHE_TTL_BUFFER_SECS),
             subject_claim,
+            scope_claim,
         }
     }
 
@@ -183,11 +190,16 @@ impl Authenticator {
 
         let subject =
             extract_claim_path(&claims, &self.subject_claim).ok_or(AuthError::MissingSubject)?;
+        let scopes = self
+            .scope_claim
+            .as_deref()
+            .and_then(|path| extract_scopes(&claims, path));
         Ok(Presented::Jwt {
             // Validation checked `iss` against the configured issuer.
             issuer: self.jwt_validator.get_issuer(),
             subject,
             name: first_name(&claims, name_claims),
+            scopes,
             kid,
         })
     }
@@ -218,6 +230,33 @@ pub fn extract_claim_path(claims: &Value, path: &[String]) -> Option<String> {
         return None;
     }
     Some(s.to_string())
+}
+
+/// Walk a dotted path into JWT claims JSON for OAuth scopes (`AUTH_SCOPE_CLAIM`).
+/// Accepts a space-delimited string or a JSON array of strings, returning sorted,
+/// deduplicated values. Missing, `null`, or non-string/array values return `None`.
+pub fn extract_scopes(claims: &Value, path: &[String]) -> Option<Vec<String>> {
+    if path.is_empty() {
+        return None;
+    }
+    let mut cur = claims;
+    for key in path {
+        cur = cur.get(key)?;
+    }
+    let mut scopes: Vec<String> = match cur {
+        Value::String(s) => s.split_whitespace().map(str::to_string).collect(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect(),
+        _ => return None,
+    };
+    scopes.sort();
+    scopes.dedup();
+    Some(scopes)
 }
 
 /// The first of `paths` that holds a string with something besides spaces,
@@ -339,7 +378,45 @@ mod tests {
                 Audiences::Any,
             ),
             parse_subject_claim("sub"),
+            None,
         )
+    }
+
+    #[test]
+    fn extract_scopes_handles_strings_arrays_and_missing() {
+        let claims = json!({
+            "scope": "project:write project:read project:write",
+            "scp": ["b:read", " a:read ", "", "a:read", 7],
+            "nested": { "scopes": "org:read" },
+            "empty_str": "   ",
+            "empty_arr": [],
+            "null_val": null,
+            "num": 42
+        });
+        assert_eq!(
+            extract_scopes(&claims, &parse_claim_path("scope")),
+            Some(vec!["project:read".into(), "project:write".into()])
+        );
+        assert_eq!(
+            extract_scopes(&claims, &parse_claim_path("scp")),
+            Some(vec!["a:read".into(), "b:read".into()])
+        );
+        assert_eq!(
+            extract_scopes(&claims, &parse_claim_path("nested.scopes")),
+            Some(vec!["org:read".into()])
+        );
+        assert_eq!(
+            extract_scopes(&claims, &parse_claim_path("empty_str")),
+            Some(vec![])
+        );
+        assert_eq!(
+            extract_scopes(&claims, &parse_claim_path("empty_arr")),
+            Some(vec![])
+        );
+        assert_eq!(extract_scopes(&claims, &parse_claim_path("missing")), None);
+        assert_eq!(extract_scopes(&claims, &parse_claim_path("null_val")), None);
+        assert_eq!(extract_scopes(&claims, &parse_claim_path("num")), None);
+        assert_eq!(extract_scopes(&claims, &[]), None);
     }
 
     fn request(authorization: Option<&str>) -> RequestHeader {

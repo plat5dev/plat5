@@ -2,6 +2,7 @@ package nodes
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/gofiber/fiber/v3"
 
@@ -27,6 +28,7 @@ func (h *Handler) Mount(r fiber.Router) {
 	r.Get("/nodes", h.List)
 	r.Get("/nodes/:node_id", h.Get)
 	r.Patch("/nodes/:node_id", h.Update)
+	r.Patch("/nodes/:node_id/rate-limit-tier", h.SetRateLimitTier)
 	r.Delete("/nodes/:node_id", h.Delete)
 	r.Post("/nodes/:node_id/restore", h.Restore)
 	r.Post("/nodes/:node_id/release-slug", h.ReleaseSlug)
@@ -34,18 +36,19 @@ func (h *Handler) Mount(r fiber.Router) {
 
 // NodeResponse is the one node shape (docs/reference/api/identity.md#node).
 type NodeResponse struct {
-	ID          string             `json:"id"`
-	Kind        string             `json:"kind"`
-	ParentID    *string            `json:"parent_id"`
-	RootID      string             `json:"root_id"`
-	Slug        *string            `json:"slug"`
-	DisplayName string             `json:"display_name"`
-	Status      string             `json:"status"`
-	DeletedAt   *string            `json:"deleted_at"`
-	PurgeAfter  *string            `json:"purge_after"`
-	CreatedAt   string             `json:"created_at"`
-	UpdatedAt   string             `json:"updated_at"`
-	Ancestors   []AncestorResponse `json:"ancestors"`
+	ID            string             `json:"id"`
+	Kind          string             `json:"kind"`
+	ParentID      *string            `json:"parent_id"`
+	RootID        string             `json:"root_id"`
+	Slug          *string            `json:"slug"`
+	DisplayName   string             `json:"display_name"`
+	Status        string             `json:"status"`
+	RateLimitTier *string            `json:"rate_limit_tier"`
+	DeletedAt     *string            `json:"deleted_at"`
+	PurgeAfter    *string            `json:"purge_after"`
+	CreatedAt     string             `json:"created_at"`
+	UpdatedAt     string             `json:"updated_at"`
+	Ancestors     []AncestorResponse `json:"ancestors"`
 }
 
 type AncestorResponse struct {
@@ -68,18 +71,19 @@ func (s *Store) Present(ctx context.Context, ns ...*Node) ([]NodeResponse, error
 	out := make([]NodeResponse, 0, len(ns))
 	for _, n := range ns {
 		r := NodeResponse{
-			ID:          n.ID,
-			Kind:        n.Kind,
-			ParentID:    n.ParentID,
-			RootID:      n.RootID,
-			Slug:        n.Slug,
-			DisplayName: n.DisplayName,
-			Status:      n.Status,
-			DeletedAt:   httpx.FormatTimePtr(n.DeletedAt),
-			PurgeAfter:  httpx.FormatTimePtr(n.PurgeAfter),
-			CreatedAt:   httpx.FormatTime(n.CreatedAt),
-			UpdatedAt:   httpx.FormatTime(n.UpdatedAt),
-			Ancestors:   []AncestorResponse{},
+			ID:            n.ID,
+			Kind:          n.Kind,
+			ParentID:      n.ParentID,
+			RootID:        n.RootID,
+			Slug:          n.Slug,
+			DisplayName:   n.DisplayName,
+			Status:        n.Status,
+			RateLimitTier: n.RateLimitTier,
+			DeletedAt:     httpx.FormatTimePtr(n.DeletedAt),
+			PurgeAfter:    httpx.FormatTimePtr(n.PurgeAfter),
+			CreatedAt:     httpx.FormatTime(n.CreatedAt),
+			UpdatedAt:     httpx.FormatTime(n.UpdatedAt),
+			Ancestors:     []AncestorResponse{},
 		}
 		for _, a := range ancestors[n.ID] {
 			r.Ancestors = append(r.Ancestors, AncestorResponse{ID: a.ID, Kind: a.Kind, Slug: a.Slug, DisplayName: a.DisplayName})
@@ -160,6 +164,32 @@ func (h *Handler) Update(c fiber.Ctx) error {
 	}
 	d := auditx.Details{}
 	d.Changed("display_name", before, n.DisplayName)
+	auditx.Set(c, d)
+	return h.store.Respond(c, fiber.StatusOK, n)
+}
+
+func (h *Handler) SetRateLimitTier(c fiber.Ctx) error {
+	ctx := c.Context()
+	nodeID := httpx.PathParam(c, "node_id")
+	var req struct {
+		RateLimitTier json.RawMessage `json:"rate_limit_tier"`
+	}
+	if err := httpx.Body(c, &req); err != nil {
+		return err
+	}
+	if req.RateLimitTier == nil {
+		return errors.FieldError("rate_limit_tier", "Nothing to update.")
+	}
+	var tier *string
+	if err := json.Unmarshal(req.RateLimitTier, &tier); err != nil {
+		return errors.FieldError("rate_limit_tier", errors.FallbackValidation)
+	}
+	before, n, err := h.store.SetRateLimitTier(ctx, nodeID, tier)
+	if err != nil {
+		return httpx.MapDB(ctx, err, "failed to set rate limit tier", notFound(nodeID))
+	}
+	d := auditx.Details{}
+	d.ChangedPtr("rate_limit_tier", before, n.RateLimitTier)
 	auditx.Set(c, d)
 	return h.store.Respond(c, fiber.StatusOK, n)
 }
