@@ -124,19 +124,26 @@ func TestIntentIsIdempotentOnRequestID(t *testing.T) {
 func TestOutcomeAppliesOnce(t *testing.T) {
 	s, _ := newTestStore(t)
 	ctx := context.Background()
-	if _, err := s.CreateIntent(ctx, testIntent("req-1", time.Now()), nil); err != nil {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if _, err := s.CreateIntent(ctx, testIntent("req-1", now), nil); err != nil {
 		t.Fatal(err)
 	}
 
-	first := &Outcome{Outcome: OutcomeResponded, Status: intPtr(200), Details: json.RawMessage(`{"role":{"from":"developer","to":"admin"}}`)}
+	first := &Outcome{EventOccurredAt: &now, Outcome: OutcomeResponded, Status: intPtr(200), Details: json.RawMessage(`{"role":{"from":"developer","to":"admin"}}`)}
 	if r, err := s.ApplyOutcome(ctx, "req-1", first); err != nil || r != metrics.OutcomeApplied {
 		t.Fatalf("apply: %v %v", r, err)
 	}
-	if r, err := s.ApplyOutcome(ctx, "req-1", &Outcome{Outcome: OutcomeNoResponse, Status: intPtr(502)}); err != nil || r != metrics.OutcomeFinal {
+	if r, err := s.ApplyOutcome(ctx, "req-1", &Outcome{EventOccurredAt: &now, Outcome: OutcomeNoResponse, Status: intPtr(502)}); err != nil || r != metrics.OutcomeFinal {
 		t.Fatalf("a second outcome changes nothing: %v %v", r, err)
+	}
+	if r, err := s.ApplyOutcome(ctx, "req-1", &Outcome{Outcome: OutcomeNoResponse, Status: intPtr(502)}); err != nil || r != metrics.OutcomeFinal {
+		t.Fatalf("a second outcome without occurred_at also changes nothing: %v %v", r, err)
 	}
 	if _, err := s.ApplyOutcome(ctx, "nope", first); !stderrors.Is(err, ErrNotFound) {
 		t.Fatalf("no intent: %v", err)
+	}
+	if _, err := s.ApplyOutcome(ctx, "nope", &Outcome{Outcome: OutcomeResponded, Status: intPtr(200)}); !stderrors.Is(err, ErrNotFound) {
+		t.Fatalf("no intent without occurred_at: %v", err)
 	}
 
 	list, _, err := s.List(ctx, Filter{Log: "01o", NodeRead: true, Limit: 10})

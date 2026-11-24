@@ -78,14 +78,60 @@ func UserDeleted(userID string) Event {
 // takes the log's lock, held until tx ends, and other event writers wait on
 // it. That keeps ids in commit order and a transaction's events adjacent.
 func Record(ctx context.Context, tx pgx.Tx, e Event) error {
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, lockKey); err != nil {
+	return RecordBatch(ctx, tx, []Event{e})
+}
+
+// RecordBatch writes events in order inside tx, taking the log's lock once and
+// pipelining the lock and insert in a single round-trip. Call it right before
+// commit so the global lock is held for as little time as possible.
+func RecordBatch(ctx context.Context, tx pgx.Tx, events []Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	batch.Queue(`SELECT pg_advisory_xact_lock($1)`, lockKey)
+	if len(events) == 1 {
+		e := events[0]
+		batch.Queue(`
+			INSERT INTO events (type, kind, node_id, member_id, root_id, principal, user_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`, e.Type, e.Kind, e.NodeID, e.MemberID, e.RootID, e.Principal, e.UserID)
+	} else {
+		n := len(events)
+		types := make([]string, n)
+		kinds := make([]*string, n)
+		nodeIDs := make([]*string, n)
+		memberIDs := make([]*string, n)
+		rootIDs := make([]*string, n)
+		principals := make([]*string, n)
+		userIDs := make([]*string, n)
+		for i, e := range events {
+			types[i] = e.Type
+			kinds[i] = e.Kind
+			nodeIDs[i] = e.NodeID
+			memberIDs[i] = e.MemberID
+			rootIDs[i] = e.RootID
+			principals[i] = e.Principal
+			userIDs[i] = e.UserID
+		}
+		batch.Queue(`
+			INSERT INTO events (type, kind, node_id, member_id, root_id, principal, user_id)
+			SELECT u.type, u.kind, u.node_id, u.member_id, u.root_id, u.principal, u.user_id
+			FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])
+				WITH ORDINALITY AS u (type, kind, node_id, member_id, root_id, principal, user_id, ord)
+			ORDER BY u.ord
+		`, types, kinds, nodeIDs, memberIDs, rootIDs, principals, userIDs)
+	}
+	br := tx.SendBatch(ctx, batch)
+	if _, err := br.Exec(); err != nil {
+		_ = br.Close()
 		return err
 	}
-	_, err := tx.Exec(ctx, `
-		INSERT INTO events (type, kind, node_id, member_id, root_id, principal, user_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, e.Type, e.Kind, e.NodeID, e.MemberID, e.RootID, e.Principal, e.UserID)
-	return err
+	if _, err := br.Exec(); err != nil {
+		_ = br.Close()
+		return err
+	}
+	return br.Close()
 }
 
 // Store reads the log. Its reads are long-polled, over and over, per reader,

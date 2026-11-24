@@ -33,6 +33,7 @@ type intentRequest struct {
 }
 
 type outcomeRequest struct {
+	OccurredAt    *string         `json:"occurred_at"`
 	Outcome       *string         `json:"outcome"`
 	Status        *int            `json:"status"`
 	Details       json.RawMessage `json:"details"`
@@ -129,12 +130,26 @@ func ParseOutcome(requestID string, body []byte) (*Outcome, error) {
 	if !validStatus(req.Status) {
 		return nil, errors.FieldError("status", "")
 	}
+	var occurredAt *time.Time
+	if req.OccurredAt != nil {
+		at, err := time.Parse(time.RFC3339Nano, *req.OccurredAt)
+		if err != nil {
+			return nil, errors.FieldError("occurred_at", "")
+		}
+		ms := at.UnixMilli()
+		if ms < 0 || uint64(ms) > ulid.MaxTime() {
+			return nil, errors.FieldError("occurred_at", "")
+		}
+		t := at.UTC().Truncate(time.Millisecond)
+		occurredAt = &t
+	}
 	out := &Outcome{
-		Outcome:       *req.Outcome,
-		Status:        req.Status,
-		CreatedID:     req.CreatedID,
-		NamedNodeIDs:  req.NamedNodeIDs,
-		NamedMemberID: req.NamedMemberID,
+		EventOccurredAt: occurredAt,
+		Outcome:         *req.Outcome,
+		Status:          req.Status,
+		CreatedID:       req.CreatedID,
+		NamedNodeIDs:    req.NamedNodeIDs,
+		NamedMemberID:   req.NamedMemberID,
 	}
 	if out.NamedNodeIDs == nil {
 		out.NamedNodeIDs = []string{}

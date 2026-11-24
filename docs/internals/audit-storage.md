@@ -4,7 +4,7 @@ For implementers. The contract is [audit](../concepts/audit.md) and the [audit A
 
 ## Storage
 
-`audit_events` in schema `audit` on the Plat5 Postgres, partitioned by month on `occurred_at`, unique on `request_id`. It holds the event as the [API](../reference/api/audit.md#event) returns it, with no check constraints between fields: audit stores what it's sent.
+`audit_events` in schema `audit` on the Plat5 Postgres, partitioned by month on `occurred_at`, unique on `(request_id, occurred_at)`. Intent dedupe bounds its `request_id` check to `±1 day` around `occurred_at` so Postgres prunes to at most two partitions; outcome updates include `occurred_at` when sent so Postgres prunes to the single partition. It holds the event as the [API](../reference/api/audit.md#event) returns it, with no check constraints between fields: audit stores what it's sent.
 
 `audit_log_keys` is one row per log an event is in: `(log, event_id, occurred_at)`, where `log` is a node id (each node in `nodes`, each in `named_node_ids`, and `created_id`) or `user:` and a user id. A read is one index range on `(log, event_id DESC)`. The intent writes the chain's and the user's keys; the outcome adds the named nodes' and `created_id`'s. Partitioned with the events.
 

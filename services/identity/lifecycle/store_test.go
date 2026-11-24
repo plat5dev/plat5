@@ -30,10 +30,8 @@ func write(pool *pgxpool.Pool, events ...Event) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	for _, e := range events {
-		if err := Record(ctx, tx, e); err != nil {
-			return err
-		}
+	if err := RecordBatch(ctx, tx, events); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }

@@ -155,6 +155,8 @@ func TestParseOutcome(t *testing.T) {
 		"no status on responded": `{"outcome":"responded"}`,
 		"a new outcome":          `{"outcome":"timed_out","status":504}`,
 		"unknown fields":         `{"outcome":"responded","status":200,"latency_ms":12}`,
+		"with occurred_at":       `{"occurred_at":"2026-10-08T18:30:00.123456Z","outcome":"responded","status":200}`,
+		"null occurred_at":       `{"occurred_at":null,"outcome":"responded","status":200}`,
 		"big details":            `{"outcome":"responded","status":200,"details":{"a":"` + strings.Repeat("x", 9000) + `"}}`,
 	}
 	for name, body := range ok {
@@ -174,6 +176,8 @@ func TestParseOutcome(t *testing.T) {
 		"status negative overflow": {`{"outcome":"responded","status":-9999999999}`, "status"},
 		"details not object":       {`{"outcome":"responded","status":200,"details":[1]}`, "details"},
 		"named not a list":         {`{"outcome":"responded","status":201,"named_node_ids":"01o"}`, "named_node_ids"},
+		"bad occurred_at":          {`{"occurred_at":"yesterday","outcome":"responded","status":200}`, "occurred_at"},
+		"pre-1970 occurred_at":     {`{"occurred_at":"1969-12-31T23:59:59.999Z","outcome":"responded","status":200}`, "occurred_at"},
 	}
 	for name, tc := range bad {
 		t.Run(name, func(t *testing.T) {

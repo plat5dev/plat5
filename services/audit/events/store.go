@@ -77,8 +77,9 @@ func (s *Store) CreateIntent(ctx context.Context, in *Intent, final *Outcome) (c
 		}
 		defer tx.Rollback(ctx)
 		// request_id alone is the dedupe. The unique index has occurred_at
-		// too (the partition key), so check request_id here and let the
-		// index catch two identical intents racing.
+		// too (the partition key), so check request_id within a 1-day window
+		// (pruning to 1-2 monthly partitions) and let the index catch two
+		// identical intents racing.
 		tag, err := tx.Exec(ctx, `
 			INSERT INTO audit_events (id, occurred_at, request_id, root_id, nodes, actor_member_id, actor_user_id,
 				actor_principal, actor_auth_type, actor_key_id, service, method, route, params, ip, user_agent,
@@ -86,7 +87,12 @@ func (s *Store) CreateIntent(ctx context.Context, in *Intent, final *Outcome) (c
 			SELECT $1::text, $2::timestamptz, $3::text, $4::text, $5::jsonb, $6::text, $7::text, $8::text,
 				$9::text, $10::text, $11::text, $12::text, $13::text, $14::jsonb, $15::text, $16::text,
 				$17::text, $18::integer
-			WHERE NOT EXISTS (SELECT 1 FROM audit_events WHERE request_id = $3::text)
+			WHERE NOT EXISTS (
+				SELECT 1 FROM audit_events
+				WHERE request_id = $3::text
+				  AND occurred_at >= $2::timestamptz - interval '1 day'
+				  AND occurred_at <= $2::timestamptz + interval '1 day'
+			)
 			ON CONFLICT DO NOTHING
 		`, eventID, in.OccurredAt, in.RequestID, in.RootID, string(nodes),
 			in.Actor.MemberID, in.Actor.UserID, in.Actor.Principal, in.Actor.AuthType, in.Actor.KeyID,
@@ -155,23 +161,43 @@ func (s *Store) ApplyOutcome(ctx context.Context, requestID string, out *Outcome
 	defer tx.Rollback(ctx)
 
 	// Only a user route's event names nodes. A tree route's event is in its
-	// chain's logs, and named nodes sent for it are ignored.
+	// chain's logs, and named nodes sent for it are ignored. When the caller
+	// sends occurred_at, include it so Postgres prunes to a single partition.
 	var eventID string
 	var at time.Time
 	var stored []string
-	err = tx.QueryRow(ctx, `
-		UPDATE audit_events
-		SET outcome = $2, status = $3, details = $4::jsonb, created_id = $5,
-			named_node_ids = CASE WHEN root_id IS NULL THEN $6::text[] ELSE '{}' END,
-			named_member_id = CASE WHEN root_id IS NULL THEN $7::text END
-		WHERE request_id = $1 AND outcome = 'pending'
-		RETURNING id, occurred_at, named_node_ids
-	`, requestID, out.Outcome, out.Status, details, out.CreatedID, named, out.NamedMemberID).Scan(&eventID, &at, &stored)
+	if out.EventOccurredAt != nil {
+		err = tx.QueryRow(ctx, `
+			UPDATE audit_events
+			SET outcome = $2, status = $3, details = $4::jsonb, created_id = $5,
+				named_node_ids = CASE WHEN root_id IS NULL THEN $6::text[] ELSE '{}' END,
+				named_member_id = CASE WHEN root_id IS NULL THEN $7::text END
+			WHERE request_id = $1 AND occurred_at = $8 AND outcome = 'pending'
+			RETURNING id, occurred_at, named_node_ids
+		`, requestID, out.Outcome, out.Status, details, out.CreatedID, named, out.NamedMemberID, *out.EventOccurredAt).Scan(&eventID, &at, &stored)
+	} else {
+		err = tx.QueryRow(ctx, `
+			UPDATE audit_events
+			SET outcome = $2, status = $3, details = $4::jsonb, created_id = $5,
+				named_node_ids = CASE WHEN root_id IS NULL THEN $6::text[] ELSE '{}' END,
+				named_member_id = CASE WHEN root_id IS NULL THEN $7::text END
+			WHERE request_id = $1 AND outcome = 'pending'
+			RETURNING id, occurred_at, named_node_ids
+		`, requestID, out.Outcome, out.Status, details, out.CreatedID, named, out.NamedMemberID).Scan(&eventID, &at, &stored)
+	}
 	if dbx.IsNoRows(err) {
 		var exists bool
-		if err := tx.QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM audit_events WHERE request_id = $1)`, requestID,
-		).Scan(&exists); err != nil {
+		if out.EventOccurredAt != nil {
+			err = tx.QueryRow(ctx,
+				`SELECT EXISTS (SELECT 1 FROM audit_events WHERE request_id = $1 AND occurred_at = $2)`,
+				requestID, *out.EventOccurredAt,
+			).Scan(&exists)
+		} else {
+			err = tx.QueryRow(ctx,
+				`SELECT EXISTS (SELECT 1 FROM audit_events WHERE request_id = $1)`, requestID,
+			).Scan(&exists)
+		}
+		if err != nil {
 			return "", op.Fail(err)
 		}
 		if !exists {

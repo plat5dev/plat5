@@ -1,7 +1,12 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::future::Future;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use http::header::HeaderName;
 use http::HeaderValue;
+use moka::future::Cache;
 use opentelemetry::global;
 use opentelemetry::propagation::Injector;
 use pingora::http::RequestHeader;
@@ -74,7 +79,7 @@ pub async fn build_and_store_upstream_peer(
     forward: Forward,
     request_id: &str,
     signer: Option<&UpstreamSigner>,
-    block_private_ips: bool,
+    resolver: &PeerResolver,
 ) -> std::result::Result<(), UpstreamError> {
     let query = session.req_header().uri.query().map(str::to_string);
     let path_and_query = path_and_query(&forward.path, query.as_deref());
@@ -148,7 +153,7 @@ pub async fn build_and_store_upstream_peer(
         return Err(UpstreamError::BadUpstream);
     };
     let peer_addr = upstream.addr();
-    let Some(socket_addr) = resolve_peer(&peer_addr, block_private_ips).await else {
+    let Some(socket_addr) = resolver.resolve(&peer_addr).await else {
         warn!(
             route = %route.path,
             upstream = %peer_addr,
@@ -253,27 +258,102 @@ pub fn peer_address(base_url: &str) -> String {
         .unwrap_or_else(|| base_url.trim().to_string())
 }
 
-/// Resolve `host:port` without panicking and without blocking the executor
-/// (`lookup_host` runs the lookup on the blocking pool). `None` when malformed,
-/// unresolvable, or blocked by `UPSTREAM_BLOCK_PRIVATE_IPS`.
-async fn resolve_peer(addr: &str, block_private_ips: bool) -> Option<std::net::SocketAddr> {
-    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host(addr).await.ok()?.collect();
-    if addrs.is_empty() {
-        return None;
+const DNS_CACHE_CAPACITY: u64 = 4_096;
+const DNS_CACHE_TTL: Duration = Duration::from_secs(10);
+
+struct ResolvedPeer {
+    addrs: Vec<SocketAddr>,
+    next: AtomicUsize,
+}
+
+impl ResolvedPeer {
+    fn pick(&self) -> SocketAddr {
+        let idx = self.next.fetch_add(1, Ordering::Relaxed) % self.addrs.len();
+        self.addrs[idx]
     }
-    if block_private_ips {
-        for resolved in &addrs {
-            if is_blocked_ip(resolved.ip()) {
+}
+
+/// Caches DNS lookups for upstream `host:port` addresses and round-robins across
+/// all returned records. Failed or private-IP-blocked lookups are never cached,
+/// and concurrent misses for the same address share one lookup.
+#[derive(Clone)]
+pub struct PeerResolver {
+    cache: Cache<String, Arc<ResolvedPeer>>,
+    block_private_ips: bool,
+}
+
+impl PeerResolver {
+    pub fn new(block_private_ips: bool) -> Self {
+        Self::with_ttl(block_private_ips, DNS_CACHE_TTL)
+    }
+
+    fn with_ttl(block_private_ips: bool, ttl: Duration) -> Self {
+        let cache = Cache::builder()
+            .max_capacity(DNS_CACHE_CAPACITY)
+            .time_to_live(ttl)
+            .build();
+        Self {
+            cache,
+            block_private_ips,
+        }
+    }
+
+    pub async fn resolve(&self, addr: &str) -> Option<SocketAddr> {
+        self.resolve_with(addr, lookup_host_addrs).await
+    }
+
+    async fn resolve_with<F, Fut>(&self, addr: &str, lookup: F) -> Option<SocketAddr>
+    where
+        F: FnOnce(String) -> Fut,
+        Fut: Future<Output = Option<Vec<SocketAddr>>>,
+    {
+        // IP literals need no DNS lookup or cache entry.
+        if let Ok(sa) = addr.parse::<SocketAddr>() {
+            if self.block_private_ips && is_blocked_ip(sa.ip()) {
                 warn!(
                     upstream = %addr,
-                    ip = %resolved.ip(),
+                    ip = %sa.ip(),
                     "blocked upstream connection to private or reserved IP"
                 );
                 return None;
             }
+            return Some(sa);
         }
+
+        let block_private_ips = self.block_private_ips;
+        let peer = self
+            .cache
+            .try_get_with(addr.to_string(), async move {
+                let addrs = lookup(addr.to_string()).await.ok_or(())?;
+                if addrs.is_empty() {
+                    return Err(());
+                }
+                if block_private_ips {
+                    for resolved in &addrs {
+                        if is_blocked_ip(resolved.ip()) {
+                            warn!(
+                                upstream = %addr,
+                                ip = %resolved.ip(),
+                                "blocked upstream connection to private or reserved IP"
+                            );
+                            return Err(());
+                        }
+                    }
+                }
+                Ok(Arc::new(ResolvedPeer {
+                    addrs,
+                    next: AtomicUsize::new(0),
+                }))
+            })
+            .await
+            .ok()?;
+        Some(peer.pick())
     }
-    addrs.into_iter().next()
+}
+
+async fn lookup_host_addrs(addr: String) -> Option<Vec<SocketAddr>> {
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host(addr).await.ok()?.collect();
+    (!addrs.is_empty()).then_some(addrs)
 }
 
 /// True for loopback, RFC1918 private, link-local (including cloud metadata),
@@ -342,19 +422,98 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_peer_rejects_bad_addresses() {
-        assert!(resolve_peer("example.com", false).await.is_none());
-        assert!(resolve_peer("", false).await.is_none());
-        assert!(resolve_peer("host:notaport", false).await.is_none());
+        let open = PeerResolver::new(false);
+        let strict = PeerResolver::new(true);
+        assert!(open.resolve("example.com").await.is_none());
+        assert!(open.resolve("").await.is_none());
+        assert!(open.resolve("host:notaport").await.is_none());
         assert_eq!(
-            resolve_peer("127.0.0.1:3000", false).await.map(|a| a.port()),
+            open.resolve("127.0.0.1:3000").await.map(|a| a.port()),
             Some(3000)
         );
-        assert!(resolve_peer("127.0.0.1:3000", true).await.is_none());
-        assert!(resolve_peer("169.254.169.254:80", true).await.is_none());
+        assert!(strict.resolve("127.0.0.1:3000").await.is_none());
+        assert!(strict.resolve("169.254.169.254:80").await.is_none());
         assert_eq!(
-            resolve_peer("93.184.216.34:443", true).await.map(|a| a.port()),
+            strict.resolve("93.184.216.34:443").await.map(|a| a.port()),
             Some(443)
         );
+    }
+
+    #[tokio::test]
+    async fn peer_resolver_caches_and_round_robins_records() {
+        let resolver = PeerResolver::with_ttl(true, Duration::from_millis(80));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let a: SocketAddr = "93.184.216.34:443".parse().unwrap();
+        let b: SocketAddr = "93.184.216.35:443".parse().unwrap();
+
+        let lookup = |calls: Arc<AtomicUsize>, res: Option<Vec<SocketAddr>>| {
+            move |_addr: String| async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                res
+            }
+        };
+
+        assert_eq!(
+            resolver
+                .resolve_with("api.example.com:443", lookup(calls.clone(), Some(vec![a, b])))
+                .await,
+            Some(a)
+        );
+        assert_eq!(
+            resolver
+                .resolve_with("api.example.com:443", lookup(calls.clone(), Some(vec![a, b])))
+                .await,
+            Some(b)
+        );
+        assert_eq!(
+            resolver
+                .resolve_with("api.example.com:443", lookup(calls.clone(), Some(vec![a, b])))
+                .await,
+            Some(a)
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "subsequent calls hit cache");
+
+        // After TTL expires, the resolver looks up again.
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        assert_eq!(
+            resolver
+                .resolve_with("api.example.com:443", lookup(calls.clone(), Some(vec![b])))
+                .await,
+            Some(b)
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn peer_resolver_does_not_cache_blocked_or_failed_lookups() {
+        let resolver = PeerResolver::with_ttl(true, Duration::from_secs(60));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let private: SocketAddr = "10.0.0.5:8080".parse().unwrap();
+        let public: SocketAddr = "93.184.216.34:8080".parse().unwrap();
+
+        let run = |res: Option<Vec<SocketAddr>>| {
+            let calls = calls.clone();
+            move |_addr: String| async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                res
+            }
+        };
+
+        assert!(resolver
+            .resolve_with("flaky.example.com:8080", run(None))
+            .await
+            .is_none());
+        assert!(resolver
+            .resolve_with("flaky.example.com:8080", run(Some(vec![public, private])))
+            .await
+            .is_none());
+        assert_eq!(
+            resolver
+                .resolve_with("flaky.example.com:8080", run(Some(vec![public])))
+                .await,
+            Some(public)
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
 
     #[test]

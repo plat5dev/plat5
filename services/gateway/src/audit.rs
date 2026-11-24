@@ -110,6 +110,8 @@ pub enum OutcomeKind {
 
 #[derive(Debug, Serialize)]
 pub struct Outcome {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub occurred_at: Option<String>,
     pub outcome: OutcomeKind,
     /// What the gateway answered with. None when the client was gone first.
     pub status: Option<u16>,
@@ -126,6 +128,8 @@ pub struct Outcome {
 /// An audited request between its intent and its outcome.
 #[derive(Debug, Default)]
 pub struct AuditState {
+    /// The intent's `occurred_at`, echoed on the outcome for partition pruning.
+    pub occurred_at: Option<String>,
     /// Set when the upstream response arrives.
     pub upstream_status: Option<u16>,
     pub details: Option<Box<RawValue>>,
@@ -144,6 +148,7 @@ pub fn outcome_for(state: AuditState, forwarded: bool, written_status: Option<u1
     };
     if outcome != OutcomeKind::Responded {
         return Outcome {
+            occurred_at: state.occurred_at,
             outcome,
             status,
             details: None,
@@ -154,6 +159,7 @@ pub fn outcome_for(state: AuditState, forwarded: bool, written_status: Option<u1
     }
     let (named_node_ids, named_member_id) = state.named.unzip();
     Outcome {
+        occurred_at: state.occurred_at,
         outcome,
         status,
         details: state.details,
@@ -531,6 +537,7 @@ mod tests {
         );
         let responded = outcome_for(
             AuditState {
+                occurred_at: Some("2026-10-08T18:30:00.123Z".into()),
                 upstream_status: Some(201),
                 details: parse_details(br#"{"a":1}"#),
                 created_id: Some("01o".into()),
@@ -539,6 +546,7 @@ mod tests {
             true,
             Some(201),
         );
+        assert_eq!(responded.occurred_at.as_deref(), Some("2026-10-08T18:30:00.123Z"));
         assert_eq!(responded.outcome, OutcomeKind::Responded);
         assert_eq!(responded.status, Some(201));
         assert!(responded.details.is_some());
@@ -549,6 +557,7 @@ mod tests {
         // What a service said counts only when it answered.
         let cut = outcome_for(
             AuditState {
+                occurred_at: Some("2026-10-08T18:30:00.123Z".into()),
                 upstream_status: None,
                 details: None,
                 created_id: Some("x".into()),
@@ -557,6 +566,7 @@ mod tests {
             true,
             Some(502),
         );
+        assert_eq!(cut.occurred_at.as_deref(), Some("2026-10-08T18:30:00.123Z"));
         assert!(cut.created_id.is_none() && cut.named_node_ids.is_none());
 
         let no_response = outcome_for(AuditState::default(), true, Some(502));
@@ -666,6 +676,7 @@ mod tests {
 
         let named = outcome_for(
             AuditState {
+                occurred_at: Some("2026-10-08T18:30:00.123Z".into()),
                 upstream_status: Some(201),
                 named: Some((vec!["01o".into()], "01m".into())),
                 ..AuditState::default()
@@ -675,7 +686,8 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(&named).unwrap(),
-            serde_json::json!({ "outcome": "responded", "status": 201, "details": null,
+            serde_json::json!({ "occurred_at": "2026-10-08T18:30:00.123Z",
+                                "outcome": "responded", "status": 201, "details": null,
                                 "named_node_ids": ["01o"], "named_member_id": "01m" })
         );
 

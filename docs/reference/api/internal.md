@@ -280,10 +280,10 @@ Audit stores what it's sent and doesn't repeat the gateway's or identity's rules
 
 ```
 PATCH /internal/events/{request_id}
-{ "outcome": "responded", "status": 200, "details": { … }, "created_id": "…", "named_node_ids": ["…"], "named_member_id": "…" }
+{ "occurred_at": "…", "outcome": "responded", "status": 200, "details": { … }, "created_id": "…", "named_node_ids": ["…"], "named_member_id": "…" }
 ```
 
-`named_node_ids` and `named_member_id` only for a user-route event, from the service's [named nodes](../../concepts/audit.md#named-nodes), and only with `responded`. Sent for a tree route's event, they're ignored.
+`occurred_at` is optional; when sent (the gateway echoes the intent's timestamp), audit uses it to prune to the single monthly partition instead of scanning every partition. `named_node_ids` and `named_member_id` only for a user-route event, from the service's [named nodes](../../concepts/audit.md#named-nodes), and only with `responded`. Sent for a tree route's event, they're ignored.
 
 | Result | Response |
 |--------|----------|

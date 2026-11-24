@@ -62,12 +62,15 @@ type Intent struct {
 // chain a user route changed and the member in it: they add the event to
 // each named node's log.
 type Outcome struct {
-	Outcome       string
-	Status        *int
-	Details       json.RawMessage
-	CreatedID     *string
-	NamedNodeIDs  []string
-	NamedMemberID *string
+	// EventOccurredAt is an optional hint matching the intent's occurred_at,
+	// used to prune ApplyOutcome to a single monthly partition.
+	EventOccurredAt *time.Time
+	Outcome         string
+	Status          *int
+	Details         json.RawMessage
+	CreatedID       *string
+	NamedNodeIDs    []string
+	NamedMemberID   *string
 }
 
 type Event struct {

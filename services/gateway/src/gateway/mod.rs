@@ -49,7 +49,7 @@ pub struct Gateway {
     audit: Audit,
     trusted_proxies: TrustedProxies,
     upstream_signer: Option<signing::UpstreamSigner>,
-    upstream_block_private_ips: bool,
+    upstream_resolver: upstream::PeerResolver,
 }
 
 impl Gateway {
@@ -76,7 +76,7 @@ impl Gateway {
             audit,
             trusted_proxies: cfg.trusted_proxies.clone(),
             upstream_signer: cfg.upstream_signer.clone(),
-            upstream_block_private_ips: cfg.upstream_block_private_ips,
+            upstream_resolver: upstream::PeerResolver::new(cfg.upstream_block_private_ips),
         }
     }
 
@@ -220,9 +220,12 @@ impl Gateway {
         // Audited: nothing reaches the service unless the intent is written
         // (docs/concepts/audit.md#delivery).
         if let (Some(caller), true) = (caller, audited) {
-            ctx.audit = Some(AuditState::default());
-            ctx.audit_user_route = route.scope == Scope::User;
             let intent = audit_intent(session, ctx, matched, caller, request_id, &ip);
+            ctx.audit = Some(AuditState {
+                occurred_at: Some(intent.occurred_at.clone()),
+                ..AuditState::default()
+            });
+            ctx.audit_user_route = route.scope == Scope::User;
             if self.audit.write_intent(&intent).await.is_err() {
                 return response::write_rejection(
                     &self.cors(),
@@ -242,7 +245,7 @@ impl Gateway {
             forwarding,
             request_id,
             self.upstream_signer.as_ref(),
-            self.upstream_block_private_ips,
+            &self.upstream_resolver,
         )
         .await
         {

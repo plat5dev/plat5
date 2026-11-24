@@ -460,11 +460,11 @@ func (s *Store) Restore(ctx context.Context, nodeID string) (*Node, bool, error)
 	if err != nil {
 		return nil, false, op.Fail(err)
 	}
-	if err := recordNodeEvents(ctx, tx, lifecycle.TypeNodeRestored, restored); err != nil {
-		return nil, false, op.Fail(err)
-	}
 	out, err := scanNode(tx.QueryRow(ctx, `SELECT `+nodeColumns+` FROM nodes WHERE id = $1`, n.ID))
 	if err != nil {
+		return nil, false, op.Fail(err)
+	}
+	if err := recordNodeEvents(ctx, tx, lifecycle.TypeNodeRestored, restored); err != nil {
 		return nil, false, op.Fail(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -720,14 +720,16 @@ func (s *Store) purgeTree(ctx context.Context, rootID string, now time.Time) (in
 		return 0, err
 	}
 
-	if err := recordNodeEvents(ctx, tx, lifecycle.TypeNodePurged, purged); err != nil {
-		return 0, err
-	}
 	sort.Slice(removed, func(i, j int) bool { return removed[i].memberID < removed[j].memberID })
+	events := make([]lifecycle.Event, 0, len(purged)+len(removed))
+	for _, n := range purged {
+		events = append(events, lifecycle.NodeEvent(lifecycle.TypeNodePurged, n.kind, n.id, n.rootID))
+	}
 	for _, m := range removed {
-		if err := lifecycle.Record(ctx, tx, lifecycle.MemberEvent(lifecycle.TypeMemberRemoved, m.memberID, rootID, m.principal)); err != nil {
-			return 0, err
-		}
+		events = append(events, lifecycle.MemberEvent(lifecycle.TypeMemberRemoved, m.memberID, rootID, m.principal))
+	}
+	if err := lifecycle.RecordBatch(ctx, tx, events); err != nil {
+		return 0, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
@@ -855,12 +857,11 @@ func sortChanged(c []changedNode) {
 }
 
 func recordNodeEvents(ctx context.Context, tx pgx.Tx, typ string, nodes []changedNode) error {
-	for _, n := range nodes {
-		if err := lifecycle.Record(ctx, tx, lifecycle.NodeEvent(typ, n.kind, n.id, n.rootID)); err != nil {
-			return err
-		}
+	events := make([]lifecycle.Event, len(nodes))
+	for i, n := range nodes {
+		events[i] = lifecycle.NodeEvent(typ, n.kind, n.id, n.rootID)
 	}
-	return nil
+	return lifecycle.RecordBatch(ctx, tx, events)
 }
 
 // NormalizeDisplayName trims a display name and checks it is 1 to 128

@@ -102,10 +102,8 @@ func (w *write) event(e lifecycle.Event) {
 }
 
 func (w *write) commit(ctx context.Context) error {
-	for _, e := range w.events {
-		if err := lifecycle.Record(ctx, w.tx, e); err != nil {
-			return err
-		}
+	if err := lifecycle.RecordBatch(ctx, w.tx, w.events); err != nil {
+		return err
 	}
 	return w.tx.Commit(ctx)
 }

@@ -92,8 +92,9 @@ func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (
 		return out, nil
 	}
 
-	// 2. Nodes.
-	chain, err := s.resolveChain(ctx, in.Chain, in.AllowDeleted)
+	// 2–4. Resolve the node chain, the principal's active member in its root,
+	// and the member's counting roles along the chain in one query.
+	chain, memberID, roles, err := s.resolveAdmitChain(ctx, snap, p.id, in.Chain, in.AllowDeleted)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
@@ -101,22 +102,12 @@ func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (
 		op.OK("not found")
 		return out, nil
 	}
-
-	// 3. Member.
-	memberID, err := activeMemberID(ctx, s.pool, p.id, chain[0].ID)
-	if err != nil {
-		return nil, op.Fail(err)
-	}
 	if memberID == "" {
 		op.OK("no member")
 		return out, nil
 	}
 	out.Nodes, out.MemberID = chain, memberID
-
-	// 4. Permissions.
-	if out.Permissions, err = s.chainPermissions(ctx, snap, out); err != nil {
-		return nil, op.Fail(err)
-	}
+	out.Permissions = Resolve(snap, roles).List()
 	op.OK("admitted")
 	return out, nil
 }
@@ -252,57 +243,112 @@ func (s *Store) firstSignIn(ctx context.Context, issuer, subject, name string) (
 	return principalID, userID, status, w.commit(ctx)
 }
 
-// resolveChain resolves each ref under the previous node, by kind; the first
-// is a root. Nil when a node is missing, purged, or deleted, except a deleted
-// last node with allowDeleted.
-func (s *Store) resolveChain(ctx context.Context, chain []ChainRef, allowDeleted bool) ([]ChainNode, error) {
-	out := make([]ChainNode, 0, len(chain))
-	parent := ""
-	for i, c := range chain {
-		var nodeID, status string
-		var err error
-		if id.IsID(c.Ref) {
-			if !id.Valid(c.Ref) {
-				return nil, nil
-			}
-			err = s.pool.QueryRow(ctx, `
-				SELECT id, status FROM nodes WHERE id = $1 AND kind = $2 AND COALESCE(parent_id, '') = $3
-			`, c.Ref, c.Kind, parent).Scan(&nodeID, &status)
-		} else {
-			err = s.pool.QueryRow(ctx, `
-				SELECT id, status FROM nodes WHERE COALESCE(parent_id, '') = $3 AND kind = $2 AND slug = $1
-			`, c.Ref, c.Kind, parent).Scan(&nodeID, &status)
+// resolveAdmitChain resolves the node chain, the principal's active member in
+// the chain's root, and the roles of that member's counting bindings (direct
+// and group) on every node in the chain, in a single Postgres round-trip.
+// Returns chain == nil when any node is missing, purged, or deleted (except a
+// deleted last node with allowDeleted), and memberID == "" when the principal
+// is not an active member of the resolved root.
+func (s *Store) resolveAdmitChain(
+	ctx context.Context,
+	snap *feed.Snapshot,
+	principalID string,
+	refs []ChainRef,
+	allowDeleted bool,
+) ([]ChainNode, string, []string, error) {
+	n := len(refs)
+	pos := make([]int32, n)
+	kinds := make([]string, n)
+	refVals := make([]string, n)
+	isIDs := make([]bool, n)
+	for i, c := range refs {
+		isID := id.IsID(c.Ref)
+		if isID && !id.Valid(c.Ref) {
+			return nil, "", nil, nil
 		}
-		if dbx.IsNoRows(err) {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		if !liveInChain(status, i == len(chain)-1, allowDeleted) {
-			return nil, nil
-		}
-		out = append(out, ChainNode{Kind: c.Kind, ID: nodeID})
-		parent = nodeID
+		pos[i] = int32(i + 1)
+		kinds[i] = c.Kind
+		refVals[i] = c.Ref
+		isIDs[i] = isID
 	}
-	return out, nil
+	bindKinds, bindRoles := bindablePairs(snap)
+	if bindKinds == nil {
+		bindKinds, bindRoles = []string{}, []string{}
+	}
+
+	var nodeIDs []string
+	var memberID *string
+	var roles []string
+	err := s.pool.QueryRow(ctx, `
+		WITH RECURSIVE
+			reqs (pos, kind, ref, is_id) AS (
+				SELECT * FROM unnest($1::int[], $2::text[], $3::text[], $4::bool[])
+			),
+			chain (pos, kind, id) AS (
+				SELECT r.pos, n.kind, n.id
+				FROM reqs r
+				JOIN nodes n
+				  ON COALESCE(n.parent_id, '') = ''
+				 AND n.kind = r.kind
+				 AND ((r.is_id AND n.id = r.ref) OR (NOT r.is_id AND n.slug = r.ref))
+				WHERE r.pos = 1
+				  AND (n.status = 'active' OR (r.pos = $5 AND $6 AND n.status = 'deleted'))
+				UNION ALL
+				SELECT r.pos, n.kind, n.id
+				FROM chain c
+				JOIN reqs r ON r.pos = c.pos + 1
+				JOIN nodes n
+				  ON COALESCE(n.parent_id, '') = c.id
+				 AND n.kind = r.kind
+				 AND ((r.is_id AND n.id = r.ref) OR (NOT r.is_id AND n.slug = r.ref))
+				WHERE n.status = 'active' OR (r.pos = $5 AND $6 AND n.status = 'deleted')
+			),
+			resolved AS (
+				SELECT pos, kind, id
+				FROM chain
+				WHERE (SELECT count(*) FROM chain) = $5
+			),
+			member AS (
+				SELECT m.id
+				FROM members m
+				JOIN resolved r ON r.pos = 1 AND m.root_id = r.id
+				WHERE m.principal_id = $7 AND m.removed_at IS NULL
+			),
+			roles AS (
+				SELECT DISTINCT b.role
+				FROM resolved bn
+				JOIN member m ON true
+				JOIN bindings b ON b.node_id = bn.id AND (
+					b.member_id = m.id
+					OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = b.group_id AND gm.member_id = m.id)
+				)
+				WHERE `+counts("$8", "$9")+`
+			)
+		SELECT
+			(SELECT array_agg(id ORDER BY pos) FROM resolved),
+			(SELECT id FROM member),
+			(SELECT array_agg(role) FROM roles)
+	`, pos, kinds, refVals, isIDs, n, allowDeleted, principalID, bindKinds, bindRoles).Scan(&nodeIDs, &memberID, &roles)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if len(nodeIDs) != n {
+		return nil, "", nil, nil
+	}
+	out := make([]ChainNode, n)
+	for i, nodeID := range nodeIDs {
+		out[i] = ChainNode{Kind: refs[i].Kind, ID: nodeID}
+	}
+	if memberID == nil {
+		return out, "", nil, nil
+	}
+	return out, *memberID, roles, nil
 }
 
 // liveInChain is whether a node lets its chain resolve: live, or, with
 // allowDeleted, a deleted last node.
 func liveInChain(status string, last, allowDeleted bool) bool {
 	return status == nodes.StatusActive || (last && allowDeleted && status == nodes.StatusDeleted)
-}
-
-// chainPermissions is the union of the roles of the member's bindings that
-// count on the chain's nodes (docs/concepts/access.md#resolution). The chain
-// is live but for an allow_deleted last node, whose own bindings count.
-func (s *Store) chainPermissions(ctx context.Context, snap *feed.Snapshot, out *Admitted) ([]string, error) {
-	held, err := heldOnChains(ctx, s.pool, snap, []memberChain{{memberID: out.MemberID, nodes: out.Nodes}})
-	if err != nil {
-		return nil, err
-	}
-	return Resolve(snap, held[0]).List(), nil
 }
 
 // memberChain is one member on one resolved chain.
