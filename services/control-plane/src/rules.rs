@@ -22,6 +22,7 @@ pub fn check(config: &Config) -> Result<(), Vec<FieldError>> {
     // The rest reads the tree; with a broken tree its errors are noise.
     if errs.is_empty() {
         check_policies(config, &mut errs);
+        check_service_authorizers(config, &mut errs);
         let mut valid = Vec::new();
         for spec in &expand::specs(config) {
             if check_spec(config, spec, &mut errs) {
@@ -82,6 +83,14 @@ fn check_kinds(config: &Config, errs: &mut Vec<FieldError>) {
                 ));
             }
         }
+        if let Some(authz) = &kind.authorizer {
+            if !config.authorizers.contains_key(&authz.name) {
+                errs.push(FieldError::new(
+                    format!("kinds.{name}.authorizer"),
+                    format!("{:?} is not an authorizer in authorizers", authz.name),
+                ));
+            }
+        }
     }
     let mut reported = BTreeSet::new();
     for name in config.kinds.keys() {
@@ -104,6 +113,19 @@ fn check_kinds(config: &Config, errs: &mut Vec<FieldError>) {
             }
             cycle.push(parent);
             at = parent;
+        }
+    }
+}
+
+fn check_service_authorizers(config: &Config, errs: &mut Vec<FieldError>) {
+    for (name, service) in &config.services {
+        if let Some(resolved) = service.authorizer.as_ref().and_then(|a| a.resolve()) {
+            if !config.authorizers.contains_key(&resolved.name) {
+                errs.push(FieldError::new(
+                    format!("services.{name}.authorizer"),
+                    format!("{:?} is not an authorizer in authorizers", resolved.name),
+                ));
+            }
         }
     }
 }
@@ -378,6 +400,47 @@ fn check_spec(config: &Config, spec: &Spec, errs: &mut Vec<FieldError>) -> bool 
                     }
                 }
                 Scope::Kind(_) => {}
+            }
+        }
+        if let Some(authz) = &v.authorizer {
+            match &scope {
+                Scope::User | Scope::Public => err(
+                    errs,
+                    &authz.at,
+                    format!("only in a kind scope; this is {}", spec.scope),
+                ),
+                Scope::Kind(_) => {
+                    if !config.authorizers.contains_key(&authz.value.name) {
+                        err(
+                            errs,
+                            &authz.at,
+                            format!("{:?} is not an authorizer in authorizers", authz.value.name),
+                        );
+                    }
+                    if matches!(
+                        v.required.as_ref().map(|r| &r.value),
+                        Some(Required::Keyword(Keyword::AnyMember))
+                    ) && authz.value.action.is_none()
+                    {
+                        err(
+                            errs,
+                            &authz.at,
+                            "authorizer.action is required when required_permissions is any_member"
+                                .into(),
+                        );
+                    }
+                    if let Some(res) = &authz.value.resource {
+                        check_template(
+                            config,
+                            &spec.scope,
+                            &scope,
+                            &res.id,
+                            Some(&params),
+                            &format!("{}.resource.id", authz.at),
+                            errs,
+                        );
+                    }
+                }
             }
         }
         let (names, names_at): (Vec<String>, String) = match &v.rate_limit {
@@ -778,6 +841,103 @@ mod tests {
             json!({ "path": "/user/a", "methods": ["GET"], "allow_public": true }),
         );
         errors_at(c, &format!("{AT}.user.routes[0].allow_public"));
+    }
+
+    #[test]
+    fn authorizers() {
+        let mut c = base();
+        c["authorizers"] = json!({
+            "topaz": {
+                "url": "http://topaz:8383",
+                "timeout": "3s",
+                "cache_ttl": "5s",
+                "negative_cache_ttl": "1s",
+                "token_env": "TOPAZ_API_KEY"
+            }
+        });
+        c["kinds"]["project"]["authorizer"] = json!({ "name": "topaz", "mode": "or" });
+        c["services"] = json!({
+            "docs": {
+                "url": "http://docs:3000",
+                "authorizer": "topaz",
+                "scopes": {
+                    "project": {
+                        "upstream_prefix": "/projects/{project.id}",
+                        "routes": [
+                            {
+                                "path": "/docs",
+                                "methods": ["GET"],
+                                "required_permissions": ["project:read"]
+                            },
+                            {
+                                "path": "/docs/{doc_id}",
+                                "methods": {
+                                    "GET": {
+                                        "required_permissions": ["project:read"],
+                                        "authorizer": {
+                                            "name": "topaz",
+                                            "mode": "and",
+                                            "resource": { "type": "document", "id": "{doc_id}" }
+                                        }
+                                    },
+                                    "DELETE": {
+                                        "required_permissions": "any_member",
+                                        "authorizer": {
+                                            "name": "topaz",
+                                            "mode": "replace",
+                                            "resource": { "type": "document", "id": "{project.id}:{doc_id}" },
+                                            "action": "document:delete"
+                                        }
+                                    }
+                                }
+                            },
+                            {
+                                "path": "/summary",
+                                "methods": ["GET"],
+                                "required_permissions": ["project:read"],
+                                "authorizer": false
+                            }
+                        ]
+                    },
+                    "public": {
+                        "routes": [{ "path": "/health", "methods": ["GET"] }]
+                    }
+                }
+            }
+        });
+        run(c.clone()).unwrap();
+
+        // Unknown authorizer on kind, service, and route are refused.
+        let mut bad = base();
+        bad["kinds"]["project"]["authorizer"] = json!("missing");
+        errors_at(bad, "kinds.project.authorizer");
+
+        let mut bad = c.clone();
+        bad["services"]["docs"]["authorizer"] = json!("missing");
+        errors_at(bad, "services.docs.authorizer");
+
+        // Explicit authorizer on user or public scope is refused.
+        let mut bad = c.clone();
+        bad["services"]["docs"]["scopes"]["public"]["routes"][0]["authorizer"] = json!("topaz");
+        errors_at(bad, "services.docs.scopes.public.routes[0].authorizer");
+
+        // any_member with authorizer requires an explicit action.
+        let mut bad = c.clone();
+        bad["services"]["docs"]["scopes"]["project"]["routes"][1]["methods"]["DELETE"]
+            ["authorizer"] = json!({ "name": "topaz", "mode": "replace" });
+        errors_at(
+            bad,
+            "services.docs.scopes.project.routes[1].methods.DELETE.authorizer",
+        );
+
+        // Unknown placeholder in resource.id is refused.
+        let mut bad = c.clone();
+        bad["services"]["docs"]["scopes"]["project"]["routes"][1]["methods"]["GET"]["authorizer"]
+            ["resource"]["id"] = json!("{nope}");
+        errors_at(
+            bad,
+            "services.docs.scopes.project.routes[1].methods.GET.authorizer.resource.id",
+        );
     }
 
     #[test]

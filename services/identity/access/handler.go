@@ -76,19 +76,20 @@ type AdmitNode struct {
 // AdmitResponse has every field in every answer: the gateway reads a missing
 // one as identity failing.
 type AdmitResponse struct {
-	Valid           bool        `json:"valid"`
-	Principal       *string     `json:"principal"`
-	KeyID           *string     `json:"key_id"`
-	AllowedCIDRs    []string    `json:"allowed_cidrs"`
-	OrgAllowedCIDRs []string    `json:"org_allowed_cidrs"`
-	Nodes           []AdmitNode `json:"nodes"`
-	MemberID        *string     `json:"member_id"`
-	UserID          *string     `json:"user_id"`
-	Permissions     []string    `json:"permissions"`
-	RateLimitTier   *string     `json:"rate_limit_tier"`
-	ExpiresAt       *string     `json:"expires_at"`
-	InvalidationSeq int64       `json:"invalidation_seq"`
-	ConfigRevision  int64       `json:"config_revision"`
+	Valid            bool        `json:"valid"`
+	Principal        *string     `json:"principal"`
+	KeyID            *string     `json:"key_id"`
+	AllowedCIDRs     []string    `json:"allowed_cidrs"`
+	OrgAllowedCIDRs  []string    `json:"org_allowed_cidrs"`
+	Nodes            []AdmitNode `json:"nodes"`
+	MemberID         *string     `json:"member_id"`
+	UserID           *string     `json:"user_id"`
+	Permissions      []string    `json:"permissions"`
+	CredentialScopes *[]string   `json:"credential_scopes,omitempty"`
+	RateLimitTier    *string     `json:"rate_limit_tier"`
+	ExpiresAt        *string     `json:"expires_at"`
+	InvalidationSeq  int64       `json:"invalidation_seq"`
+	ConfigRevision   int64       `json:"config_revision"`
 }
 
 func (h *Handler) Admit(c fiber.Ctx) error {
@@ -127,19 +128,20 @@ func (h *Handler) Admit(c fiber.Ctx) error {
 
 func admitResponse(a *Admitted) AdmitResponse {
 	out := AdmitResponse{
-		Valid:           a.Valid,
-		Principal:       nullable(a.Principal),
-		KeyID:           nullable(a.KeyID),
-		AllowedCIDRs:    a.AllowedCIDRs,
-		OrgAllowedCIDRs: a.OrgAllowedCIDRs,
-		Nodes:           make([]AdmitNode, 0, len(a.Nodes)),
-		MemberID:        nullable(a.MemberID),
-		UserID:          nullable(a.UserID),
-		Permissions:     a.Permissions,
-		RateLimitTier:   a.RateLimitTier,
-		ExpiresAt:       httpx.FormatTimePtr(a.ExpiresAt),
-		InvalidationSeq: a.InvalidationSeq,
-		ConfigRevision:  a.ConfigRevision,
+		Valid:            a.Valid,
+		Principal:        nullable(a.Principal),
+		KeyID:            nullable(a.KeyID),
+		AllowedCIDRs:     a.AllowedCIDRs,
+		OrgAllowedCIDRs:  a.OrgAllowedCIDRs,
+		Nodes:            make([]AdmitNode, 0, len(a.Nodes)),
+		MemberID:         nullable(a.MemberID),
+		UserID:           nullable(a.UserID),
+		Permissions:      a.Permissions,
+		CredentialScopes: a.CredentialScopes,
+		RateLimitTier:    a.RateLimitTier,
+		ExpiresAt:        httpx.FormatTimePtr(a.ExpiresAt),
+		InvalidationSeq:  a.InvalidationSeq,
+		ConfigRevision:   a.ConfigRevision,
 	}
 	if out.AllowedCIDRs == nil {
 		out.AllowedCIDRs = []string{}

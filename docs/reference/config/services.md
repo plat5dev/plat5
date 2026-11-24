@@ -45,6 +45,7 @@ With the kinds in [kinds](kinds.md), the versions route is `GET` and `POST /orgs
 | `url` | `string` | Upstream, `http://host[:port]` (default port `80`) or `https://host[:port]` (default port `443`), no path or query, from the **gateway's** network view. Credentials in the URL, a port outside 1–65535, or any other form is **422** |
 | `timeouts` | `{connect, read}?` | Upstream timeouts, each a duration. One left out uses `defaults.timeouts` ([settings](settings.md)) |
 | `max_body_bytes` | `integer?` | The largest request body forwarded to this service. Larger is **413**. Omitted uses `defaults.max_body_bytes` |
+| `authorizer` | `string \| false \| {name, mode, resource, action}?` | Optional default external AuthZEN authorizer inherited by kind-scoped routes in this service ([authorizers](authorizers.md)) |
 | `scopes` | `map<scope, scope block>` | One block per scope: a kind name, `user` or `public`. At least one route in all |
 <!-- end generated -->
 
@@ -54,6 +55,7 @@ With the kinds in [kinds](kinds.md), the versions route is `GET` and `POST /orgs
 | Field | Type | Rule |
 |-------|------|------|
 | `upstream_prefix` | `string?` | Prepended to each route's path to make its default upstream. Placeholders with a dot only ([below](#upstream)) |
+| `authorizer` | `string \| false \| {name, mode, resource, action}?` | Optional external AuthZEN authorizer inherited by routes in this scope (kind scopes only, [authorizers](authorizers.md)) |
 | `routes` | `array<route>` | At least one |
 <!-- end generated -->
 
@@ -70,6 +72,7 @@ With the kinds in [kinds](kinds.md), the versions route is `GET` and `POST /orgs
 | `audit` | `bool?` | Omitted: the method default. Not in `public` |
 | `allow_deleted` | `bool?` | Default `false`. `true` lets the route's node be deleted (not purged); its own bindings are kept until purge and still count here, so whoever managed the node can restore it. For identity's restore route ([`reference/api/internal.md`](../api/internal.md#admit)). Kind scopes only |
 | `allow_public` | `bool?` | Default `false`. Kind scopes only, when this kind or an ancestor sets `allow_public: true`. Lets unauthenticated (`all_users`) and non-member authenticated (`all_authenticated_users`) callers reach the route when a public binding grants a required permission |
+| `authorizer` | `string \| false \| {name, mode, resource, action}?` | Optional external AuthZEN authorizer for this route, or `false` to opt out of a service/scope default (kind scopes only, [authorizers](authorizers.md)) |
 <!-- end generated -->
 
 Unknown fields are **422**.

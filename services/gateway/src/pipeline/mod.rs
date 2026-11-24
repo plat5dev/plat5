@@ -6,19 +6,25 @@
 mod checks;
 mod permissions;
 
+use std::collections::BTreeMap;
 use std::future::Future;
 
+use serde_json::{json, Value};
 use tracing::{info, warn};
 
 use crate::auth::admit::{
     Admit, AdmitAnswer, AdmitCache, AdmitCredential, AdmitRequest, ChainRef, NodeRef,
 };
 use crate::auth::{AuthError, AuthType, Presented};
+use crate::authorizer::{
+    Authorizer, AuthorizerCache, AuthorizerInvalidator, AuthorizerMode, AuthorizerSpec,
+    AuthzenAction, AuthzenRequest, AuthzenResource, AuthzenSubject, NoAuthorizer,
+};
 use crate::error::{ApiError, ErrorKind};
 use crate::kinds::id_header;
 use crate::metrics;
 use crate::rate_limit::{Bucket, RateLimitInfo, RateLimiter, Unavailable, Verdict};
-use crate::route_map::{BadParam, Matched, Route, Scope, Values};
+use crate::route_map::{BadParam, Matched, Required, Route, Scope, Values};
 
 pub use checks::{parse_checks, BadField, Check, Checked, MAX_CHECKS, MAX_CHECKS_BODY};
 pub use permissions::permitted;
@@ -73,6 +79,8 @@ pub struct Caller {
     pub user_id: Option<String>,
     /// The caller's permissions on the route's node. Log only: never sent on.
     pub permissions: Vec<String>,
+    /// Optional explicit credential scopes when a key or JWT is scope-narrowed.
+    pub credential_scopes: Option<Vec<String>>,
     /// Optional opaque rate-limit tier from the root node.
     pub rate_limit_tier: Option<String>,
 }
@@ -88,6 +96,7 @@ impl Caller {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Admitted {
     Public,
     Caller(Caller),
@@ -190,18 +199,36 @@ pub struct Forward {
     pub headers: Vec<(String, String)>,
 }
 
-pub struct Pipeline<A, C> {
+pub struct Pipeline<A, C, P = NoAuthorizer> {
     admit: AdmitCache<A>,
     counter: C,
     auth_failure: Limit,
+    authorizer: AuthorizerCache<P>,
 }
 
-impl<A: Admit, C: Counter> Pipeline<A, C> {
+impl<A: Admit, C: Counter> Pipeline<A, C, NoAuthorizer> {
     pub fn new(admit: AdmitCache<A>, counter: C, auth_failure: Limit) -> Self {
         Self {
             admit,
             counter,
             auth_failure,
+            authorizer: AuthorizerCache::new(NoAuthorizer, AuthorizerInvalidator::new()),
+        }
+    }
+}
+
+impl<A: Admit, C: Counter, P: Authorizer> Pipeline<A, C, P> {
+    pub fn with_authorizer(
+        admit: AdmitCache<A>,
+        counter: C,
+        auth_failure: Limit,
+        authorizer: AuthorizerCache<P>,
+    ) -> Self {
+        Self {
+            admit,
+            counter,
+            auth_failure,
+            authorizer,
         }
     }
 
@@ -214,6 +241,19 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         ip: &str,
         presented: Result<Presented, AuthError>,
         cred: &mut RequestCredential,
+    ) -> Result<Passed, Refused> {
+        self.decide_with_authorizers(matched, ip, presented, cred, &BTreeMap::new(), "")
+            .await
+    }
+
+    pub async fn decide_with_authorizers(
+        &self,
+        matched: &Matched,
+        ip: &str,
+        presented: Result<Presented, AuthError>,
+        cred: &mut RequestCredential,
+        authorizers: &BTreeMap<String, AuthorizerSpec>,
+        request_id: &str,
     ) -> Result<Passed, Refused> {
         let route = &matched.route;
         let admitted = match &route.scope {
@@ -228,18 +268,31 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         // its budgets. Counted with admit's 403, so the two stay one answer.
         // Anonymous callers on `allow_public` routes get a uniform 401 so
         // missing vs. non-public nodes never differ.
-        if let Err(denied) = authorize(route, &admitted) {
-            let base = match &admitted {
-                Admitted::Caller(c) if c.auth_type.is_none() => {
-                    unauthorized(AuthError::MissingAuthorization, None, route.scope.name())
+        if let Err(err) = self
+            .authorize_route(matched, &admitted, authorizers, ip, request_id)
+            .await
+        {
+            match err {
+                Rejection::Unavailable | Rejection::BadPathParam => {
+                    return Err(Refused {
+                        rejection: err,
+                        caller: caller(),
+                    });
                 }
-                _ => denied,
-            };
-            let rejection = self.count_refusal(ip).await.unwrap_or(base);
-            return Err(Refused {
-                rejection,
-                caller: caller(),
-            });
+                denied => {
+                    let base = match &admitted {
+                        Admitted::Caller(c) if c.auth_type.is_none() => {
+                            unauthorized(AuthError::MissingAuthorization, None, route.scope.name())
+                        }
+                        _ => denied,
+                    };
+                    let rejection = self.count_refusal(ip).await.unwrap_or(base);
+                    return Err(Refused {
+                        rejection,
+                        caller: caller(),
+                    });
+                }
+            }
         }
         let rate_limit = self
             .limit(route, ip, &admitted)
@@ -254,6 +307,57 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         })
     }
 
+    async fn authorize_route(
+        &self,
+        matched: &Matched,
+        admitted: &Admitted,
+        authorizers: &BTreeMap<String, AuthorizerSpec>,
+        ip: &str,
+        request_id: &str,
+    ) -> Result<(), Rejection> {
+        let route = &matched.route;
+        let Admitted::Caller(caller) = admitted else {
+            return Ok(());
+        };
+        let Some(ra) = route.authorizer.as_ref() else {
+            return authorize(route, admitted);
+        };
+        let builtin_ok = permitted(&route.required, &caller.permissions);
+        let actions = effective_actions(
+            route,
+            ra.action.as_deref(),
+            caller.credential_scopes.as_deref(),
+        );
+        if actions.is_empty() {
+            return Err(Rejection::Denied);
+        }
+        match ra.mode {
+            AuthorizerMode::And if !builtin_ok => return Err(Rejection::Denied),
+            AuthorizerMode::Or if builtin_ok => return Ok(()),
+            _ => {}
+        }
+        let spec = authorizers.get(&ra.name).ok_or(Rejection::Unavailable)?;
+        let reqs = build_authzen_requests(matched, caller, ra, &actions, ip, request_id)?;
+        let allowed = if reqs.len() == 1 {
+            self.authorizer
+                .evaluate(spec, &reqs[0], request_id)
+                .await
+                .map_err(|_| Rejection::Unavailable)?
+        } else {
+            let decisions = self
+                .authorizer
+                .evaluate_batch(spec, &reqs, "permit_on_first_permit", request_id)
+                .await
+                .map_err(|_| Rejection::Unavailable)?;
+            decisions.into_iter().any(|d| d)
+        };
+        if allowed {
+            Ok(())
+        } else {
+            Err(Rejection::Denied)
+        }
+    }
+
     async fn admit(
         &self,
         matched: &Matched,
@@ -262,6 +366,10 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         cred: &mut RequestCredential,
     ) -> Result<Caller, Rejection> {
         let route = &matched.route;
+        let external_can_grant = route
+            .authorizer
+            .as_ref()
+            .is_some_and(|a| matches!(a.mode, AuthorizerMode::Replace | AuthorizerMode::Or));
         if matches!(presented, Err(AuthError::MissingAuthorization)) && route.allow_public {
             let req = admit_request(matched, AdmitCredential::Anonymous(true));
             let answer = self
@@ -269,7 +377,10 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
                 .get(&req)
                 .await
                 .map_err(|_| Rejection::Unavailable)?;
-            if !answer.valid || !answer.allows_org_ip(ip) || answer.refused(&req) {
+            if !answer.valid
+                || !answer.allows_org_ip(ip)
+                || answer.refused_with_external(&req, external_can_grant)
+            {
                 let rejection =
                     unauthorized(AuthError::MissingAuthorization, None, route.scope.name());
                 return Err(self.count_refusal(ip).await.unwrap_or(rejection));
@@ -286,6 +397,7 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
                 member_id: None,
                 user_id: None,
                 permissions: answer.permissions.clone(),
+                credential_scopes: answer.credential_scopes.clone(),
                 rate_limit_tier: answer.rate_limit_tier.clone(),
             };
             cred.principal = Some(caller.principal.clone());
@@ -343,7 +455,7 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
             );
             return Err(self.count_refusal(ip).await.unwrap_or(Rejection::NotFound));
         }
-        if answer.refused(&req) {
+        if answer.refused_with_external(&req, external_can_grant) {
             return Err(self.count_refusal(ip).await.unwrap_or(Rejection::NotFound));
         }
         let caller = Caller {
@@ -355,6 +467,7 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
             member_id: answer.member_id.clone().filter(|_| !req.chain.is_empty()),
             user_id: answer.user_id.clone().filter(|_| req.chain.is_empty()),
             permissions: answer.permissions.clone(),
+            credential_scopes: answer.credential_scopes.clone(),
             rate_limit_tier: answer.rate_limit_tier.clone(),
         };
         cred.principal = Some(caller.principal.clone());
@@ -582,8 +695,136 @@ pub fn forward(matched: &Matched, admitted: &Admitted) -> Result<Forward, Reject
     Ok(Forward { path, headers })
 }
 
-/// The proxy's pipeline: identity over HTTP, Valkey counters.
-pub type GatewayPipeline = Pipeline<crate::auth::admit::HttpAdmit, RateLimiter>;
+/// Actions to evaluate against an external authorizer, intersected with any
+/// explicit credential scopes so a narrowed key or JWT can never be widened.
+pub(super) fn effective_actions(
+    route: &Route,
+    override_action: Option<&str>,
+    credential_scopes: Option<&[String]>,
+) -> Vec<String> {
+    let actions: Vec<String> = match override_action {
+        Some(a) => vec![a.to_string()],
+        None => match &route.required {
+            Required::AnyOf(list) => list.clone(),
+            Required::Nothing | Required::AnyMember => Vec::new(),
+        },
+    };
+    let Some(scopes) = credential_scopes else {
+        return actions;
+    };
+    if scopes.iter().any(|s| s == "*") {
+        return actions;
+    }
+    actions
+        .into_iter()
+        .filter(|a| scopes.iter().any(|s| s == a))
+        .collect()
+}
+
+pub(super) fn build_authzen_requests(
+    matched: &Matched,
+    caller: &Caller,
+    ra: &crate::authorizer::RouteAuthorizer,
+    actions: &[String],
+    ip: &str,
+    request_id: &str,
+) -> Result<Vec<AuthzenRequest>, Rejection> {
+    let route = &matched.route;
+    let nodes_slice: Vec<&str> = caller.nodes.iter().map(|n| n.id.as_str()).collect();
+    let (res_type, res_id) = match &ra.resource {
+        Some(res) => {
+            let filled = res
+                .id
+                .fill(Values {
+                    nodes: &nodes_slice,
+                    member_id: caller.member_id.as_deref(),
+                    user_id: caller.user_id.as_deref(),
+                    params: &matched.params,
+                })
+                .map_err(|BadParam| Rejection::BadPathParam)?;
+            (res.r#type.clone(), filled)
+        }
+        None => (
+            route.scope.name().to_string(),
+            caller.node_id().unwrap_or_default().to_string(),
+        ),
+    };
+
+    let (subj_type, subj_id) = if let Some(member_id) = &caller.member_id {
+        ("member".to_string(), member_id.clone())
+    } else if let Some(user_id) = &caller.user_id {
+        ("user".to_string(), user_id.clone())
+    } else {
+        ("anonymous".to_string(), String::new())
+    };
+    let mut subj_props = BTreeMap::new();
+    if !caller.principal.is_empty() {
+        subj_props.insert("principal".into(), json!(caller.principal));
+    }
+    if let Some(root_id) = caller.root_id() {
+        subj_props.insert("root_id".into(), json!(root_id));
+    }
+    let subject = AuthzenSubject {
+        r#type: subj_type,
+        id: subj_id,
+        properties: subj_props,
+    };
+
+    let mut res_props = BTreeMap::new();
+    if let Some(root_id) = caller.root_id() {
+        res_props.insert("root_id".into(), json!(root_id));
+    }
+    for n in &caller.nodes {
+        res_props.insert(format!("{}_id", n.kind), json!(n.id));
+    }
+    res_props.insert(
+        "nodes".into(),
+        Value::Array(
+            caller
+                .nodes
+                .iter()
+                .map(|n| json!({ "kind": n.kind, "id": n.id }))
+                .collect(),
+        ),
+    );
+    let resource = AuthzenResource {
+        r#type: res_type,
+        id: res_id,
+        properties: res_props,
+    };
+
+    let mut context = BTreeMap::new();
+    if !ip.is_empty() {
+        context.insert("client_ip".into(), json!(ip));
+    }
+    if !request_id.is_empty() {
+        context.insert("request_id".into(), json!(request_id));
+    }
+    if !matched.params.is_empty() {
+        context.insert("params".into(), json!(matched.params));
+    }
+
+    let mut action_props = BTreeMap::new();
+    action_props.insert("method".into(), json!(route.method));
+    action_props.insert("route".into(), json!(route.path));
+
+    Ok(actions
+        .iter()
+        .map(|name| AuthzenRequest {
+            subject: subject.clone(),
+            action: AuthzenAction {
+                name: name.clone(),
+                properties: action_props.clone(),
+            },
+            resource: resource.clone(),
+            context: context.clone(),
+        })
+        .collect())
+}
+
+/// The proxy's pipeline: identity over HTTP, Valkey counters, outbound AuthZEN PDP client.
+pub type GatewayPipeline =
+    Pipeline<crate::auth::admit::HttpAdmit, RateLimiter, crate::authorizer::HttpAuthorizer>;
 
 #[cfg(test)]
 mod tests;

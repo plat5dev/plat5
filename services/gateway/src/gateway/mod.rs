@@ -23,6 +23,7 @@ use crate::auth::admit::{AdmitCache, HttpAdmit};
 use crate::auth::invalidations::InvalidationTracker;
 use crate::auth::jwt::JwtValidatorState;
 use crate::auth::{AuthError, Authenticator, NameClaims};
+use crate::authorizer::{AuthorizerCache, AuthorizerInvalidator, HttpAuthorizer};
 use crate::client_ip::TrustedProxies;
 use crate::config::GatewayConfig;
 use crate::control_plane::Snapshot;
@@ -61,8 +62,13 @@ impl Gateway {
         limiter: RateLimiter,
         audit: Audit,
         invalidations: InvalidationTracker,
+        authorizer_invalidator: AuthorizerInvalidator,
     ) -> Self {
         let admit = HttpAdmit::new(&cfg.identity_internal_url, InternalHttpClient::new());
+        let authorizer = AuthorizerCache::new(
+            HttpAuthorizer::new(cfg.upstream_block_private_ips),
+            authorizer_invalidator,
+        );
         Self {
             authenticator: Authenticator::new(
                 jwt_validator,
@@ -71,7 +77,7 @@ impl Gateway {
                 cfg.auth_policy_claims.clone(),
             ),
             name_claims: cfg.auth_name_claims.clone(),
-            pipeline: Pipeline::new(
+            pipeline: Pipeline::with_authorizer(
                 AdmitCache::with_tracker(
                     admit,
                     cfg.admit_cache_ttl,
@@ -83,6 +89,7 @@ impl Gateway {
                     requests: cfg.rate_limit_auth_failure_requests,
                     window_seconds: cfg.rate_limit_auth_failure_window_seconds,
                 },
+                authorizer,
             ),
             snapshot,
             audit,
@@ -148,6 +155,7 @@ impl Gateway {
         &self,
         session: &mut Session,
         ctx: &mut GatewayContext,
+        snapshot: &Snapshot,
         matched: &Matched,
         request_id: &str,
     ) -> Result<bool> {
@@ -183,7 +191,14 @@ impl Gateway {
         };
         let decided = self
             .pipeline
-            .decide(matched, &ip, presented, &mut ctx.credential)
+            .decide_with_authorizers(
+                matched,
+                &ip,
+                presented,
+                &mut ctx.credential,
+                &snapshot.authorizers,
+                request_id,
+            )
             .await;
         let audited = self.audit.enabled() && route.audit;
         let passed = match decided {
@@ -355,13 +370,15 @@ impl Gateway {
         let host = request_host(session.req_header()).map(str::to_string);
         let checked = self
             .pipeline
-            .check_routes(
+            .check_routes_with_authorizers(
                 &snapshot.routes,
                 &snapshot.default_policies,
+                &snapshot.authorizers,
                 &credential,
                 &checks,
                 &ip,
                 host.as_deref(),
+                ctx.request_id.as_deref().unwrap_or(""),
             )
             .await;
         let checked = match checked {
@@ -725,7 +742,7 @@ impl ProxyHttp for Gateway {
             if let Some(done) = self.reject_oversized_content_length(session, ctx).await? {
                 return Ok(done);
             }
-            self.prepare_upstream(session, ctx, &matched, &request_id)
+            self.prepare_upstream(session, ctx, &snapshot, &matched, &request_id)
                 .await
         }
         .instrument(span)

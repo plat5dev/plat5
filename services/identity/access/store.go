@@ -37,6 +37,7 @@ type Store struct {
 	pool      *pgxpool.Pool
 	brand     string
 	registrar PersonRegistrar
+	pdp       PDP
 	tracer    trace.Tracer
 	now       func() time.Time
 }
@@ -48,9 +49,17 @@ func NewStore(pool *pgxpool.Pool, brand string, registrar PersonRegistrar) *Stor
 		pool:      pool,
 		brand:     brand,
 		registrar: registrar,
+		pdp:       NewHTTPPDP(),
 		tracer:    otel.Tracer(storeTracerName),
 		now:       time.Now,
 	}
+}
+
+// WithPDP returns a copy of the store using a custom AuthZEN PDP client, for tests.
+func (s *Store) WithPDP(pdp PDP) *Store {
+	c := *s
+	c.pdp = pdp
+	return &c
 }
 
 // WithClock returns a copy of the store using a custom clock, for tests.

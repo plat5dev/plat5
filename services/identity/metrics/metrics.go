@@ -17,14 +17,16 @@ const (
 )
 
 var (
-	initOnce        sync.Once
-	requestDuration *prometheus.HistogramVec
-	requestsTotal   *prometheus.CounterVec
-	nodeOps         *prometheus.CounterVec
-	evaluations     *prometheus.CounterVec
-	dbOpsTotal      *prometheus.CounterVec
-	dbOpsErrors     *prometheus.CounterVec
-	dbOpsDuration   *prometheus.HistogramVec
+	initOnce           sync.Once
+	requestDuration    *prometheus.HistogramVec
+	requestsTotal      *prometheus.CounterVec
+	nodeOps            *prometheus.CounterVec
+	evaluations        *prometheus.CounterVec
+	dbOpsTotal         *prometheus.CounterVec
+	dbOpsErrors        *prometheus.CounterVec
+	dbOpsDuration      *prometheus.HistogramVec
+	authorizerRequests *prometheus.CounterVec
+	authorizerDuration *prometheus.HistogramVec
 )
 
 // Init registers service metrics on the default Prometheus registry.
@@ -70,6 +72,17 @@ func Init() {
 			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
 		}, dbLabels)
 
+		authorizerRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "authorizer_requests_total",
+			Help: "Outbound AuthZEN PDP requests by authorizer, operation and result",
+		}, []string{"authorizer", "operation", "result"})
+
+		authorizerDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "authorizer_duration_seconds",
+			Help:    "Outbound AuthZEN PDP request latency in seconds",
+			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5},
+		}, []string{"authorizer", "operation"})
+
 		prometheus.MustRegister(
 			requestDuration,
 			requestsTotal,
@@ -78,6 +91,8 @@ func Init() {
 			dbOpsTotal,
 			dbOpsErrors,
 			dbOpsDuration,
+			authorizerRequests,
+			authorizerDuration,
 		)
 	})
 }
@@ -126,4 +141,10 @@ func RecordDBOperation(operation string, duration time.Duration, err error) {
 	if err != nil {
 		dbOpsErrors.WithLabelValues(labels...).Inc()
 	}
+}
+
+func RecordAuthorizerRequest(authorizer, operation, result string, duration time.Duration) {
+	Init()
+	authorizerRequests.WithLabelValues(authorizer, operation, result).Inc()
+	authorizerDuration.WithLabelValues(authorizer, operation).Observe(duration.Seconds())
 }

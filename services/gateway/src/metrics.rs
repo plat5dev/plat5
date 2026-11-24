@@ -150,6 +150,34 @@ pub static ADMIT_INVALIDATIONS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(||
     .expect("failed to register admit_invalidations_total")
 });
 
+pub static AUTHORIZER_REQUESTS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "authorizer_requests_total",
+        "Outbound AuthZEN PDP requests by authorizer, operation and result",
+        &["authorizer", "operation", "result"]
+    )
+    .expect("failed to register authorizer_requests_total")
+});
+
+pub static AUTHORIZER_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
+    let opts = histogram_opts!(
+        "authorizer_duration_seconds",
+        "Latency of outbound AuthZEN PDP requests",
+        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5]
+    );
+    register_histogram_vec!(opts, &["authorizer", "operation"])
+        .expect("failed to register authorizer_duration_seconds")
+});
+
+pub static AUTHORIZER_CACHE_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "authorizer_cache_total",
+        "Outbound AuthZEN decision cache lookups by authorizer and result (hit, miss)",
+        &["authorizer", "result"]
+    )
+    .expect("failed to register authorizer_cache_total")
+});
+
 // OTEL dual-write instruments. No-op until a MeterProvider is installed.
 struct OtelInstruments {
     http_requests: Counter<u64>,
@@ -166,6 +194,9 @@ struct OtelInstruments {
     rate_limit_fail_open: Counter<u64>,
     valkey_up: Gauge<i64>,
     admit_invalidations: Counter<u64>,
+    authorizer_requests: Counter<u64>,
+    authorizer_duration: Histogram<f64>,
+    authorizer_cache: Counter<u64>,
 }
 
 static OTEL: LazyLock<OtelInstruments> = LazyLock::new(|| {
@@ -241,6 +272,21 @@ static OTEL: LazyLock<OtelInstruments> = LazyLock::new(|| {
         admit_invalidations: meter
             .u64_counter("admit_invalidations_total")
             .with_description("Admit cache invalidations received from identity, by scope")
+            .build(),
+        authorizer_requests: meter
+            .u64_counter("authorizer_requests_total")
+            .with_description("Outbound AuthZEN PDP requests by authorizer, operation and result")
+            .build(),
+        authorizer_duration: meter
+            .f64_histogram("authorizer_duration_seconds")
+            .with_description("Latency of outbound AuthZEN PDP requests")
+            .with_boundaries(vec![
+                0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5,
+            ])
+            .build(),
+        authorizer_cache: meter
+            .u64_counter("authorizer_cache_total")
+            .with_description("Outbound AuthZEN decision cache lookups by authorizer and result")
             .build(),
     }
 });
@@ -373,4 +419,38 @@ pub fn record_admit_invalidation(scope: &str) {
     ADMIT_INVALIDATIONS_TOTAL.with_label_values(&[scope]).inc();
     OTEL.admit_invalidations
         .add(1, &[KeyValue::new("scope", scope.to_string())]);
+}
+
+pub fn record_authorizer_request(
+    authorizer: &str,
+    operation: &str,
+    result: &str,
+    duration_secs: f64,
+) {
+    AUTHORIZER_REQUESTS_TOTAL
+        .with_label_values(&[authorizer, operation, result])
+        .inc();
+    AUTHORIZER_DURATION_SECONDS
+        .with_label_values(&[authorizer, operation])
+        .observe(duration_secs);
+    let attrs = [
+        KeyValue::new("authorizer", authorizer.to_string()),
+        KeyValue::new("operation", operation.to_string()),
+        KeyValue::new("result", result.to_string()),
+    ];
+    OTEL.authorizer_requests.add(1, &attrs);
+    OTEL.authorizer_duration.record(duration_secs, &attrs[..2]);
+}
+
+pub fn record_authorizer_cache(authorizer: &str, result: &str) {
+    AUTHORIZER_CACHE_TOTAL
+        .with_label_values(&[authorizer, result])
+        .inc();
+    OTEL.authorizer_cache.add(
+        1,
+        &[
+            KeyValue::new("authorizer", authorizer.to_string()),
+            KeyValue::new("result", result.to_string()),
+        ],
+    );
 }

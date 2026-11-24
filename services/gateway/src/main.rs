@@ -85,6 +85,7 @@ fn main() {
 
     let invalidations = auth::invalidations::InvalidationTracker::new(cfg.admit_cache_ttl);
     invalidations.spawn_follower(cfg.identity_internal_url.clone(), rt.handle());
+    let authorizer_invalidator = gateway::authorizer::AuthorizerInvalidator::new();
 
     let mut my_proxy = pingora::proxy::http_proxy_service(
         &my_server.configuration,
@@ -95,12 +96,17 @@ fn main() {
             limiter.clone(),
             audit,
             invalidations,
+            authorizer_invalidator.clone(),
         ),
     );
     my_proxy.add_tcp(&format!("0.0.0.0:{}", cfg.port));
     my_server.add_service(my_proxy);
 
-    let health_state = Arc::new(health::HealthState::new(jwt_validator, limiter));
+    let health_state = Arc::new(health::HealthState::new(
+        jwt_validator,
+        limiter,
+        authorizer_invalidator,
+    ));
     let health_server = health::new_health_server(health_state);
     let mut health_service =
         pingora::services::listening::Service::new("Health and Metrics".to_string(), health_server);

@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+use crate::authorizer::{AuthorizerSpec, RouteAuthorizer, RouteAuthorizerDoc, RouteResource};
 use crate::duration::parse_duration;
 use crate::kinds::{resolve_host, Kinds, RootHost};
 
@@ -45,6 +46,8 @@ pub struct RouteDoc {
     pub allow_deleted: bool,
     #[serde(default)]
     pub allow_public: bool,
+    #[serde(default)]
+    pub authorizer: Option<RouteAuthorizerDoc>,
 }
 
 /// A list of permissions, or `"any_member"`.
@@ -185,6 +188,7 @@ pub struct Route {
     pub audit: bool,
     pub allow_deleted: bool,
     pub allow_public: bool,
+    pub authorizer: Option<RouteAuthorizer>,
     pub timeouts: Timeouts,
     pub max_body_bytes: u64,
 }
@@ -227,6 +231,15 @@ impl RouteMap {
         rate_limits: &BTreeMap<String, PolicyDoc>,
         kinds: &Kinds,
     ) -> Result<Self, String> {
+        Self::from_feed_with_authorizers(services, rate_limits, kinds, &BTreeMap::new())
+    }
+
+    pub fn from_feed_with_authorizers(
+        services: &BTreeMap<String, ServiceDoc>,
+        rate_limits: &BTreeMap<String, PolicyDoc>,
+        kinds: &Kinds,
+        authorizers: &BTreeMap<String, AuthorizerSpec>,
+    ) -> Result<Self, String> {
         let mut by_method: HashMap<String, Vec<CompiledRoute>> = HashMap::new();
         for (name, service) in services {
             let timeouts = Timeouts {
@@ -236,13 +249,21 @@ impl RouteMap {
                     .ok_or_else(|| format!("services.{name}.timeouts.read"))?,
             };
             for (i, doc) in service.routes.iter().enumerate() {
-                let compiled = build_route(name, service, timeouts, doc, rate_limits, kinds)
-                    .map_err(|e| {
-                        format!(
-                            "services.{name}.routes[{i}] ({} {}): {e}",
-                            doc.method, doc.path
-                        )
-                    })?;
+                let compiled = build_route(
+                    name,
+                    service,
+                    timeouts,
+                    doc,
+                    rate_limits,
+                    kinds,
+                    authorizers,
+                )
+                .map_err(|e| {
+                    format!(
+                        "services.{name}.routes[{i}] ({} {}): {e}",
+                        doc.method, doc.path
+                    )
+                })?;
                 by_method
                     .entry(doc.method.clone())
                     .or_default()
@@ -352,6 +373,7 @@ fn build_route(
     doc: &RouteDoc,
     rate_limits: &BTreeMap<String, PolicyDoc>,
     kinds: &Kinds,
+    authorizers: &BTreeMap<String, AuthorizerSpec>,
 ) -> Result<CompiledRoute, String> {
     let scope = match doc.scope.as_str() {
         "public" => Scope::Public,
@@ -413,6 +435,34 @@ fn build_route(
         })
         .collect::<Result<Vec<_>, String>>()?;
 
+    let authorizer = match &doc.authorizer {
+        None => None,
+        Some(a) => {
+            if !authorizers.contains_key(&a.name) {
+                return Err(format!("authorizer {:?} is not in authorizers", a.name));
+            }
+            if matches!(required, Required::AnyMember) && a.action.is_none() {
+                return Err(
+                    "authorizer.action is required when required_permissions is any_member"
+                        .to_string(),
+                );
+            }
+            let resource = match &a.resource {
+                None => None,
+                Some(r) => Some(RouteResource {
+                    r#type: r.r#type.clone(),
+                    id: Upstream::compile(&r.id, &scope, &chain, &own_params)?,
+                }),
+            };
+            Some(RouteAuthorizer {
+                name: a.name.clone(),
+                mode: a.mode,
+                resource,
+                action: a.action.clone(),
+            })
+        }
+    };
+
     Ok(CompiledRoute {
         segments,
         route: Arc::new(Route {
@@ -428,6 +478,7 @@ fn build_route(
             audit: doc.audit,
             allow_deleted: doc.allow_deleted,
             allow_public: doc.allow_public,
+            authorizer,
             timeouts,
             max_body_bytes: service.max_body_bytes,
         }),

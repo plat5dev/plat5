@@ -33,6 +33,10 @@ pub const FILES: &[(&str, &str)] = &[
         include_str!(concat!(env!("PLAT5_SCHEMA_DIR"), "/roles.json")),
     ),
     (
+        "authorizers.json",
+        include_str!(concat!(env!("PLAT5_SCHEMA_DIR"), "/authorizers.json")),
+    ),
+    (
         "rate_limits.json",
         include_str!(concat!(env!("PLAT5_SCHEMA_DIR"), "/rate_limits.json")),
     ),

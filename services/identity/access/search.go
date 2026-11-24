@@ -2,11 +2,14 @@ package access
 
 import (
 	"context"
+	stderrors "errors"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
+	"github.com/plat5dev/plat5/identity/internal/httpx"
 )
 
 const (
@@ -88,21 +91,40 @@ func (s *Store) SearchResources(ctx context.Context, snap *feed.Snapshot, in Res
 		return &ResourceSearchResult{}, nil
 	}
 
-	kinds, roles := grantingPairs(snap, in.Permission)
-	if kinds == nil {
-		kinds, roles = []string{}, []string{}
-	}
-
+	targetKind, _ := snap.Kind(in.Kind)
 	now := s.now().UTC()
 	// Short-circuit: a binding on the scope or an ancestor granting the
-	// permission covers every live node of in.Kind at or below scopeID.
+	// permission covers every live node of in.Kind at or below scopeID,
+	// unless an external authorizer in `replace` or `and` mode can restrict it.
 	held, heldCustom, err := heldOnChains(ctx, tx, snap, []memberChain{{memberID: in.MemberID, nodes: chain}}, now)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
-	if ResolveWithCustom(snap, held[0], heldCustom[0]).Has(in.Permission) {
+	scopeBuiltinAll := ResolveWithCustom(snap, held[0], heldCustom[0]).Has(in.Permission)
+	if targetKind.Authorizer != nil {
+		if targetKind.Authorizer.Mode == feed.AuthorizerModeOr && scopeBuiltinAll {
+			op.OK("all")
+			return &ResourceSearchResult{All: true}, nil
+		}
+		res, err := s.searchWithAuthorizer(ctx, tx, snap, in, scopeID, memberRoot, limit, targetKind.Authorizer, scopeBuiltinAll)
+		if err != nil {
+			if stderrors.Is(err, ErrPDPUnavailable) {
+				httpx.LogError(ctx, "external authorizer resource search failed", err, errors.KindNetwork)
+				return nil, errors.ServiceUnavailableError()
+			}
+			return nil, op.Fail(err)
+		}
+		op.OK("ok")
+		return res, nil
+	}
+	if scopeBuiltinAll {
 		op.OK("all")
 		return &ResourceSearchResult{All: true}, nil
+	}
+
+	kinds, roles := grantingPairs(snap, in.Permission)
+	if kinds == nil {
+		kinds, roles = []string{}, []string{}
 	}
 
 	// Sparse case: anchor on the member's granting bindings (direct and via
@@ -160,6 +182,129 @@ func (s *Store) SearchResources(ctx context.Context, snap *feed.Snapshot, in Res
 	}
 	op.OK("ok")
 	return res, nil
+}
+
+// searchWithAuthorizer walks live candidate nodes of in.Kind under scopeID in
+// id order, combining built-in RBAC with the kind's external AuthZEN PDP in
+// batches of up to MaxPDPBatch.
+func (s *Store) searchWithAuthorizer(
+	ctx context.Context,
+	tx pgx.Tx,
+	snap *feed.Snapshot,
+	in ResourceSearch,
+	scopeID, rootID string,
+	limit int,
+	ka *feed.KindAuthorizer,
+	scopeBuiltinAll bool,
+) (*ResourceSearchResult, error) {
+	authz, ok := snap.Authorizers[ka.Name]
+	if !ok || s.pdp == nil {
+		return nil, ErrPDPUnavailable
+	}
+	batchSize := min(max(limit+1, 100), MaxPDPBatch)
+	after := in.After
+	var out []string
+	for {
+		rows, err := tx.Query(ctx, `
+			SELECT n.id
+			FROM node_ancestors a
+			JOIN nodes n ON n.id = a.node_id
+			WHERE a.ancestor_id = $1
+			  AND n.kind = $2
+			  AND n.status = 'active'
+			  AND n.id > $3
+			  AND NOT EXISTS (
+			      SELECT 1 FROM node_ancestors da JOIN nodes dn ON dn.id = da.ancestor_id
+			      WHERE da.node_id = n.id AND dn.status <> 'active'
+			  )
+			ORDER BY n.id ASC
+			LIMIT $4
+		`, scopeID, in.Kind, after, batchSize)
+		if err != nil {
+			return nil, err
+		}
+		cands, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return nil, err
+		}
+		if len(cands) == 0 {
+			return &ResourceSearchResult{NodeIDs: out}, nil
+		}
+
+		builtin := make([]bool, len(cands))
+		if ka.Mode != feed.AuthorizerModeReplace {
+			if scopeBuiltinAll {
+				for i := range builtin {
+					builtin[i] = true
+				}
+			} else {
+				chains, err := liveChains(ctx, tx, cands)
+				if err != nil {
+					return nil, err
+				}
+				pairs := make([]memberChain, len(cands))
+				for i, cid := range cands {
+					pairs[i] = memberChain{memberID: in.MemberID, nodes: chains[cid]}
+				}
+				held, heldCustom, err := heldOnChains(ctx, tx, snap, pairs, s.now().UTC())
+				if err != nil {
+					return nil, err
+				}
+				for i := range cands {
+					builtin[i] = ResolveWithCustom(snap, held[i], heldCustom[i]).Has(in.Permission)
+				}
+			}
+		}
+
+		decisions := append([]bool(nil), builtin...)
+		var extIdx []int
+		var reqs []AuthzenRequest
+		for i, cid := range cands {
+			if !NeedsExternal(ka.Mode, builtin[i]) {
+				continue
+			}
+			extIdx = append(extIdx, i)
+			reqs = append(reqs, AuthzenRequest{
+				Subject: AuthzenSubject{
+					Type:       "member",
+					ID:         in.MemberID,
+					Properties: map[string]any{"root_id": rootID},
+				},
+				Action: AuthzenAction{Name: in.Permission},
+				Resource: AuthzenResource{
+					Type:       in.Kind,
+					ID:         cid,
+					Properties: map[string]any{"root_id": rootID},
+				},
+			})
+		}
+		if len(reqs) > 0 {
+			extRes, err := s.pdp.EvaluateBatch(ctx, authz, reqs)
+			if err != nil {
+				return nil, err
+			}
+			for j, idx := range extIdx {
+				decisions[idx] = extRes[j]
+			}
+		}
+		for i, cid := range cands {
+			if !decisions[i] {
+				continue
+			}
+			out = append(out, cid)
+			if len(out) > limit {
+				trimmed := out[:limit]
+				return &ResourceSearchResult{
+					NodeIDs:   trimmed,
+					NextToken: trimmed[len(trimmed)-1],
+				}, nil
+			}
+		}
+		if len(cands) < batchSize {
+			return &ResourceSearchResult{NodeIDs: out}, nil
+		}
+		after = cands[len(cands)-1]
+	}
 }
 
 // kindAtOrBelow is whether kind exists in snap and is scopeKind or a

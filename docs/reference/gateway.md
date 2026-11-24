@@ -128,7 +128,13 @@ TLS terminates at the edge or load balancer, not the gateway. Services behind th
 ## Upstream security
 
 - **Request signing.** Set `UPSTREAM_SIGNING_KEY` (and optionally `UPSTREAM_SIGNING_KEY_ID`) to attach an Ed25519 `X-Plat5-Signature` header to every forwarded request ([`reference/headers.md`](headers.md#upstream-request-signing)), so services outside the private network can verify requests came from the gateway.
-- **Private-IP blocking.** Set `UPSTREAM_BLOCK_PRIVATE_IPS=true` to refuse upstream connections whose DNS-resolved address is loopback, private (RFC1918 / IPv6 ULA), link-local (`169.254.0.0/16` / `fe80::/10`), CGNAT (`100.64.0.0/10`), unspecified, or an IPv4-mapped IPv6 address pointing to any of those. Blocked requests return **502** `SERVICE_UNAVAILABLE`.
+- **Private-IP blocking.** Set `UPSTREAM_BLOCK_PRIVATE_IPS=true` to refuse upstream connections (and outbound AuthZEN PDP calls) whose DNS-resolved address is loopback, private (RFC1918 / IPv6 ULA), link-local (`169.254.0.0/16` / `fe80::/10`), CGNAT (`100.64.0.0/10`), unspecified, or an IPv4-mapped IPv6 address pointing to any of those. Blocked upstream requests return **502** `SERVICE_UNAVAILABLE`; blocked authorizer calls return **503** `SERVICE_UNAVAILABLE`.
+
+## Outbound authorizers
+
+Routes in a kind scope may attach an external OpenID AuthZEN 1.0 PDP ([`reference/config/authorizers.md`](config/authorizers.md)) in `replace`, `and`, or `or` mode, with optional record-level `resource: { type, id }` templates. Decisions fail closed (**503** on timeout/error), respect credential scope narrowing, and batch per authorizer during `POST /access/routes`.
+
+When `cache_ttl` or `negative_cache_ttl` is non-zero, active invalidation is served on `INTERNAL_PORT` at `POST /internal/authorizer-cache/invalidate` with `{ "authorizer"?, "subject_id"?, "resource_type"?, "resource_id"?, "all"? }`.
 
 ## CORS
 

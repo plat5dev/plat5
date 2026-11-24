@@ -1,0 +1,44 @@
+# Minimal local Topaz config for Plat5 AuthZEN 1.0 interop testing.
+# Plaintext HTTP on the private compose network:
+#   :8383 — Authorizer & OpenID AuthZEN 1.0 (/access/v1/evaluation, /access/v1/evaluations)
+#   :9393 — Directory v3 REST API (/api/v3/directory/manifest, /object, /relation)
+version: 3
+
+logging:
+  prod: false
+  log_level: info
+
+directory_config:
+  edge_directory:
+    db_path: /tmp/topaz-directory.db
+    seed_metadata: false
+
+api:
+  health:
+    listen_address: 0.0.0.0:9494
+  reader:
+    grpc:
+      listen_address: 0.0.0.0:9292
+    gateway:
+      listen_address: 0.0.0.0:9393
+      allowed_origins: ["*"]
+  writer:
+    grpc:
+      listen_address: 0.0.0.0:9292
+    gateway:
+      listen_address: 0.0.0.0:9393
+      allowed_origins: ["*"]
+  model:
+    grpc:
+      listen_address: 0.0.0.0:9292
+    gateway:
+      listen_address: 0.0.0.0:9393
+      allowed_origins: ["*"]
+  authorizer:
+    needs:
+      - reader
+    grpc:
+      listen_address: 0.0.0.0:8282
+    gateway:
+      listen_address: 0.0.0.0:8383
+      allowed_origins: ["*"]

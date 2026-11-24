@@ -2,12 +2,15 @@ package members
 
 import (
 	"context"
+	stderrors "errors"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/plat5dev/plat5/identity/access"
+	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
+	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/internal/id"
 	"github.com/plat5dev/plat5/identity/lifecycle"
 	"github.com/plat5dev/plat5/identity/metrics"
@@ -304,6 +307,61 @@ func (s *Store) visible(ctx context.Context, snap *feed.Snapshot, cands []*liste
 	for _, c := range cands {
 		k, ok := snap.Kind(c.Kind)
 		out[c.ID] = ok && access.ResolveWithCustom(snap, held[c.ID], heldCustom[c.ID]).Has(k.ListPermission)
+	}
+
+	// Delegate candidates whose kind declares an external AuthZEN authorizer,
+	// batched per authorizer.
+	type extCand struct {
+		nodeID string
+		req    access.AuthzenRequest
+	}
+	pending := map[string][]extCand{}
+	for _, c := range cands {
+		k, ok := snap.Kind(c.Kind)
+		if !ok || k.Authorizer == nil {
+			continue
+		}
+		if !access.NeedsExternal(k.Authorizer.Mode, out[c.ID]) {
+			continue
+		}
+		pending[k.Authorizer.Name] = append(pending[k.Authorizer.Name], extCand{
+			nodeID: c.ID,
+			req: access.AuthzenRequest{
+				Subject: access.AuthzenSubject{
+					Type:       "member",
+					ID:         c.memberID,
+					Properties: map[string]any{"root_id": c.RootID},
+				},
+				Action: access.AuthzenAction{Name: k.ListPermission},
+				Resource: access.AuthzenResource{
+					Type:       c.Kind,
+					ID:         c.ID,
+					Properties: map[string]any{"root_id": c.RootID},
+				},
+			},
+		})
+	}
+	for name, items := range pending {
+		authz, ok := snap.Authorizers[name]
+		if !ok || s.pdp == nil {
+			httpx.LogError(ctx, "external authorizer not configured", access.ErrPDPUnavailable, errors.KindNetwork)
+			return nil, errors.ServiceUnavailableError()
+		}
+		reqs := make([]access.AuthzenRequest, len(items))
+		for i, it := range items {
+			reqs[i] = it.req
+		}
+		decisions, err := s.pdp.EvaluateBatch(ctx, authz, reqs)
+		if err != nil {
+			if stderrors.Is(err, access.ErrPDPUnavailable) {
+				httpx.LogError(ctx, "external authorizer list filtering failed", err, errors.KindNetwork)
+				return nil, errors.ServiceUnavailableError()
+			}
+			return nil, err
+		}
+		for i, it := range items {
+			out[it.nodeID] = decisions[i]
+		}
 	}
 	return out, nil
 }

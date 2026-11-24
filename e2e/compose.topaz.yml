@@ -1,0 +1,17 @@
+# Opt-in Topaz PDP overlay for real OpenID AuthZEN 1.0 interop tests.
+#
+# Run:
+#   ADMIT_CACHE_TTL=1s ADMIT_NEGATIVE_CACHE_TTL=1s \
+#     docker compose -f compose/docker-compose.yml -f e2e/compose.yml -f e2e/compose.topaz.yml up -d --build
+#   cd e2e && PLAT5_E2E=1 TOPAZ_URL=http://topaz:8383 go test -run TestOutboundAuthZENTopaz -v
+services:
+  topaz:
+    image: ghcr.io/aserto-dev/topaz:latest
+    command: ["run", "--config-file", "/config/config.yaml"]
+    ports:
+      - "127.0.0.1:8383:8383"
+      - "127.0.0.1:9393:9393"
+    volumes:
+      - ./topaz/config.yaml:/config/config.yaml:ro
+    networks:
+      - plat5

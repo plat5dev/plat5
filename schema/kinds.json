@@ -61,6 +61,11 @@
           "description": "Optional. Allows public principal bindings (`all_users`, `all_authenticated_users`) on nodes of this kind and `allow_public: true` routes in or below its scope. Default `false`.",
           "type": "boolean",
           "default": false
+        },
+        "authorizer": {
+          "title": "authorizer",
+          "description": "Optional. External AuthZEN authorizer used for `list_permission` filtering and identity `/access/v1/*` evaluation on nodes of this kind ([authorizers](authorizers.md)).",
+          "$ref": "authorizers.json#/$defs/kind_authorizer"
         }
       }
     }

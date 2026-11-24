@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/plat5dev/plat5/identity/access"
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
@@ -60,6 +61,7 @@ type Store struct {
 	pool         *pgxpool.Pool
 	nodes        *nodes.Store
 	brand        string
+	pdp          access.PDP
 	tracer       trace.Tracer
 	now          func() time.Time
 	onInvalidate func(context.Context)
@@ -71,9 +73,17 @@ func NewStore(pool *pgxpool.Pool, nodeStore *nodes.Store, brand string) *Store {
 		pool:   pool,
 		nodes:  nodeStore,
 		brand:  brand,
+		pdp:    access.NewHTTPPDP(),
 		tracer: otel.Tracer(storeTracerName),
 		now:    time.Now,
 	}
+}
+
+// WithPDP returns a copy of the store using a custom AuthZEN PDP client, for tests.
+func (s *Store) WithPDP(pdp access.PDP) *Store {
+	c := *s
+	c.pdp = pdp
+	return &c
 }
 
 // WithInvalidationNotifier registers a callback invoked after a transaction

@@ -37,6 +37,11 @@
           "description": "The largest request body forwarded to this service. Larger is **413**. Omitted uses `defaults.max_body_bytes`.",
           "$ref": "settings.json#/$defs/max_body_bytes"
         },
+        "authorizer": {
+          "title": "authorizer",
+          "description": "Optional default external AuthZEN authorizer inherited by kind-scoped routes in this service ([authorizers](authorizers.md)).",
+          "$ref": "authorizers.json#/$defs/route_authorizer"
+        },
         "scopes": {
           "title": "scopes",
           "description": "One block per scope: a kind name, `user` or `public`. At least one route in all.",
@@ -63,6 +68,11 @@
           "title": "upstream_prefix",
           "description": "Prepended to each route's path to make its default upstream. Placeholders with a dot only ([below](#upstream)).",
           "$ref": "#/$defs/upstream"
+        },
+        "authorizer": {
+          "title": "authorizer",
+          "description": "Optional external AuthZEN authorizer inherited by routes in this scope (kind scopes only, [authorizers](authorizers.md)).",
+          "$ref": "authorizers.json#/$defs/route_authorizer"
         },
         "routes": {
           "title": "routes",
@@ -128,6 +138,11 @@
           "title": "allow_public",
           "description": "Default `false`. Kind scopes only, when this kind or an ancestor sets `allow_public: true`. Lets unauthenticated (`all_users`) and non-member authenticated (`all_authenticated_users`) callers reach the route when a public binding grants a required permission.",
           "type": "boolean"
+        },
+        "authorizer": {
+          "title": "authorizer",
+          "description": "Optional external AuthZEN authorizer for this route, or `false` to opt out of a service/scope default (kind scopes only, [authorizers](authorizers.md)).",
+          "$ref": "authorizers.json#/$defs/route_authorizer"
         }
       }
     },
@@ -152,7 +167,8 @@
         "required_permissions": { "$ref": "#/$defs/required_permissions" },
         "rate_limit": { "$ref": "#/$defs/rate_limit" },
         "audit": { "type": "boolean" },
-        "allow_public": { "type": "boolean" }
+        "allow_public": { "type": "boolean" },
+        "authorizer": { "$ref": "authorizers.json#/$defs/route_authorizer" }
       }
     },
     "required_permissions": {

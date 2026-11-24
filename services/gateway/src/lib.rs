@@ -1,5 +1,6 @@
 pub mod audit;
 pub mod auth;
+pub mod authorizer;
 pub mod client_ip;
 pub mod config;
 pub mod control_plane;

@@ -4,11 +4,17 @@
 //! by a second rule. Rate limits, body limits, the fill and the upstream aren't
 //! evaluated.
 
+use std::collections::BTreeMap;
+
 use serde_json::Value;
 
-use super::{permitted, tightest, unauthorized, Counter, Pipeline, Rejection};
+use super::{
+    build_authzen_requests, effective_actions, permitted, tightest, unauthorized, Caller, Counter,
+    Pipeline, Rejection,
+};
 use crate::auth::admit::{credential_hash, Admit, AdmitCredential};
-use crate::auth::{AuthError, Presented};
+use crate::auth::{AuthError, AuthType, Presented};
+use crate::authorizer::{Authorizer, AuthorizerMode, AuthorizerSpec, AuthzenRequest};
 use crate::rate_limit::{Bucket, RateLimitInfo, Unavailable, Verdict};
 use crate::route_map::{Policy, RouteMap, Scope};
 
@@ -125,6 +131,11 @@ enum CheckRefused {
     Unavailable,
 }
 
+enum CheckOutcome {
+    Decided(bool),
+    External(String, Vec<AuthzenRequest>),
+}
+
 /// The call's answer: each check's `allowed`, in order, and the tightest
 /// default policy's numbers for the response.
 #[derive(Debug, PartialEq, Eq)]
@@ -133,7 +144,7 @@ pub struct Checked {
     pub rate_limit: Option<RateLimitInfo>,
 }
 
-impl<A: Admit, C: Counter> Pipeline<A, C> {
+impl<A: Admit, C: Counter, P: Authorizer> Pipeline<A, C, P> {
     /// The call's credential, as a route's: missing, malformed or a JWT refused
     /// locally is a **401**, JWKS not loaded a **503**.
     pub fn check_credential(
@@ -163,19 +174,60 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         ip: &str,
         host: Option<&str>,
     ) -> Result<Checked, Rejection> {
+        self.check_routes_with_authorizers(
+            routes,
+            defaults,
+            &BTreeMap::new(),
+            credential,
+            checks,
+            ip,
+            host,
+            "",
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn check_routes_with_authorizers(
+        &self,
+        routes: &RouteMap,
+        defaults: &[Policy],
+        authorizers: &BTreeMap<String, AuthorizerSpec>,
+        credential: &AdmitCredential,
+        checks: &[Check],
+        ip: &str,
+        host: Option<&str>,
+        request_id: &str,
+    ) -> Result<Checked, Rejection> {
         let rate_limit = self.limit_credential(defaults, credential).await?;
-        let mut allowed = Vec::with_capacity(checks.len());
-        for check in checks {
+        let mut allowed = vec![false; checks.len()];
+        let mut pending: BTreeMap<String, Vec<(usize, AuthzenRequest)>> = BTreeMap::new();
+
+        for (idx, check) in checks.iter().enumerate() {
             match self
-                .check(routes, &check.method, &check.path, credential, ip, host)
+                .check_one(
+                    routes,
+                    &check.method,
+                    &check.path,
+                    credential,
+                    ip,
+                    host,
+                    request_id,
+                )
                 .await
             {
-                Ok(answer) => allowed.push(answer),
+                Ok(CheckOutcome::Decided(ans)) => allowed[idx] = ans,
+                Ok(CheckOutcome::External(name, reqs)) => {
+                    let group = pending.entry(name).or_default();
+                    for req in reqs {
+                        group.push((idx, req));
+                    }
+                }
                 Err(CheckRefused::Unavailable) => return Err(Rejection::Unavailable),
                 Err(CheckRefused::Credential) => {
                     let auth_type = match credential {
-                        AdmitCredential::Credential(_) => Some(crate::auth::AuthType::ApiKey),
-                        AdmitCredential::Idp { .. } => Some(crate::auth::AuthType::Jwt),
+                        AdmitCredential::Credential(_) => Some(AuthType::ApiKey),
+                        AdmitCredential::Idp { .. } => Some(AuthType::Jwt),
                         AdmitCredential::Anonymous(_) => None,
                     };
                     let rejection =
@@ -184,6 +236,22 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
                 }
             }
         }
+
+        for (name, items) in pending {
+            let spec = authorizers.get(&name).ok_or(Rejection::Unavailable)?;
+            let reqs: Vec<AuthzenRequest> = items.iter().map(|(_, r)| r.clone()).collect();
+            let decisions = self
+                .authorizer
+                .evaluate_batch(spec, &reqs, "execute_all", request_id)
+                .await
+                .map_err(|_| Rejection::Unavailable)?;
+            for ((idx, _), decision) in items.into_iter().zip(decisions) {
+                if decision {
+                    allowed[idx] = true;
+                }
+            }
+        }
+
         Ok(Checked {
             allowed,
             rate_limit,
@@ -191,8 +259,10 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
     }
 
     /// One check: what the pipeline would decide for this credential, method
-    /// and path, up to the permission check.
-    async fn check(
+    /// and path, up to the permission check. Returns `External` when an external
+    /// AuthZEN PDP needs to decide (so multiple checks can be batched per PDP).
+    #[allow(clippy::too_many_arguments)]
+    async fn check_one(
         &self,
         routes: &RouteMap,
         method: &str,
@@ -200,15 +270,20 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         credential: &AdmitCredential,
         ip: &str,
         host: Option<&str>,
-    ) -> Result<bool, CheckRefused> {
+        request_id: &str,
+    ) -> Result<CheckOutcome, CheckRefused> {
         // Match. No route, or not this method: what a request would get as a 404.
         let Some(matched) = routes.find_route_with_host(path, method, host) else {
-            return Ok(false);
+            return Ok(CheckOutcome::Decided(false));
         };
         let route = &matched.route;
         if route.scope == Scope::Public {
-            return Ok(true);
+            return Ok(CheckOutcome::Decided(true));
         }
+        let external_can_grant = route
+            .authorizer
+            .as_ref()
+            .is_some_and(|a| matches!(a.mode, AuthorizerMode::Replace | AuthorizerMode::Or));
         // Admit, from the cache, with the route's chain (empty on a user route)
         // and allow_deleted.
         let req = super::admit_request(&matched, credential.clone());
@@ -224,14 +299,51 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
         if super::service_account_on_user_route(&req, &answer)
             || super::scoped_key_on_user_route(&req, &answer)
         {
-            return Ok(false);
+            return Ok(CheckOutcome::Decided(false));
         }
         // Org IP allowlist, missing node, or not in tree: what a request would get as a 403.
-        if !answer.allows_org_ip(ip) || answer.refused(&req) {
-            return Ok(false);
+        if !answer.allows_org_ip(ip) || answer.refused_with_external(&req, external_can_grant) {
+            return Ok(CheckOutcome::Decided(false));
         }
-        // The permission check. A user route requires nothing of a person.
-        Ok(permitted(&route.required, &answer.permissions))
+        let builtin_ok = permitted(&route.required, &answer.permissions);
+        let Some(ra) = route.authorizer.as_ref() else {
+            return Ok(CheckOutcome::Decided(builtin_ok));
+        };
+        let actions = effective_actions(
+            route,
+            ra.action.as_deref(),
+            answer.credential_scopes.as_deref(),
+        );
+        if actions.is_empty() {
+            return Ok(CheckOutcome::Decided(false));
+        }
+        match ra.mode {
+            AuthorizerMode::And if !builtin_ok => return Ok(CheckOutcome::Decided(false)),
+            AuthorizerMode::Or if builtin_ok => return Ok(CheckOutcome::Decided(true)),
+            _ => {}
+        }
+        let auth_type = match credential {
+            AdmitCredential::Credential(_) => Some(AuthType::ApiKey),
+            AdmitCredential::Idp { .. } => Some(AuthType::Jwt),
+            AdmitCredential::Anonymous(_) => None,
+        };
+        let caller = Caller {
+            auth_type,
+            key_id: answer.key_id.clone(),
+            kid: None,
+            principal: answer.principal.clone().unwrap_or_default(),
+            nodes: answer.nodes.clone(),
+            member_id: answer.member_id.clone().filter(|_| !req.chain.is_empty()),
+            user_id: answer.user_id.clone().filter(|_| req.chain.is_empty()),
+            permissions: answer.permissions.clone(),
+            credential_scopes: answer.credential_scopes.clone(),
+            rate_limit_tier: answer.rate_limit_tier.clone(),
+        };
+        let reqs = match build_authzen_requests(&matched, &caller, ra, &actions, ip, request_id) {
+            Ok(reqs) => reqs,
+            Err(_) => return Ok(CheckOutcome::Decided(false)),
+        };
+        Ok(CheckOutcome::External(ra.name.clone(), reqs))
     }
 
     /// One count of each policy `defaults.rate_limit` names, per credential,

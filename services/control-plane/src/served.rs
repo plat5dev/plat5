@@ -45,16 +45,22 @@ pub fn feed_body(revision: i64, body: &Value) -> Value {
 }
 
 /// The body of `GET /internal/gateway`: kinds, every service's routes
-/// expanded, rate limits, `defaults.rate_limit`, and CORS, with defaults filled
-/// in.
+/// expanded, rate limits, `defaults.rate_limit`, CORS, and optional
+/// `authorizers`, with defaults filled in.
 pub fn gateway_body(c: &Config) -> Value {
-    json!({
-        "kinds": c.kinds,
-        "services": expand::expand(c),
-        "rate_limits": c.rate_limits,
-        "defaults": { "rate_limit": c.defaults.rate_limit },
-        "cors": c.cors,
-    })
+    let mut out = Map::new();
+    out.insert("kinds".into(), json!(c.kinds));
+    out.insert("services".into(), json!(expand::expand(c)));
+    out.insert("rate_limits".into(), json!(c.rate_limits));
+    out.insert(
+        "defaults".into(),
+        json!({ "rate_limit": c.defaults.rate_limit }),
+    );
+    out.insert("cors".into(), json!(c.cors));
+    if !c.authorizers.is_empty() {
+        out.insert("authorizers".into(), json!(c.authorizers));
+    }
+    Value::Object(out)
 }
 
 /// One entry in the identity feed's derived permission catalog.
@@ -141,6 +147,9 @@ pub fn identity_body(c: &Config) -> Value {
     if c.custom_roles || !c.permissions.is_empty() {
         out.insert("permissions".into(), json!(permission_catalog(c)));
     }
+    if !c.authorizers.is_empty() {
+        out.insert("authorizers".into(), json!(c.authorizers));
+    }
     Value::Object(out)
 }
 
@@ -212,5 +221,46 @@ mod tests {
         );
         assert!(identity["permissions"].get("organization:read").is_some());
         assert!(identity["permissions"].get("*").is_none());
+
+        // Authorizers expand into both feeds with defaults, and inherit service -> route -> verb (with false opt-out).
+        let mut authz = base();
+        authz["authorizers"] = json!({
+            "topaz": { "url": "http://topaz:8383", "token_env": "TOPAZ_API_KEY" }
+        });
+        authz["kinds"]["project"]["authorizer"] = json!("topaz");
+        authz["services"]["e10s"]["authorizer"] = json!({ "name": "topaz", "mode": "or" });
+        authz["services"]["e10s"]["scopes"]["project"]["routes"][0]["methods"]["POST"]
+            ["authorizer"] = json!(false);
+        let gw = gateway_feed(6, &authz);
+        assert_eq!(
+            gw["authorizers"]["topaz"],
+            json!({
+                "url": "http://topaz:8383",
+                "timeout": "2s",
+                "cache_ttl": "0s",
+                "negative_cache_ttl": "0s",
+                "token_env": "TOPAZ_API_KEY"
+            })
+        );
+        let id = identity_feed(6, &authz);
+        assert_eq!(id["authorizers"], gw["authorizers"]);
+        assert_eq!(
+            id["kinds"]["project"]["authorizer"],
+            json!({ "name": "topaz", "mode": "replace" })
+        );
+        let routes = gw["services"]["e10s"]["routes"].as_array().unwrap();
+        let get_plans = routes
+            .iter()
+            .find(|r| r["method"] == "GET" && r["scope"] == "project")
+            .unwrap();
+        assert_eq!(
+            get_plans["authorizer"],
+            json!({ "name": "topaz", "mode": "or" })
+        );
+        let post_plans = routes
+            .iter()
+            .find(|r| r["method"] == "POST" && r["scope"] == "project")
+            .unwrap();
+        assert!(post_plans.get("authorizer").is_none());
     }
 }

@@ -87,6 +87,8 @@ pub struct AdmitAnswer {
     #[serde(deserialize_with = "Option::deserialize")]
     pub user_id: Option<String>,
     pub permissions: Vec<String>,
+    #[serde(default)]
+    pub credential_scopes: Option<Vec<String>>,
     #[serde(deserialize_with = "Option::deserialize")]
     pub rate_limit_tier: Option<String>,
     #[serde(deserialize_with = "Option::deserialize")]
@@ -99,6 +101,13 @@ impl AdmitAnswer {
     /// A refusal: an invalid credential, or on a tree route no member (and on
     /// `allow_public` routes, no public node/permission admission either).
     pub fn refused(&self, req: &AdmitRequest) -> bool {
+        self.refused_with_external(req, false)
+    }
+
+    /// Like [`Self::refused`], except when `external_can_grant` is true on an
+    /// `allow_public` route a resolved node chain is forwarded to the external
+    /// AuthZEN PDP even if built-in public bindings are empty.
+    pub fn refused_with_external(&self, req: &AdmitRequest, external_can_grant: bool) -> bool {
         if !self.valid {
             return true;
         }
@@ -109,7 +118,10 @@ impl AdmitAnswer {
             return false;
         }
         if req.allow_public {
-            return self.nodes.is_empty() || self.permissions.is_empty();
+            if self.nodes.is_empty() {
+                return true;
+            }
+            return !external_can_grant && self.permissions.is_empty();
         }
         true
     }
@@ -634,6 +646,7 @@ pub mod tests {
             member_id: Some(MEMBER.into()),
             user_id: None,
             permissions: permissions.iter().map(|p| p.to_string()).collect(),
+            credential_scopes: None,
             rate_limit_tier: None,
             expires_at: None,
             invalidation_seq: 0,
@@ -653,6 +666,7 @@ pub mod tests {
             member_id: None,
             user_id: Some(USER.into()),
             permissions: vec![],
+            credential_scopes: None,
             rate_limit_tier: None,
             expires_at: None,
             invalidation_seq: 0,
@@ -672,6 +686,7 @@ pub mod tests {
             member_id: None,
             user_id: None,
             permissions: vec![],
+            credential_scopes: None,
             rate_limit_tier: None,
             expires_at: None,
             invalidation_seq: 0,
@@ -691,6 +706,7 @@ pub mod tests {
             member_id: None,
             user_id: None,
             permissions: vec![],
+            credential_scopes: None,
             rate_limit_tier: None,
             expires_at: None,
             invalidation_seq: 0,
@@ -710,6 +726,7 @@ pub mod tests {
             member_id: None,
             user_id: None,
             permissions: vec![],
+            credential_scopes: None,
             rate_limit_tier: None,
             expires_at: None,
             invalidation_seq: 0,
@@ -728,6 +745,7 @@ pub mod tests {
             member_id: None,
             user_id: None,
             permissions: vec![],
+            credential_scopes: None,
             rate_limit_tier: None,
             expires_at: None,
             invalidation_seq: 0,

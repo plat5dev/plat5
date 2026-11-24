@@ -13,7 +13,7 @@ use serde::Serialize;
 
 use crate::config::{
     audited_by_default, is_false, Config, FilledTimeouts, MethodConfig, RateLimit, Required,
-    Service, PUBLIC_SCOPE, VERBS,
+    ResolvedRouteAuthorizer, RouteAuthorizerConfig, Service, PUBLIC_SCOPE, USER_SCOPE, VERBS,
 };
 
 /// One route as the gateway matches it.
@@ -30,6 +30,8 @@ pub struct ExpandedRoute {
     pub allow_deleted: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub allow_public: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorizer: Option<ResolvedRouteAuthorizer>,
     /// The field path of the route's path, for errors.
     #[serde(skip)]
     pub at: String,
@@ -82,6 +84,7 @@ pub struct VerbSpec {
     pub rate_limit: Option<At<RateLimit>>,
     pub audit: Option<At<bool>>,
     pub allow_public: Option<At<bool>>,
+    pub authorizer: Option<At<ResolvedRouteAuthorizer>>,
 }
 
 pub fn verb_order(method: &str) -> usize {
@@ -102,12 +105,28 @@ pub fn specs(config: &Config) -> Vec<Spec> {
 
 fn route_specs(name: &str, service: &Service) -> Vec<Spec> {
     let mut out = Vec::new();
+    let service_authorizer = service
+        .authorizer
+        .as_ref()
+        .map(|a| at(a.clone(), format!("services.{name}.authorizer")));
     for (scope_name, scope) in &service.scopes {
         let scope_at = format!("services.{name}.scopes.{scope_name}");
         let prefix = scope
             .upstream_prefix
             .clone()
             .map(|p| at(p, format!("{scope_at}.upstream_prefix")));
+        // A service-level authorizer only inherits into kind scopes (not user/public),
+        // whereas an explicit authorizer on a user/public scope is kept so rules.rs rejects it.
+        let inherited_service_authz = if scope_name == USER_SCOPE || scope_name == PUBLIC_SCOPE {
+            None
+        } else {
+            service_authorizer.clone()
+        };
+        let scope_authorizer = scope
+            .authorizer
+            .as_ref()
+            .map(|a| at(a.clone(), format!("{scope_at}.authorizer")))
+            .or(inherited_service_authz);
         for (i, route) in scope.routes.iter().enumerate() {
             let route_at = format!("{scope_at}.routes[{i}]");
             let route_level = MethodConfig {
@@ -115,17 +134,34 @@ fn route_specs(name: &str, service: &Service) -> Vec<Spec> {
                 rate_limit: route.rate_limit.clone(),
                 audit: route.audit,
                 allow_public: route.allow_public,
+                authorizer: route.authorizer.clone(),
             };
             let mut verbs: Vec<VerbSpec> = match &route.methods {
                 crate::config::Methods::List(list) => list
                     .iter()
-                    .map(|m| verb_spec(m, &route_at, &route_level, None, &route_at))
+                    .map(|m| {
+                        verb_spec(
+                            m,
+                            &route_at,
+                            &route_level,
+                            None,
+                            &route_at,
+                            scope_authorizer.as_ref(),
+                        )
+                    })
                     .collect(),
                 crate::config::Methods::Map(map) => map
                     .iter()
                     .map(|(m, cfg)| {
                         let verb_at = format!("{route_at}.methods.{m}");
-                        verb_spec(m, &route_at, &route_level, cfg.as_ref(), &verb_at)
+                        verb_spec(
+                            m,
+                            &route_at,
+                            &route_level,
+                            cfg.as_ref(),
+                            &verb_at,
+                            scope_authorizer.as_ref(),
+                        )
                     })
                     .collect(),
             };
@@ -157,9 +193,21 @@ fn verb_spec(
     route: &MethodConfig,
     verb: Option<&MethodConfig>,
     verb_at: &str,
+    scope_authorizer: Option<&At<RouteAuthorizerConfig>>,
 ) -> VerbSpec {
     let field = |f: &str, own: bool| format!("{}.{f}", if own { verb_at } else { route_at });
     let own = verb.cloned().unwrap_or_default();
+    let raw_authorizer = own
+        .authorizer
+        .map(|a| at(a, field("authorizer", true)))
+        .or_else(|| {
+            route
+                .authorizer
+                .clone()
+                .map(|a| at(a, field("authorizer", false)))
+        })
+        .or_else(|| scope_authorizer.cloned());
+    let authorizer = raw_authorizer.and_then(|a| a.value.resolve().map(|r| at(r, a.at)));
     VerbSpec {
         method: method.to_string(),
         missing_at: format!("{verb_at}.required_permissions"),
@@ -193,6 +241,7 @@ fn verb_spec(
                     .allow_public
                     .map(|a| at(a, field("allow_public", false)))
             }),
+        authorizer,
     }
 }
 
@@ -263,6 +312,11 @@ pub fn expand_spec(config: &Config, spec: &Spec) -> Vec<ExpandedRoute> {
                     .map_or(audited_by_default(&v.method), |a| a.value),
             allow_deleted: spec.allow_deleted.as_ref().is_some_and(|a| a.value),
             allow_public: v.allow_public.as_ref().is_some_and(|a| a.value),
+            authorizer: if kind_scope {
+                v.authorizer.as_ref().map(|a| a.value.clone())
+            } else {
+                None
+            },
             at: spec.path_at.clone(),
         })
         .collect()

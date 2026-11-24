@@ -1840,3 +1840,350 @@ async fn host_based_route_checks_resolve_against_request_host() {
         .unwrap();
     assert_eq!(checked.allowed, vec![true, true, true, false]);
 }
+
+#[derive(Default)]
+struct FakePdp {
+    seen: Mutex<Vec<crate::authorizer::AuthzenRequest>>,
+    batch_calls: std::sync::atomic::AtomicUsize,
+    allow: Mutex<std::collections::HashSet<(String, String, String)>>,
+    down: std::sync::atomic::AtomicBool,
+}
+
+impl FakePdp {
+    fn grant(&self, action: &str, res_type: &str, res_id: &str) {
+        self.allow
+            .lock()
+            .unwrap()
+            .insert((action.into(), res_type.into(), res_id.into()));
+    }
+
+    fn set_down(&self, down: bool) {
+        self.down.store(down, Ordering::SeqCst);
+    }
+
+    fn calls(&self) -> usize {
+        self.seen.lock().unwrap().len()
+    }
+}
+
+impl crate::authorizer::Authorizer for FakePdp {
+    async fn evaluate(
+        &self,
+        _spec: &crate::authorizer::AuthorizerSpec,
+        req: &crate::authorizer::AuthzenRequest,
+        _request_id: &str,
+    ) -> Result<bool, crate::authorizer::AuthorizerUnavailable> {
+        self.seen.lock().unwrap().push(req.clone());
+        if self.down.load(Ordering::SeqCst) {
+            return Err(crate::authorizer::AuthorizerUnavailable("down".into()));
+        }
+        let key = (
+            req.action.name.clone(),
+            req.resource.r#type.clone(),
+            req.resource.id.clone(),
+        );
+        Ok(self.allow.lock().unwrap().contains(&key))
+    }
+
+    async fn evaluate_batch(
+        &self,
+        _spec: &crate::authorizer::AuthorizerSpec,
+        reqs: &[crate::authorizer::AuthzenRequest],
+        _semantic: &str,
+        _request_id: &str,
+    ) -> Result<Vec<bool>, crate::authorizer::AuthorizerUnavailable> {
+        self.batch_calls.fetch_add(1, Ordering::SeqCst);
+        self.seen.lock().unwrap().extend(reqs.iter().cloned());
+        if self.down.load(Ordering::SeqCst) {
+            return Err(crate::authorizer::AuthorizerUnavailable("down".into()));
+        }
+        let allow = self.allow.lock().unwrap();
+        Ok(reqs
+            .iter()
+            .map(|r| {
+                allow.contains(&(
+                    r.action.name.clone(),
+                    r.resource.r#type.clone(),
+                    r.resource.id.clone(),
+                ))
+            })
+            .collect())
+    }
+}
+
+fn authorizer_snapshot() -> Snapshot {
+    let mut feed = fixture("catalog/gateway-feed.json");
+    feed["authorizers"] = json!({
+        "topaz": {
+            "url": "http://topaz:8383",
+            "timeout": "2s",
+            "cache_ttl": "0s",
+            "negative_cache_ttl": "0s"
+        }
+    });
+    feed["services"]["docs"] = json!({
+        "url": "http://docs:3000",
+        "timeouts": { "connect": "2s", "read": "30s" },
+        "max_body_bytes": 1048576,
+        "routes": [
+            {
+                "path": "/orgs/{organization}/projects/{project}/docs/{doc_id}",
+                "method": "GET",
+                "scope": "project",
+                "upstream": "/projects/{project.id}/docs/{doc_id}",
+                "required_permissions": ["docs:read"],
+                "rate_limit": [],
+                "audit": false,
+                "allow_deleted": false,
+                "authorizer": {
+                    "name": "topaz",
+                    "mode": "or",
+                    "resource": { "type": "document", "id": "{doc_id}" }
+                }
+            },
+            {
+                "path": "/orgs/{organization}/projects/{project}/docs/{doc_id}",
+                "method": "PATCH",
+                "scope": "project",
+                "upstream": "/projects/{project.id}/docs/{doc_id}",
+                "required_permissions": ["docs:write"],
+                "rate_limit": [],
+                "audit": false,
+                "allow_deleted": false,
+                "authorizer": {
+                    "name": "topaz",
+                    "mode": "and",
+                    "resource": { "type": "document", "id": "{doc_id}" }
+                }
+            },
+            {
+                "path": "/orgs/{organization}/projects/{project}/docs/{doc_id}",
+                "method": "DELETE",
+                "scope": "project",
+                "upstream": "/projects/{project.id}/docs/{doc_id}",
+                "required_permissions": ["docs:delete"],
+                "rate_limit": [],
+                "audit": false,
+                "allow_deleted": false,
+                "authorizer": {
+                    "name": "topaz",
+                    "mode": "replace",
+                    "resource": { "type": "document", "id": "{doc_id}" }
+                }
+            }
+        ]
+    });
+    build(feed).unwrap()
+}
+
+#[tokio::test]
+async fn outbound_authzen_modes_record_resources_scopes_and_fail_closed() {
+    let snapshot = authorizer_snapshot();
+    let get_doc = snapshot
+        .routes
+        .find_route("/orgs/acme/projects/web/docs/doc-42", "GET")
+        .unwrap();
+    let patch_doc = snapshot
+        .routes
+        .find_route("/orgs/acme/projects/web/docs/doc-42", "PATCH")
+        .unwrap();
+    let delete_doc = snapshot
+        .routes
+        .find_route("/orgs/acme/projects/web/docs/doc-42", "DELETE")
+        .unwrap();
+
+    // 1. `or` mode: built-in permission short-circuits without calling PDP.
+    let pdp = Arc::new(FakePdp::default());
+    let counter = Arc::new(MemCounter::default());
+    let p = Pipeline::with_authorizer(
+        AdmitCache::new(
+            Arc::new(FakeAdmit::new(Ok(project(&["docs:read"])))),
+            Duration::from_secs(60),
+            Duration::from_secs(10),
+        ),
+        counter.clone(),
+        AUTH_FAILURE,
+        crate::authorizer::AuthorizerCache::new(
+            pdp.clone(),
+            crate::authorizer::AuthorizerInvalidator::new(),
+        ),
+    );
+    let mut cred = RequestCredential::default();
+    p.decide_with_authorizers(
+        &get_doc,
+        IP,
+        Ok(jwt()),
+        &mut cred,
+        &snapshot.authorizers,
+        "r1",
+    )
+    .await
+    .unwrap();
+    assert_eq!(pdp.calls(), 0);
+
+    // 2. `or` mode: built-in lacks permission -> falls through to PDP with record resource {document, doc-42}.
+    let pdp = Arc::new(FakePdp::default());
+    pdp.grant("docs:read", "document", "doc-42");
+    let p = Pipeline::with_authorizer(
+        AdmitCache::new(
+            Arc::new(FakeAdmit::new(Ok(project(&[])))),
+            Duration::from_secs(60),
+            Duration::from_secs(10),
+        ),
+        Arc::new(MemCounter::default()),
+        AUTH_FAILURE,
+        crate::authorizer::AuthorizerCache::new(
+            pdp.clone(),
+            crate::authorizer::AuthorizerInvalidator::new(),
+        ),
+    );
+    let mut cred = RequestCredential::default();
+    p.decide_with_authorizers(
+        &get_doc,
+        IP,
+        Ok(jwt()),
+        &mut cred,
+        &snapshot.authorizers,
+        "r2",
+    )
+    .await
+    .unwrap();
+    assert_eq!(pdp.calls(), 1);
+    let sent = pdp.seen.lock().unwrap()[0].clone();
+    assert_eq!(sent.subject.r#type, "member");
+    assert_eq!(sent.subject.id, MEMBER);
+    assert_eq!(sent.action.name, "docs:read");
+    assert_eq!(sent.resource.r#type, "document");
+    assert_eq!(sent.resource.id, "doc-42");
+
+    // 3. `and` mode: built-in deny short-circuits without calling PDP; built-in allow requires PDP too.
+    let pdp = Arc::new(FakePdp::default());
+    pdp.grant("docs:write", "document", "doc-42");
+    let p_no_builtin = Pipeline::with_authorizer(
+        AdmitCache::new(
+            Arc::new(FakeAdmit::new(Ok(project(&[])))),
+            Duration::from_secs(60),
+            Duration::from_secs(10),
+        ),
+        Arc::new(MemCounter::default()),
+        AUTH_FAILURE,
+        crate::authorizer::AuthorizerCache::new(
+            pdp.clone(),
+            crate::authorizer::AuthorizerInvalidator::new(),
+        ),
+    );
+    let err = p_no_builtin
+        .decide_with_authorizers(
+            &patch_doc,
+            IP,
+            Ok(jwt()),
+            &mut RequestCredential::default(),
+            &snapshot.authorizers,
+            "r3",
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.rejection, Rejection::Denied);
+    assert_eq!(pdp.calls(), 0);
+
+    // 4. `replace` mode: PDP deny overrides built-in `*`, and credential scopes cannot be widened by PDP.
+    let pdp = Arc::new(FakePdp::default());
+    let mut scoped_admin = project(&["*"]);
+    scoped_admin.credential_scopes = Some(vec!["docs:read".into()]);
+    let p_replace = Pipeline::with_authorizer(
+        AdmitCache::new(
+            Arc::new(FakeAdmit::new(Ok(scoped_admin))),
+            Duration::from_secs(60),
+            Duration::from_secs(10),
+        ),
+        Arc::new(MemCounter::default()),
+        AUTH_FAILURE,
+        crate::authorizer::AuthorizerCache::new(
+            pdp.clone(),
+            crate::authorizer::AuthorizerInvalidator::new(),
+        ),
+    );
+    pdp.grant("docs:delete", "document", "doc-42");
+    let err = p_replace
+        .decide_with_authorizers(
+            &delete_doc,
+            IP,
+            Ok(jwt()),
+            &mut RequestCredential::default(),
+            &snapshot.authorizers,
+            "r4",
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.rejection, Rejection::Denied);
+    assert_eq!(pdp.calls(), 0);
+
+    // 5. Fail-closed 503 when PDP is unavailable, without consuming failed-auth IP limiter.
+    let pdp = Arc::new(FakePdp::default());
+    pdp.set_down(true);
+    let counter = Arc::new(MemCounter::default());
+    let p_down = Pipeline::with_authorizer(
+        AdmitCache::new(
+            Arc::new(FakeAdmit::new(Ok(project(&["*"])))),
+            Duration::from_secs(60),
+            Duration::from_secs(10),
+        ),
+        counter.clone(),
+        AUTH_FAILURE,
+        crate::authorizer::AuthorizerCache::new(
+            pdp.clone(),
+            crate::authorizer::AuthorizerInvalidator::new(),
+        ),
+    );
+    let err = p_down
+        .decide_with_authorizers(
+            &delete_doc,
+            IP,
+            Ok(jwt()),
+            &mut RequestCredential::default(),
+            &snapshot.authorizers,
+            "r5",
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.rejection, Rejection::Unavailable);
+    assert_eq!(counter.count(IP_BUCKET), 0);
+
+    // 6. POST /access/routes batches multiple external checks into ONE evaluate_batch call.
+    let pdp = Arc::new(FakePdp::default());
+    pdp.grant("docs:read", "document", "doc-1");
+    pdp.grant("docs:delete", "document", "doc-1");
+    let p_checks = Pipeline::with_authorizer(
+        AdmitCache::new(
+            ByChain::with(&[("acme/web", project(&[]))]),
+            Duration::from_secs(60),
+            Duration::from_secs(10),
+        ),
+        Arc::new(MemCounter::default()),
+        AUTH_FAILURE,
+        crate::authorizer::AuthorizerCache::new(
+            pdp.clone(),
+            crate::authorizer::AuthorizerInvalidator::new(),
+        ),
+    );
+    let checked = p_checks
+        .check_routes_with_authorizers(
+            &snapshot.routes,
+            &snapshot.default_policies,
+            &snapshot.authorizers,
+            &jwt_credential(),
+            &checks(&[
+                ("GET", "/orgs/acme/projects/web/docs/doc-1"),
+                ("GET", "/orgs/acme/projects/web/docs/doc-2"),
+                ("DELETE", "/orgs/acme/projects/web/docs/doc-1"),
+                ("DELETE", "/orgs/acme/projects/web/docs/doc-2"),
+            ]),
+            IP,
+            None,
+            "r6",
+        )
+        .await
+        .unwrap();
+    assert_eq!(checked.allowed, vec![true, false, true, false]);
+    assert_eq!(pdp.batch_calls.load(Ordering::SeqCst), 1);
+}

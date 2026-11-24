@@ -12,6 +12,8 @@ pub const ROUTE_CHECKS_PATH: &str = "/access/routes";
 pub const DEFAULT_CONNECT_TIMEOUT: &str = "10s";
 pub const DEFAULT_READ_TIMEOUT: &str = "30s";
 pub const DEFAULT_MAX_BODY_BYTES: u64 = 10_485_760;
+pub const DEFAULT_AUTHORIZER_TIMEOUT: &str = "2s";
+pub const DEFAULT_AUTHORIZER_CACHE_TTL: &str = "0s";
 
 pub const USER_SCOPE: &str = "user";
 pub const PUBLIC_SCOPE: &str = "public";
@@ -35,6 +37,8 @@ pub struct Config {
     pub custom_roles: bool,
     #[serde(default)]
     pub permissions: BTreeMap<String, PermissionMeta>,
+    #[serde(default)]
+    pub authorizers: BTreeMap<String, Authorizer>,
     #[serde(default)]
     pub rate_limits: BTreeMap<String, Policy>,
     #[serde(default)]
@@ -128,6 +132,10 @@ pub struct Kind {
     /// on nodes of this kind and `allow_public` routes in or below its scope.
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_public: bool,
+    /// Optional external AuthZEN authorizer for this kind's list filtering and
+    /// identity `/access/v1/*` evaluation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorizer: Option<KindAuthorizer>,
 }
 
 /// The kinds, each `list_permission` filled in where the config leaves it out.
@@ -202,6 +210,139 @@ pub struct PermissionMeta {
     pub custom_role_assignable: bool,
 }
 
+fn default_authorizer_timeout() -> String {
+    DEFAULT_AUTHORIZER_TIMEOUT.to_string()
+}
+
+fn default_authorizer_cache_ttl() -> String {
+    DEFAULT_AUTHORIZER_CACHE_TTL.to_string()
+}
+
+/// Top-level external AuthZEN 1.0 PDP definition (`authorizers.<name>`).
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Authorizer {
+    pub url: String,
+    #[serde(default = "default_authorizer_timeout")]
+    pub timeout: String,
+    #[serde(default = "default_authorizer_cache_ttl")]
+    pub cache_ttl: String,
+    #[serde(default = "default_authorizer_cache_ttl")]
+    pub negative_cache_ttl: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_env: Option<String>,
+}
+
+/// How an external AuthZEN authorizer combines with Plat5's built-in RBAC.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthorizerMode {
+    #[default]
+    Replace,
+    And,
+    Or,
+}
+
+/// Canonical authorizer binding on a kind (deserializes shorthand `"topaz"` or
+/// `{ "name": "topaz", "mode": "or" }`, always serializes as `{ name, mode }`).
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct KindAuthorizer {
+    pub name: String,
+    pub mode: AuthorizerMode,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum KindAuthorizerRaw {
+    Name(String),
+    Full(KindAuthorizerObj),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KindAuthorizerObj {
+    name: String,
+    #[serde(default)]
+    mode: AuthorizerMode,
+}
+
+impl<'de> serde::Deserialize<'de> for KindAuthorizer {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        match KindAuthorizerRaw::deserialize(d)? {
+            KindAuthorizerRaw::Name(name) => Ok(KindAuthorizer {
+                name,
+                mode: AuthorizerMode::Replace,
+            }),
+            KindAuthorizerRaw::Full(obj) => Ok(KindAuthorizer {
+                name: obj.name,
+                mode: obj.mode,
+            }),
+        }
+    }
+}
+
+/// Optional AuthZEN resource override on a route (`{ type, id }`).
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AuthorizerResource {
+    #[serde(rename = "type")]
+    pub r#type: String,
+    pub id: String,
+}
+
+/// Raw authorizer setting on a service, scope, route or method.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum RouteAuthorizerConfig {
+    Off(bool),
+    Name(String),
+    Full(RouteAuthorizerObj),
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RouteAuthorizerObj {
+    pub name: String,
+    #[serde(default)]
+    pub mode: AuthorizerMode,
+    #[serde(default)]
+    pub resource: Option<AuthorizerResource>,
+    #[serde(default)]
+    pub action: Option<String>,
+}
+
+/// Canonical expanded authorizer served to the gateway per route.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct ResolvedRouteAuthorizer {
+    pub name: String,
+    pub mode: AuthorizerMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<AuthorizerResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+}
+
+impl RouteAuthorizerConfig {
+    /// Resolves to `Some(authorizer)` when enabled, or `None` when `false`.
+    pub fn resolve(&self) -> Option<ResolvedRouteAuthorizer> {
+        match self {
+            RouteAuthorizerConfig::Off(_) => None,
+            RouteAuthorizerConfig::Name(name) => Some(ResolvedRouteAuthorizer {
+                name: name.clone(),
+                mode: AuthorizerMode::Replace,
+                resource: None,
+                action: None,
+            }),
+            RouteAuthorizerConfig::Full(obj) => Some(ResolvedRouteAuthorizer {
+                name: obj.name.clone(),
+                mode: obj.mode,
+                resource: obj.resource.clone(),
+                action: obj.action.clone(),
+            }),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TierLimit {
@@ -239,6 +380,8 @@ pub struct Service {
     #[serde(default)]
     pub max_body_bytes: Option<u64>,
     #[serde(default)]
+    pub authorizer: Option<RouteAuthorizerConfig>,
+    #[serde(default)]
     pub scopes: BTreeMap<String, Scope>,
 }
 
@@ -247,6 +390,8 @@ pub struct Service {
 pub struct Scope {
     #[serde(default)]
     pub upstream_prefix: Option<String>,
+    #[serde(default)]
+    pub authorizer: Option<RouteAuthorizerConfig>,
     pub routes: Vec<Route>,
 }
 
@@ -267,6 +412,8 @@ pub struct Route {
     pub allow_deleted: Option<bool>,
     #[serde(default)]
     pub allow_public: Option<bool>,
+    #[serde(default)]
+    pub authorizer: Option<RouteAuthorizerConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -288,6 +435,8 @@ pub struct MethodConfig {
     pub audit: Option<bool>,
     #[serde(default)]
     pub allow_public: Option<bool>,
+    #[serde(default)]
+    pub authorizer: Option<RouteAuthorizerConfig>,
 }
 
 /// `required_permissions`: a list, any one of which admits, or `any_member`.

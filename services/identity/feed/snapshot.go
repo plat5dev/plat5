@@ -6,13 +6,39 @@ package feed
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// Authorizer modes combining external AuthZEN PDPs with built-in RBAC.
+const (
+	AuthorizerModeReplace = "replace"
+	AuthorizerModeAnd     = "and"
+	AuthorizerModeOr      = "or"
+)
+
+// Authorizer is an external OpenID AuthZEN 1.0 PDP configured in authorizers.
+type Authorizer struct {
+	Name             string
+	URL              string
+	Timeout          time.Duration
+	CacheTTL         time.Duration
+	NegativeCacheTTL time.Duration
+	TokenEnv         string
+	Token            string
+}
+
+// KindAuthorizer attaches a named external authorizer to a kind.
+type KindAuthorizer struct {
+	Name string
+	Mode string
+}
 
 // Snapshot is one revision of the config. Read it once per request or sweep,
 // so one piece of work sees one config.
@@ -25,6 +51,7 @@ type Snapshot struct {
 	CreatorRole   string
 	CustomRoles   bool
 	Permissions   map[string]PermissionMeta
+	Authorizers   map[string]Authorizer
 }
 
 // PermissionMeta describes one entry in the deployment's permission catalog
@@ -106,6 +133,9 @@ type Kind struct {
 	// AllowPublic is whether nodes of this kind accept public principal
 	// bindings (all_users, all_authenticated_users).
 	AllowPublic bool
+	// Authorizer is an optional external AuthZEN PDP for list_permission and
+	// identity /access/v1/* evaluation on nodes of this kind.
+	Authorizer *KindAuthorizer
 }
 
 // Kind looks a kind up by name.
@@ -130,16 +160,31 @@ func (s *Snapshot) Names() []string {
 }
 
 var (
-	kindNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
-	durationRe = regexp.MustCompile(`^([1-9][0-9]{0,8})([smhd])$`)
+	kindNameRe            = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+	durationRe            = regexp.MustCompile(`^([1-9][0-9]{0,8})([smhd])$`)
+	nonNegativeDurationRe = regexp.MustCompile(`^(0|[1-9][0-9]{0,8})([smhd])$`)
 )
+
+type wireKindAuthorizer struct {
+	Name string `json:"name"`
+	Mode string `json:"mode"`
+}
+
+type wireAuthorizer struct {
+	URL              string `json:"url"`
+	Timeout          string `json:"timeout"`
+	CacheTTL         string `json:"cache_ttl"`
+	NegativeCacheTTL string `json:"negative_cache_ttl"`
+	TokenEnv         string `json:"token_env"`
+}
 
 type wireKind struct {
 	Parent         string `json:"parent"`
 	ListPermission string `json:"list_permission"`
 	// BindCreator is sent only when off: missing is on.
-	BindCreator *bool `json:"bind_creator"`
-	AllowPublic bool  `json:"allow_public"`
+	BindCreator *bool               `json:"bind_creator"`
+	AllowPublic bool                `json:"allow_public"`
+	Authorizer  *wireKindAuthorizer `json:"authorizer"`
 }
 
 type wireRole struct {
@@ -163,6 +208,7 @@ type wireSnapshot struct {
 	CreatorRole   string                        `json:"creator_role"`
 	CustomRoles   bool                          `json:"custom_roles"`
 	Permissions   map[string]wirePermissionMeta `json:"permissions"`
+	Authorizers   map[string]wireAuthorizer     `json:"authorizers"`
 }
 
 // Parse reads a feed body. The control plane validated the config at apply;
@@ -185,6 +231,45 @@ func Parse(body []byte) (*Snapshot, error) {
 		CreatorRole:   w.CreatorRole,
 		CustomRoles:   w.CustomRoles,
 		Permissions:   make(map[string]PermissionMeta, len(w.Permissions)),
+		Authorizers:   make(map[string]Authorizer, len(w.Authorizers)),
+	}
+	for name, wa := range w.Authorizers {
+		u := strings.TrimRight(strings.TrimSpace(wa.URL), "/")
+		if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+			return nil, fmt.Errorf("authorizers.%s.url: must be http or https", name)
+		}
+		timeout := 2 * time.Second
+		if wa.Timeout != "" {
+			var err error
+			timeout, err = ParseDuration(wa.Timeout)
+			if err != nil {
+				return nil, fmt.Errorf("authorizers.%s.timeout: %w", name, err)
+			}
+		}
+		cacheTTL, err := parseNonNegativeDuration(wa.CacheTTL)
+		if err != nil {
+			return nil, fmt.Errorf("authorizers.%s.cache_ttl: %w", name, err)
+		}
+		negTTL, err := parseNonNegativeDuration(wa.NegativeCacheTTL)
+		if err != nil {
+			return nil, fmt.Errorf("authorizers.%s.negative_cache_ttl: %w", name, err)
+		}
+		var token string
+		if wa.TokenEnv != "" {
+			token = strings.TrimSpace(os.Getenv(wa.TokenEnv))
+			if token == "" {
+				return nil, fmt.Errorf("authorizers.%s.token_env references %s, which is not set", name, wa.TokenEnv)
+			}
+		}
+		s.Authorizers[name] = Authorizer{
+			Name:             name,
+			URL:              u,
+			Timeout:          timeout,
+			CacheTTL:         cacheTTL,
+			NegativeCacheTTL: negTTL,
+			TokenEnv:         wa.TokenEnv,
+			Token:            token,
+		}
 	}
 	for perm, wm := range w.Permissions {
 		if perm == "*" {
@@ -211,12 +296,27 @@ func Parse(body []byte) (*Snapshot, error) {
 		if wk.ListPermission == "" {
 			return nil, fmt.Errorf("kinds.%s.list_permission: missing", name)
 		}
+		var ka *KindAuthorizer
+		if wk.Authorizer != nil {
+			if _, ok := s.Authorizers[wk.Authorizer.Name]; !ok {
+				return nil, fmt.Errorf("kinds.%s.authorizer: %q is not in authorizers", name, wk.Authorizer.Name)
+			}
+			mode := wk.Authorizer.Mode
+			if mode == "" {
+				mode = AuthorizerModeReplace
+			}
+			if mode != AuthorizerModeReplace && mode != AuthorizerModeAnd && mode != AuthorizerModeOr {
+				return nil, fmt.Errorf("kinds.%s.authorizer.mode: invalid mode %q", name, mode)
+			}
+			ka = &KindAuthorizer{Name: wk.Authorizer.Name, Mode: mode}
+		}
 		s.Kinds[name] = Kind{
 			Name:           name,
 			Parent:         wk.Parent,
 			ListPermission: wk.ListPermission,
 			BindCreator:    wk.BindCreator == nil || *wk.BindCreator,
 			AllowPublic:    wk.AllowPublic,
+			Authorizer:     ka,
 		}
 	}
 	for name, k := range s.Kinds {
@@ -279,6 +379,19 @@ func ParseDuration(v string) (time.Duration, error) {
 		return 30 * 24 * time.Hour, nil
 	}
 	m := durationRe.FindStringSubmatch(v)
+	if m == nil {
+		return 0, fmt.Errorf("%q is not a duration", v)
+	}
+	n, _ := strconv.ParseInt(m[1], 10, 64)
+	unit := map[string]time.Duration{"s": time.Second, "m": time.Minute, "h": time.Hour, "d": 24 * time.Hour}[m[2]]
+	return time.Duration(n) * unit, nil
+}
+
+func parseNonNegativeDuration(v string) (time.Duration, error) {
+	if v == "" {
+		return 0, nil
+	}
+	m := nonNegativeDurationRe.FindStringSubmatch(v)
 	if m == nil {
 		return 0, fmt.Errorf("%q is not a duration", v)
 	}

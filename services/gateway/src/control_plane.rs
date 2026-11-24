@@ -17,6 +17,7 @@ use serde_json::Value;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
+use crate::authorizer::{parse_authorizers, AuthorizerDoc, AuthorizerSpec};
 use crate::cors::CorsPolicy;
 use crate::duration::parse_duration;
 use crate::kinds::{KindDoc, Kinds};
@@ -36,6 +37,8 @@ pub struct Snapshot {
     /// The policies `defaults.rate_limit` names, counted per credential for
     /// `POST /access/routes`. Empty when `defaults.rate_limit` is unset.
     pub default_policies: Vec<Policy>,
+    /// External AuthZEN 1.0 authorizers declared in the config.
+    pub authorizers: BTreeMap<String, AuthorizerSpec>,
 }
 
 #[derive(Deserialize)]
@@ -46,6 +49,8 @@ struct GatewayFeed {
     rate_limits: BTreeMap<String, PolicyDoc>,
     defaults: DefaultsFeed,
     cors: CorsFeed,
+    #[serde(default)]
+    authorizers: BTreeMap<String, AuthorizerDoc>,
 }
 
 /// `defaults`. The gateway reads only `rate_limit`: a route's own timeouts
@@ -254,7 +259,13 @@ fn revision_of(feed: &Value) -> Option<i64> {
 pub fn build(feed: Value) -> Result<Snapshot, String> {
     let feed: GatewayFeed = serde_json::from_value(feed).map_err(|e| e.to_string())?;
     let kinds = Kinds::from_feed(&feed.kinds);
-    let routes = RouteMap::from_feed(&feed.services, &feed.rate_limits, &kinds)?;
+    let authorizers = parse_authorizers(&feed.authorizers)?;
+    let routes = RouteMap::from_feed_with_authorizers(
+        &feed.services,
+        &feed.rate_limits,
+        &kinds,
+        &authorizers,
+    )?;
     let default_policies = feed
         .defaults
         .rate_limit
@@ -293,6 +304,7 @@ pub fn build(feed: Value) -> Result<Snapshot, String> {
             &feed.cors.allowed_headers,
         )),
         default_policies,
+        authorizers,
     })
 }
 

@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://www.topaz.sh/schema/manifest.json
+# ReBAC model matching Plat5's member -> project -> document AuthZEN 1.0 payloads.
+model:
+  version: 3
+
+types:
+  member: {}
+
+  project:
+    relations:
+      viewer: member
+      editor: member
+    permissions:
+      project:read: viewer | editor
+      project:write: editor
+
+  document:
+    relations:
+      owner: member
+      editor: member
+      viewer: member
+    permissions:
+      docs:read: viewer | editor | owner
+      docs:write: editor | owner
+      docs:delete: owner

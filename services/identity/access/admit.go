@@ -59,19 +59,20 @@ type ChainNode struct {
 
 // Admitted is admit's answer. Empty strings are nulls on the wire.
 type Admitted struct {
-	Valid           bool
-	Principal       string
-	KeyID           string
-	AllowedCIDRs    []string
-	OrgAllowedCIDRs []string
-	Nodes           []ChainNode
-	MemberID        string
-	UserID          string
-	Permissions     []string
-	RateLimitTier   *string
-	ExpiresAt       *time.Time
-	InvalidationSeq int64
-	ConfigRevision  int64
+	Valid            bool
+	Principal        string
+	KeyID            string
+	AllowedCIDRs     []string
+	OrgAllowedCIDRs  []string
+	Nodes            []ChainNode
+	MemberID         string
+	UserID           string
+	Permissions      []string
+	CredentialScopes *[]string
+	RateLimitTier    *string
+	ExpiresAt        *time.Time
+	InvalidationSeq  int64
+	ConfigRevision   int64
 }
 
 type rootSecurityPolicy struct {
@@ -158,14 +159,14 @@ func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (
 			return out, nil
 		}
 		perms := ResolveWithCustom(snap, roles, customPerms).List()
-		if len(perms) == 0 {
-			op.OK("not public")
-			return out, nil
-		}
 		out.Nodes = chain
 		out.Permissions = perms
 		out.RateLimitTier = rootTier
 		out.ExpiresAt = minBindingExp
+		if len(perms) == 0 {
+			op.OK("not public")
+			return out, nil
+		}
 		op.OK("admitted")
 		return out, nil
 	}
@@ -240,21 +241,33 @@ func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (
 	switch {
 	case len(p.scopes) > 0:
 		perms = IntersectScopes(resolved, p.scopes)
+		sc := append([]string(nil), p.scopes...)
+		out.CredentialScopes = &sc
 	case in.IdP != nil && in.IdP.HasScopes:
 		perms = IntersectScopes(resolved, in.IdP.Scopes)
+		sc := append([]string(nil), in.IdP.Scopes...)
+		if sc == nil {
+			sc = []string{}
+		}
+		out.CredentialScopes = &sc
 	default:
 		perms = resolved.List()
 	}
 
 	if memberID == "" {
-		if !in.AllowPublic || len(perms) == 0 {
+		if !in.AllowPublic {
 			op.OK("no member")
 			return out, nil
 		}
 		out.Nodes = chain
+		out.UserID = p.userID
 		out.RateLimitTier = rootTier
 		out.ExpiresAt = earliestTime(p.expiresAt, minBindingExp)
 		out.Permissions = perms
+		if len(perms) == 0 {
+			op.OK("no member")
+			return out, nil
+		}
 		op.OK("admitted public")
 		return out, nil
 	}

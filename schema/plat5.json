@@ -13,6 +13,9 @@
     "kinds": { "$ref": "kinds.json#/properties/kinds" },
     "roles": { "$ref": "roles.json#/properties/roles" },
     "creator_role": { "$ref": "roles.json#/properties/creator_role" },
+    "custom_roles": { "$ref": "roles.json#/properties/custom_roles" },
+    "permissions": { "$ref": "roles.json#/properties/permissions" },
+    "authorizers": { "$ref": "authorizers.json#/properties/authorizers" },
     "rate_limits": { "$ref": "rate_limits.json#/properties/rate_limits" },
     "cors": { "$ref": "cors.json#/properties/cors" },
     "services": {

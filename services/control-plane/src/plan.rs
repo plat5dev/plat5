@@ -32,6 +32,7 @@ pub enum What {
     Kind,
     Setting,
     Role,
+    Authorizer,
     RateLimit,
     Cors,
     Service,
@@ -275,6 +276,13 @@ async fn make_plan(
             .map(|c| named(&c.identity, "roles"))
             .unwrap_or_default(),
         &named(&next.identity, "roles"),
+    ));
+    changes.extend(diff_map(
+        What::Authorizer,
+        &current
+            .map(|c| named(&c.gateway, "authorizers"))
+            .unwrap_or_default(),
+        &named(&next.gateway, "authorizers"),
     ));
     changes.extend(diff_map(
         What::RateLimit,
