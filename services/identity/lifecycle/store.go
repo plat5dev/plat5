@@ -85,18 +85,29 @@ func Record(ctx context.Context, tx pgx.Tx, e Event) error {
 // pipelining the lock and insert in a single round-trip. Call it right before
 // commit so the global lock is held for as little time as possible.
 func RecordBatch(ctx context.Context, tx pgx.Tx, events []Event) error {
-	if len(events) == 0 {
+	return RecordCommit(ctx, tx, events, nil)
+}
+
+// RecordCommit writes lifecycle events and admit invalidations in one
+// pipelined batch under the single commit-ordering advisory lock. Taking one
+// lock in one place keeps both sequences commit-ordered and prevents lock-order
+// deadlocks between the two logs.
+func RecordCommit(ctx context.Context, tx pgx.Tx, events []Event, invalidations []Invalidation) error {
+	if len(events) == 0 && len(invalidations) == 0 {
 		return nil
 	}
 	batch := &pgx.Batch{}
+	queued := 1
 	batch.Queue(`SELECT pg_advisory_xact_lock($1)`, lockKey)
 	if len(events) == 1 {
+		queued++
 		e := events[0]
 		batch.Queue(`
 			INSERT INTO events (type, kind, node_id, member_id, root_id, principal, user_id)
 			VALUES ($1, $2, $3, $4, $5, $6, $7)
 		`, e.Type, e.Kind, e.NodeID, e.MemberID, e.RootID, e.Principal, e.UserID)
-	} else {
+	} else if len(events) > 1 {
+		queued++
 		n := len(events)
 		types := make([]string, n)
 		kinds := make([]*string, n)
@@ -122,14 +133,15 @@ func RecordBatch(ctx context.Context, tx pgx.Tx, events []Event) error {
 			ORDER BY u.ord
 		`, types, kinds, nodeIDs, memberIDs, rootIDs, principals, userIDs)
 	}
-	br := tx.SendBatch(ctx, batch)
-	if _, err := br.Exec(); err != nil {
-		_ = br.Close()
-		return err
+	if queueInvalidations(batch, invalidations) {
+		queued++
 	}
-	if _, err := br.Exec(); err != nil {
-		_ = br.Close()
-		return err
+	br := tx.SendBatch(ctx, batch)
+	for range queued {
+		if _, err := br.Exec(); err != nil {
+			_ = br.Close()
+			return err
+		}
 	}
 	return br.Close()
 }

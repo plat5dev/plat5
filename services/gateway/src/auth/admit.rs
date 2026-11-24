@@ -6,11 +6,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use moka::future::Cache;
+use moka::ops::compute::{CompResult, Op};
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use tracing::{info, warn};
 
 use crate::auth::call::AuthCallTimer;
+use crate::auth::invalidations::InvalidationTracker;
 use crate::client_ip::Cidr;
 use crate::internal_http::InternalHttpClient;
 use crate::metrics;
@@ -69,6 +71,8 @@ pub struct AdmitAnswer {
     #[serde(deserialize_with = "Option::deserialize")]
     pub user_id: Option<String>,
     pub permissions: Vec<String>,
+    pub invalidation_seq: i64,
+    pub config_revision: i64,
 }
 
 impl AdmitAnswer {
@@ -134,20 +138,43 @@ impl Admit for HttpAdmit {
 struct Entry {
     answer: Arc<AdmitAnswer>,
     ttl: Duration,
+    global_gen: u64,
+    seq: i64,
+    config_revision: i64,
+    is_negative: bool,
+}
+
+enum ComputeErr {
+    Unavailable(AdmitUnavailable),
+    /// Hit a lagging identity replica whose `config_revision` is behind what we
+    /// already know: return the answer to the caller without caching it.
+    Uncached(Arc<AdmitAnswer>),
 }
 
 /// Admit answers by credential (a key as presented, or a JWT's issuer and subject),
 /// `allow_deleted` and the chain refs. Refusals live for the negative TTL. Concurrent
 /// misses for one key share a single call; an identity error is never cached.
+/// Positive entries are checked against [`InvalidationTracker`] epochs on every
+/// lookup so revocations and role applies take effect without waiting for TTL.
 pub struct AdmitCache<A> {
     admit: A,
     ttl: Duration,
     negative_ttl: Duration,
     entries: Cache<String, Entry>,
+    tracker: InvalidationTracker,
 }
 
 impl<A: Admit> AdmitCache<A> {
     pub fn new(admit: A, ttl: Duration, negative_ttl: Duration) -> Self {
+        Self::with_tracker(admit, ttl, negative_ttl, InvalidationTracker::new(ttl))
+    }
+
+    pub fn with_tracker(
+        admit: A,
+        ttl: Duration,
+        negative_ttl: Duration,
+        tracker: InvalidationTracker,
+    ) -> Self {
         let entries = Cache::builder()
             .max_capacity(CACHE_CAPACITY)
             .expire_after(EntryExpiry)
@@ -157,41 +184,100 @@ impl<A: Admit> AdmitCache<A> {
             ttl,
             negative_ttl,
             entries,
+            tracker,
         }
+    }
+
+    pub fn tracker(&self) -> &InvalidationTracker {
+        &self.tracker
+    }
+
+    async fn entry_is_fresh(&self, entry: &Entry) -> bool {
+        if entry.is_negative {
+            return true;
+        }
+        self.tracker
+            .is_fresh(
+                &entry.answer,
+                entry.global_gen,
+                entry.seq,
+                entry.config_revision,
+            )
+            .await
     }
 
     pub async fn get(&self, req: &AdmitRequest) -> Result<Arc<AdmitAnswer>, Arc<AdmitUnavailable>> {
         let key = cache_key(req);
         if let Some(entry) = self.entries.get(&key).await {
-            metrics::record_auth_cache_hit("admit");
-            return Ok(entry.answer);
+            if self.entry_is_fresh(&entry).await {
+                metrics::record_auth_cache_hit("admit");
+                return Ok(entry.answer);
+            }
         }
         metrics::record_auth_cache_miss("admit");
-        self.entries
-            .try_get_with(key, async {
-                let answer = self.admit.admit(req).await?;
-                if answer.valid && answer.allowed_cidrs.iter().any(|c| Cidr::parse(c).is_err()) {
-                    warn!(error_message = "allowed_cidrs", "admit answered with an invalid CIDR");
-                    return Err(AdmitUnavailable("allowed_cidrs".to_string()));
+        let computed = self
+            .entries
+            .entry(key)
+            .and_try_compute_with(|maybe_entry| async move {
+                if let Some(existing) = maybe_entry {
+                    if self.entry_is_fresh(existing.value()).await {
+                        return Ok(Op::Nop);
+                    }
                 }
-                if !answer.refused(req) {
+                let stamp = self.tracker.snapshot_before_admit();
+                let answer = self
+                    .admit
+                    .admit(req)
+                    .await
+                    .map_err(ComputeErr::Unavailable)?;
+                if answer.valid && answer.allowed_cidrs.iter().any(|c| Cidr::parse(c).is_err()) {
+                    warn!(
+                        error_message = "allowed_cidrs",
+                        "admit answered with an invalid CIDR"
+                    );
+                    return Err(ComputeErr::Unavailable(AdmitUnavailable(
+                        "allowed_cidrs".to_string(),
+                    )));
+                }
+                let is_negative = answer.refused(req);
+                if !is_negative {
                     check_admitted(&answer, req).map_err(|e| {
                         warn!(error_message = e, "admit answered without a field it needs");
-                        AdmitUnavailable(e.to_string())
+                        ComputeErr::Unavailable(AdmitUnavailable(e.to_string()))
                     })?;
                 }
-                let ttl = if answer.refused(req) {
+                let min_rev = self.tracker.observe_config_revision(answer.config_revision);
+                if !is_negative && answer.config_revision < min_rev {
+                    return Err(ComputeErr::Uncached(Arc::new(answer)));
+                }
+                let ttl = if is_negative {
                     self.negative_ttl
                 } else {
                     self.ttl
                 };
-                Ok(Entry {
+                let seq = self.tracker.entry_seq(stamp, answer.invalidation_seq);
+                let config_revision = answer.config_revision;
+                Ok(Op::Put(Entry {
                     answer: Arc::new(answer),
                     ttl,
-                })
+                    global_gen: stamp.global_gen,
+                    seq,
+                    config_revision,
+                    is_negative,
+                }))
             })
-            .await
-            .map(|entry| entry.answer)
+            .await;
+
+        match computed {
+            Ok(CompResult::Inserted(entry))
+            | Ok(CompResult::ReplacedWith(entry))
+            | Ok(CompResult::Unchanged(entry)) => Ok(entry.into_value().answer),
+            Ok(CompResult::StillNone(_)) | Ok(CompResult::Removed(_)) => Err(Arc::new(
+                AdmitUnavailable("cache entry removed".to_string()),
+            )),
+            Err(ComputeErr::Uncached(answer)) => Ok(answer),
+            Err(ComputeErr::Unavailable(err)) => Err(Arc::new(err)),
+        }
     }
 }
 
@@ -342,6 +428,8 @@ pub mod tests {
             member_id: Some(MEMBER.into()),
             user_id: None,
             permissions: permissions.iter().map(|p| p.to_string()).collect(),
+            invalidation_seq: 0,
+            config_revision: 0,
         }
     }
 
@@ -356,6 +444,8 @@ pub mod tests {
             member_id: None,
             user_id: Some(USER.into()),
             permissions: vec![],
+            invalidation_seq: 0,
+            config_revision: 0,
         }
     }
 
@@ -370,6 +460,8 @@ pub mod tests {
             member_id: None,
             user_id: None,
             permissions: vec![],
+            invalidation_seq: 0,
+            config_revision: 0,
         }
     }
 
@@ -384,6 +476,8 @@ pub mod tests {
             member_id: None,
             user_id: None,
             permissions: vec![],
+            invalidation_seq: 0,
+            config_revision: 0,
         }
     }
 
@@ -397,6 +491,8 @@ pub mod tests {
             member_id: None,
             user_id: None,
             permissions: vec![],
+            invalidation_seq: 0,
+            config_revision: 0,
         }
     }
 
@@ -460,7 +556,8 @@ pub mod tests {
     fn every_answer_field_is_required() {
         let full = serde_json::json!({
             "valid": true, "principal": "person", "key_id": null, "allowed_cidrs": [], "nodes": [],
-            "member_id": null, "user_id": "01u", "permissions": []
+            "member_id": null, "user_id": "01u", "permissions": [],
+            "invalidation_seq": 0, "config_revision": 1
         });
         assert!(serde_json::from_value::<AdmitAnswer>(full.clone()).is_ok());
         for field in [
@@ -472,6 +569,8 @@ pub mod tests {
             "member_id",
             "user_id",
             "permissions",
+            "invalidation_seq",
+            "config_revision",
         ] {
             let mut v = full.clone();
             v.as_object_mut().unwrap().remove(field);
@@ -662,5 +761,139 @@ pub mod tests {
             assert!(t.await.unwrap());
         }
         assert_eq!(fake.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn invalidation_forces_re_admit_and_handles_in_flight_race_and_lagging_replica() {
+        use crate::auth::invalidations::{FeedPage, InvalidationEvent};
+
+        let req = request(key("k"), &[("organization", "acme")], false);
+        let initial_ans = AdmitAnswer {
+            invalidation_seq: 10,
+            config_revision: 5,
+            ..admitted(&[("organization", "01o")], &["project:write"])
+        };
+        let fake = Arc::new(FakeAdmit::new(Ok(initial_ans)));
+        let tracker = InvalidationTracker::new(Duration::from_secs(300));
+        tracker
+            .apply_page(
+                FeedPage {
+                    head: 10,
+                    config_revision: 5,
+                    reset: false,
+                    events: vec![],
+                },
+                true,
+            )
+            .await;
+        let c = Arc::new(AdmitCache::with_tracker(
+            fake.clone(),
+            Duration::from_secs(300),
+            Duration::from_secs(10),
+            tracker.clone(),
+        ));
+
+        // 1. Cached hit stays at 1 call.
+        assert_eq!(
+            c.get(&req).await.unwrap().permissions,
+            vec!["project:write"]
+        );
+        assert_eq!(
+            c.get(&req).await.unwrap().permissions,
+            vec!["project:write"]
+        );
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 1);
+
+        // 2. Member invalidation at seq 11 forces immediate re-admit.
+        *fake.answer.lock().unwrap() = Ok(AdmitAnswer {
+            invalidation_seq: 11,
+            config_revision: 5,
+            ..admitted(&[("organization", "01o")], &["project:read"])
+        });
+        tracker
+            .apply_page(
+                FeedPage {
+                    head: 11,
+                    config_revision: 5,
+                    reset: false,
+                    events: vec![InvalidationEvent {
+                        id: 11,
+                        scope: "member".into(),
+                        target: MEMBER.into(),
+                    }],
+                },
+                false,
+            )
+            .await;
+        assert_eq!(c.get(&req).await.unwrap().permissions, vec!["project:read"]);
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 2);
+
+        // 3. In-flight race: invalidation arrives while slow admit is in flight.
+        let slow_fake = Arc::new(FakeAdmit {
+            delay: Duration::from_millis(60),
+            ..FakeAdmit::new(Ok(AdmitAnswer {
+                invalidation_seq: 11,
+                config_revision: 5,
+                ..admitted(&[("organization", "01o")], &["admin"])
+            }))
+        });
+        let slow_cache = Arc::new(AdmitCache::with_tracker(
+            slow_fake.clone(),
+            Duration::from_secs(300),
+            Duration::from_secs(10),
+            tracker.clone(),
+        ));
+        let task = {
+            let slow_cache = slow_cache.clone();
+            let req = req.clone();
+            tokio::spawn(async move { slow_cache.get(&req).await.unwrap() })
+        };
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        tracker
+            .apply_page(
+                FeedPage {
+                    head: 12,
+                    config_revision: 5,
+                    reset: false,
+                    events: vec![InvalidationEvent {
+                        id: 12,
+                        scope: "member".into(),
+                        target: MEMBER.into(),
+                    }],
+                },
+                false,
+            )
+            .await;
+        let _ = task.await.unwrap();
+        // Next request MUST re-admit because entry was stamped with seq 11 < 12.
+        *slow_fake.answer.lock().unwrap() = Ok(AdmitAnswer {
+            invalidation_seq: 12,
+            config_revision: 5,
+            ..admitted(&[("organization", "01o")], &[])
+        });
+        assert!(slow_cache.get(&req).await.unwrap().permissions.is_empty());
+        assert_eq!(slow_fake.calls.load(Ordering::SeqCst), 2);
+
+        // 4. Lagging identity replica (config_revision 5 < known 6) is returned uncached.
+        tracker
+            .apply_page(
+                FeedPage {
+                    head: 12,
+                    config_revision: 6,
+                    reset: false,
+                    events: vec![],
+                },
+                false,
+            )
+            .await;
+        *fake.answer.lock().unwrap() = Ok(AdmitAnswer {
+            invalidation_seq: 12,
+            config_revision: 5,
+            ..admitted(&[("organization", "01o")], &["stale"])
+        });
+        assert_eq!(c.get(&req).await.unwrap().permissions, vec!["stale"]);
+        // Not cached, so a second call hits identity again.
+        assert_eq!(c.get(&req).await.unwrap().permissions, vec!["stale"]);
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 4);
     }
 }

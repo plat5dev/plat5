@@ -6,7 +6,10 @@ use arc_swap::ArcSwap;
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{Client, RedisError, Script};
 use std::sync::LazyLock;
+use tokio::sync::Notify;
 use tracing::{info, warn};
+
+use crate::metrics;
 
 /// Default counter key prefix (`VALKEY_KEY_PREFIX`), so a Valkey shared with other software is safe.
 pub const DEFAULT_KEY_PREFIX: &str = "plat5:rl:";
@@ -14,12 +17,23 @@ pub const DEFAULT_KEY_PREFIX: &str = "plat5:rl:";
 /// Command and connect bound. A dead socket must surface as an error inside this window.
 const VALKEY_TIMEOUT: Duration = Duration::from_millis(500);
 
+/// Backoff sequence for the background reconnect loop after Valkey fails.
+const RECONNECT_BACKOFF: &[Duration] = &[
+    Duration::from_millis(200),
+    Duration::from_millis(500),
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+];
+
 /// Cluster-wide fixed-window limiter backed by Valkey, or disabled when
 /// `RATE_LIMIT_ENABLED=false`. A request's buckets are checked together in one
 /// round trip and counted only if every one passes.
 ///
-/// Clones share one connection. A timeout or dropped socket is replaced in the
-/// background so a later request succeeds once Valkey answers again.
+/// Clones share one connection. When Valkey becomes unreachable, the limiter
+/// marks itself down so subsequent checks return [`Unavailable`] immediately
+/// (0ms) for the pipeline to fail open, while a single background loop
+/// reconnects with capped backoff and restores enforcement once Valkey answers.
 #[derive(Clone)]
 pub struct RateLimiter {
     inner: Option<Arc<Inner>>,
@@ -27,8 +41,9 @@ pub struct RateLimiter {
 
 struct Inner {
     client: Client,
-    conn: ArcSwap<ConnectionManager>,
-    reconnecting: AtomicBool,
+    conn: ArcSwap<Option<ConnectionManager>>,
+    up: AtomicBool,
+    reconnect: Arc<Notify>,
     key_prefix: String,
 }
 
@@ -60,22 +75,62 @@ pub enum Verdict {
     },
 }
 
-/// Valkey didn't answer in time, or answered something else: **503**.
+/// Valkey didn't answer in time, or is currently disconnected: caller fails open.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Unavailable;
 
 impl RateLimiter {
+    /// Connect eagerly, failing if `url` is invalid or Valkey does not answer.
     pub async fn connect(url: &str, key_prefix: String) -> Result<Self, RedisError> {
         let client = Client::open(url)?;
         let conn = open_manager(client.clone()).await?;
-        Ok(Self {
-            inner: Some(Arc::new(Inner {
-                client,
-                conn: ArcSwap::from_pointee(conn),
-                reconnecting: AtomicBool::new(false),
-                key_prefix,
-            })),
-        })
+        metrics::record_valkey_up(true);
+        let inner = Arc::new(Inner {
+            client,
+            conn: ArcSwap::from_pointee(Some(conn)),
+            up: AtomicBool::new(true),
+            reconnect: Arc::new(Notify::new()),
+            key_prefix,
+        });
+        spawn_reconnect_loop(&inner, &tokio::runtime::Handle::current());
+        Ok(Self { inner: Some(inner) })
+    }
+
+    /// Validate `url` eagerly and attempt an initial connect. If Valkey is
+    /// unreachable at boot, starts degraded (failing open) and reconnects in
+    /// the background on `runtime`.
+    pub async fn connect_or_start(
+        url: &str,
+        key_prefix: String,
+        runtime: &tokio::runtime::Handle,
+    ) -> Result<Self, RedisError> {
+        let client = Client::open(url)?;
+        let (conn, up) = match open_manager(client.clone()).await {
+            Ok(conn) => {
+                metrics::record_valkey_up(true);
+                (Some(conn), true)
+            }
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    "valkey unavailable at startup; rate limiting failing open until reconnected"
+                );
+                metrics::record_valkey_up(false);
+                (None, false)
+            }
+        };
+        let inner = Arc::new(Inner {
+            client,
+            conn: ArcSwap::from_pointee(conn),
+            up: AtomicBool::new(up),
+            reconnect: Arc::new(Notify::new()),
+            key_prefix,
+        });
+        spawn_reconnect_loop(&inner, runtime);
+        if !up {
+            inner.reconnect.notify_one();
+        }
+        Ok(Self { inner: Some(inner) })
     }
 
     pub fn disabled() -> Self {
@@ -86,11 +141,26 @@ impl RateLimiter {
         self.inner.is_some()
     }
 
+    /// Whether Valkey is currently reachable. When already marked down, returns
+    /// an error immediately instead of waiting on a dead socket.
     pub async fn ping(&self) -> Result<(), RedisError> {
         let Some(inner) = self.inner.as_ref() else {
             return Ok(());
         };
-        let mut conn = ConnectionManager::clone(&inner.conn.load());
+        if !inner.up.load(Ordering::Acquire) {
+            return Err(RedisError::from(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "valkey disconnected",
+            )));
+        }
+        let guard = inner.conn.load();
+        let Some(existing) = guard.as_ref().as_ref() else {
+            return Err(RedisError::from(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "valkey disconnected",
+            )));
+        };
+        let mut conn = existing.clone();
         let result = redis::cmd("PING").query_async(&mut conn).await;
         if let Err(ref err) = result {
             note_disconnect(inner, err);
@@ -99,7 +169,8 @@ impl RateLimiter {
     }
 
     /// Check every bucket, and count them all only if all pass. No buckets or
-    /// disabled: no trip.
+    /// disabled: no trip. When Valkey is marked down, returns [`Unavailable`]
+    /// immediately (0ms) so the caller can fail open without paying a timeout.
     pub async fn check(&self, buckets: &[Bucket]) -> Result<Verdict, Unavailable> {
         let Some(inner) = self.inner.as_ref() else {
             return Ok(Verdict::Allowed(Vec::new()));
@@ -107,6 +178,13 @@ impl RateLimiter {
         if buckets.is_empty() {
             return Ok(Verdict::Allowed(Vec::new()));
         }
+        if !inner.up.load(Ordering::Acquire) {
+            return Err(Unavailable);
+        }
+        let guard = inner.conn.load();
+        let Some(existing) = guard.as_ref().as_ref() else {
+            return Err(Unavailable);
+        };
         let mut invocation = CHECK.prepare_invoke();
         for bucket in buckets {
             invocation
@@ -114,7 +192,7 @@ impl RateLimiter {
                 .arg(bucket.requests)
                 .arg(bucket.window_seconds);
         }
-        let mut conn = ConnectionManager::clone(&inner.conn.load());
+        let mut conn = existing.clone();
         match invocation.invoke_async::<Vec<i64>>(&mut conn).await {
             Ok(vals) if vals.len() == 1 + 2 * buckets.len() => {
                 Ok(verdict(buckets, vals[0] == 1, &vals[1..], now_epoch()))
@@ -124,7 +202,6 @@ impl RateLimiter {
                 Err(Unavailable)
             }
             Err(err) => {
-                warn!(error = %err, "rate limit valkey error");
                 note_disconnect(inner, &err);
                 Err(Unavailable)
             }
@@ -132,35 +209,65 @@ impl RateLimiter {
     }
 }
 
-/// A response timeout does not replace the connection. Swap in a new one
-/// or later commands keep the dead socket.
+/// A response timeout or broken socket flips the breaker to down (logging once
+/// on the transition) and wakes the single background reconnect loop.
 fn note_disconnect(inner: &Arc<Inner>, err: &RedisError) {
-    if err.is_io_error() || err.is_unrecoverable_error() {
-        spawn_reconnect(inner);
+    if err.is_io_error() || err.is_unrecoverable_error() || err.is_timeout() {
+        if inner.up.swap(false, Ordering::AcqRel) {
+            warn!(error = %err, "valkey unavailable; rate limiting failing open");
+            metrics::record_valkey_up(false);
+        }
+        inner.reconnect.notify_one();
+    } else {
+        warn!(error = %err, "rate limit valkey error");
     }
 }
 
-fn spawn_reconnect(inner: &Arc<Inner>) {
-    if inner.reconnecting.swap(true, Ordering::AcqRel) {
-        return;
-    }
-    let inner = Arc::clone(inner);
-    let Some(handle) = tokio::runtime::Handle::try_current().ok() else {
-        inner.reconnecting.store(false, Ordering::Release);
-        warn!("valkey reconnect skipped: no tokio runtime");
-        return;
-    };
-    handle.spawn(async move {
-        match open_manager(inner.client.clone()).await {
-            Ok(conn) => {
-                inner.conn.store(Arc::new(conn));
-                info!("valkey reconnected");
+fn spawn_reconnect_loop(inner: &Arc<Inner>, runtime: &tokio::runtime::Handle) {
+    let weak = Arc::downgrade(inner);
+    let reconnect = Arc::clone(&inner.reconnect);
+    runtime.spawn(async move {
+        loop {
+            let is_up = match weak.upgrade() {
+                Some(inner) => inner.up.load(Ordering::Acquire),
+                None => return,
+            };
+            if is_up {
+                reconnect.notified().await;
+                continue;
             }
-            Err(err) => {
-                warn!(error = %err, "valkey reconnect failed");
+            let mut attempt = 0usize;
+            loop {
+                let delay = RECONNECT_BACKOFF[attempt.min(RECONNECT_BACKOFF.len() - 1)];
+                attempt = attempt.saturating_add(1);
+                tokio::time::sleep(delay).await;
+                let Some(inner) = weak.upgrade() else {
+                    return;
+                };
+                if inner.up.load(Ordering::Acquire) {
+                    break;
+                }
+                match open_manager(inner.client.clone()).await {
+                    Ok(mut conn) => {
+                        if redis::cmd("PING")
+                            .query_async::<String>(&mut conn)
+                            .await
+                            .is_ok()
+                        {
+                            inner.conn.store(Arc::new(Some(conn)));
+                            inner.up.store(true, Ordering::Release);
+                            metrics::record_valkey_up(true);
+                            info!("valkey reconnected; rate limiting restored");
+                            break;
+                        }
+                    }
+                    Err(err) if attempt == 1 => {
+                        warn!(error = %err, "valkey reconnect attempt failed; retrying in background");
+                    }
+                    Err(_) => {}
+                }
             }
         }
-        inner.reconnecting.store(false, Ordering::Release);
     });
 }
 
@@ -390,6 +497,51 @@ mod tests {
                 Instant::now() < deadline,
                 "did not recover after valkey answered again"
             );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn connect_or_start_degrades_and_recovers_with_zero_ms_checks() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let live = Arc::new(AtomicBool::new(false));
+        let accept_live = Arc::clone(&live);
+        tokio::spawn(async move {
+            loop {
+                let Ok((sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let live = Arc::clone(&accept_live);
+                tokio::spawn(handle_conn(sock, live));
+            }
+        });
+
+        let limiter = RateLimiter::connect_or_start(
+            &format!("redis://{addr}"),
+            DEFAULT_KEY_PREFIX.to_string(),
+            &tokio::runtime::Handle::current(),
+        )
+        .await
+        .expect("connect_or_start succeeds even when valkey is down");
+
+        // While down, check() fails open immediately without waiting 500ms.
+        let started = Instant::now();
+        assert_eq!(limiter.check(&[bucket()]).await, Err(Unavailable));
+        assert!(
+            started.elapsed() < Duration::from_millis(50),
+            "check blocked while down: {:?}",
+            started.elapsed()
+        );
+        assert!(limiter.ping().await.is_err());
+
+        live.store(true, Ordering::SeqCst);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if limiter.ping().await.is_ok() && limiter.check(&[bucket()]).await.is_ok() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "did not reconnect");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }

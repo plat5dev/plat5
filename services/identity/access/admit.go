@@ -45,20 +45,23 @@ type ChainNode struct {
 
 // Admitted is admit's answer. Empty strings are nulls on the wire.
 type Admitted struct {
-	Valid        bool
-	Principal    string
-	KeyID        string
-	AllowedCIDRs []string
-	Nodes        []ChainNode
-	MemberID     string
-	UserID       string
-	Permissions  []string
+	Valid           bool
+	Principal       string
+	KeyID           string
+	AllowedCIDRs    []string
+	Nodes           []ChainNode
+	MemberID        string
+	UserID          string
+	Permissions     []string
+	InvalidationSeq int64
+	ConfigRevision  int64
 }
 
 // admitPrincipal is the principal behind a credential.
 type admitPrincipal struct {
 	id, kind, userID, keyID string
 	allowedCIDRs            []string
+	invalidationSeq         int64
 }
 
 // Admit turns a credential and a node chain into the member and permissions
@@ -75,15 +78,26 @@ func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (
 	userRoute := len(in.Chain) == 0
 
 	// 1. Principal.
-	p, err := s.admitPrincipal(ctx, in)
+	p, seq, err := s.admitPrincipal(ctx, in)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
+	var configRev int64
+	if snap != nil {
+		configRev = snap.Revision
+	}
 	if p == nil {
 		op.OK("invalid")
-		return &Admitted{}, nil
+		return &Admitted{InvalidationSeq: seq, ConfigRevision: configRev}, nil
 	}
-	out := &Admitted{Valid: true, Principal: p.kind, KeyID: p.keyID, AllowedCIDRs: p.allowedCIDRs}
+	out := &Admitted{
+		Valid:           true,
+		Principal:       p.kind,
+		KeyID:           p.keyID,
+		AllowedCIDRs:    p.allowedCIDRs,
+		InvalidationSeq: p.invalidationSeq,
+		ConfigRevision:  configRev,
+	}
 	if userRoute {
 		// A person's user id. A service account has none: the gateway refuses
 		// it on a user route.
@@ -94,9 +108,14 @@ func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (
 
 	// 2–4. Resolve the node chain, the principal's active member in its root,
 	// and the member's counting roles along the chain in one query.
-	chain, memberID, roles, err := s.resolveAdmitChain(ctx, snap, p.id, in.Chain, in.AllowDeleted)
+	chain, memberID, roles, chainSeq, err := s.resolveAdmitChain(ctx, snap, p.id, in.Chain, in.AllowDeleted)
 	if err != nil {
 		return nil, op.Fail(err)
+	}
+	// Use the earlier sequence of the two queries so a mutation between step 1
+	// and step 2 can never be hidden behind a newer invalidation_seq.
+	if chainSeq < out.InvalidationSeq {
+		out.InvalidationSeq = chainSeq
 	}
 	if chain == nil {
 		op.OK("not found")
@@ -129,16 +148,16 @@ func checkAdmit(in AdmitInput) error {
 // a key identity can't read, an unknown or revoked key, a suspended person,
 // or a service account whose node is deleted. A new IdP subject becomes
 // a person.
-func (s *Store) admitPrincipal(ctx context.Context, in AdmitInput) (*admitPrincipal, error) {
+func (s *Store) admitPrincipal(ctx context.Context, in AdmitInput) (*admitPrincipal, int64, error) {
 	if in.Credential != nil {
 		return s.keyPrincipalFor(ctx, *in.Credential)
 	}
 	return s.idpPrincipal(ctx, *in.IdP)
 }
 
-func (s *Store) keyPrincipalFor(ctx context.Context, key string) (*admitPrincipal, error) {
+func (s *Store) keyPrincipalFor(ctx context.Context, key string) (*admitPrincipal, int64, error) {
 	if !secret.Parse(secret.KeyPrefix(s.brand), key) {
-		return nil, nil
+		return nil, 0, nil
 	}
 	var p admitPrincipal
 	var userID *string
@@ -146,28 +165,29 @@ func (s *Store) keyPrincipalFor(ctx context.Context, key string) (*admitPrincipa
 	var revoked bool
 	var nodeStatus *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT p.id, p.kind, p.user_id, k.id, k.allowed_cidrs, p.status, k.revoked_at IS NOT NULL, bn.status
+		SELECT p.id, p.kind, p.user_id, k.id, k.allowed_cidrs, p.status, k.revoked_at IS NOT NULL, bn.status,
+		       COALESCE((SELECT MAX(id) FROM admit_invalidations), 0)
 		FROM api_keys k
 		JOIN principals p ON p.id = k.principal_id
 		LEFT JOIN nodes bn ON bn.id = p.node_id
 		WHERE k.key_hash = $1
-	`, secret.Hash(key)).Scan(&p.id, &p.kind, &userID, &p.keyID, &p.allowedCIDRs, &status, &revoked, &nodeStatus)
+	`, secret.Hash(key)).Scan(&p.id, &p.kind, &userID, &p.keyID, &p.allowedCIDRs, &status, &revoked, &nodeStatus, &p.invalidationSeq)
 	if dbx.IsNoRows(err) {
-		return nil, nil
+		return nil, 0, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if revoked || !admissible(status, nodeStatus) {
-		return nil, nil
+		return nil, p.invalidationSeq, nil
 	}
 	if userID != nil {
 		p.userID = *userID
 	}
-	return &p, nil
+	return &p, p.invalidationSeq, nil
 }
 
-func (s *Store) idpPrincipal(ctx context.Context, c IdPClaims) (*admitPrincipal, error) {
+func (s *Store) idpPrincipal(ctx context.Context, c IdPClaims) (*admitPrincipal, int64, error) {
 	issuer, subject := strings.TrimSpace(c.Issuer), strings.TrimSpace(c.Subject)
 	var name string
 	if c.Name != nil {
@@ -175,33 +195,36 @@ func (s *Store) idpPrincipal(ctx context.Context, c IdPClaims) (*admitPrincipal,
 	}
 	var principalID, userID, status string
 	var current *string
+	var seq int64
 	err := s.pool.QueryRow(ctx, `
-		SELECT p.id, p.user_id, p.status, p.name FROM idp_links l JOIN principals p ON p.id = l.principal_id
+		SELECT p.id, p.user_id, p.status, p.name,
+		       COALESCE((SELECT MAX(id) FROM admit_invalidations), 0)
+		FROM idp_links l JOIN principals p ON p.id = l.principal_id
 		WHERE l.issuer = $1 AND l.subject = $2
-	`, issuer, subject).Scan(&principalID, &userID, &status, &current)
+	`, issuer, subject).Scan(&principalID, &userID, &status, &current, &seq)
 	switch {
 	case dbx.IsNoRows(err):
 		if s.registrar == nil {
-			return nil, errNoRegistrar
+			return nil, 0, errNoRegistrar
 		}
 		if principalID, userID, status, err = s.registrar.FirstSignIn(ctx, issuer, subject, name); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	case err != nil:
-		return nil, err
+		return nil, 0, err
 	case name != "" && current == nil:
 		// Seed the person's name if it is still empty; preserve any concurrent edit.
 		if _, err := s.pool.Exec(ctx, `
 			UPDATE principals SET name = $2, updated_at = $3
 			WHERE id = $1 AND name IS NULL
 		`, principalID, name, s.now().UTC()); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 	if !admissible(status, nil) {
-		return nil, nil
+		return nil, seq, nil
 	}
-	return &admitPrincipal{id: principalID, kind: principalPerson, userID: userID}, nil
+	return &admitPrincipal{id: principalID, kind: principalPerson, userID: userID, invalidationSeq: seq}, seq, nil
 }
 
 // claimName is a name claim as a person's name: trimmed, and cut to the
@@ -236,7 +259,7 @@ func (s *Store) resolveAdmitChain(
 	principalID string,
 	refs []ChainRef,
 	allowDeleted bool,
-) ([]ChainNode, string, []string, error) {
+) ([]ChainNode, string, []string, int64, error) {
 	n := len(refs)
 	pos := make([]int32, n)
 	kinds := make([]string, n)
@@ -245,7 +268,7 @@ func (s *Store) resolveAdmitChain(
 	for i, c := range refs {
 		isID := id.IsID(c.Ref)
 		if isID && !id.Valid(c.Ref) {
-			return nil, "", nil, nil
+			return nil, "", nil, 0, nil
 		}
 		pos[i] = int32(i + 1)
 		kinds[i] = c.Kind
@@ -260,6 +283,7 @@ func (s *Store) resolveAdmitChain(
 	var nodeIDs []string
 	var memberID *string
 	var roles []string
+	var invSeq int64
 	err := s.pool.QueryRow(ctx, `
 		WITH RECURSIVE
 			reqs (pos, kind, ref, is_id) AS (
@@ -334,22 +358,23 @@ func (s *Store) resolveAdmitChain(
 		SELECT
 			(SELECT array_agg(id ORDER BY pos) FROM resolved),
 			(SELECT id FROM member),
-			(SELECT array_agg(role) FROM roles)
-	`, pos, kinds, refVals, isIDs, n, allowDeleted, principalID, bindKinds, bindRoles).Scan(&nodeIDs, &memberID, &roles)
+			(SELECT array_agg(role) FROM roles),
+			COALESCE((SELECT MAX(id) FROM admit_invalidations), 0)
+	`, pos, kinds, refVals, isIDs, n, allowDeleted, principalID, bindKinds, bindRoles).Scan(&nodeIDs, &memberID, &roles, &invSeq)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, 0, err
 	}
 	if len(nodeIDs) != n {
-		return nil, "", nil, nil
+		return nil, "", nil, invSeq, nil
 	}
 	out := make([]ChainNode, n)
 	for i, nodeID := range nodeIDs {
 		out[i] = ChainNode{Kind: refs[i].Kind, ID: nodeID}
 	}
 	if memberID == nil {
-		return out, "", nil, nil
+		return out, "", nil, invSeq, nil
 	}
-	return out, *memberID, roles, nil
+	return out, *memberID, roles, invSeq, nil
 }
 
 // liveInChain is whether a node lets its chain resolve: live, or, with

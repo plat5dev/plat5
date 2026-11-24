@@ -27,12 +27,13 @@ On identity's `INTERNAL_PORT`. An empty chain is a user route. Contract: [`refer
 
 ### Cache
 
-In-process per replica.
+In-process per replica, backed by identity's invalidation feed (`GET {IDENTITY_INTERNAL_URL}/internal/admit-invalidations`, [`reference/api/internal.md`](api/internal.md#admit-invalidations)).
 
 | | |
 |--|--|
 | Key | The credential (a key's hash, or a verified JWT's issuer and subject), `allow_deleted`, and the chain refs as written in the path |
-| TTL | `ADMIT_CACHE_TTL` (default `5m`) |
+| Invalidation | Targeted epoch checks (`key_id`, `user_id`, `member_id`, `root_id`, global reset, and identity's `config_revision`) driven by identity's invalidation feed; entries stamped before the admit call so in-flight revocations are never pinned. A lagging identity replica returning an older `config_revision` is served without caching |
+| TTL | `ADMIT_CACHE_TTL` (default `5m`) — fallback upper bound if the invalidation feed is disconnected |
 | Negative entries | For invalid credentials and `member_id: null`, for `ADMIT_NEGATIVE_CACHE_TTL` (default `10s`). Never for identity errors |
 | Singleflight | Concurrent misses for one key share a single identity call |
 | JWT verification | Each request; the token's `exp` is checked every time |
@@ -49,9 +50,9 @@ Routes, kinds, rate limits, defaults and CORS come from the control plane (`CONT
 
 ## Rate limits
 
-Controlled by `RATE_LIMIT_ENABLED` (default `true`). When enabled, counters live in **Valkey** so replicas share one budget: `VALKEY_URL` is required to boot, `/health/ready` is **503** until Valkey answers PING, and a Valkey error or timeout (> 500ms) returns **503** on limited requests.
+Controlled by `RATE_LIMIT_ENABLED` (default `true`). When enabled, counters live in **Valkey** so replicas share one budget: `VALKEY_URL` is required to boot (URL syntax is validated at boot). Rate limiting always **fails open** when Valkey is unreachable or times out (> 500ms): requests are allowed without `X-RateLimit-*` headers, the failure is logged on state transitions and counted (`rate_limit_fail_open_total`), and a background reconnect loop restores enforcement automatically once Valkey recovers. Valkey availability does not block boot or fail `/health/ready`.
 
-When `RATE_LIMIT_ENABLED=false`, `VALKEY_URL` is ignored, Valkey need not run, `/health/ready` does not check Valkey, and configured rate limits (including the failed-auth IP limiter) are skipped. The gateway logs the mode at boot.
+When `RATE_LIMIT_ENABLED=false`, `VALKEY_URL` is ignored, Valkey need not run, and configured rate limits (including the failed-auth IP limiter) are skipped. The gateway logs the mode at boot.
 
 Policies and buckets: [rate limits](config/rate-limits.md).
 
@@ -59,13 +60,13 @@ Policies and buckets: [rate limits](config/rate-limits.md).
 |--|--|
 | Check | Every policy on the route in one round trip, counted only if all pass |
 | Exceed | **429** `RATE_LIMITED`, `details.retry_after_seconds`, `Retry-After` |
-| Admitted headers | On limited routes (2xx and 429): `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, for the tightest policy |
+| Admitted headers | On limited routes (2xx and 429) when Valkey answered: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, for the tightest policy (omitted when failing open) |
 | Keys | Under `VALKEY_KEY_PREFIX` (default `plat5:rl:`) |
 | Failed-auth IP | `RATE_LIMIT_AUTH_FAILURE_REQUESTS` / `RATE_LIMIT_AUTH_FAILURE_WINDOW` (default `60` / `60s`; `0` requests = off). What it counts: [access](../concepts/access.md#how-a-request-is-decided). **429** sets `Retry-After`; no `X-RateLimit-*` |
 
 ## Audit
 
-Controlled by `AUDIT_ENABLED` (default `true`). On an audited route other than `public`, the gateway writes an intent after the permission check and before forward, and an outcome after. Intent not written → **503**, and the service isn't called. Its own refusals after admit are one background event. `AUDIT_URL` is required to boot unless `AUDIT_ENABLED=false`. Contract: [`concepts/audit.md`](../concepts/audit.md).
+Controlled by `AUDIT_ENABLED` (default `true`) and `AUDIT_MODE` (`sync` or `async`, default `sync`). In `sync` mode, on an audited route other than `public`, the gateway writes an intent after the permission check and before forward, and an outcome after; an unwritten intent returns **503** and the service isn't called. In `async` mode, audited requests forward immediately and queue one completed event in the background after the response. In both modes, gateway refusals after admit are one background event. `AUDIT_URL` is required to boot unless `AUDIT_ENABLED=false`. Contract: [`concepts/audit.md`](../concepts/audit.md).
 
 ## Client IP
 
@@ -154,7 +155,7 @@ On public proxy responses (errors included, not `/health` or `/metrics`), each a
 
 ## Boot and ready
 
-The gateway listens only once it has a control-plane snapshot. `/health/ready` is **200** when JWKS is loaded **and** (when `RATE_LIMIT_ENABLED=true`) Valkey answers PING within 500ms, otherwise **503**. The control plane and audit aren't part of ready: while the control plane is down, the gateway serves its last snapshot; while audit is down, audited routes return **503** and unaudited routes keep working.
+The gateway listens only once it has a control-plane snapshot. `/health/ready` is **200** when JWKS is loaded, otherwise **503**. The JSON body still reports `checks.valkey_ready` for visibility when `RATE_LIMIT_ENABLED=true`, but a Valkey outage does not fail readiness (rate limiting fails open). The control plane and audit aren't part of ready: while the control plane is down, the gateway serves its last snapshot; while audit is down, audited routes return **503** in `sync` mode (or queue in `async` mode) and unaudited routes keep working.
 
 ## Errors
 
@@ -167,7 +168,7 @@ The gateway listens only once it has a control-plane snapshot. `/health/ready` i
 | Request body too large | `PAYLOAD_TOO_LARGE` (413) |
 | Bad `/access/routes` body | `VALIDATION_ERROR` (422) |
 | Rate limit (route policy or failed-auth IP) | `RATE_LIMITED` (429) |
-| JWKS, Valkey, identity, or audit intent down | `SERVICE_UNAVAILABLE` (503) |
+| JWKS, identity, or sync audit intent down | `SERVICE_UNAVAILABLE` (503) |
 | Upstream unreachable, timed out, or failing mid-proxy | **502** `SERVICE_UNAVAILABLE` |
 | Path param `.` / `..` or containing `/` / `?` / `#` | `INVALID_REQUEST` (400) |
 

@@ -113,9 +113,14 @@ func (s *Store) SetStatus(ctx context.Context, userID, status string) (string, *
 	if !id.Valid(userID) {
 		return "", nil, op.Expected("not found", ErrNotFound)
 	}
+	w, err := s.begin(ctx)
+	if err != nil {
+		return "", nil, op.Fail(err)
+	}
+	defer w.rollback(ctx)
 	var u User
 	var before string
-	err := s.pool.QueryRow(ctx, `
+	err = w.tx.QueryRow(ctx, `
 		UPDATE principals p SET status = $2, updated_at = CASE WHEN old.status = $2 THEN p.updated_at ELSE $3 END
 		FROM (SELECT id, status FROM principals WHERE user_id = $1 AND kind = 'person' FOR UPDATE) old
 		WHERE p.id = old.id
@@ -125,6 +130,34 @@ func (s *Store) SetStatus(ctx context.Context, userID, status string) (string, *
 		return "", nil, op.Expected("not found", ErrNotFound)
 	}
 	if err != nil {
+		return "", nil, op.Fail(err)
+	}
+	if before != status {
+		w.invalidate(lifecycle.InvalidateUser(u.ID))
+		mRows, err := w.tx.Query(ctx, `SELECT id FROM members WHERE principal_id = $1 AND removed_at IS NULL`, u.principalID)
+		if err != nil {
+			return "", nil, op.Fail(err)
+		}
+		memberIDs, err := pgx.CollectRows(mRows, pgx.RowTo[string])
+		if err != nil {
+			return "", nil, op.Fail(err)
+		}
+		for _, mid := range memberIDs {
+			w.invalidate(lifecycle.InvalidateMember(mid))
+		}
+		kRows, err := w.tx.Query(ctx, `SELECT id FROM api_keys WHERE principal_id = $1 AND revoked_at IS NULL`, u.principalID)
+		if err != nil {
+			return "", nil, op.Fail(err)
+		}
+		keyIDs, err := pgx.CollectRows(kRows, pgx.RowTo[string])
+		if err != nil {
+			return "", nil, op.Fail(err)
+		}
+		for _, kid := range keyIDs {
+			w.invalidate(lifecycle.InvalidateKey(kid))
+		}
+	}
+	if err := w.commit(ctx); err != nil {
 		return "", nil, op.Fail(err)
 	}
 	op.OK("ok")
@@ -293,6 +326,14 @@ func (s *Store) deleteAccountOnce(ctx context.Context, userID string) (bool, err
 			return false, err
 		}
 	}
+	keyRows, err := w.tx.Query(ctx, `SELECT id FROM api_keys WHERE principal_id = $1 AND revoked_at IS NULL`, u.principalID)
+	if err != nil {
+		return false, err
+	}
+	keyIDs, err := pgx.CollectRows(keyRows, pgx.RowTo[string])
+	if err != nil {
+		return false, err
+	}
 	tag, err := w.tx.Exec(ctx, `DELETE FROM principals WHERE id = $1`, u.principalID)
 	if err != nil {
 		return false, err
@@ -302,6 +343,10 @@ func (s *Store) deleteAccountOnce(ctx context.Context, userID string) (bool, err
 		return false, nil
 	}
 	w.event(lifecycle.UserDeleted(u.ID))
+	w.invalidate(lifecycle.InvalidateUser(u.ID))
+	for _, kid := range keyIDs {
+		w.invalidate(lifecycle.InvalidateKey(kid))
+	}
 	if err := w.commit(ctx); err != nil {
 		return false, err
 	}

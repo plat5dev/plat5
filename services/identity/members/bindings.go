@@ -12,6 +12,7 @@ import (
 	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 	"github.com/plat5dev/plat5/identity/internal/id"
+	"github.com/plat5dev/plat5/identity/lifecycle"
 	"github.com/plat5dev/plat5/identity/nodes"
 )
 
@@ -77,6 +78,7 @@ func (s *Store) insertBinding(ctx context.Context, w *write, memberID, nodeID, r
 	if err != nil {
 		return nil, err
 	}
+	w.invalidate(lifecycle.InvalidateMember(memberID))
 	return scanBinding(w.tx.QueryRow(ctx, bindingSelect(`b.id = $2`), nodeID, bindingID))
 }
 
@@ -122,6 +124,7 @@ func (s *Store) CreateGroupBinding(ctx context.Context, snap *feed.Snapshot, nod
 	if err != nil {
 		return nil, op.Reject(err)
 	}
+	w.invalidate(lifecycle.InvalidateRoot(n.RootID))
 	if err := w.commit(ctx); err != nil {
 		return nil, op.Fail(err)
 	}
@@ -231,6 +234,13 @@ func (s *Store) PatchBinding(ctx context.Context, snap *feed.Snapshot, nodeID, b
 	if err != nil {
 		return nil, nil, op.Fail(err)
 	}
+	if before.Role != role {
+		if before.MemberID != nil {
+			w.invalidate(lifecycle.InvalidateMember(*before.MemberID))
+		} else if before.GroupID != nil {
+			w.invalidate(lifecycle.InvalidateRoot(n.RootID))
+		}
+	}
 	if err := w.commit(ctx); err != nil {
 		return nil, nil, op.Fail(err)
 	}
@@ -278,9 +288,12 @@ func (s *Store) DeleteBinding(ctx context.Context, nodeID, bindingID string) (*B
 		return nil, op.Fail(err)
 	}
 	if b.MemberID != nil {
+		w.invalidate(lifecycle.InvalidateMember(*b.MemberID))
 		if err := s.removeEmptyPeople(ctx, w, []string{*b.MemberID}); err != nil {
 			return nil, op.Fail(err)
 		}
+	} else if b.GroupID != nil {
+		w.invalidate(lifecycle.InvalidateRoot(n.RootID))
 	}
 	if err := w.commit(ctx); err != nil {
 		return nil, op.Fail(err)

@@ -78,7 +78,8 @@ impl HealthHttpApp {
         let valkey_ready =
             !self.state.limiter.is_enabled() || self.state.limiter.ping().await.is_ok();
 
-        let (status, http_status) = if jwks_ready && valkey_ready {
+        // Rate limiting fails open when Valkey is down, so only JWKS gates readiness.
+        let (status, http_status) = if jwks_ready {
             ("healthy", 200)
         } else {
             ("unhealthy", 503)

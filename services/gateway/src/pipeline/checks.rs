@@ -252,7 +252,10 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
                 retry_after,
                 info: tightest(infos),
             }),
-            Err(Unavailable) => Err(Rejection::Unavailable),
+            Err(Unavailable) => {
+                crate::metrics::record_rate_limit_fail_open("route_checks");
+                Ok(None)
+            }
         }
     }
 }

@@ -4,6 +4,7 @@
 
 pub mod admit;
 pub mod call;
+pub mod invalidations;
 pub mod jwt;
 
 use pingora::http::RequestHeader;

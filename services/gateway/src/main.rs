@@ -52,12 +52,13 @@ fn main() {
     }
 
     let limiter = if let Some(ref url) = cfg.valkey_url {
-        info!(key_prefix = %cfg.valkey_key_prefix, "rate limiting on");
-        rt.block_on(gateway::rate_limit::RateLimiter::connect(
+        info!(key_prefix = %cfg.valkey_key_prefix, "rate limiting on (fail-open when Valkey unavailable)");
+        rt.block_on(gateway::rate_limit::RateLimiter::connect_or_start(
             url,
             cfg.valkey_key_prefix.clone(),
+            rt.handle(),
         ))
-        .unwrap_or_else(|e| panic!("failed to connect to valkey: {e}"))
+        .unwrap_or_else(|e| panic!("invalid VALKEY_URL: {e}"))
     } else {
         tracing::warn!("RATE_LIMIT_ENABLED=false: rate limiting is off and Valkey is not used");
         gateway::rate_limit::RateLimiter::disabled()
@@ -71,12 +72,19 @@ fn main() {
     }
 
     // Background audit writes run on this runtime, off the request path.
-    let audit = gateway::audit::Audit::new(cfg.audit_url.clone(), rt.handle());
+    let audit = gateway::audit::Audit::new(cfg.audit_url.clone(), cfg.audit_mode, rt.handle());
     if let Some(url) = cfg.audit_url.as_deref() {
-        info!(audit_url = %url, "audit on");
+        info!(audit_url = %url, mode = cfg.audit_mode.as_str(), "audit on");
     } else {
         tracing::warn!("AUDIT_ENABLED=false: audit is off and no audit log is recorded");
     }
+
+    let audit_drain =
+        pingora::services::background::background_service("Audit Drain", AuditDrain(audit.clone()));
+    my_server.add_service(audit_drain);
+
+    let invalidations = auth::invalidations::InvalidationTracker::new(cfg.admit_cache_ttl);
+    invalidations.spawn_follower(cfg.identity_internal_url.clone(), rt.handle());
 
     let mut my_proxy = pingora::proxy::http_proxy_service(
         &my_server.configuration,
@@ -86,6 +94,7 @@ fn main() {
             snapshot,
             limiter.clone(),
             audit,
+            invalidations,
         ),
     );
     my_proxy.add_tcp(&format!("0.0.0.0:{}", cfg.port));
@@ -99,4 +108,14 @@ fn main() {
     my_server.add_service(health_service);
 
     my_server.run_forever();
+}
+
+struct AuditDrain(gateway::audit::Audit);
+
+#[async_trait::async_trait]
+impl pingora::services::background::BackgroundService for AuditDrain {
+    async fn start(&self, mut shutdown: pingora::server::ShutdownWatch) {
+        let _ = shutdown.changed().await;
+        self.0.drain(std::time::Duration::from_secs(5)).await;
+    }
 }

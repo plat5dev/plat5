@@ -58,15 +58,36 @@ func (s *Store) CreateIntent(ctx context.Context, in *Intent, final *Outcome) (c
 		return false, op.Fail(err)
 	}
 	outcome, status := OutcomePending, (*int)(nil)
+	var details any
+	var createdID *string
+	namedNodes := []string{}
+	var namedMemberID *string
 	if final != nil {
 		outcome, status = final.Outcome, final.Status
+		if final.Details != nil {
+			details = string(final.Details)
+		}
+		createdID = final.CreatedID
+		// Only a user route's event (root_id IS NULL) carries named nodes/member.
+		if in.RootID == nil {
+			if final.NamedNodeIDs != nil {
+				namedNodes = final.NamedNodeIDs
+			}
+			namedMemberID = final.NamedMemberID
+		}
 	}
-	logs := make([]string, 0, len(in.Nodes)+1)
+	logs := make([]string, 0, len(in.Nodes)+len(namedNodes)+2)
 	for _, n := range in.Nodes {
 		logs = append(logs, n.ID)
 	}
 	if in.Actor.UserID != nil {
 		logs = append(logs, UserLog(*in.Actor.UserID))
+	}
+	if final != nil {
+		logs = append(logs, namedNodes...)
+		if createdID != nil {
+			logs = append(logs, *createdID)
+		}
 	}
 	eventID := id.NewAt(in.OccurredAt)
 
@@ -83,10 +104,10 @@ func (s *Store) CreateIntent(ctx context.Context, in *Intent, final *Outcome) (c
 		tag, err := tx.Exec(ctx, `
 			INSERT INTO audit_events (id, occurred_at, request_id, root_id, nodes, actor_member_id, actor_user_id,
 				actor_principal, actor_auth_type, actor_key_id, service, method, route, params, ip, user_agent,
-				outcome, status)
+				outcome, status, details, created_id, named_node_ids, named_member_id)
 			SELECT $1::text, $2::timestamptz, $3::text, $4::text, $5::jsonb, $6::text, $7::text, $8::text,
 				$9::text, $10::text, $11::text, $12::text, $13::text, $14::jsonb, $15::text, $16::text,
-				$17::text, $18::integer
+				$17::text, $18::integer, $19::jsonb, $20::text, $21::text[], $22::text
 			WHERE NOT EXISTS (
 				SELECT 1 FROM audit_events
 				WHERE request_id = $3::text
@@ -96,7 +117,8 @@ func (s *Store) CreateIntent(ctx context.Context, in *Intent, final *Outcome) (c
 			ON CONFLICT DO NOTHING
 		`, eventID, in.OccurredAt, in.RequestID, in.RootID, string(nodes),
 			in.Actor.MemberID, in.Actor.UserID, in.Actor.Principal, in.Actor.AuthType, in.Actor.KeyID,
-			in.Service, in.Method, in.Route, string(params), in.IP, in.UserAgent, outcome, status)
+			in.Service, in.Method, in.Route, string(params), in.IP, in.UserAgent,
+			outcome, status, details, createdID, namedNodes, namedMemberID)
 		if err != nil || tag.RowsAffected() == 0 {
 			return false, err
 		}

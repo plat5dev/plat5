@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -228,7 +229,9 @@ func ParseDuration(v string) (time.Duration, error) {
 
 // Source holds the current snapshot. Nil until the first one is stored.
 type Source struct {
-	cur atomic.Pointer[Snapshot]
+	cur     atomic.Pointer[Snapshot]
+	mu      sync.Mutex
+	changed chan struct{}
 }
 
 // Static is a Source that holds s, for tests.
@@ -239,9 +242,26 @@ func Static(s *Snapshot) *Source {
 }
 
 func (src *Source) Store(s *Snapshot) {
-	if s != nil {
-		src.cur.Store(s)
+	if s == nil {
+		return
 	}
+	src.cur.Store(s)
+	src.mu.Lock()
+	if src.changed != nil {
+		close(src.changed)
+		src.changed = nil
+	}
+	src.mu.Unlock()
+}
+
+// Changed returns a channel closed the next time Store updates the snapshot.
+func (src *Source) Changed() <-chan struct{} {
+	src.mu.Lock()
+	defer src.mu.Unlock()
+	if src.changed == nil {
+		src.changed = make(chan struct{})
+	}
+	return src.changed
 }
 
 // Current is the snapshot in use, or nil before the first.
@@ -252,4 +272,12 @@ func (src *Source) Current() *Snapshot {
 // Loaded is whether identity has a config to serve with.
 func (src *Source) Loaded() bool {
 	return src.cur.Load() != nil
+}
+
+// Revision is the current snapshot's revision, or 0 before the first load.
+func (src *Source) Revision() int64 {
+	if s := src.cur.Load(); s != nil {
+		return s.Revision
+	}
+	return 0
 }

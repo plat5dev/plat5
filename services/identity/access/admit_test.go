@@ -16,7 +16,7 @@ import (
 // table (docs/concepts/access.md#how-a-request-is-decided).
 
 // admitFields is every field of every answer.
-var admitFields = []string{"valid", "principal", "key_id", "nodes", "member_id", "user_id", "permissions"}
+var admitFields = []string{"valid", "principal", "key_id", "allowed_cidrs", "nodes", "member_id", "user_id", "permissions", "invalidation_seq", "config_revision"}
 
 // gatewayStatus is what the gateway answers for an admit response on a route
 // requiring need (nil on a user route, "any_member" for any member).

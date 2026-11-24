@@ -10,6 +10,7 @@ import (
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 	"github.com/plat5dev/plat5/identity/internal/id"
+	"github.com/plat5dev/plat5/identity/lifecycle"
 	"github.com/plat5dev/plat5/identity/nodes"
 )
 
@@ -207,6 +208,7 @@ func (s *Store) DeleteGroup(ctx context.Context, rootID, groupID string) (*Group
 	if _, err := w.tx.Exec(ctx, `DELETE FROM groups WHERE id = $1`, g.ID); err != nil {
 		return nil, op.Fail(err)
 	}
+	w.invalidate(lifecycle.InvalidateRoot(root.ID))
 	if err := s.removeEmptyPeople(ctx, w, formerMembers); err != nil {
 		return nil, op.Fail(err)
 	}
@@ -284,6 +286,7 @@ func (s *Store) AddGroupMember(ctx context.Context, rootID, groupID, memberID st
 	if err != nil {
 		return nil, op.Fail(err)
 	}
+	w.invalidate(lifecycle.InvalidateMember(memberID))
 	if err := w.commit(ctx); err != nil {
 		return nil, op.Fail(err)
 	}
@@ -328,6 +331,7 @@ func (s *Store) RemoveGroupMember(ctx context.Context, rootID, groupID, memberID
 		op.OK("unchanged")
 		return false, nil
 	}
+	w.invalidate(lifecycle.InvalidateMember(memberID))
 	if err := s.removeEmptyPeople(ctx, w, []string{memberID}); err != nil {
 		return false, op.Fail(err)
 	}

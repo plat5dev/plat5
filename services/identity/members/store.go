@@ -55,11 +55,12 @@ var (
 // active member per principal per tree" and "removed when left with no
 // bindings" can't race.
 type Store struct {
-	pool   *pgxpool.Pool
-	nodes  *nodes.Store
-	brand  string
-	tracer trace.Tracer
-	now    func() time.Time
+	pool         *pgxpool.Pool
+	nodes        *nodes.Store
+	brand        string
+	tracer       trace.Tracer
+	now          func() time.Time
+	onInvalidate func(context.Context)
 }
 
 // NewStore needs SECRET_BRAND for the keys and invite tokens it mints and reads.
@@ -73,6 +74,12 @@ func NewStore(pool *pgxpool.Pool, nodeStore *nodes.Store, brand string) *Store {
 	}
 }
 
+// WithInvalidationNotifier registers a callback invoked after a transaction
+// commits admit invalidations, so local long-poll readers wake immediately.
+func (s *Store) WithInvalidationNotifier(fn func(context.Context)) {
+	s.onInvalidate = fn
+}
+
 // WithClock is the store with a fixed notion of now, for tests of expiry. The
 // node store it creates nodes with gets the same clock.
 func (s *Store) WithClock(now func() time.Time) *Store {
@@ -82,11 +89,14 @@ func (s *Store) WithClock(now func() time.Time) *Store {
 	return &c
 }
 
-// write is one transaction whose lifecycle events are recorded last, after
-// every other write, since recording holds the log's lock until commit.
+// write is one transaction whose lifecycle events and admit invalidations are
+// recorded last, after every other write, since recording holds the log's lock
+// until commit.
 type write struct {
-	tx     pgx.Tx
-	events []lifecycle.Event
+	tx            pgx.Tx
+	events        []lifecycle.Event
+	invalidations []lifecycle.Invalidation
+	onInvalidate  func(context.Context)
 }
 
 func (s *Store) begin(ctx context.Context) (*write, error) {
@@ -94,18 +104,28 @@ func (s *Store) begin(ctx context.Context) (*write, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &write{tx: tx}, nil
+	return &write{tx: tx, onInvalidate: s.onInvalidate}, nil
 }
 
 func (w *write) event(e lifecycle.Event) {
 	w.events = append(w.events, e)
 }
 
+func (w *write) invalidate(invs ...lifecycle.Invalidation) {
+	w.invalidations = append(w.invalidations, invs...)
+}
+
 func (w *write) commit(ctx context.Context) error {
-	if err := lifecycle.RecordBatch(ctx, w.tx, w.events); err != nil {
+	if err := lifecycle.RecordCommit(ctx, w.tx, w.events, w.invalidations); err != nil {
 		return err
 	}
-	return w.tx.Commit(ctx)
+	if err := w.tx.Commit(ctx); err != nil {
+		return err
+	}
+	if w.onInvalidate != nil && len(w.invalidations) > 0 {
+		w.onInvalidate(ctx)
+	}
+	return nil
 }
 
 func (w *write) rollback(ctx context.Context) {
@@ -183,6 +203,7 @@ func (s *Store) removeMember(ctx context.Context, w *write, m *memberRow) error 
 		return err
 	}
 	w.event(lifecycle.MemberEvent(lifecycle.TypeMemberRemoved, m.id, m.rootID, m.principal))
+	w.invalidate(lifecycle.InvalidateMember(m.id))
 	return nil
 }
 
@@ -213,6 +234,7 @@ func (s *Store) removeEmptyPeople(ctx context.Context, w *write, memberIDs []str
 	sort.Slice(removed, func(i, j int) bool { return removed[i][0] < removed[j][0] })
 	for _, m := range removed {
 		w.event(lifecycle.MemberEvent(lifecycle.TypeMemberRemoved, m[0], m[1], PrincipalPerson))
+		w.invalidate(lifecycle.InvalidateMember(m[0]))
 	}
 	return nil
 }

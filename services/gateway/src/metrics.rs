@@ -116,6 +116,40 @@ pub static GATEWAY_CONFIG_REFUSED_TOTAL: LazyLock<IntCounterVec> = LazyLock::new
     .expect("failed to register gateway_config_refused_total")
 });
 
+pub static RATE_LIMIT_FAIL_OPEN_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "rate_limit_fail_open_total",
+        "Rate-limit checks allowed fail-open while Valkey was unavailable, by reason",
+        &["reason"]
+    )
+    .expect("failed to register rate_limit_fail_open_total")
+});
+
+pub static VALKEY_UP: LazyLock<IntGauge> = LazyLock::new(|| {
+    register_int_gauge!(
+        "valkey_up",
+        "1 when the gateway's Valkey connection is healthy, 0 when failing open"
+    )
+    .expect("failed to register valkey_up")
+});
+
+pub static AUDIT_QUEUE_DEPTH: LazyLock<IntGauge> = LazyLock::new(|| {
+    register_int_gauge!(
+        "audit_queue_depth",
+        "Queued background audit writes waiting to be sent to the audit service"
+    )
+    .expect("failed to register audit_queue_depth")
+});
+
+pub static ADMIT_INVALIDATIONS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "admit_invalidations_total",
+        "Admit cache invalidations received from identity, by scope",
+        &["scope"]
+    )
+    .expect("failed to register admit_invalidations_total")
+});
+
 // OTEL dual-write instruments. No-op until a MeterProvider is installed.
 struct OtelInstruments {
     http_requests: Counter<u64>,
@@ -126,8 +160,12 @@ struct OtelInstruments {
     auth_cache_misses: Counter<u64>,
     audit_writes: Counter<u64>,
     audit_intent_duration: Histogram<f64>,
+    audit_queue_depth: Gauge<i64>,
     config_revision: Gauge<i64>,
     config_refused: Counter<u64>,
+    rate_limit_fail_open: Counter<u64>,
+    valkey_up: Gauge<i64>,
+    admit_invalidations: Counter<u64>,
 }
 
 static OTEL: LazyLock<OtelInstruments> = LazyLock::new(|| {
@@ -164,7 +202,7 @@ static OTEL: LazyLock<OtelInstruments> = LazyLock::new(|| {
         audit_writes: meter
             .u64_counter("audit_writes_total")
             .with_description(
-                "Audit writes to the audit service by write (intent, outcome, rejected) and result",
+                "Audit writes to the audit service by write (intent, outcome, rejected, event) and result",
             )
             .build(),
         audit_intent_duration: meter
@@ -174,6 +212,12 @@ static OTEL: LazyLock<OtelInstruments> = LazyLock::new(|| {
             )
             .with_boundaries(vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0])
             .build(),
+        audit_queue_depth: meter
+            .i64_gauge("audit_queue_depth")
+            .with_description(
+                "Queued background audit writes waiting to be sent to the audit service",
+            )
+            .build(),
         config_revision: meter
             .i64_gauge("gateway_config_revision")
             .with_description("The control-plane revision this replica serves")
@@ -181,6 +225,22 @@ static OTEL: LazyLock<OtelInstruments> = LazyLock::new(|| {
         config_refused: meter
             .u64_counter("gateway_config_refused_total")
             .with_description("Control-plane snapshots this replica refused, by revision")
+            .build(),
+        rate_limit_fail_open: meter
+            .u64_counter("rate_limit_fail_open_total")
+            .with_description(
+                "Rate-limit checks allowed fail-open while Valkey was unavailable, by reason",
+            )
+            .build(),
+        valkey_up: meter
+            .i64_gauge("valkey_up")
+            .with_description(
+                "1 when the gateway's Valkey connection is healthy, 0 when failing open",
+            )
+            .build(),
+        admit_invalidations: meter
+            .u64_counter("admit_invalidations_total")
+            .with_description("Admit cache invalidations received from identity, by scope")
             .build(),
     }
 });
@@ -285,4 +345,32 @@ pub fn record_config_refused(revision: i64) {
         .inc();
     OTEL.config_refused
         .add(1, &[KeyValue::new("revision", revision)]);
+}
+
+/// A rate-limit check allowed fail-open while Valkey was unavailable.
+/// `reason` is `route`, `route_checks`, or `auth_failure`.
+pub fn record_rate_limit_fail_open(reason: &str) {
+    RATE_LIMIT_FAIL_OPEN_TOTAL
+        .with_label_values(&[reason])
+        .inc();
+    OTEL.rate_limit_fail_open
+        .add(1, &[KeyValue::new("reason", reason.to_string())]);
+}
+
+pub fn record_valkey_up(up: bool) {
+    let val = i64::from(up);
+    VALKEY_UP.set(val);
+    OTEL.valkey_up.record(val, &[]);
+}
+
+pub fn record_audit_queue_depth(depth: i64) {
+    AUDIT_QUEUE_DEPTH.set(depth);
+    OTEL.audit_queue_depth.record(depth, &[]);
+}
+
+/// An admit cache invalidation received from identity (`key`, `user`, `member`, `root`, `reset`, `config_revision`).
+pub fn record_admit_invalidation(scope: &str) {
+    ADMIT_INVALIDATIONS_TOTAL.with_label_values(&[scope]).inc();
+    OTEL.admit_invalidations
+        .add(1, &[KeyValue::new("scope", scope.to_string())]);
 }

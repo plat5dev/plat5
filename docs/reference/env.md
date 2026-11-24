@@ -22,6 +22,7 @@ Internal ports (`INTERNAL_PORT`) take no token. Keep them inside the deployment'
 | `VALKEY_KEY_PREFIX` | Prefix for Valkey rate-limit keys. Default `plat5:rl:` (non-empty visible ASCII, no whitespace) |
 | `RATE_LIMIT_AUTH_FAILURE_REQUESTS`, `RATE_LIMIT_AUTH_FAILURE_WINDOW` | Failed-auth IP limiter (active when `RATE_LIMIT_ENABLED=true`). Default `60` and `60s`; `0` requests = off |
 | `AUDIT_ENABLED` | Default `true`. Set `false` to run without writing audit events ([audit](../concepts/audit.md#on-and-off)) |
+| `AUDIT_MODE` | `sync` (default) or `async`. In `sync`, audited writes wait on an intent write before forwarding (**503** on failure). In `async`, writes forward immediately and queue one completed event in the background ([delivery](../concepts/audit.md#delivery)) |
 | `AUDIT_URL` | Audit's internal base URL, e.g. `http://audit:3003`. Required unless `AUDIT_ENABLED=false` |
 | `TRUSTED_PROXIES` | Comma-separated IPs/CIDRs trusted for `X-Forwarded-For` and `X-Forwarded-Proto` ([client IP](gateway.md#client-ip)) |
 | `UPSTREAM_SIGNING_KEY` | Optional 32-byte Ed25519 seed encoded as base64url without padding. When set, every upstream request carries `X-Plat5-Signature` ([signing](headers.md#upstream-request-signing)); empty-but-set or invalid refuses boot |

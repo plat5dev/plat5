@@ -69,8 +69,13 @@ func main() {
 	nodeStore := nodes.NewStore(pool)
 	memberStore := members.NewStore(pool, nodeStore, cfg.SecretBrand)
 	accessStore := access.NewStore(pool, cfg.SecretBrand, memberStore)
+	invalidationStore := lifecycle.NewInvalidationStore(pool)
+	invalidationHandler := lifecycle.NewInvalidationHandler(invalidationStore, src, lifecycle.LongPollWait)
+	nodeStore.WithInvalidationNotifier(invalidationHandler.Notify)
+	memberStore.WithInvalidationNotifier(invalidationHandler.Notify)
 	sweeper := nodes.NewSweeper(nodeStore, baseLogger)
 	sweeper.Also("expire invites", memberStore.ExpireInvites)
+	sweeper.Also("prune admit invalidations", invalidationStore.Prune)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -92,9 +97,14 @@ func main() {
 		defer wg.Done()
 		lifecycleHandler.Follow(runCtx, lifecycle.PollInterval, baseLogger)
 	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		invalidationHandler.Follow(runCtx, lifecycle.PollInterval, baseLogger)
+	}()
 
 	app := newPublicApp(telem, nodeHandler, memberHandler)
-	internalApp := newInternalApp(telem, pool, src, lifecycleHandler, nodeHandler, accessHandler)
+	internalApp := newInternalApp(telem, pool, src, lifecycleHandler, invalidationHandler, nodeHandler, accessHandler)
 
 	baseLogger.Info().
 		Str("port", cfg.Port).
@@ -170,6 +180,7 @@ func newInternalApp(
 	pool *pgxpool.Pool,
 	src *feed.Source,
 	lifecycleHandler *lifecycle.Handler,
+	invalidationHandler *lifecycle.InvalidationHandler,
 	nodeHandler *nodes.Handler,
 	accessHandler *access.Handler,
 ) *fiber.App {
@@ -191,10 +202,11 @@ func newInternalApp(
 		return c.JSON(fiber.Map{"status": "healthy"})
 	})
 	app.Get("/metrics", adaptor.HTTPHandler(metrics.Handler()))
-	// The lifecycle log is long-polled: off traces and request metrics, like
-	// health, with only a 5xx logged. Mounted before /internal's traced group,
-	// so that group's middleware never runs for it.
+	// The lifecycle log and admit invalidations feed are long-polled: off traces
+	// and request metrics, like health, with only a 5xx logged. Mounted before
+	// /internal's traced group, so that group's middleware never runs for them.
 	app.Get(lifecycle.Path, middleware.FailureLogger(telem), lifecycleHandler.List)
+	app.Get(lifecycle.InvalidationsPath, middleware.FailureLogger(telem), invalidationHandler.List)
 
 	// Health and /metrics stay off traces and HTTP RED (docs/reference/health.md).
 	// No token: internal ports are reachable only inside the deployment's

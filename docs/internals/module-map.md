@@ -95,7 +95,7 @@ No cycles. `events` is the only domain package.
 | gw `gateway` | Pingora request handler, upstream peer resolution/SSRF checks, Ed25519 request signing | nearly every module | `lib`, `config` (`signing`) |
 | gw `pipeline` | Per-request decision: admit, permissions, rate limits, route checks, upstream fill | route_map, auth, rate_limit, control_plane, error, kinds, metrics | gateway |
 | gw `route_map` | Route table built from the control-plane snapshot, with compiled upstream templates | kinds, duration | gateway, pipeline, control_plane, error |
-| gw `auth` | JWT validation, admit calls and cache, IP allowlist checks | error, internal_http, client_ip, metrics | gateway, pipeline, audit, config, health |
+| gw `auth` | JWT validation, admit calls and cache, admit invalidation follower/epochs, IP allowlist checks | error, internal_http, client_ip, metrics | gateway, pipeline, audit, config, health |
 | gw `control_plane` | Follows the control-plane feed, swaps snapshots atomically | route_map, cors, kinds, duration, metrics | gateway, pipeline |
 | gw `cors` | CORS policy compiled from the control plane's `cors` document | none | gateway, control_plane |
 | gw `client_ip` | Trusted proxies, CIDR parsing, client IP and scheme extraction | none | gateway, auth, config |
@@ -114,7 +114,7 @@ No cycles. `events` is the only domain package.
 | id `access` | Read/decision plane: gateway admit, AuthZEN evaluation and resource search, role-to-permission resolution | nodes, feed, internal/*, errors, metrics | main, members |
 | id `members` | Users, people, service accounts, groups, invites, bindings, keys | access, nodes, lifecycle, feed, internal/*, errors, metrics | main |
 | id `nodes` | Node tree, slugs, purge sweeper, plan counts | lifecycle, feed, internal/*, errors, metrics | main, members |
-| id `lifecycle` | Commit-ordered lifecycle event log | errors, internal/dbx, internal/httpx | main, members, nodes |
+| id `lifecycle` | Commit-ordered lifecycle event log and admit invalidations feed | errors, internal/dbx, internal/httpx | main, members, nodes |
 | id `feed` | Follows the control plane's identity feed | none | main, members, nodes |
 | id `internal/*` | HTTP and DB helpers, ids, audit details, secrets | errors, metrics | members, nodes, lifecycle |
 | id infra | config, db, errors, metrics, middleware, telemetry | none (middleware → errors, metrics, telemetry) | everything |

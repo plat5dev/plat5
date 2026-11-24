@@ -47,10 +47,10 @@ Optional tuning:
 
 ### Optional modules
 
-Both **audit** and **rate limiting** default to on and fail closed if their backing service is missing:
+Both **audit** and **rate limiting** default to on (`AUDIT_URL` and `VALKEY_URL` are required unless turned off):
 
-- **Without audit:** set `AUDIT_ENABLED=false` on the gateway and don't run the `audit` container (and omit `audit` from your control-plane `services` config).
-- **Without rate limiting:** set `RATE_LIMIT_ENABLED=false` on the gateway and don't run `valkey`. Rate-limit policies in your config are still accepted at apply and ignored at runtime.
+- **Without audit:** set `AUDIT_ENABLED=false` on the gateway and don't run the `audit` container (and omit `audit` from your control-plane `services` config). With audit on, set `AUDIT_MODE=async` if you prefer lower write latency over `sync` fail-closed intent durability.
+- **Without rate limiting:** set `RATE_LIMIT_ENABLED=false` on the gateway and don't run `valkey`. Rate-limit policies in your config are still accepted at apply and ignored at runtime. When enabled, rate limiting fails open if Valkey is unreachable and resumes automatically when Valkey recovers.
 
 Full env reference: [`reference/env.md`](../reference/env.md).
 

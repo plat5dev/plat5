@@ -24,7 +24,9 @@ POST /internal/admit
   "nodes": [ { "kind": "organization", "id": "01jbw…" }, { "kind": "project", "id": "01jbx…" } ],
   "member_id": "01jby…",
   "user_id": null,
-  "permissions": ["catalog:write", "project:read"]
+  "permissions": ["catalog:write", "project:read"],
+  "invalidation_seq": 42,
+  "config_revision": 7
 }
 ```
 
@@ -35,7 +37,7 @@ POST /internal/admit
 
 An empty `chain` is a user route: `nodes`, `member_id` and `permissions` are empty. For a person, `user_id` is the person's. A valid service account answers `valid: true` and `principal: "service_account"` with `user_id: null`: it has no user, and the gateway refuses it there. On a tree route `user_id` is `null`.
 
-Every field is in every answer, so the gateway never sees a missing one. With `valid: false`, `principal`, `key_id`, `member_id` and `user_id` are `null`, and `allowed_cidrs`, `nodes` and `permissions` are empty. A missing node and a caller outside the tree both answer `member_id: null` with empty `nodes` and `permissions`. `key_id` is the key's id for a key, `null` for a JWT. `allowed_cidrs` is the key's IP allowlist (`[]` for a JWT or an unrestricted key). `permissions` is sorted, with `*` as the role wrote it.
+Every field is in every answer, so the gateway never sees a missing one. With `valid: false`, `principal`, `key_id`, `member_id` and `user_id` are `null`, and `allowed_cidrs`, `nodes` and `permissions` are empty. A missing node and a caller outside the tree both answer `member_id: null` with empty `nodes` and `permissions`. `key_id` is the key's id for a key, `null` for a JWT. `allowed_cidrs` is the key's IP allowlist (`[]` for a JWT or an unrestricted key). `permissions` is sorted, with `*` as the role wrote it. `invalidation_seq` is the commit-ordered head of identity's invalidation log as of this read, and `config_revision` is the control-plane revision identity used to resolve permissions.
 
 Identity resolves `chain` by kind name only and doesn't check it against its kinds: a gateway a revision ahead or behind gets `member_id: null`, not an error. A body identity can't read is **422**: neither or both of `credential` and `idp`, or an `idp` without `issuer` or `subject`.
 
@@ -51,6 +53,35 @@ Identity resolves `chain` by kind name only and doesn't check it against its kin
 | Transport error, non-2xx, missing fields | **503** |
 
 The order of these steps, and which answers the failed-auth IP limiter counts: [access](../../concepts/access.md#how-a-request-is-decided).
+
+### Admit invalidations
+
+Long-poll feed of commit-ordered access invalidations for gateway admit caches (`GET {IDENTITY_INTERNAL_URL}/internal/admit-invalidations`). Never exposes a `principal_id`; every target is an id the gateway already receives from admit.
+
+```
+GET /internal/admit-invalidations?after=41&config_revision=7
+→ 200
+{
+  "head": 43,
+  "config_revision": 7,
+  "reset": false,
+  "events": [
+    { "id": 42, "scope": "key", "target": "01jbz…" },
+    { "id": 43, "scope": "member", "target": "01jby…" }
+  ]
+}
+```
+
+| Field | |
+|-------|--|
+| `head` | Newest invalidation sequence id in identity (`0` when empty) |
+| `config_revision` | Control-plane revision this identity replica currently serves |
+| `reset` | `true` when `after` was pruned or ahead of `head` (DB reset); gateway flushes cached entries and advances its cursor to `head` |
+| `events` | Invalidation entries past `after`, ascending by `id`, up to `limit` (default 500, max 1000). Each carries `scope` (`key`, `user`, `member`, `root`) and `target` (`key_id`, `user_id`, `member_id`, `root_id`) |
+
+- Without `after`: answers immediately with `head`, `config_revision`, `reset: false`, and empty `events` (initial sync).
+- With `after` (and optional `config_revision`): waits up to 25 seconds until either an invalidation past `after` commits or identity's `config_revision` differs from the caller's. Nothing in that time is **204**.
+- Reads stay off traces and request metrics, like health checks. Postgres unavailable: **503**.
 
 ### Plan counts
 
@@ -292,6 +323,6 @@ PATCH /internal/events/{request_id}
 | A field it can't store, or `outcome: pending` | **422** |
 | Postgres unavailable | **503**. The gateway retries |
 
-### Rejected
+### Completed and rejected (single write)
 
-The gateway's own refusals after admit (a permission **403**, a **400** on a param, a **500**) are one write, in the background: an intent that also carries `"outcome": "rejected"` and its `status`, written final. It answers as an intent does.
+A gateway refusal after admit (a permission **403**, a **400** on a param, a **500**) — and any forwarded audited request when `AUDIT_MODE=async` — is sent as one background `PUT /internal/events/{request_id}` carrying the intent fields plus the final outcome fields (`outcome`, `status`, and optionally `details`, `created_id`, `named_node_ids`, `named_member_id`). Audit inserts the row already final and adds the corresponding `audit_log_keys` (`created_id`, and `named_node_ids` on user routes) in one transaction. It answers as an intent does.

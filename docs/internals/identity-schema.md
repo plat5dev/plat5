@@ -133,6 +133,14 @@ CREATE TABLE events (                                 -- append-only; outlives w
     CHECK (type LIKE 'node.%' OR (kind IS NULL AND node_id IS NULL)),
     CHECK (type LIKE 'member.%' OR (member_id IS NULL AND principal IS NULL))
 );
+
+CREATE TABLE admit_invalidations (                    -- commit-ordered cache invalidations; pruned on sweep
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    scope       TEXT NOT NULL CHECK (scope IN ('key', 'user', 'member', 'root')),
+    target      TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX admit_invalidations_created_idx ON admit_invalidations (created_at);
 ```
 
 Ids are lowercase ULIDs with no prefix ([ids](../concepts/model.md#ids-and-slugs)). Principal ids never leave identity; a person's `user_id` is a separate id, sent only on user routes and in `user.*` events.
@@ -149,4 +157,4 @@ The rules themselves are in the concept docs ([access](../concepts/access.md), [
 - **Purge.** Purge sets `status = 'purged'` and keeps the row. Below a root it sets `slug` to `NULL`, freeing it; a purged root keeps its slug until an operator releases it.
 - **Writes that touch members** take the tree's lock, so "one active member" and "removed when left with no bindings" can't race.
 - **Account deletion** removes the members it found with their trees locked, then locks the principal row `FOR UPDATE`, removes any member that a join inserted meanwhile (the join's foreign key held the row, so the lock waited for it), and deletes the principal. A join that inserts after the lock waits on the row and then fails the foreign key.
-- **Events.** A change writes its events after every other write. Each event write takes the log's one advisory lock, held to commit, so ids commit in order, a reader never sees a later id before an earlier one commits, and a transaction's events are adjacent. A person's row and its `user.created` are written together, as are the principal's deletion and its `user.deleted`.
+- **Events and invalidations.** A change writes its lifecycle events and admit invalidations after every other write, taking the one serialization advisory lock held to commit so sequence ids commit in order, a reader never sees a later id before an earlier one commits, and concurrent writes cannot deadlock. A person's row and its `user.created` are written together, as are the principal's deletion and its `user.deleted`. Old `admit_invalidations` rows are pruned on the background sweep; any gateway cursor older than the oldest remaining row gets `reset: true`.

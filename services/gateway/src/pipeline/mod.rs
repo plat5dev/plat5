@@ -306,7 +306,8 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
     }
 
     /// The failed-auth IP limiter, on what admit refused and on the permission
-    /// **403**. Some(rejection) when it answers instead.
+    /// **403**. Some(rejection) when it answers instead. Fails open when Valkey
+    /// is unavailable so the caller receives the underlying 401/403.
     async fn count_refusal(&self, ip: &str) -> Option<Rejection> {
         if self.auth_failure.requests == 0 {
             return None;
@@ -322,11 +323,15 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
                 retry_after,
                 info: None,
             }),
-            Err(Unavailable) => Some(Rejection::Unavailable),
+            Err(Unavailable) => {
+                metrics::record_rate_limit_fail_open("auth_failure");
+                None
+            }
         }
     }
 
-    /// Every policy on the route, checked at once. Ok carries the tightest one's numbers.
+    /// Every policy on the route, checked at once. Ok carries the tightest one's
+    /// numbers, or None when no policy applies or Valkey failed open.
     async fn limit(
         &self,
         route: &Route,
@@ -340,7 +345,10 @@ impl<A: Admit, C: Counter> Pipeline<A, C> {
                 retry_after,
                 info: tightest(infos),
             }),
-            Err(Unavailable) => Err(Rejection::Unavailable),
+            Err(Unavailable) => {
+                metrics::record_rate_limit_fail_open("route");
+                Ok(None)
+            }
         }
     }
 }

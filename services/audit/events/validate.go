@@ -27,9 +27,13 @@ type intentRequest struct {
 	Params     map[string]string `json:"params"`
 	IP         *string           `json:"ip"`
 	UserAgent  *string           `json:"user_agent"`
-	// A gateway refusal: the intent arrives final.
-	Outcome *string `json:"outcome"`
-	Status  *int    `json:"status"`
+	// A gateway refusal or async-mode completed event: the intent arrives final.
+	Outcome       *string         `json:"outcome"`
+	Status        *int            `json:"status"`
+	Details       json.RawMessage `json:"details"`
+	CreatedID     *string         `json:"created_id"`
+	NamedNodeIDs  []string        `json:"named_node_ids"`
+	NamedMemberID *string         `json:"named_member_id"`
 }
 
 type outcomeRequest struct {
@@ -112,7 +116,24 @@ func ParseIntent(requestID string, body []byte) (*Intent, *Outcome, error) {
 	if req.Outcome == nil || *req.Outcome == OutcomePending {
 		return in, nil, nil
 	}
-	return in, &Outcome{Outcome: *req.Outcome, Status: req.Status, NamedNodeIDs: []string{}}, nil
+	final := &Outcome{
+		Outcome:       *req.Outcome,
+		Status:        req.Status,
+		CreatedID:     req.CreatedID,
+		NamedNodeIDs:  req.NamedNodeIDs,
+		NamedMemberID: req.NamedMemberID,
+	}
+	if final.NamedNodeIDs == nil {
+		final.NamedNodeIDs = []string{}
+	}
+	details := bytes.TrimSpace(req.Details)
+	if len(details) > 0 && !bytes.Equal(details, []byte("null")) {
+		if details[0] != '{' {
+			return nil, nil, errors.FieldError("details", "")
+		}
+		final.Details = json.RawMessage(details)
+	}
+	return in, final, nil
 }
 
 // ParseOutcome reads an outcome body. Pending is not an outcome.

@@ -22,16 +22,16 @@ An audit event is one request, not one change. It says who called which route, o
 
 Two settings, independent of each other:
 
-- **Whether the gateway writes events** is wiring, in the gateway's env: `AUDIT_ENABLED` and `AUDIT_URL` ([env](../reference/env.md#gateway)). It stays out of the config, so the admin token can't turn audit off. Events already written mean the same either way.
+- **Whether and how the gateway writes events** is wiring, in the gateway's env: `AUDIT_ENABLED`, `AUDIT_MODE` (`sync` or `async`, default `sync`), and `AUDIT_URL` ([env](../reference/env.md#gateway)). It stays out of the config, so the admin token can't turn audit off or weaken its delivery mode. Events already written mean the same either way.
 - **Whether audit's read routes are published** at the gateway is `services/audit.yml`, like any service file ([generated routes](../reference/config/generated-routes.md#audits-routes)). Leaving it out of `services` hides the reads; the gateway still writes events.
 
-| | Audit on (default) | Audit off (`AUDIT_ENABLED=false`) |
-|---|---|---|
-| Gateway `AUDIT_URL` | Required to boot | Ignored |
-| `audit` service | Runs | Need not run. If `services/audit.yml` stays in the config, its read routes answer as an unreachable upstream does |
-| Audited request | Intent written before forward. **503** if it can't be | Forwarded like any other |
-| Route `audit` fields | Applied | Accepted at apply, ignored |
-| `X-Plat5-Audit-*` | Read, stored, stripped | Stripped |
+| | `AUDIT_MODE=sync` (default) | `AUDIT_MODE=async` | Audit off (`AUDIT_ENABLED=false`) |
+|---|---|---|---|
+| Gateway `AUDIT_URL` | Required to boot | Required to boot | Ignored |
+| `audit` service | Runs | Runs | Need not run. If `services/audit.yml` stays in the config, its read routes answer as an unreachable upstream does |
+| Audited request | Intent written before forward. **503** if it can't be | Forwarded immediately; one completed event queued after the response | Forwarded like any other |
+| Route `audit` fields | Applied | Applied | Accepted at apply, ignored |
+| `X-Plat5-Audit-*` | Read, stored, stripped | Read, stored, stripped | Stripped |
 
 The gateway logs the mode at boot. Turning audit on doesn't backfill.
 
@@ -71,17 +71,25 @@ Audit runs inside the gateway's pipeline ([access](access.md#how-a-request-is-de
 
 ## Delivery
 
+### `sync` mode (default)
+
 Two writes per forwarded audited request, both keyed by `request_id`.
 
 **Intent.** Before forward, and the client waits on it. It carries every event field except outcome, status, and details. Each attempt times out at 500ms; up to 3 attempts within 1s. If none succeeds, the gateway answers **503** and doesn't call the service. It then sends a `rejected` / `503` outcome in the background, because the intent may have landed without the gateway seeing it.
 
 **Outcome.** After the upstream answers, or fails. The client doesn't wait on it. It runs in the gateway's logging phase, so an upstream failure or a client disconnect still produces one. The gateway queues it in process and retries with backoff. The queue is bounded; an outcome that overflows it is dropped, logged and counted.
 
-A gateway refusal after admit is one write, in the background, queued like an outcome.
+The guarantee in `sync` mode: an audited request doesn't reach its service unless its intent is recorded. If the gateway dies or drops the outcome between forward and outcome, the event stays `pending`. Pending is not success, and nothing turns it into one.
+
+### `async` mode
+
+One write per forwarded audited request, sent after the response in the gateway's logging phase through the same bounded background queue and retry loop as outcomes. `occurred_at` is still captured at request arrival, and the client never waits on audit. During an audit outage or gateway crash, events that cannot be drained or overflow the queue are dropped, logged, and counted—trading the `sync` durability guarantee for lower write latency and half the audit database writes.
+
+### Refusals and idempotency
+
+In either mode, a gateway refusal after admit is one write, in the background, queued like an outcome.
 
 Every write is idempotent. An outcome is applied once, `pending` → final.
-
-The guarantee: an audited request doesn't reach its service unless its intent is recorded. If the gateway dies or drops the outcome between forward and outcome, the event stays `pending`. Pending is not success, and nothing turns it into one.
 
 Audit stores what it's sent. It doesn't repeat the gateway's or identity's rules, and ignores fields it doesn't know, so a newer gateway or identity never makes audited requests fail.
 

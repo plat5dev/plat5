@@ -201,3 +201,20 @@ func TestParseOutcomeIDs(t *testing.T) {
 		t.Fatalf("none named: %+v %v", out, err)
 	}
 }
+
+func TestParseIntentCompletedFinalFields(t *testing.T) {
+	body := strings.Replace(userIntent, `"user_agent": null`, `"user_agent": null, "outcome": "responded", "status": 201, "details": {"name":"acme"}, "created_id": "01o", "named_node_ids": ["01o"], "named_member_id": "01m"`, 1)
+	_, final, err := ParseIntent("req-async-1", []byte(body))
+	if err != nil || final == nil {
+		t.Fatalf("want completed final outcome, got %+v %v", final, err)
+	}
+	if final.Outcome != "responded" || *final.Status != 201 || string(final.Details) != `{"name":"acme"}` ||
+		*final.CreatedID != "01o" || len(final.NamedNodeIDs) != 1 || final.NamedNodeIDs[0] != "01o" || *final.NamedMemberID != "01m" {
+		t.Fatalf("unexpected final outcome: %+v", final)
+	}
+
+	badDetails := strings.Replace(userIntent, `"user_agent": null`, `"user_agent": null, "outcome": "responded", "status": 200, "details": [1,2]`, 1)
+	if _, _, err := ParseIntent("req-async-bad", []byte(badDetails)); err == nil {
+		t.Fatal("expected 422 for non-object details")
+	}
+}

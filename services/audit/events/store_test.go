@@ -93,6 +93,57 @@ func requestIDs(list []*Event) []string {
 	return got
 }
 
+func TestCreateIntentCompletedSingleWrite(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	// User route completed single write (async mode): stores details, created_id,
+	// named_node_ids, named_member_id and indexes created + named node logs.
+	uOut := &Outcome{
+		Outcome:       "responded",
+		Status:        intPtr(201),
+		Details:       json.RawMessage(`{"name":"acme"}`),
+		CreatedID:     strPtr("01org"),
+		NamedNodeIDs:  []string{"01org"},
+		NamedMemberID: strPtr("01mem"),
+	}
+	created, err := s.CreateIntent(ctx, userEvent("req-async-user", now), uOut)
+	if err != nil || !created {
+		t.Fatalf("completed user event: %v %v", created, err)
+	}
+	nodeList, _, err := s.List(ctx, Filter{Log: "01org", NodeRead: true, Limit: 10})
+	if err != nil || len(nodeList) != 1 {
+		t.Fatalf("expected event in named/created node log: %v %+v", err, nodeList)
+	}
+	if e := nodeList[0]; e.Outcome.Outcome != "responded" || *e.Status != 201 || string(e.Details) != `{"name": "acme"}` ||
+		*e.CreatedID != "01org" || *e.NamedMemberID != "01mem" {
+		t.Fatalf("unexpected stored event: %+v", e)
+	}
+
+	// Tree route completed single write: stores details & created_id, ignores named_*.
+	tOut := &Outcome{
+		Outcome:       "responded",
+		Status:        intPtr(201),
+		Details:       json.RawMessage(`{"role":"admin"}`),
+		CreatedID:     strPtr("01proj2"),
+		NamedNodeIDs:  []string{"01ignored"},
+		NamedMemberID: strPtr("01ignoredm"),
+	}
+	created, err = s.CreateIntent(ctx, testIntent("req-async-tree", now), tOut)
+	if err != nil || !created {
+		t.Fatalf("completed tree event: %v %v", created, err)
+	}
+	createdList, _, err := s.List(ctx, Filter{Log: "01proj2", NodeRead: true, Limit: 10})
+	if err != nil || len(createdList) != 1 || len(createdList[0].NamedNodeIDs) != 0 || createdList[0].NamedMemberID != nil {
+		t.Fatalf("tree route created log / ignored named fields: %v %+v", err, createdList)
+	}
+	ignoredList, _, err := s.List(ctx, Filter{Log: "01ignored", NodeRead: true, Limit: 10})
+	if err != nil || len(ignoredList) != 0 {
+		t.Fatalf("named_node_ids on tree route must not index: %v %+v", err, ignoredList)
+	}
+}
+
 func TestIntentIsIdempotentOnRequestID(t *testing.T) {
 	s, _ := newTestStore(t)
 	ctx := context.Background()

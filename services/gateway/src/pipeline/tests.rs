@@ -65,9 +65,13 @@ fn catalog() -> Snapshot {
 struct MemCounter {
     counts: Mutex<HashMap<String, u64>>,
     order: Mutex<Vec<String>>,
+    down: std::sync::atomic::AtomicBool,
 }
 
 impl MemCounter {
+    fn set_down(&self, down: bool) {
+        self.down.store(down, std::sync::atomic::Ordering::SeqCst);
+    }
     fn count(&self, bucket: &str) -> u64 {
         self.counts
             .lock()
@@ -83,6 +87,9 @@ impl MemCounter {
 
 impl Counter for Arc<MemCounter> {
     async fn check(&self, buckets: &[Bucket]) -> Result<Verdict, Unavailable> {
+        if self.down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(Unavailable);
+        }
         let mut counts = self.counts.lock().unwrap();
         let full = |b: &Bucket| counts.get(&b.key).copied().unwrap_or(0) >= b.requests;
         let allowed = !buckets.iter().any(full);
@@ -1199,14 +1206,9 @@ async fn api_key_ip_allowlist_refuses_route_checks_with_401() {
     ans.allowed_cidrs = vec!["10.0.0.0/8".into()];
     let identity = ByChain::with(&[("acme", ans)]);
     let (p, counter) = checks_pipeline(identity, AUTH_FAILURE);
-    let err = run_checks(
-        &p,
-        &snapshot,
-        &key_credential(),
-        &[("GET", "/orgs/acme")],
-    )
-    .await
-    .unwrap_err();
+    let err = run_checks(&p, &snapshot, &key_credential(), &[("GET", "/orgs/acme")])
+        .await
+        .unwrap_err();
     assert_eq!(err, Rejection::Unauthorized(AuthError::InvalidCredential));
     assert_eq!(counter.count(IP_BUCKET), 1);
 }
@@ -1547,4 +1549,52 @@ fn authentication_failed_line() {
         assert!(line.get("error_message").is_none(), "{line}");
         assert!(line.get("error_type").is_none(), "{line}");
     }
+}
+
+#[tokio::test]
+async fn rate_limiting_fails_open_when_valkey_is_unavailable() {
+    let snapshot = catalog();
+    let read = project_read(&snapshot);
+    let h = harness(Ok(answer_for(&read.route, &["project:read"])));
+    h.counter.set_down(true);
+
+    // Limited route succeeds without X-RateLimit-* info.
+    let passed = h
+        .pipeline
+        .decide(
+            &read,
+            "198.51.100.1",
+            Ok(key()),
+            &mut RequestCredential::default(),
+        )
+        .await
+        .expect("route fails open");
+    assert!(passed.rate_limit.is_none());
+
+    // Refusals preserve the underlying 403/401 instead of turning into 503.
+    let h_denied = harness(Ok(answer_for(&read.route, &[])));
+    h_denied.counter.set_down(true);
+    let (res, _) = h_denied.run(&read, Ok(key())).await;
+    assert_eq!(res.err(), Some(Rejection::Denied));
+
+    // POST /access/routes also fails open without rate_limit info.
+    let snapshot = snapshot_with(e10s(), e10s_limits());
+    let identity = Arc::new(ByChain::default());
+    let (p, counter) = checks_pipeline(identity, AUTH_FAILURE);
+    counter.set_down(true);
+    let checked = p
+        .check_routes(
+            &snapshot.routes,
+            &snapshot.default_policies,
+            &key_credential(),
+            &[Check {
+                method: "GET".into(),
+                path: "/health".into(),
+            }],
+            "198.51.100.1",
+        )
+        .await
+        .expect("route checks fail open");
+    assert_eq!(checked.allowed, vec![true]);
+    assert!(checked.rate_limit.is_none());
 }

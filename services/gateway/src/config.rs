@@ -51,6 +51,8 @@ pub struct GatewayConfig {
 
     /// Audit's internal base URL. None = audit off (`AUDIT_ENABLED=false`).
     pub audit_url: Option<String>,
+    /// Audit delivery mode (`AUDIT_MODE`): `sync` (default) or `async`.
+    pub audit_mode: crate::audit::AuditMode,
 
     /// Proxies whose `X-Forwarded-For` names the client (`TRUSTED_PROXIES`).
     /// Empty = the TCP peer is the client.
@@ -109,6 +111,7 @@ impl GatewayConfig {
             env::var("AUDIT_URL").ok().as_deref(),
             true,
         )?;
+        let audit_mode = parse_audit_mode(env::var("AUDIT_MODE").ok().as_deref())?;
         let rate_limit_auth_failure_requests = parse_u64_env(
             "RATE_LIMIT_AUTH_FAILURE_REQUESTS",
             DEFAULT_RATE_LIMIT_AUTH_FAILURE_REQUESTS,
@@ -165,6 +168,7 @@ impl GatewayConfig {
             rate_limit_auth_failure_window_seconds: rate_limit_auth_failure_window.as_secs(),
 
             audit_url,
+            audit_mode,
             trusted_proxies,
             upstream_signer,
             upstream_block_private_ips,
@@ -295,17 +299,24 @@ fn parse_key_prefix(raw: Option<&str>) -> Result<String, GatewayConfigError> {
     let Some(raw) = raw else {
         return Ok(DEFAULT_KEY_PREFIX.to_string());
     };
-    if raw.is_empty()
-        || !raw
-            .bytes()
-            .all(|b| b.is_ascii_graphic())
-    {
+    if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_graphic()) {
         return Err(GatewayConfigError::Invalid {
             key: "VALKEY_KEY_PREFIX",
             message: "must be non-empty visible ASCII without whitespace".to_string(),
         });
     }
     Ok(raw.to_string())
+}
+
+fn parse_audit_mode(raw: Option<&str>) -> Result<crate::audit::AuditMode, GatewayConfigError> {
+    match raw.map(str::trim) {
+        None | Some("") | Some("sync") => Ok(crate::audit::AuditMode::Sync),
+        Some("async") => Ok(crate::audit::AuditMode::Async),
+        Some(other) => Err(GatewayConfigError::Invalid {
+            key: "AUDIT_MODE",
+            message: format!("must be sync or async, got {other:?}"),
+        }),
+    }
 }
 
 fn parse_bool_env(
@@ -479,6 +490,16 @@ mod tests {
     }
 
     #[test]
+    fn audit_mode_parses_strictly() {
+        use crate::audit::AuditMode;
+        assert_eq!(parse_audit_mode(None).unwrap(), AuditMode::Sync);
+        assert_eq!(parse_audit_mode(Some("")).unwrap(), AuditMode::Sync);
+        assert_eq!(parse_audit_mode(Some("sync")).unwrap(), AuditMode::Sync);
+        assert_eq!(parse_audit_mode(Some("async")).unwrap(), AuditMode::Async);
+        assert!(parse_audit_mode(Some("best_effort")).is_err());
+    }
+
+    #[test]
     fn upstream_signer_config_fails_closed() {
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
         use base64::Engine;
@@ -491,10 +512,14 @@ mod tests {
         assert!(parse_upstream_signer(Some("not-valid"), None).is_err());
         assert!(parse_upstream_signer(Some(&valid_seed), Some("bad kid")).is_err());
 
-        let signer = parse_upstream_signer(Some(&valid_seed), Some("k-2026")).unwrap().unwrap();
+        let signer = parse_upstream_signer(Some(&valid_seed), Some("k-2026"))
+            .unwrap()
+            .unwrap();
         assert_eq!(signer.kid(), "k-2026");
 
-        let default_signer = parse_upstream_signer(Some(&valid_seed), None).unwrap().unwrap();
+        let default_signer = parse_upstream_signer(Some(&valid_seed), None)
+            .unwrap()
+            .unwrap();
         assert_eq!(default_signer.kid().len(), 16);
     }
 }

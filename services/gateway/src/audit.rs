@@ -5,13 +5,14 @@
 //! off for the whole deployment. Wire: docs/reference/api/internal.md#audit.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use reqwest::Method;
 use serde::Serialize;
 use serde_json::value::RawValue;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, watch, Semaphore};
 use tracing::{error, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -88,6 +89,24 @@ pub struct Intent {
     pub user_agent: Option<String>,
 }
 
+/// Delivery mode (`AUDIT_MODE`, docs/concepts/audit.md#delivery).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuditMode {
+    /// Intent written before forward (503 on failure); outcome queued after.
+    Sync,
+    /// Forward immediately; one completed event queued after the response.
+    Async,
+}
+
+impl AuditMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AuditMode::Sync => "sync",
+            AuditMode::Async => "async",
+        }
+    }
+}
+
 /// A gateway refusal after admit: the intent, written final.
 #[derive(Debug, Serialize)]
 pub struct Rejected {
@@ -95,6 +114,22 @@ pub struct Rejected {
     pub intent: Intent,
     pub outcome: OutcomeKind,
     pub status: u16,
+}
+
+/// A completed audited request in `async` mode: intent + final outcome in one write.
+#[derive(Debug, Serialize)]
+pub struct Completed {
+    #[serde(flatten)]
+    pub intent: Intent,
+    pub outcome: OutcomeKind,
+    pub status: Option<u16>,
+    pub details: Option<Box<RawValue>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub named_node_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub named_member_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -130,6 +165,8 @@ pub struct Outcome {
 pub struct AuditState {
     /// The intent's `occurred_at`, echoed on the outcome for partition pruning.
     pub occurred_at: Option<String>,
+    /// In `async` mode, the unsent intent held until the logging phase sends one completed event.
+    pub intent: Option<Intent>,
     /// Set when the upstream response arrives.
     pub upstream_status: Option<u16>,
     pub details: Option<Box<RawValue>>,
@@ -246,6 +283,7 @@ pub struct IntentNotWritten;
 enum Background {
     Outcome(Outcome),
     Rejected(Box<Rejected>),
+    Completed(Box<Completed>),
 }
 
 impl Background {
@@ -254,6 +292,7 @@ impl Background {
         match self {
             Background::Outcome(_) => "outcome",
             Background::Rejected(_) => "rejected",
+            Background::Completed(_) => "event",
         }
     }
 }
@@ -266,8 +305,11 @@ pub struct Audit {
 
 struct Inner {
     base_url: String,
+    mode: AuditMode,
     http: InternalHttpClient,
-    background: mpsc::Sender<(String, Background, opentelemetry::Context)>,
+    background: Mutex<Option<mpsc::Sender<(String, Background, opentelemetry::Context)>>>,
+    queue_depth: Arc<AtomicI64>,
+    done: watch::Receiver<bool>,
 }
 
 impl Audit {
@@ -276,27 +318,60 @@ impl Audit {
     }
 
     /// On when `base_url` is set. Background writes run on `runtime`, with their own client.
-    pub fn new(base_url: Option<String>, runtime: &tokio::runtime::Handle) -> Self {
+    pub fn new(
+        base_url: Option<String>,
+        mode: AuditMode,
+        runtime: &tokio::runtime::Handle,
+    ) -> Self {
         let Some(base_url) = base_url else {
             return Self::off();
         };
         let (tx, rx) = mpsc::channel(BACKGROUND_QUEUE);
+        let (done_tx, done_rx) = watch::channel(false);
+        let queue_depth = Arc::new(AtomicI64::new(0));
+        metrics::record_audit_queue_depth(0);
         runtime.spawn(run_background(
             base_url.clone(),
             InternalHttpClient::new(),
             rx,
+            Arc::clone(&queue_depth),
+            done_tx,
         ));
         Self {
             inner: Some(Arc::new(Inner {
                 base_url,
+                mode,
                 http: InternalHttpClient::new(),
-                background: tx,
+                background: Mutex::new(Some(tx)),
+                queue_depth,
+                done: done_rx,
             })),
         }
     }
 
     pub fn enabled(&self) -> bool {
         self.inner.is_some()
+    }
+
+    pub fn is_async(&self) -> bool {
+        self.inner
+            .as_ref()
+            .is_some_and(|i| i.mode == AuditMode::Async)
+    }
+
+    /// Close the background queue and wait up to `timeout` for queued and
+    /// in-flight writes to finish (for graceful shutdown).
+    pub async fn drain(&self, timeout: Duration) {
+        let Some(inner) = &self.inner else {
+            return;
+        };
+        let _ = inner
+            .background
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        let mut done = inner.done.clone();
+        let _ = tokio::time::timeout(timeout, done.wait_for(|&finished| finished)).await;
     }
 
     /// Write the intent, retrying within [`INTENT_BUDGET`]. Err = the gateway did not
@@ -369,18 +444,54 @@ impl Audit {
         self.queue(request_id, Background::Rejected(Box::new(rejected)), parent);
     }
 
+    /// Queue a completed audited request (`async` mode) as one event written final.
+    /// Never waits.
+    pub fn send_completed(&self, intent: Intent, outcome: Outcome, parent: opentelemetry::Context) {
+        let request_id = intent.request_id.clone();
+        let completed = Completed {
+            intent,
+            outcome: outcome.outcome,
+            status: outcome.status,
+            details: outcome.details,
+            created_id: outcome.created_id,
+            named_node_ids: outcome.named_node_ids,
+            named_member_id: outcome.named_member_id,
+        };
+        self.queue(
+            request_id,
+            Background::Completed(Box::new(completed)),
+            parent,
+        );
+    }
+
     fn queue(&self, request_id: String, write: Background, parent: opentelemetry::Context) {
         let Some(inner) = &self.inner else {
             return;
         };
-        if let Err(err) = inner.background.try_send((request_id, write, parent)) {
-            let (request_id, write, _) = err.into_inner();
+        let guard = inner.background.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(tx) = guard.as_ref() else {
             warn!(
                 request_id = %request_id,
                 write = write.write(),
-                "audit queue full; write dropped"
+                "audit queue closed during shutdown; write dropped"
             );
             metrics::record_audit_write(write.write(), "dropped");
+            return;
+        };
+        match tx.try_send((request_id, write, parent)) {
+            Ok(()) => {
+                let depth = inner.queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
+                metrics::record_audit_queue_depth(depth);
+            }
+            Err(err) => {
+                let (request_id, write, _) = err.into_inner();
+                warn!(
+                    request_id = %request_id,
+                    write = write.write(),
+                    "audit queue full; write dropped"
+                );
+                metrics::record_audit_write(write.write(), "dropped");
+            }
         }
     }
 }
@@ -393,11 +504,15 @@ async fn run_background(
     base_url: String,
     http: InternalHttpClient,
     mut rx: mpsc::Receiver<(String, Background, opentelemetry::Context)>,
+    queue_depth: Arc<AtomicI64>,
+    done: watch::Sender<bool>,
 ) {
     let permits = Arc::new(Semaphore::new(BACKGROUND_IN_FLIGHT));
     while let Some((request_id, write, parent)) = rx.recv().await {
+        let depth = (queue_depth.fetch_sub(1, Ordering::Relaxed) - 1).max(0);
+        metrics::record_audit_queue_depth(depth);
         let Ok(permit) = permits.clone().acquire_owned().await else {
-            return;
+            break;
         };
         let http = http.clone();
         let url = event_url(&base_url, &request_id);
@@ -412,6 +527,9 @@ async fn run_background(
             .instrument(span),
         );
     }
+    // Wait for all in-flight tasks before signaling drain completion.
+    let _ = permits.acquire_many(BACKGROUND_IN_FLIGHT as u32).await;
+    let _ = done.send(true);
 }
 
 /// Send a background write until audit takes it, refuses it, or the backoff runs
@@ -434,6 +552,10 @@ async fn write_background(
             }
             Background::Rejected(rejected) => {
                 http.send_json(Method::PUT, url, rejected, BACKGROUND_ATTEMPT_TIMEOUT)
+                    .await
+            }
+            Background::Completed(completed) => {
+                http.send_json(Method::PUT, url, completed, BACKGROUND_ATTEMPT_TIMEOUT)
                     .await
             }
         };
@@ -538,6 +660,7 @@ mod tests {
         let responded = outcome_for(
             AuditState {
                 occurred_at: Some("2026-10-08T18:30:00.123Z".into()),
+                intent: None,
                 upstream_status: Some(201),
                 details: parse_details(br#"{"a":1}"#),
                 created_id: Some("01o".into()),
@@ -546,7 +669,10 @@ mod tests {
             true,
             Some(201),
         );
-        assert_eq!(responded.occurred_at.as_deref(), Some("2026-10-08T18:30:00.123Z"));
+        assert_eq!(
+            responded.occurred_at.as_deref(),
+            Some("2026-10-08T18:30:00.123Z")
+        );
         assert_eq!(responded.outcome, OutcomeKind::Responded);
         assert_eq!(responded.status, Some(201));
         assert!(responded.details.is_some());
@@ -558,6 +684,7 @@ mod tests {
         let cut = outcome_for(
             AuditState {
                 occurred_at: Some("2026-10-08T18:30:00.123Z".into()),
+                intent: None,
                 upstream_status: None,
                 details: None,
                 created_id: Some("x".into()),
@@ -755,7 +882,11 @@ mod tests {
     }
 
     fn audit_at(url: String) -> Audit {
-        Audit::new(Some(url), &tokio::runtime::Handle::current())
+        Audit::new(
+            Some(url),
+            AuditMode::Sync,
+            &tokio::runtime::Handle::current(),
+        )
     }
 
     #[tokio::test]
@@ -845,6 +976,32 @@ mod tests {
 
         let (url, hits) = fake_audit(vec![422]).await;
         write_background(&http, &format!("{url}/x"), "req-1", &rejected, &quick).await;
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn async_mode_queues_completed_event_and_drains_on_shutdown() {
+        let (url, hits) = fake_audit(vec![201]).await;
+        let audit = Audit::new(
+            Some(url),
+            AuditMode::Async,
+            &tokio::runtime::Handle::current(),
+        );
+        assert!(audit.is_async());
+        let outcome = outcome_for(
+            AuditState {
+                occurred_at: Some("2026-10-08T18:30:00.123Z".into()),
+                intent: None,
+                upstream_status: Some(201),
+                details: parse_details(br#"{"a":1}"#),
+                created_id: Some("01c".into()),
+                named: None,
+            },
+            true,
+            Some(201),
+        );
+        audit.send_completed(intent(), outcome, opentelemetry::Context::new());
+        audit.drain(Duration::from_secs(2)).await;
         assert_eq!(hits.load(Ordering::SeqCst), 1);
     }
 }

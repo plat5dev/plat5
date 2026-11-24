@@ -27,7 +27,7 @@ Who can do what, in one place: the ancestor rule, who can be in a tree, roles an
 
 - **Groups.** A flat group of active members (people or service accounts) belonging to one root tree. Groups never nest and never cross trees. A group can hold bindings on any node of its tree, and every member of the group inherits those bindings.
 
-- **Closed world.** A tree's data refers only to its own nodes and members. Plat5 guarantees half of this by never sending a principal id, and sending a user id only on user routes and in user events, which carry no tree; the other half is a convention services follow. People cross trees; data doesn't.
+- **Closed world.** A tree's data refers only to its own nodes and members. Plat5 guarantees half of this by never sending a principal id, and sending a user id only on user routes and in user events, which carry no tree; the other half is a convention services follow. People cross trees; data doesn't. This is a data-isolation convention, not a privacy boundary: services and the team can still correlate a person across trees, and an operator plane can show which trees a user is in.
 
 
 ## Roles and bindings
@@ -113,7 +113,7 @@ On a `public` route, authenticate and admit is skipped and there is no caller. O
 
 ## How fast changes reach the edge
 
-The gateway caches each admit ([`reference/gateway.md`](../reference/gateway.md#cache)). A removed binding, a role change, a deleted node, a suspended person, a revoked key or a key IP allowlist change reaches the edge within `ADMIT_CACHE_TTL`. A refusal is cached only for `ADMIT_NEGATIVE_CACHE_TTL`, so a fresh invitee or a new node works within seconds.
+The gateway caches each admit ([`reference/gateway.md`](../reference/gateway.md#cache)) and long-polls identity's invalidation feed (`GET /internal/admit-invalidations`). A removed binding, group change, role config apply, deleted/restored/purged node, suspended or deleted person, deleted service account, revoked key, or key IP allowlist change reaches every gateway replica within about a second (milliseconds on a single identity replica). `ADMIT_CACHE_TTL` bounds staleness if the invalidation feed is disconnected. A refusal is cached only for `ADMIT_NEGATIVE_CACHE_TTL`, so a fresh invitee or a new node works within seconds.
 
 ## Outside a request
 

@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use crate::audit::{self, Audit, AuditState};
 use crate::auth::admit::{AdmitCache, HttpAdmit};
+use crate::auth::invalidations::InvalidationTracker;
 use crate::auth::jwt::JwtValidatorState;
 use crate::auth::{AuthError, Authenticator, NameClaims};
 use crate::client_ip::TrustedProxies;
@@ -59,13 +60,19 @@ impl Gateway {
         snapshot: Arc<ArcSwap<Snapshot>>,
         limiter: RateLimiter,
         audit: Audit,
+        invalidations: InvalidationTracker,
     ) -> Self {
         let admit = HttpAdmit::new(&cfg.identity_internal_url, InternalHttpClient::new());
         Self {
             authenticator: Authenticator::new(jwt_validator, cfg.auth_subject_claim.clone()),
             name_claims: cfg.auth_name_claims.clone(),
             pipeline: Pipeline::new(
-                AdmitCache::new(admit, cfg.admit_cache_ttl, cfg.admit_negative_cache_ttl),
+                AdmitCache::with_tracker(
+                    admit,
+                    cfg.admit_cache_ttl,
+                    cfg.admit_negative_cache_ttl,
+                    invalidations,
+                ),
                 limiter,
                 Limit {
                     requests: cfg.rate_limit_auth_failure_requests,
@@ -217,24 +224,33 @@ impl Gateway {
             }
         };
 
-        // Audited: nothing reaches the service unless the intent is written
-        // (docs/concepts/audit.md#delivery).
+        // Audited: in sync mode nothing reaches the service unless the intent
+        // is written; in async mode the intent is held until the logging phase
+        // sends one completed event (docs/concepts/audit.md#delivery).
         if let (Some(caller), true) = (caller, audited) {
             let intent = audit_intent(session, ctx, matched, caller, request_id, &ip);
-            ctx.audit = Some(AuditState {
-                occurred_at: Some(intent.occurred_at.clone()),
-                ..AuditState::default()
-            });
             ctx.audit_user_route = route.scope == Scope::User;
-            if self.audit.write_intent(&intent).await.is_err() {
-                return response::write_rejection(
-                    &self.cors(),
-                    session,
-                    ctx,
-                    route,
-                    Rejection::Unavailable,
-                )
-                .await;
+            if self.audit.is_async() {
+                ctx.audit = Some(AuditState {
+                    occurred_at: Some(intent.occurred_at.clone()),
+                    intent: Some(intent),
+                    ..AuditState::default()
+                });
+            } else {
+                ctx.audit = Some(AuditState {
+                    occurred_at: Some(intent.occurred_at.clone()),
+                    ..AuditState::default()
+                });
+                if self.audit.write_intent(&intent).await.is_err() {
+                    return response::write_rejection(
+                        &self.cors(),
+                        session,
+                        ctx,
+                        route,
+                        Rejection::Unavailable,
+                    )
+                    .await;
+                }
             }
         }
 
@@ -908,11 +924,17 @@ impl ProxyHttp for Gateway {
             e,
         );
 
-        if let Some(state) = ctx.audit.take() {
+        if let Some(mut state) = ctx.audit.take() {
+            let intent = state.intent.take();
             let written = session.response_written().map(|r| r.status.as_u16());
             let outcome = audit::outcome_for(state, ctx.forwarded, written);
-            self.audit
-                .send_outcome(request_id.to_string(), outcome, request_context(ctx));
+            if let Some(intent) = intent {
+                self.audit
+                    .send_completed(intent, outcome, request_context(ctx));
+            } else {
+                self.audit
+                    .send_outcome(request_id.to_string(), outcome, request_context(ctx));
+            }
         }
 
         ctx.finish_root_span();

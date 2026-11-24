@@ -15,6 +15,7 @@ import (
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 	"github.com/plat5dev/plat5/identity/internal/id"
 	"github.com/plat5dev/plat5/identity/internal/secret"
+	"github.com/plat5dev/plat5/identity/lifecycle"
 	"github.com/plat5dev/plat5/identity/nodes"
 )
 
@@ -232,6 +233,17 @@ func (s *Store) DeleteServiceAccount(ctx context.Context, nodeID, memberID strin
 	}
 	if err := s.removeMember(ctx, w, m); err != nil {
 		return false, op.Fail(err)
+	}
+	keyRows, err := w.tx.Query(ctx, `SELECT id FROM api_keys WHERE principal_id = $1 AND revoked_at IS NULL`, principalID)
+	if err != nil {
+		return false, op.Fail(err)
+	}
+	keyIDs, err := pgx.CollectRows(keyRows, pgx.RowTo[string])
+	if err != nil {
+		return false, op.Fail(err)
+	}
+	for _, kid := range keyIDs {
+		w.invalidate(lifecycle.InvalidateKey(kid))
 	}
 	if _, err := w.tx.Exec(ctx, `DELETE FROM principals WHERE id = $1`, principalID); err != nil {
 		return false, op.Fail(err)
@@ -489,6 +501,9 @@ func (s *Store) UpdateKey(ctx context.Context, owner KeyOwner, keyID string, pat
 	if err != nil {
 		return nil, nil, op.Fail(err)
 	}
+	if patch.AllowedCIDRs != nil {
+		w.invalidate(lifecycle.InvalidateKey(keyID))
+	}
 	if err := w.commit(ctx); err != nil {
 		return nil, nil, op.Fail(err)
 	}
@@ -530,6 +545,9 @@ func (s *Store) RevokeKey(ctx context.Context, owner KeyOwner, keyID string) (*K
 	}
 	if k.AllowedCIDRs == nil {
 		k.AllowedCIDRs = []string{}
+	}
+	if changed {
+		w.invalidate(lifecycle.InvalidateKey(k.ID))
 	}
 	if err := w.commit(ctx); err != nil {
 		return nil, false, op.Fail(err)
