@@ -101,19 +101,18 @@ func (h *Handler) Mount(r fiber.Router) {
 // --- shapes (docs/reference/api/identity.md#shapes) ---
 
 type BindingResponse struct {
-	ID              string  `json:"id"`
-	MemberID        *string `json:"member_id"`
-	GroupID         *string `json:"group_id"`
-	PublicPrincipal *string `json:"public_principal"`
-	NodeID          string  `json:"node_id"`
-	Role            string  `json:"role"`
-	Inherited       bool    `json:"inherited"`
-	Guest           bool    `json:"guest"`
-	Principal       string  `json:"principal"`
-	Name            *string `json:"name"`
-	ExpiresAt       *string `json:"expires_at"`
-	CreatedAt       string  `json:"created_at"`
-	UpdatedAt       string  `json:"updated_at"`
+	ID        string  `json:"id"`
+	MemberID  *string `json:"member_id"`
+	GroupID   *string `json:"group_id"`
+	NodeID    string  `json:"node_id"`
+	Role      string  `json:"role"`
+	Inherited bool    `json:"inherited"`
+	Guest     bool    `json:"guest"`
+	Principal string  `json:"principal"`
+	Name      *string `json:"name"`
+	ExpiresAt *string `json:"expires_at"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
 }
 
 type GroupResponse struct {
@@ -125,9 +124,10 @@ type GroupResponse struct {
 }
 
 type MembershipResponse struct {
-	MemberID    string            `json:"member_id"`
-	Bindings    []BindingResponse `json:"bindings"`
-	Permissions []string          `json:"permissions"`
+	MemberID    string             `json:"member_id"`
+	Status      string             `json:"status"`
+	Bindings    *[]BindingResponse `json:"bindings,omitempty"`
+	Permissions *[]string          `json:"permissions,omitempty"`
 }
 
 type MemberResponse struct {
@@ -241,7 +241,7 @@ func securityPolicyResponse(p *RootSecurityPolicy) SecurityPolicyResponse {
 
 func bindingResponse(b *Binding) BindingResponse {
 	return BindingResponse{
-		ID: b.ID, MemberID: b.MemberID, GroupID: b.GroupID, PublicPrincipal: b.PublicPrincipal, NodeID: b.NodeID, Role: b.Role, Inherited: b.Inherited, Guest: b.Guest,
+		ID: b.ID, MemberID: b.MemberID, GroupID: b.GroupID, NodeID: b.NodeID, Role: b.Role, Inherited: b.Inherited, Guest: b.Guest,
 		Principal: b.Principal, Name: b.Name, ExpiresAt: httpx.FormatTimePtr(b.ExpiresAt),
 		CreatedAt: httpx.FormatTime(b.CreatedAt), UpdatedAt: httpx.FormatTime(b.UpdatedAt),
 	}

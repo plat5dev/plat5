@@ -18,20 +18,19 @@ AUTH_NAME_CLAIMS=name,preferred_username
 # Intersect JWT scopes with the caller's member permissions
 AUTH_SCOPE_CLAIM=scope
 
-# Forward IdP claims to admit so orgs can enforce SSO / MFA policies
-AUTH_POLICY_CLAIMS=amr,idp_connection
-
 # Trust your edge proxy so org/key IP allowlists read the real client IP
 TRUSTED_PROXIES=10.0.0.0/8
 ```
 
 ## 2. Deployment config (`plat5.yml`)
 
-Enable `custom_roles`, describe assignable permissions in `permissions`, and define plan `tiers` on rate-limit policies:
+Declare `policy_claims`, enable `custom_roles`, describe assignable permissions in `permissions`, and define plan `tiers` on rate-limit policies:
 
 ```yaml
 deletion_grace: 30d
 reserved_slugs: [new, settings, api, admin]
+# Forward IdP claims to admit so orgs can enforce SSO / MFA policies
+policy_claims: [amr, idp_connection]
 
 kinds:
   organization:

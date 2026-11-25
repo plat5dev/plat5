@@ -12,7 +12,8 @@ Plat5's gateway accepts signed JWT access tokens from any issuer (OAuth 2.0 JWT 
 | Subject claim path | `AUTH_SUBJECT_CLAIM` (dotted JSON path, default `sub`) |
 | Name claim paths | `AUTH_NAME_CLAIMS` (comma-separated dotted JSON paths, default `name,preferred_username`) |
 | Scope claim path | `AUTH_SCOPE_CLAIM` (optional dotted JSON path; space-delimited string or string array intersected with resolved permissions on kind routes) |
-| Policy claim paths | `AUTH_POLICY_CLAIMS` (optional comma-separated dotted JSON paths, max 16; forwarded to admit to check per-org `required_idp_claims`) |
+
+Policy claim paths forwarded to admit for per-org `required_idp_claims` checks are configured in control-plane config via top-level `policy_claims` ([settings](config/settings.md)), not via gateway env.
 
 Each token is checked for `iss`, `aud`, `exp`, a `kid` header matching a key in JWKS, signature validity, and a non-empty subject claim.
 

@@ -17,7 +17,7 @@ import (
 
 // Postgres unavailable is 503 SERVICE_UNAVAILABLE on every port: the service
 // API, admit, plan counts and access evaluation
-// (docs/reference/errors.md#which-status). It needs no Postgres.
+// (docs/reference/errors.md). It needs no Postgres.
 func TestPostgresDownIs503(t *testing.T) {
 	pool, err := pgxpool.New(context.Background(), "postgres://plat5:plat5@127.0.0.1:1/plat5?connect_timeout=1")
 	if err != nil {

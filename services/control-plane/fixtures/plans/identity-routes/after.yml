@@ -29,20 +29,20 @@ services:
         routes:
           - path: /
             methods:
-              GET: { required_permissions: [organization:read] }
-              PATCH: { required_permissions: [organization:write] }
-              DELETE: { required_permissions: [organization:admin] }
+              GET: { permissions: [organization:read] }
+              PATCH: { permissions: [organization:write] }
+              DELETE: { permissions: [organization:admin] }
           - path: /apps
             upstream: /nodes/{organization.id}/children/project
             methods:
-              GET: { required_permissions: any_member }
-              POST: { required_permissions: [project:create] }
+              GET: { permissions: any_member }
+              POST: { permissions: [project:create] }
       project:
         upstream_prefix: /nodes/{project.id}
         routes:
           - path: /
             methods:
-              GET: { required_permissions: [project:read] }
+              GET: { permissions: [project:read] }
   e10s:
     url: http://e10s:3000
     scopes:
@@ -51,14 +51,14 @@ services:
         routes:
           - path: /plans
             methods:
-              GET: { required_permissions: [organization:read] }
+              GET: { permissions: [organization:read] }
       project:
         upstream_prefix: /projects/{project.id}
         routes:
           - path: /plans
             methods:
-              GET: { required_permissions: [project:read] }
-              POST: { required_permissions: [catalog:write] }
+              GET: { permissions: [project:read] }
+              POST: { permissions: [catalog:write] }
       public:
         routes:
           - path: /health

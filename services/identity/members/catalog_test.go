@@ -29,25 +29,25 @@ const (
 )
 
 type catalogRoute struct {
-	Path                string          `json:"path"`
-	Method              string          `json:"method"`
-	Scope               string          `json:"scope"`
-	Upstream            string          `json:"upstream"`
-	RequiredPermissions json.RawMessage `json:"required_permissions"`
-	AllowDeleted        bool            `json:"allow_deleted"`
+	Path         string          `json:"path"`
+	Method       string          `json:"method"`
+	Scope        string          `json:"scope"`
+	Upstream     string          `json:"upstream"`
+	Permissions  json.RawMessage `json:"permissions"`
+	AllowDeleted bool            `json:"allow_deleted"`
 }
 
-// need is the route's required_permissions as gatewayStatus takes them: nil
+// need is the route's permissions as gatewayStatus takes them: nil
 // outside a kind scope, "any_member", or the list.
 func (r catalogRoute) need() any {
-	switch raw := string(r.RequiredPermissions); raw {
+	switch raw := string(r.Permissions); raw {
 	case "", "null":
 		return nil
 	case `"any_member"`:
 		return "any_member"
 	}
 	var perms []string
-	if err := json.Unmarshal(r.RequiredPermissions, &perms); err != nil {
+	if err := json.Unmarshal(r.Permissions, &perms); err != nil {
 		panic(err)
 	}
 	return perms

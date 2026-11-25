@@ -14,24 +14,24 @@ use tracing::warn;
 const DNS_CACHE_TTL: Duration = Duration::from_secs(10);
 const DNS_CACHE_CAPACITY: u64 = 1_024;
 
-struct ResolvedPeer {
-    addrs: Vec<SocketAddr>,
+struct ResolvedHost {
+    ips: Vec<IpAddr>,
     next: AtomicUsize,
 }
 
-impl ResolvedPeer {
-    fn pick(&self) -> SocketAddr {
-        let idx = self.next.fetch_add(1, Ordering::Relaxed) % self.addrs.len();
-        self.addrs[idx]
+impl ResolvedHost {
+    fn pick(&self) -> IpAddr {
+        let idx = self.next.fetch_add(1, Ordering::Relaxed) % self.ips.len();
+        self.ips[idx]
     }
 }
 
-/// Short-lived cached DNS resolver with round-robin selection and optional
-/// private/reserved IP blocking. Failed or blocked lookups are never cached,
-/// and concurrent misses for the same address share one lookup.
+/// Short-lived cached DNS resolver keyed by hostname, with round-robin selection
+/// and optional private/reserved IP blocking. Failed or blocked lookups are never
+/// cached, and concurrent misses for the same host share one lookup.
 #[derive(Clone)]
 pub struct PeerResolver {
-    cache: Cache<String, Arc<ResolvedPeer>>,
+    cache: Cache<String, Arc<ResolvedHost>>,
     block_private_ips: bool,
 }
 
@@ -59,9 +59,10 @@ impl PeerResolver {
         self.resolve_with(addr, lookup_host_addrs).await
     }
 
-    /// Resolves all allowed addresses for `host:port` (used by `reqwest::dns::Resolve`
+    /// Resolves all allowed addresses for `(host, port)` (used by `reqwest::dns::Resolve`
     /// so HTTP clients connect directly to the SSRF-checked IPs without TOCTOU re-resolution).
     pub async fn resolve_all(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
+        let host = host.trim_start_matches('[').trim_end_matches(']');
         if let Ok(ip) = host.parse::<IpAddr>() {
             if self.block_private_ips && is_blocked_ip(ip) {
                 warn!(host = %host, ip = %ip, "blocked outbound connection to private or reserved IP");
@@ -69,42 +70,14 @@ impl PeerResolver {
             }
             return Ok(vec![SocketAddr::new(ip, port)]);
         }
-        let addr = format!("{host}:{port}");
-        let block_private_ips = self.block_private_ips;
         let peer = self
-            .cache
-            .try_get_with(addr.clone(), async move {
-                let addrs = lookup_host_addrs(addr.clone())
-                    .await
-                    .ok_or_else(|| format!("dns lookup failed for {addr}"))?;
-                if block_private_ips {
-                    for resolved in &addrs {
-                        if is_blocked_ip(resolved.ip()) {
-                            warn!(
-                                upstream = %addr,
-                                ip = %resolved.ip(),
-                                "blocked outbound connection to private or reserved IP"
-                            );
-                            return Err(format!(
-                                "blocked private or reserved IP {}",
-                                resolved.ip()
-                            ));
-                        }
-                    }
-                }
-                let prefer_ipv4 = addrs[0].is_ipv4();
-                let addrs: Vec<SocketAddr> = addrs
-                    .into_iter()
-                    .filter(|sa| sa.is_ipv4() == prefer_ipv4)
-                    .collect();
-                Ok(Arc::new(ResolvedPeer {
-                    addrs,
-                    next: AtomicUsize::new(0),
-                }))
-            })
-            .await
-            .map_err(|e| (*e).clone())?;
-        Ok(peer.addrs.clone())
+            .resolve_host_with(host, port, lookup_host_addrs)
+            .await?;
+        Ok(peer
+            .ips
+            .iter()
+            .map(|ip| SocketAddr::new(*ip, port))
+            .collect())
     }
 
     pub async fn resolve_with<F, Fut>(&self, addr: &str, lookup: F) -> Option<SocketAddr>
@@ -123,41 +96,74 @@ impl PeerResolver {
             }
             return Some(sa);
         }
+        let (host, port) = split_host_port(addr)?;
+        let peer = self.resolve_host_with(host, port, lookup).await.ok()?;
+        Some(SocketAddr::new(peer.pick(), port))
+    }
 
+    async fn resolve_host_with<F, Fut>(
+        &self,
+        host: &str,
+        port: u16,
+        lookup: F,
+    ) -> Result<Arc<ResolvedHost>, String>
+    where
+        F: FnOnce(String) -> Fut,
+        Fut: Future<Output = Option<Vec<SocketAddr>>>,
+    {
+        let key = host.to_ascii_lowercase();
+        let query_addr = format!("{host}:{port}");
         let block_private_ips = self.block_private_ips;
-        let peer = self
-            .cache
-            .try_get_with(addr.to_string(), async move {
-                let addrs = lookup(addr.to_string()).await.ok_or(())?;
-                if addrs.is_empty() {
-                    return Err(());
-                }
+        self.cache
+            .try_get_with(key, async move {
+                let addrs = lookup(query_addr.clone())
+                    .await
+                    .filter(|v| !v.is_empty())
+                    .ok_or_else(|| format!("dns lookup failed for {query_addr}"))?;
                 if block_private_ips {
                     for resolved in &addrs {
                         if is_blocked_ip(resolved.ip()) {
                             warn!(
-                                upstream = %addr,
+                                upstream = %query_addr,
                                 ip = %resolved.ip(),
-                                "blocked upstream connection to private or reserved IP"
+                                "blocked outbound connection to private or reserved IP"
                             );
-                            return Err(());
+                            return Err(format!(
+                                "blocked private or reserved IP {}",
+                                resolved.ip()
+                            ));
                         }
                     }
                 }
                 let prefer_ipv4 = addrs[0].is_ipv4();
-                let addrs: Vec<SocketAddr> = addrs
+                let ips: Vec<IpAddr> = addrs
                     .into_iter()
                     .filter(|sa| sa.is_ipv4() == prefer_ipv4)
+                    .map(|sa| sa.ip())
                     .collect();
-                Ok(Arc::new(ResolvedPeer {
-                    addrs,
+                Ok(Arc::new(ResolvedHost {
+                    ips,
                     next: AtomicUsize::new(0),
                 }))
             })
             .await
-            .ok()?;
-        Some(peer.pick())
+            .map_err(|e| (*e).clone())
     }
+}
+
+fn split_host_port(addr: &str) -> Option<(&str, u16)> {
+    let (host, port_str) = if let Some(rest) = addr.strip_prefix('[') {
+        let (h, after) = rest.split_once(']')?;
+        let p = after.strip_prefix(':')?;
+        (h, p)
+    } else {
+        addr.rsplit_once(':')?
+    };
+    if host.is_empty() {
+        return None;
+    }
+    let port = port_str.parse::<u16>().ok()?;
+    (port > 0).then_some((host, port))
 }
 
 impl reqwest::dns::Resolve for PeerResolver {

@@ -17,6 +17,7 @@ pub const DEFAULT_AUTHORIZER_CACHE_TTL: &str = "0s";
 
 pub const USER_SCOPE: &str = "user";
 pub const PUBLIC_SCOPE: &str = "public";
+
 /// Every struct here refuses unknown fields: a config the running version
 /// can't read fails loudly, never read with a field dropped
 /// (docs/concepts/config.md#the-config-shape).
@@ -28,17 +29,21 @@ pub struct Config {
     #[serde(default)]
     pub reserved_slugs: Vec<String>,
     #[serde(default)]
+    pub policy_claims: Vec<String>,
+    #[serde(default)]
     pub defaults: Defaults,
     #[serde(deserialize_with = "kinds_filled")]
     pub kinds: BTreeMap<String, Kind>,
+    #[serde(default)]
     pub roles: BTreeMap<String, Role>,
-    pub creator_role: String,
+    #[serde(default)]
+    pub creator_role: Option<String>,
     #[serde(default)]
     pub custom_roles: bool,
     #[serde(default)]
     pub permissions: BTreeMap<String, PermissionMeta>,
     #[serde(default)]
-    pub authorizers: BTreeMap<String, Authorizer>,
+    pub authorizer: Option<Authorizer>,
     #[serde(default)]
     pub rate_limits: BTreeMap<String, Policy>,
     #[serde(default)]
@@ -126,14 +131,6 @@ pub struct Kind {
     /// Optional hostname template on a root kind: `{<kind>}.<domain>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
-    /// Allows public principal bindings (`all_users`, `all_authenticated_users`)
-    /// on nodes of this kind and `allow_public` routes in or below its scope.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub allow_public: bool,
-    /// Optional external AuthZEN authorizer for this kind's list filtering and
-    /// identity `/access/v1/*` evaluation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub authorizer: Option<KindAuthorizer>,
 }
 
 /// The kinds, each `list_permission` filled in where the config leaves it out.
@@ -155,10 +152,6 @@ fn yes() -> bool {
 
 fn is_yes(b: &bool) -> bool {
     *b
-}
-
-pub(crate) fn is_false(b: &bool) -> bool {
-    !*b
 }
 
 impl Kind {
@@ -216,7 +209,7 @@ fn default_authorizer_cache_ttl() -> String {
     DEFAULT_AUTHORIZER_CACHE_TTL.to_string()
 }
 
-/// Top-level external AuthZEN 1.0 PDP definition (`authorizers.<name>`).
+/// Top-level external AuthZEN 1.0 PDP definition (`authorizer`).
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Authorizer {
@@ -231,110 +224,13 @@ pub struct Authorizer {
     pub token_env: Option<String>,
 }
 
-/// How an external AuthZEN authorizer combines with Plat5's built-in RBAC.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum AuthorizerMode {
-    #[default]
-    Replace,
-    And,
-    Or,
-}
-
-/// Canonical authorizer binding on a kind (deserializes shorthand `"topaz"` or
-/// `{ "name": "topaz", "mode": "or" }`, always serializes as `{ name, mode }`).
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub struct KindAuthorizer {
-    pub name: String,
-    pub mode: AuthorizerMode,
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum KindAuthorizerRaw {
-    Name(String),
-    Full(KindAuthorizerObj),
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct KindAuthorizerObj {
-    name: String,
-    #[serde(default)]
-    mode: AuthorizerMode,
-}
-
-impl<'de> serde::Deserialize<'de> for KindAuthorizer {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        match KindAuthorizerRaw::deserialize(d)? {
-            KindAuthorizerRaw::Name(name) => Ok(KindAuthorizer {
-                name,
-                mode: AuthorizerMode::Replace,
-            }),
-            KindAuthorizerRaw::Full(obj) => Ok(KindAuthorizer {
-                name: obj.name,
-                mode: obj.mode,
-            }),
-        }
-    }
-}
-
-/// Optional AuthZEN resource override on a route (`{ type, id }`).
+/// Optional AuthZEN resource override on a route or verb (`{ type, id }`).
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct AuthorizerResource {
+pub struct Resource {
     #[serde(rename = "type")]
     pub r#type: String,
     pub id: String,
-}
-
-/// Raw authorizer setting on a service, scope, route or method.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum RouteAuthorizerConfig {
-    Off(bool),
-    Name(String),
-    Full(ResolvedRouteAuthorizer),
-}
-
-/// Canonical expanded authorizer served to the gateway per route.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct ResolvedRouteAuthorizer {
-    pub name: String,
-    #[serde(default)]
-    pub mode: AuthorizerMode,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resource: Option<AuthorizerResource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub action: Option<String>,
-}
-
-impl From<&KindAuthorizer> for ResolvedRouteAuthorizer {
-    fn from(ka: &KindAuthorizer) -> Self {
-        Self {
-            name: ka.name.clone(),
-            mode: ka.mode,
-            resource: None,
-            action: None,
-        }
-    }
-}
-
-impl RouteAuthorizerConfig {
-    /// Resolves to `Some(authorizer)` when enabled, or `None` when `false`.
-    pub fn resolve(&self) -> Option<ResolvedRouteAuthorizer> {
-        match self {
-            RouteAuthorizerConfig::Off(_) => None,
-            RouteAuthorizerConfig::Name(name) => Some(ResolvedRouteAuthorizer {
-                name: name.clone(),
-                mode: AuthorizerMode::Replace,
-                resource: None,
-                action: None,
-            }),
-            RouteAuthorizerConfig::Full(obj) => Some(obj.clone()),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -373,9 +269,6 @@ pub struct Service {
     pub timeouts: Timeouts,
     #[serde(default)]
     pub max_body_bytes: Option<u64>,
-    #[serde(default)]
-    pub authorizer: Option<RouteAuthorizerConfig>,
-    #[serde(default)]
     pub scopes: BTreeMap<String, Scope>,
 }
 
@@ -384,8 +277,6 @@ pub struct Service {
 pub struct Scope {
     #[serde(default)]
     pub upstream_prefix: Option<String>,
-    #[serde(default)]
-    pub authorizer: Option<RouteAuthorizerConfig>,
     pub routes: Vec<Route>,
 }
 
@@ -397,7 +288,7 @@ pub struct Route {
     pub upstream: Option<String>,
     pub methods: Methods,
     #[serde(default)]
-    pub required_permissions: Option<Required>,
+    pub permissions: Option<Required>,
     #[serde(default)]
     pub rate_limit: Option<RateLimit>,
     #[serde(default)]
@@ -405,9 +296,7 @@ pub struct Route {
     #[serde(default)]
     pub allow_deleted: Option<bool>,
     #[serde(default)]
-    pub allow_public: Option<bool>,
-    #[serde(default)]
-    pub authorizer: Option<RouteAuthorizerConfig>,
+    pub resource: Option<Resource>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -422,23 +311,39 @@ pub enum Methods {
 #[serde(deny_unknown_fields)]
 pub struct MethodConfig {
     #[serde(default)]
-    pub required_permissions: Option<Required>,
+    pub permissions: Option<Required>,
     #[serde(default)]
     pub rate_limit: Option<RateLimit>,
     #[serde(default)]
     pub audit: Option<bool>,
     #[serde(default)]
-    pub allow_public: Option<bool>,
-    #[serde(default)]
-    pub authorizer: Option<RouteAuthorizerConfig>,
+    pub resource: Option<Resource>,
 }
 
-/// `required_permissions`: a list, any one of which admits, or `any_member`.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+/// `permissions`: a list (or single-string shorthand), any one of which admits,
+/// or `any_member`. Always serializes canonically as an array or `"any_member"`.
+#[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(untagged)]
 pub enum Required {
     Permissions(Vec<String>),
     Keyword(Keyword),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RequiredRaw {
+    Single(String),
+    List(Vec<String>),
+}
+
+impl<'de> serde::Deserialize<'de> for Required {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        match RequiredRaw::deserialize(d)? {
+            RequiredRaw::Single(s) if s == "any_member" => Ok(Required::Keyword(Keyword::AnyMember)),
+            RequiredRaw::Single(s) => Ok(Required::Permissions(vec![s])),
+            RequiredRaw::List(list) => Ok(Required::Permissions(list)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
@@ -447,12 +352,31 @@ pub enum Keyword {
     AnyMember,
 }
 
-/// `rate_limit`: policy names, or `false` for none (the schema refuses `true`).
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+/// `rate_limit`: policy names, or `false` for none.
+#[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(untagged)]
 pub enum RateLimit {
     Off(bool),
     Policies(Vec<String>),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RateLimitRaw {
+    Flag(bool),
+    Policies(Vec<String>),
+}
+
+impl<'de> serde::Deserialize<'de> for RateLimit {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        match RateLimitRaw::deserialize(d)? {
+            RateLimitRaw::Flag(false) => Ok(RateLimit::Off(false)),
+            RateLimitRaw::Flag(true) => Err(serde::de::Error::custom(
+                "rate_limit must be a list of policies or false",
+            )),
+            RateLimitRaw::Policies(p) => Ok(RateLimit::Policies(p)),
+        }
+    }
 }
 
 /// The verbs a route can have, in the order expanded routes list them.
@@ -495,6 +419,3 @@ impl Config {
             .filter(move |(_, k)| k.parent.as_deref() == Some(kind))
     }
 }
-
-/// The key of the flat config that isn't the config: the apply's precondition.
-pub const APPLY_ONLY_KEYS: &[&str] = &["expect"];

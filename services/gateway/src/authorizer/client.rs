@@ -18,6 +18,9 @@ use super::config::AuthorizerSpec;
 /// Maximum items in one AuthZEN `/access/v1/evaluations` call.
 pub const MAX_BATCH_EVALUATIONS: usize = 100;
 
+/// Metric and span label for the single deployment-wide external authorizer.
+pub const AUTHORIZER_METRIC_LABEL: &str = "external";
+
 /// AuthZEN batch `evaluations_semantic` values used by the gateway.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BatchSemantic {
@@ -175,6 +178,7 @@ impl HttpAuthorizer {
         let block_private_ips = resolver.block_private_ips();
         let client = reqwest::Client::builder()
             .dns_resolver(Arc::new(resolver))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("failed to build authorizer HTTP client");
         Self {
@@ -217,15 +221,15 @@ impl HttpAuthorizer {
         let start = Instant::now();
         if let Err(err) = self.check_ip_literal(&url) {
             metrics::record_authorizer_request(
-                &spec.name,
+                AUTHORIZER_METRIC_LABEL,
                 op,
                 "error",
                 start.elapsed().as_secs_f64(),
             );
-            warn!(authorizer = %spec.name, op, error = %err.0, "authorizer request blocked");
+            warn!(op, error = %err.0, "authorizer request blocked");
             return Err(err);
         }
-        let span = authorizer_span(&spec.name, op, &url);
+        let span = authorizer_span(op, &url);
         let mut req = self
             .client
             .post(&url)
@@ -241,25 +245,24 @@ impl HttpAuthorizer {
             .await
             .map_err(|e| {
                 metrics::record_authorizer_request(
-                    &spec.name,
+                    AUTHORIZER_METRIC_LABEL,
                     op,
                     "error",
                     start.elapsed().as_secs_f64(),
                 );
-                warn!(authorizer = %spec.name, op, error = %e, "authorizer request failed");
+                warn!(op, error = %e, "authorizer request failed");
                 AuthorizerUnavailable(e.to_string())
             })?;
         let status = response.status();
         span.record("http.response.status_code", status.as_u16());
         if !status.is_success() {
             metrics::record_authorizer_request(
-                &spec.name,
+                AUTHORIZER_METRIC_LABEL,
                 op,
                 "error",
                 start.elapsed().as_secs_f64(),
             );
             warn!(
-                authorizer = %spec.name,
                 op,
                 status = status.as_u16(),
                 "authorizer returned non-2xx"
@@ -268,12 +271,12 @@ impl HttpAuthorizer {
         }
         response.json::<R>().await.map_err(|e| {
             metrics::record_authorizer_request(
-                &spec.name,
+                AUTHORIZER_METRIC_LABEL,
                 op,
                 "error",
                 start.elapsed().as_secs_f64(),
             );
-            warn!(authorizer = %spec.name, op, error = %e, "authorizer response decode failed");
+            warn!(op, error = %e, "authorizer response decode failed");
             AuthorizerUnavailable(e.to_string())
         })
     }
@@ -292,7 +295,7 @@ impl Authorizer for HttpAuthorizer {
             .await?;
         let outcome = if resp.decision { "allow" } else { "deny" };
         metrics::record_authorizer_request(
-            &spec.name,
+            AUTHORIZER_METRIC_LABEL,
             "evaluation",
             outcome,
             start.elapsed().as_secs_f64(),
@@ -329,7 +332,7 @@ impl Authorizer for HttpAuthorizer {
         let decisions: Vec<bool> = resp.evaluations.into_iter().map(|e| e.decision).collect();
         if semantic == BatchSemantic::ExecuteAll && decisions.len() != reqs.len() {
             metrics::record_authorizer_request(
-                &spec.name,
+                AUTHORIZER_METRIC_LABEL,
                 "evaluations",
                 "error",
                 start.elapsed().as_secs_f64(),
@@ -342,7 +345,7 @@ impl Authorizer for HttpAuthorizer {
         }
         if decisions.is_empty() || decisions.len() > reqs.len() {
             metrics::record_authorizer_request(
-                &spec.name,
+                AUTHORIZER_METRIC_LABEL,
                 "evaluations",
                 "error",
                 start.elapsed().as_secs_f64(),
@@ -353,7 +356,7 @@ impl Authorizer for HttpAuthorizer {
             )));
         }
         metrics::record_authorizer_request(
-            &spec.name,
+            AUTHORIZER_METRIC_LABEL,
             "evaluations",
             "ok",
             start.elapsed().as_secs_f64(),
@@ -362,12 +365,12 @@ impl Authorizer for HttpAuthorizer {
     }
 }
 
-fn authorizer_span(name: &str, op: &str, url: &str) -> Span {
+fn authorizer_span(op: &str, url: &str) -> Span {
     tracing::info_span!(
         "authzen_client",
         otel.kind = "client",
         otel.name = %format!("POST /access/v1/{op}"),
-        plat5.authorizer = %name,
+        plat5.authorizer = AUTHORIZER_METRIC_LABEL,
         http.request.method = "POST",
         url.full = %url,
         http.response.status_code = tracing::field::Empty,

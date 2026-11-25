@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Instant;
 
 use jsonwebtoken::errors::{Error as JwtError, ErrorKind};
@@ -12,7 +13,7 @@ use crate::metrics;
 pub async fn validate_token(
     token: &str,
     issuer: String,
-    jwks: JwkSet,
+    jwks: Arc<JwkSet>,
     allowed_audiences: Audiences,
 ) -> Result<(TokenData<Value>, String), JwtError> {
     let token = token.to_string();

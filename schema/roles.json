@@ -48,6 +48,7 @@
           "title": "bindable_at",
           "description": "Optional kinds where custom roles holding this permission may be bound. Omitted allows any kind.",
           "type": "array",
+          "minItems": 1,
           "uniqueItems": true,
           "items": { "$ref": "kinds.json#/$defs/kind_name" }
         },
@@ -67,9 +68,10 @@
     },
     "permission": {
       "title": "permission",
-      "description": "`[a-z0-9:._-]+`, max 64.",
+      "description": "`[a-z0-9:._-]+`, max 64. Not `any_member`.",
       "type": "string",
-      "pattern": "^[a-z0-9:._-]{1,64}$"
+      "pattern": "^[a-z0-9:._-]{1,64}$",
+      "not": { "const": "any_member" }
     },
     "role": {
       "title": "role",

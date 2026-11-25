@@ -25,7 +25,7 @@
           "method": "GET",
           "scope": "public",
           "upstream": "/health",
-          "required_permissions": null,
+          "permissions": null,
           "rate_limit": [
             "standard"
           ],
@@ -37,7 +37,7 @@
           "method": "GET",
           "scope": "organization",
           "upstream": "/orgs/{organization.id}/plans",
-          "required_permissions": [
+          "permissions": [
             "organization:read"
           ],
           "rate_limit": [
@@ -51,7 +51,7 @@
           "method": "GET",
           "scope": "project",
           "upstream": "/projects/{project.id}/plans",
-          "required_permissions": [
+          "permissions": [
             "project:read"
           ],
           "rate_limit": [
@@ -65,7 +65,7 @@
           "method": "POST",
           "scope": "project",
           "upstream": "/projects/{project.id}/plans",
-          "required_permissions": [
+          "permissions": [
             "catalog:write"
           ],
           "rate_limit": [

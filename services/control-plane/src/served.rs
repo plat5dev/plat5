@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 
-use crate::config::{Authorizer, Config};
+use crate::config::Config;
 use crate::expand::ExpandedService;
 use crate::rules::Checked;
 
@@ -52,8 +52,8 @@ pub fn feed_body(revision: i64, body: &Value) -> Value {
 }
 
 /// The body of `GET /internal/gateway`: kinds, every service's routes
-/// expanded, rate limits, `defaults.rate_limit`, CORS, and only the
-/// `authorizers` referenced by at least one expanded route.
+/// expanded, rate limits, `defaults.rate_limit`, CORS, optional `policy_claims`,
+/// and optional deployment-wide `authorizer`.
 pub fn gateway_body_with(c: &Config, services: &BTreeMap<String, ExpandedService>) -> Value {
     let mut out = Map::new();
     out.insert("kinds".into(), json!(c.kinds));
@@ -64,18 +64,13 @@ pub fn gateway_body_with(c: &Config, services: &BTreeMap<String, ExpandedService
         json!({ "rate_limit": c.defaults.rate_limit }),
     );
     out.insert("cors".into(), json!(c.cors));
-    let used: BTreeSet<&str> = services
-        .values()
-        .flat_map(|s| &s.routes)
-        .filter_map(|r| r.authorizer.as_ref().map(|a| a.name.as_str()))
-        .collect();
-    let gw_authorizers: BTreeMap<&String, &Authorizer> = c
-        .authorizers
-        .iter()
-        .filter(|(name, _)| used.contains(name.as_str()))
-        .collect();
-    if !gw_authorizers.is_empty() {
-        out.insert("authorizers".into(), json!(gw_authorizers));
+    if !c.policy_claims.is_empty() {
+        let mut claims = c.policy_claims.clone();
+        claims.sort();
+        out.insert("policy_claims".into(), json!(claims));
+    }
+    if let Some(authz) = &c.authorizer {
+        out.insert("authorizer".into(), json!(authz));
     }
     Value::Object(out)
 }
@@ -89,8 +84,17 @@ struct ServedPermission {
     custom_role_assignable: bool,
 }
 
+/// Slim authorizer projection for identity (excludes gateway-only cache TTLs).
+#[derive(Clone, Debug, Serialize, PartialEq)]
+struct IdentityAuthorizer<'a> {
+    url: &'a str,
+    timeout: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token_env: Option<&'a str>,
+}
+
 /// Derives the deployment's permission catalog from kinds (`list_permission`),
-/// service routes (`required_permissions`), predefined roles (excluding `*`),
+/// service routes (`permissions`), predefined roles (excluding `*`),
 /// and explicit `permissions:` metadata.
 fn permission_catalog(
     c: &Config,
@@ -98,9 +102,7 @@ fn permission_catalog(
 ) -> BTreeMap<String, ServedPermission> {
     let mut all_keys: BTreeSet<String> = c.permissions.keys().cloned().collect();
     for kind in c.kinds.values() {
-        if kind.list_permission != "*" {
-            all_keys.insert(kind.list_permission.clone());
-        }
+        all_keys.insert(kind.list_permission.clone());
     }
     all_keys.extend(route_permissions.iter().cloned());
     for role in c.roles.values() {
@@ -137,36 +139,42 @@ fn permission_catalog(
     out
 }
 
-/// The body of `GET /internal/identity`: settings, kinds, roles, optional
-/// custom-role catalog, and only the `authorizers` referenced by kinds.
+/// The body of `GET /internal/identity`: settings, kinds, optional `policy_claims`,
+/// and either built-in RBAC (`roles`, `creator_role`, optional `custom_roles` and
+/// `permissions` catalog) or the deployment-wide `authorizer`.
 pub fn identity_body_with(c: &Config, route_permissions: &BTreeSet<String>) -> Value {
     let mut out = Map::new();
     out.insert("deletion_grace".into(), json!(c.deletion_grace));
     out.insert("reserved_slugs".into(), json!(c.reserved_slugs));
+    if !c.policy_claims.is_empty() {
+        let mut claims = c.policy_claims.clone();
+        claims.sort();
+        out.insert("policy_claims".into(), json!(claims));
+    }
     out.insert("kinds".into(), json!(c.kinds));
-    out.insert("roles".into(), json!(c.roles));
-    out.insert("creator_role".into(), json!(c.creator_role));
-    if c.custom_roles {
-        out.insert("custom_roles".into(), json!(true));
-    }
-    if c.custom_roles || !c.permissions.is_empty() {
+    if let Some(authz) = &c.authorizer {
         out.insert(
-            "permissions".into(),
-            json!(permission_catalog(c, route_permissions)),
+            "authorizer".into(),
+            json!(IdentityAuthorizer {
+                url: &authz.url,
+                timeout: &authz.timeout,
+                token_env: authz.token_env.as_deref(),
+            }),
         );
-    }
-    let used: BTreeSet<&str> = c
-        .kinds
-        .values()
-        .filter_map(|k| k.authorizer.as_ref().map(|a| a.name.as_str()))
-        .collect();
-    let id_authorizers: BTreeMap<&String, &Authorizer> = c
-        .authorizers
-        .iter()
-        .filter(|(name, _)| used.contains(name.as_str()))
-        .collect();
-    if !id_authorizers.is_empty() {
-        out.insert("authorizers".into(), json!(id_authorizers));
+    } else {
+        out.insert("roles".into(), json!(c.roles));
+        if let Some(creator_role) = &c.creator_role {
+            out.insert("creator_role".into(), json!(creator_role));
+        }
+        if c.custom_roles {
+            out.insert("custom_roles".into(), json!(true));
+        }
+        if c.custom_roles || !c.permissions.is_empty() {
+            out.insert(
+                "permissions".into(),
+                json!(permission_catalog(c, route_permissions)),
+            );
+        }
     }
     Value::Object(out)
 }
@@ -213,11 +221,11 @@ mod tests {
             json!({
                 "path": "/orgs/{organization}/projects/{project}/plans", "method": "GET",
                 "scope": "project", "upstream": "/projects/{project.id}/plans",
-                "required_permissions": ["project:read"], "rate_limit": ["standard"], "audit": false,
+                "permissions": ["project:read"], "rate_limit": ["standard"], "audit": false,
                 "allow_deleted": false
             })
         );
-        assert_eq!(e10s["routes"][0]["required_permissions"], Value::Null);
+        assert_eq!(e10s["routes"][0]["permissions"], Value::Null);
         let identity = identity_feed(4, &base());
         assert_eq!(identity["deletion_grace"], json!("30d"));
         assert_eq!(identity["reserved_slugs"], json!([]));
@@ -227,11 +235,15 @@ mod tests {
 
         let mut custom = base();
         custom["custom_roles"] = json!(true);
+        custom["policy_claims"] = json!(["amr", "acr"]);
         custom["permissions"] = json!({
             "project:read": { "description": "Read projects" },
             "internal:secret": { "custom_role_assignable": false }
         });
+        let gw = gateway_feed(5, &custom);
+        assert_eq!(gw["policy_claims"], json!(["acr", "amr"]));
         let identity = identity_feed(5, &custom);
+        assert_eq!(identity["policy_claims"], json!(["acr", "amr"]));
         assert_eq!(identity["custom_roles"], json!(true));
         assert_eq!(
             identity["permissions"]["project:read"],
@@ -244,49 +256,50 @@ mod tests {
         assert!(identity["permissions"].get("organization:read").is_some());
         assert!(identity["permissions"].get("*").is_none());
 
-        // Authorizers expand into each feed filtered by what that service uses,
-        // and inherit kind -> service -> scope -> route -> verb (with false opt-out).
+        // External authorizer mode replaces roles/creator_role and sends
+        // authorizer to both feeds (slimmed for identity) plus route resource.
         let mut authz = base();
-        authz["authorizers"] = json!({
-            "topaz": { "url": "http://topaz:8383", "token_env": "TOPAZ_API_KEY" },
-            "gw_only": { "url": "http://cerbos:3592", "token_env": "CERBOS_API_KEY" }
+        authz.as_object_mut().unwrap().remove("roles");
+        authz.as_object_mut().unwrap().remove("creator_role");
+        authz["authorizer"] = json!({
+            "url": "http://topaz:8383",
+            "cache_ttl": "5s",
+            "token_env": "TOPAZ_API_KEY"
         });
-        authz["kinds"]["project"]["authorizer"] = json!("topaz");
-        authz["services"]["e10s"]["authorizer"] = json!({ "name": "gw_only", "mode": "or" });
-        authz["services"]["e10s"]["scopes"]["project"]["routes"][0]["methods"]["POST"]
-            ["authorizer"] = json!(false);
+        authz["services"]["e10s"]["scopes"]["project"]["routes"][0]["resource"] = json!({
+            "type": "plan",
+            "id": "{project.id}"
+        });
         let gw = gateway_feed(6, &authz);
         assert_eq!(
-            gw["authorizers"]["gw_only"],
+            gw["authorizer"],
             json!({
-                "url": "http://cerbos:3592",
+                "url": "http://topaz:8383",
                 "timeout": "2s",
-                "cache_ttl": "0s",
+                "cache_ttl": "5s",
                 "negative_cache_ttl": "0s",
-                "token_env": "CERBOS_API_KEY"
+                "token_env": "TOPAZ_API_KEY"
             })
         );
-        assert!(gw["authorizers"].get("topaz").is_none());
         let id = identity_feed(6, &authz);
-        assert!(id["authorizers"].get("topaz").is_some());
-        assert!(id["authorizers"].get("gw_only").is_none());
         assert_eq!(
-            id["kinds"]["project"]["authorizer"],
-            json!({ "name": "topaz", "mode": "replace" })
+            id["authorizer"],
+            json!({
+                "url": "http://topaz:8383",
+                "timeout": "2s",
+                "token_env": "TOPAZ_API_KEY"
+            })
         );
+        assert!(id.get("roles").is_none());
+        assert!(id.get("creator_role").is_none());
         let routes = gw["services"]["e10s"]["routes"].as_array().unwrap();
         let get_plans = routes
             .iter()
             .find(|r| r["method"] == "GET" && r["scope"] == "project")
             .unwrap();
         assert_eq!(
-            get_plans["authorizer"],
-            json!({ "name": "gw_only", "mode": "or" })
+            get_plans["resource"],
+            json!({ "type": "plan", "id": "{project.id}" })
         );
-        let post_plans = routes
-            .iter()
-            .find(|r| r["method"] == "POST" && r["scope"] == "project")
-            .unwrap();
-        assert!(post_plans.get("authorizer").is_none());
     }
 }

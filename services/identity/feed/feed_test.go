@@ -89,12 +89,12 @@ func TestParseRefuses(t *testing.T) {
 }
 
 func TestParseDuration(t *testing.T) {
-	for in, want := range map[string]time.Duration{"": 30 * 24 * time.Hour, "30d": 30 * 24 * time.Hour, "90s": 90 * time.Second, "5m": 5 * time.Minute, "12h": 12 * time.Hour} {
+	for in, want := range map[string]time.Duration{"30d": 30 * 24 * time.Hour, "90s": 90 * time.Second, "5m": 5 * time.Minute, "12h": 12 * time.Hour} {
 		if got, err := ParseDuration(in); err != nil || got != want {
 			t.Fatalf("%q: %v %v", in, got, err)
 		}
 	}
-	for _, bad := range []string{"0d", "1w", "d", "-1h", "1.5h"} {
+	for _, bad := range []string{"", "0d", "1w", "d", "-1h", "1.5h", "999999999d", "36501d"} {
 		if _, err := ParseDuration(bad); err == nil {
 			t.Fatalf("%q should be refused", bad)
 		}

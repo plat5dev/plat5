@@ -12,7 +12,7 @@ tests' own tree, not any template's.
 They dry-run it through the control plane's admin API and apply it with the
 plan's revision as `expect`; a plan with no changes applies nothing, so a rerun
 leaves the stack as it is. The config is the same with audit off: the
-gateway's `AUDIT_ENABLED` decides whether it writes events, and
+gateway's `AUDIT_MODE` (`sync`, `async`, or `off`) decides whether it writes events, and
 `services/audit.yml` only publishes audit's reads.
 
 The tests serve their own JWKS on host port `5401` (compose's default
@@ -50,7 +50,7 @@ cd e2e && PLAT5_E2E=1 go test ./... -count=1 -v
 | Env | Default | |
 |-----|---------|--|
 | `PLAT5_E2E` | unset | `1` runs the tests |
-| `AUDIT_ENABLED` | unset | `false` skips the tests that read audit events, for a stack run with audit off |
+| `AUDIT_MODE` | unset | `off` skips the tests that read audit events, for a stack run with audit off |
 | `GATEWAY_URL` | `http://localhost:5400` | The gateway, as clients see it |
 | `CONTROL_PLANE_URL` | `http://localhost:5402` | The control plane's admin API |
 | `IDENTITY_INTERNAL_URL` | `http://localhost:5404` | Identity's internal port, for the evaluation API and the lifecycle log |

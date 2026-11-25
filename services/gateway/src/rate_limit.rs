@@ -81,6 +81,7 @@ pub struct Unavailable;
 
 impl RateLimiter {
     /// Connect eagerly, failing if `url` is invalid or Valkey does not answer.
+    #[cfg(test)]
     pub async fn connect(url: &str, key_prefix: String) -> Result<Self, RedisError> {
         let client = Client::open(url)?;
         let conn = open_manager(client.clone()).await?;

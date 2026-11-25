@@ -104,12 +104,12 @@ impl ApiError {
     }
 
     /// The one 403 body: a node that doesn't exist, a caller outside its tree, and a
-    /// missing permission all answer this, with the route's `required_permissions`
-    /// list. An `any_member` route has none: its 403 only means the caller isn't in
+    /// missing permission all answer this, with the route's `permissions` list.
+    /// An `any_member` route has none: its 403 only means the caller isn't in
     /// the tree.
     pub fn forbidden(required: &Required) -> Self {
         let details = match required {
-            Required::AnyOf(list) => Some(serde_json::json!({ "required_permissions": list })),
+            Required::AnyOf(list) => Some(serde_json::json!({ "permissions": list })),
             Required::AnyMember | Required::Nothing => None,
         };
         Self {
@@ -224,7 +224,7 @@ mod tests {
         assert_eq!(parsed["error"]["request_id"], "req-1");
         assert_eq!(
             parsed["error"]["details"],
-            serde_json::json!({ "required_permissions": ["project:read"] })
+            serde_json::json!({ "permissions": ["project:read"] })
         );
 
         let any = ApiError::forbidden(&Required::AnyMember);

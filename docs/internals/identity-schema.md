@@ -97,22 +97,21 @@ CREATE TABLE org_roles (
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX org_roles_root_idx ON org_roles (root_id);
+CREATE UNIQUE INDEX org_roles_root_name_uidx ON org_roles (root_id, LOWER(display_name));
 
 CREATE TABLE bindings (
-    id               TEXT PRIMARY KEY,
-    member_id        TEXT REFERENCES members (id),
-    group_id         TEXT REFERENCES groups (id) ON DELETE CASCADE,
-    public_principal TEXT CHECK (public_principal IN ('all_users', 'all_authenticated_users')),
-    node_id          TEXT NOT NULL REFERENCES nodes (id),   -- under the member's or group's root
-    role             TEXT NOT NULL,                         -- predefined slug or root org_role id; grants nothing if gone
-    expires_at       TIMESTAMPTZ,                           -- optional JIT expiry
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CHECK (((member_id IS NOT NULL)::int + (group_id IS NOT NULL)::int + (public_principal IS NOT NULL)::int) = 1)
+    id         TEXT PRIMARY KEY,
+    member_id  TEXT REFERENCES members (id),
+    group_id   TEXT REFERENCES groups (id) ON DELETE CASCADE,
+    node_id    TEXT NOT NULL REFERENCES nodes (id),   -- under the member's or group's root
+    role       TEXT NOT NULL,                         -- predefined slug or root org_role id; grants nothing if gone
+    expires_at TIMESTAMPTZ,                           -- optional JIT expiry
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK ((member_id IS NOT NULL) <> (group_id IS NOT NULL))
 );
 CREATE UNIQUE INDEX bindings_member_role_uidx ON bindings (member_id, node_id, role) WHERE member_id IS NOT NULL;
 CREATE UNIQUE INDEX bindings_group_role_uidx ON bindings (group_id, node_id, role) WHERE group_id IS NOT NULL;
-CREATE UNIQUE INDEX bindings_public_role_uidx ON bindings (public_principal, node_id, role) WHERE public_principal IS NOT NULL;
 
 CREATE TABLE api_keys (
     id            TEXT PRIMARY KEY,

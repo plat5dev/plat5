@@ -39,7 +39,7 @@
           "before": {
             "scope": "environment",
             "upstream": "/envs/{environment.id}/flags",
-            "required_permissions": [
+            "permissions": [
               "environment:read"
             ],
             "rate_limit": [
@@ -56,7 +56,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/envs/{environment.id}/flags",
-            "required_permissions": [
+            "permissions": [
               "environment:read"
             ],
             "rate_limit": [

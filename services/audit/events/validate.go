@@ -71,13 +71,9 @@ func ParseIntent(requestID string, body []byte) (*Intent, *Outcome, error) {
 	if req.OccurredAt == nil {
 		return nil, nil, errors.FieldError("occurred_at", "")
 	}
-	at, err := time.Parse(time.RFC3339Nano, *req.OccurredAt)
+	at, err := parseOccurredAt(*req.OccurredAt)
 	if err != nil {
-		return nil, nil, errors.FieldError("occurred_at", "")
-	}
-	ms := at.UnixMilli()
-	if ms < 0 || uint64(ms) > ulid.MaxTime() {
-		return nil, nil, errors.FieldError("occurred_at", "")
+		return nil, nil, err
 	}
 	if req.Service == nil || *req.Service == "" {
 		return nil, nil, errors.FieldError("service", "")
@@ -90,9 +86,8 @@ func ParseIntent(requestID string, body []byte) (*Intent, *Outcome, error) {
 	}
 
 	in := &Intent{
-		RequestID: requestID,
-		// The event is to the millisecond, and so is its id.
-		OccurredAt: at.UTC().Truncate(time.Millisecond),
+		RequestID:  requestID,
+		OccurredAt: at,
 		Nodes:      req.Nodes,
 		Actor:      req.Actor,
 		Service:    *req.Service,
@@ -116,22 +111,9 @@ func ParseIntent(requestID string, body []byte) (*Intent, *Outcome, error) {
 	if req.Outcome == nil || *req.Outcome == OutcomePending {
 		return in, nil, nil
 	}
-	final := &Outcome{
-		Outcome:       *req.Outcome,
-		Status:        req.Status,
-		CreatedID:     req.CreatedID,
-		NamedNodeIDs:  req.NamedNodeIDs,
-		NamedMemberID: req.NamedMemberID,
-	}
-	if final.NamedNodeIDs == nil {
-		final.NamedNodeIDs = []string{}
-	}
-	details := bytes.TrimSpace(req.Details)
-	if len(details) > 0 && !bytes.Equal(details, []byte("null")) {
-		if details[0] != '{' {
-			return nil, nil, errors.FieldError("details", "")
-		}
-		final.Details = json.RawMessage(details)
+	final, err := parseOutcomeFields(*req.Outcome, req.Status, req.Details, req.CreatedID, req.NamedNodeIDs, req.NamedMemberID, nil)
+	if err != nil {
+		return nil, nil, err
 	}
 	return in, final, nil
 }
@@ -153,29 +135,41 @@ func ParseOutcome(requestID string, body []byte) (*Outcome, error) {
 	}
 	var occurredAt *time.Time
 	if req.OccurredAt != nil {
-		at, err := time.Parse(time.RFC3339Nano, *req.OccurredAt)
+		at, err := parseOccurredAt(*req.OccurredAt)
 		if err != nil {
-			return nil, errors.FieldError("occurred_at", "")
+			return nil, err
 		}
-		ms := at.UnixMilli()
-		if ms < 0 || uint64(ms) > ulid.MaxTime() {
-			return nil, errors.FieldError("occurred_at", "")
-		}
-		t := at.UTC().Truncate(time.Millisecond)
-		occurredAt = &t
+		occurredAt = &at
 	}
+	return parseOutcomeFields(*req.Outcome, req.Status, req.Details, req.CreatedID, req.NamedNodeIDs, req.NamedMemberID, occurredAt)
+}
+
+func parseOccurredAt(raw string) (time.Time, error) {
+	at, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, errors.FieldError("occurred_at", "")
+	}
+	ms := at.UnixMilli()
+	if ms < 0 || uint64(ms) > ulid.MaxTime() {
+		return time.Time{}, errors.FieldError("occurred_at", "")
+	}
+	// The event is to the millisecond, and so is its id.
+	return at.UTC().Truncate(time.Millisecond), nil
+}
+
+func parseOutcomeFields(outcome string, status *int, detailsRaw json.RawMessage, createdID *string, namedNodeIDs []string, namedMemberID *string, occurredAt *time.Time) (*Outcome, error) {
 	out := &Outcome{
 		EventOccurredAt: occurredAt,
-		Outcome:         *req.Outcome,
-		Status:          req.Status,
-		CreatedID:       req.CreatedID,
-		NamedNodeIDs:    req.NamedNodeIDs,
-		NamedMemberID:   req.NamedMemberID,
+		Outcome:         outcome,
+		Status:          status,
+		CreatedID:       createdID,
+		NamedNodeIDs:    namedNodeIDs,
+		NamedMemberID:   namedMemberID,
 	}
 	if out.NamedNodeIDs == nil {
 		out.NamedNodeIDs = []string{}
 	}
-	details := bytes.TrimSpace(req.Details)
+	details := bytes.TrimSpace(detailsRaw)
 	if len(details) > 0 && !bytes.Equal(details, []byte("null")) {
 		if details[0] != '{' {
 			return nil, errors.FieldError("details", "")

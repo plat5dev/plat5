@@ -70,13 +70,13 @@ func (h *Handler) SetName(c fiber.Ctx) error {
 
 func (h *Handler) DeleteAccount(c fiber.Ctx) error {
 	userID := httpx.PathParam(c, "user_id")
-	changed, err := h.store.DeleteAccount(c.Context(), userID)
+	priorStatus, changed, err := h.store.DeleteAccount(c.Context(), userID)
 	if err != nil {
 		return mapErr(c, err, "failed to delete account", "user", userID)
 	}
 	if changed {
 		d := auditx.Details{}
-		d.Changed("status", StatusActive, StatusRemoved)
+		d.Changed("status", priorStatus, StatusRemoved)
 		auditx.Set(c, d)
 	}
 	return c.SendStatus(fiber.StatusNoContent)
@@ -149,7 +149,11 @@ func (h *Handler) CreateServiceAccount(c fiber.Ctx) error {
 	if err != nil {
 		return mapErr(c, err, "failed to create service account", "service_account", "")
 	}
-	auditx.Set(c, auditx.Details{"member_id": sa.ID, "binding_id": b.ID})
+	d := auditx.Details{"member_id": sa.ID}
+	if b != nil {
+		d["binding_id"] = b.ID
+	}
+	auditx.Set(c, d)
 	auditx.SetCreated(c, sa.ID)
 	return c.Status(fiber.StatusCreated).JSON(serviceAccountResponse(sa))
 }
@@ -186,13 +190,13 @@ func (h *Handler) RenameServiceAccount(c fiber.Ctx) error {
 
 func (h *Handler) DeleteServiceAccount(c fiber.Ctx) error {
 	saID := httpx.PathParam(c, "service_account_id")
-	changed, err := h.store.DeleteServiceAccount(c.Context(), httpx.PathParam(c, "node_id"), saID)
+	priorStatus, changed, err := h.store.DeleteServiceAccount(c.Context(), httpx.PathParam(c, "node_id"), saID)
 	if err != nil {
 		return mapErr(c, err, "failed to delete service account", "service_account", saID)
 	}
 	if changed {
 		d := auditx.Details{"member_id": saID}
-		d.Changed("status", StatusActive, StatusRemoved)
+		d.Changed("status", priorStatus, StatusRemoved)
 		auditx.Set(c, d)
 	}
 	return c.SendStatus(fiber.StatusNoContent)

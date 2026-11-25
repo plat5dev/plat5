@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -31,9 +32,15 @@ func ConnectSchema(ctx context.Context, databaseURL, schema string) (*pgxpool.Po
 		return nil, fmt.Errorf("parse DATABASE_URL: %w", err)
 	}
 
-	cfg.MaxConns = 10
-	cfg.MinConns = 1
-	cfg.MaxConnLifetime = time.Hour
+	if !strings.Contains(databaseURL, "pool_max_conns") {
+		cfg.MaxConns = 10
+	}
+	if !strings.Contains(databaseURL, "pool_min_conns") {
+		cfg.MinConns = 1
+	}
+	if !strings.Contains(databaseURL, "pool_max_conn_lifetime") {
+		cfg.MaxConnLifetime = time.Hour
+	}
 
 	quoted := pgx.Identifier{schema}.Sanitize()
 	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {

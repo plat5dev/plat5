@@ -16,26 +16,17 @@ import (
 	"time"
 )
 
-// Authorizer modes combining external AuthZEN PDPs with built-in RBAC.
 const (
-	AuthorizerModeReplace = "replace"
-	AuthorizerModeAnd     = "and"
-	AuthorizerModeOr      = "or"
+	defaultDeletionGrace = 30 * 24 * time.Hour
+	maxDurationSecs      = 36_500 * 86_400 // 100 years, safely inside int64 ns (~292y)
 )
 
-// Authorizer is an external OpenID AuthZEN 1.0 PDP configured in authorizers.
+// Authorizer is the deployment-wide external OpenID AuthZEN 1.0 PDP.
 type Authorizer struct {
-	Name     string
 	URL      string
 	Timeout  time.Duration
 	TokenEnv string
 	Token    string
-}
-
-// KindAuthorizer attaches a named external authorizer to a kind.
-type KindAuthorizer struct {
-	Name string
-	Mode string
 }
 
 // Snapshot is one revision of the config. Read it once per request or sweep,
@@ -44,12 +35,110 @@ type Snapshot struct {
 	Revision      int64
 	DeletionGrace time.Duration
 	ReservedSlugs map[string]bool
+	PolicyClaims  map[string]bool
 	Kinds         map[string]Kind
 	Roles         map[string]Role
 	CreatorRole   string
 	CustomRoles   bool
 	Permissions   map[string]PermissionMeta
-	Authorizers   map[string]Authorizer
+	Authorizer    *Authorizer
+
+	// Precomputed role-binding indices built once at Parse().
+	bindableKinds []string
+	bindableRoles []string
+	wildcardKinds []string
+	wildcardRoles []string
+	grantByPerm   map[string]kindRolePairs
+}
+
+type kindRolePairs struct {
+	kinds []string
+	roles []string
+}
+
+// ExternalAuthz reports whether the deployment delegates all authorization
+// decisions to an external AuthZEN 1.0 PDP instead of Plat5's built-in RBAC.
+func (s *Snapshot) ExternalAuthz() bool {
+	return s != nil && s.Authorizer != nil
+}
+
+// BindablePairs returns precomputed parallel (kind, role) arrays for every
+// predefined role in snap that can be bound at a kind.
+func (s *Snapshot) BindablePairs() (kinds, roles []string) {
+	if s == nil {
+		return []string{}, []string{}
+	}
+	if len(s.bindableKinds) == 0 && len(s.Roles) > 0 {
+		s.rebuildRoleIndices()
+	}
+	if len(s.bindableKinds) == 0 {
+		return []string{}, []string{}
+	}
+	return s.bindableKinds, s.bindableRoles
+}
+
+// GrantingPairs returns precomputed parallel (kind, role) arrays for every
+// predefined role in snap that grants permission (directly, via includes, or "*").
+func (s *Snapshot) GrantingPairs(permission string) (kinds, roles []string) {
+	if s == nil {
+		return []string{}, []string{}
+	}
+	if len(s.bindableKinds) == 0 && len(s.Roles) > 0 {
+		s.rebuildRoleIndices()
+	}
+	p, ok := s.grantByPerm[permission]
+	if !ok {
+		if len(s.wildcardKinds) == 0 {
+			return []string{}, []string{}
+		}
+		return s.wildcardKinds, s.wildcardRoles
+	}
+	if len(s.wildcardKinds) == 0 {
+		return p.kinds, p.roles
+	}
+	k := make([]string, 0, len(p.kinds)+len(s.wildcardKinds))
+	r := make([]string, 0, len(p.roles)+len(s.wildcardRoles))
+	k = append(k, p.kinds...)
+	k = append(k, s.wildcardKinds...)
+	r = append(r, p.roles...)
+	r = append(r, s.wildcardRoles...)
+	return k, r
+}
+
+func (s *Snapshot) rebuildRoleIndices() {
+	slugs := s.RoleSlugs()
+	var bKinds, bRoles, wKinds, wRoles []string
+	byPerm := map[string]kindRolePairs{}
+	for _, slug := range slugs {
+		role := s.Roles[slug]
+		hasWildcard := false
+		for _, perm := range role.Permissions {
+			if perm == "*" {
+				hasWildcard = true
+				break
+			}
+		}
+		for _, k := range role.BindableAt {
+			bKinds = append(bKinds, k)
+			bRoles = append(bRoles, slug)
+			if hasWildcard {
+				wKinds = append(wKinds, k)
+				wRoles = append(wRoles, slug)
+			} else {
+				for _, perm := range role.Permissions {
+					p := byPerm[perm]
+					p.kinds = append(p.kinds, k)
+					p.roles = append(p.roles, slug)
+					byPerm[perm] = p
+				}
+			}
+		}
+	}
+	s.bindableKinds = bKinds
+	s.bindableRoles = bRoles
+	s.wildcardKinds = wKinds
+	s.wildcardRoles = wRoles
+	s.grantByPerm = byPerm
 }
 
 // PermissionMeta describes one entry in the deployment's permission catalog
@@ -126,14 +215,9 @@ type Kind struct {
 	// (docs/concepts/access.md#lists).
 	ListPermission string
 	// BindCreator is whether creating a node of this kind gives its creator
-	// creator_role on it (docs/concepts/access.md#assigning).
+	// creator_role (or a root member in external authorizer mode) on it
+	// (docs/concepts/access.md#assigning).
 	BindCreator bool
-	// AllowPublic is whether nodes of this kind accept public principal
-	// bindings (all_users, all_authenticated_users).
-	AllowPublic bool
-	// Authorizer is an optional external AuthZEN PDP for list_permission and
-	// identity /access/v1/* evaluation on nodes of this kind.
-	Authorizer *KindAuthorizer
 }
 
 // Kind looks a kind up by name.
@@ -147,25 +231,10 @@ func (k Kind) IsRoot() bool {
 	return k.Parent == ""
 }
 
-// Names is the kind names, sorted.
-func (s *Snapshot) Names() []string {
-	out := make([]string, 0, len(s.Kinds))
-	for name := range s.Kinds {
-		out = append(out, name)
-	}
-	sort.Strings(out)
-	return out
-}
-
 var (
 	kindNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 	durationRe = regexp.MustCompile(`^([1-9][0-9]{0,8})([smhd])$`)
 )
-
-type wireKindAuthorizer struct {
-	Name string `json:"name"`
-	Mode string `json:"mode"`
-}
 
 type wireAuthorizer struct {
 	URL      string `json:"url"`
@@ -177,9 +246,7 @@ type wireKind struct {
 	Parent         string `json:"parent"`
 	ListPermission string `json:"list_permission"`
 	// BindCreator is sent only when off: missing is on.
-	BindCreator *bool               `json:"bind_creator"`
-	AllowPublic bool                `json:"allow_public"`
-	Authorizer  *wireKindAuthorizer `json:"authorizer"`
+	BindCreator *bool `json:"bind_creator"`
 }
 
 type wireRole struct {
@@ -198,12 +265,13 @@ type wireSnapshot struct {
 	Revision      int64                         `json:"revision"`
 	DeletionGrace string                        `json:"deletion_grace"`
 	ReservedSlugs []string                      `json:"reserved_slugs"`
+	PolicyClaims  []string                      `json:"policy_claims"`
 	Kinds         map[string]wireKind           `json:"kinds"`
 	Roles         map[string]wireRole           `json:"roles"`
 	CreatorRole   string                        `json:"creator_role"`
 	CustomRoles   bool                          `json:"custom_roles"`
 	Permissions   map[string]wirePermissionMeta `json:"permissions"`
-	Authorizers   map[string]wireAuthorizer     `json:"authorizers"`
+	Authorizer    *wireAuthorizer               `json:"authorizer"`
 }
 
 // Parse reads a feed body. The control plane validated the config at apply;
@@ -214,45 +282,53 @@ func Parse(body []byte) (*Snapshot, error) {
 	if err := json.Unmarshal(body, &w); err != nil {
 		return nil, err
 	}
-	grace, err := ParseDuration(w.DeletionGrace)
-	if err != nil {
-		return nil, fmt.Errorf("deletion_grace: %w", err)
+	grace := defaultDeletionGrace
+	if w.DeletionGrace != "" {
+		var err error
+		grace, err = ParseDuration(w.DeletionGrace)
+		if err != nil {
+			return nil, fmt.Errorf("deletion_grace: %w", err)
+		}
 	}
 	s := &Snapshot{
 		Revision:      w.Revision,
 		DeletionGrace: grace,
 		ReservedSlugs: make(map[string]bool, len(w.ReservedSlugs)),
+		PolicyClaims:  make(map[string]bool, len(w.PolicyClaims)),
 		Kinds:         make(map[string]Kind, len(w.Kinds)),
 		CreatorRole:   w.CreatorRole,
 		CustomRoles:   w.CustomRoles,
 		Permissions:   make(map[string]PermissionMeta, len(w.Permissions)),
-		Authorizers:   make(map[string]Authorizer, len(w.Authorizers)),
 	}
-	for name, wa := range w.Authorizers {
-		u := strings.TrimRight(strings.TrimSpace(wa.URL), "/")
+	for _, claim := range w.PolicyClaims {
+		if c := strings.TrimSpace(claim); c != "" {
+			s.PolicyClaims[c] = true
+		}
+	}
+	if w.Authorizer != nil {
+		u := strings.TrimRight(strings.TrimSpace(w.Authorizer.URL), "/")
 		if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
-			return nil, fmt.Errorf("authorizers.%s.url: must be http or https", name)
+			return nil, fmt.Errorf("authorizer.url: must be http or https")
 		}
 		timeout := 2 * time.Second
-		if wa.Timeout != "" {
+		if w.Authorizer.Timeout != "" {
 			var err error
-			timeout, err = ParseDuration(wa.Timeout)
+			timeout, err = ParseDuration(w.Authorizer.Timeout)
 			if err != nil {
-				return nil, fmt.Errorf("authorizers.%s.timeout: %w", name, err)
+				return nil, fmt.Errorf("authorizer.timeout: %w", err)
 			}
 		}
 		var token string
-		if wa.TokenEnv != "" {
-			token = strings.TrimSpace(os.Getenv(wa.TokenEnv))
+		if w.Authorizer.TokenEnv != "" {
+			token = strings.TrimSpace(os.Getenv(w.Authorizer.TokenEnv))
 			if token == "" {
-				return nil, fmt.Errorf("authorizers.%s.token_env references %s, which is not set", name, wa.TokenEnv)
+				return nil, fmt.Errorf("authorizer.token_env references %s, which is not set", w.Authorizer.TokenEnv)
 			}
 		}
-		s.Authorizers[name] = Authorizer{
-			Name:     name,
+		s.Authorizer = &Authorizer{
 			URL:      u,
 			Timeout:  timeout,
-			TokenEnv: wa.TokenEnv,
+			TokenEnv: w.Authorizer.TokenEnv,
 			Token:    token,
 		}
 	}
@@ -281,27 +357,11 @@ func Parse(body []byte) (*Snapshot, error) {
 		if wk.ListPermission == "" {
 			return nil, fmt.Errorf("kinds.%s.list_permission: missing", name)
 		}
-		var ka *KindAuthorizer
-		if wk.Authorizer != nil {
-			if _, ok := s.Authorizers[wk.Authorizer.Name]; !ok {
-				return nil, fmt.Errorf("kinds.%s.authorizer: %q is not in authorizers", name, wk.Authorizer.Name)
-			}
-			mode := wk.Authorizer.Mode
-			if mode == "" {
-				mode = AuthorizerModeReplace
-			}
-			if mode != AuthorizerModeReplace && mode != AuthorizerModeAnd && mode != AuthorizerModeOr {
-				return nil, fmt.Errorf("kinds.%s.authorizer.mode: invalid mode %q", name, mode)
-			}
-			ka = &KindAuthorizer{Name: wk.Authorizer.Name, Mode: mode}
-		}
 		s.Kinds[name] = Kind{
 			Name:           name,
 			Parent:         wk.Parent,
 			ListPermission: wk.ListPermission,
 			BindCreator:    wk.BindCreator == nil || *wk.BindCreator,
-			AllowPublic:    wk.AllowPublic,
-			Authorizer:     ka,
 		}
 	}
 	for name, k := range s.Kinds {
@@ -309,11 +369,15 @@ func Parse(body []byte) (*Snapshot, error) {
 			return nil, fmt.Errorf("kinds.%s.parent: no kind %q", name, k.Parent)
 		}
 	}
+	if s.Authorizer != nil && (len(w.Roles) > 0 || w.CreatorRole != "" || w.CustomRoles) {
+		return nil, fmt.Errorf("authorizer: cannot be combined with roles, creator_role, or custom_roles")
+	}
 	roles, err := resolveRoles(w.Roles)
 	if err != nil {
 		return nil, err
 	}
 	s.Roles = roles
+	s.rebuildRoleIndices()
 	return s, nil
 }
 
@@ -357,19 +421,22 @@ func resolveRoles(wire map[string]wireRole) (map[string]Role, error) {
 	return out, nil
 }
 
-// ParseDuration reads the config's duration form: a whole number and s, m, h
-// or d. Empty is the default, 30d.
+// ParseDuration reads the config's duration form: a positive whole number and
+// s, m, h or d, capped at 36500d so Go's int64 time.Duration cannot overflow.
 func ParseDuration(v string) (time.Duration, error) {
-	if v == "" {
-		return 30 * 24 * time.Hour, nil
-	}
 	m := durationRe.FindStringSubmatch(v)
 	if m == nil {
 		return 0, fmt.Errorf("%q is not a duration", v)
 	}
-	n, _ := strconv.ParseInt(m[1], 10, 64)
-	unit := map[string]time.Duration{"s": time.Second, "m": time.Minute, "h": time.Hour, "d": 24 * time.Hour}[m[2]]
-	return time.Duration(n) * unit, nil
+	n, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("%q is not a duration", v)
+	}
+	mult := map[string]int64{"s": 1, "m": 60, "h": 3600, "d": 86_400}[m[2]]
+	if n > maxDurationSecs/mult {
+		return 0, fmt.Errorf("%q exceeds maximum duration (36500d)", v)
+	}
+	return time.Duration(n*mult) * time.Second, nil
 }
 
 // Source holds the current snapshot. Nil until the first one is stored.

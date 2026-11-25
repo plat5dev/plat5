@@ -3,8 +3,6 @@
 //! and `prepare_authorization` steps, never by a second rule. Rate limits, body
 //! limits, the fill and the upstream aren't evaluated.
 
-use std::collections::BTreeMap;
-
 use serde_json::Value;
 
 use super::{
@@ -131,15 +129,16 @@ enum CheckRefused {
 
 enum CheckOutcome {
     Decided(bool),
-    External(String, Vec<AuthzenRequest>),
+    External(Vec<AuthzenRequest>),
 }
 
-/// The call's answer: each check's `allowed`, in order, and the tightest
-/// default policy's numbers for the response.
+/// The call's answer: each check's `allowed`, in order, the tightest default
+/// policy's numbers for the response, and the recognized API key id if any.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Checked {
     pub allowed: Vec<bool>,
     pub rate_limit: Option<RateLimitInfo>,
+    pub key_id: Option<String>,
 }
 
 impl<A: Admit, C: Counter, P: Authorizer> Pipeline<A, C, P> {
@@ -157,9 +156,7 @@ impl<A: Admit, C: Counter, P: Authorizer> Pipeline<A, C, P> {
         }
     }
 
-    /// The whole call, once its credential and body are read: one count of
-    /// each policy `defaults.rate_limit` names for the credential, then each
-    /// check in order.
+    #[cfg(test)]
     pub async fn check_routes(
         &self,
         routes: &RouteMap,
@@ -169,52 +166,59 @@ impl<A: Admit, C: Counter, P: Authorizer> Pipeline<A, C, P> {
         ip: &str,
         host: Option<&str>,
     ) -> Result<Checked, Rejection> {
-        self.check_routes_with_authorizers(
-            routes,
-            defaults,
-            &BTreeMap::new(),
-            credential,
-            checks,
-            ip,
-            host,
-            "",
+        self.check_routes_with_authorizer(
+            routes, defaults, None, credential, checks, ip, host, "",
         )
         .await
     }
 
+    /// The whole call, once its credential and body are read: each check in
+    /// order, one count of each policy `defaults.rate_limit` names once the
+    /// credential is recognized (preventing unauthenticated key flooding in
+    /// Valkey), then one batched PDP evaluation if an external authorizer is configured.
     #[allow(clippy::too_many_arguments)]
-    pub async fn check_routes_with_authorizers(
+    pub async fn check_routes_with_authorizer(
         &self,
         routes: &RouteMap,
         defaults: &[Policy],
-        authorizers: &BTreeMap<String, AuthorizerSpec>,
+        authorizer: Option<&AuthorizerSpec>,
         credential: &AdmitCredential,
         checks: &[Check],
         ip: &str,
         host: Option<&str>,
         request_id: &str,
     ) -> Result<Checked, Rejection> {
-        let rate_limit = self.limit_credential(defaults, credential).await?;
         let mut allowed = vec![false; checks.len()];
-        let mut pending: BTreeMap<String, Vec<(usize, AuthzenRequest)>> = BTreeMap::new();
+        let mut pending: Vec<(usize, AuthzenRequest)> = Vec::new();
+        let mut key_id: Option<String> = None;
+        let mut credential_verified = matches!(credential, AdmitCredential::Idp { .. });
 
         for (idx, check) in checks.iter().enumerate() {
             match self
-                .check_one(routes, check, credential, ip, host, request_id)
+                .check_one(
+                    routes,
+                    check,
+                    credential,
+                    authorizer.is_some(),
+                    ip,
+                    host,
+                    request_id,
+                    &mut key_id,
+                    &mut credential_verified,
+                )
                 .await
             {
                 Ok(CheckOutcome::Decided(ans)) => allowed[idx] = ans,
-                Ok(CheckOutcome::External(name, reqs)) => {
-                    let group = pending.entry(name).or_default();
+                Ok(CheckOutcome::External(reqs)) => {
                     for req in reqs {
-                        group.push((idx, req));
+                        pending.push((idx, req));
                     }
                 }
                 Err(CheckRefused::Unavailable) => return Err(Rejection::Unavailable),
                 Err(CheckRefused::Credential) => {
                     let rejection = unauthorized(
                         AuthError::InvalidCredential,
-                        credential.auth_type(),
+                        Some(credential.auth_type()),
                         CHECKS_SCOPE,
                     );
                     return Err(self.count_refusal(ip).await.unwrap_or(rejection));
@@ -222,15 +226,24 @@ impl<A: Admit, C: Counter, P: Authorizer> Pipeline<A, C, P> {
             }
         }
 
-        for (name, items) in pending {
-            let spec = authorizers.get(&name).ok_or(Rejection::Unavailable)?;
-            let reqs: Vec<AuthzenRequest> = items.iter().map(|(_, r)| r.clone()).collect();
+        // Count default rate limits only after the credential is verified (or by IP
+        // if every check was public/unmatched and never hit admit), so arbitrary
+        // unauthenticated Bearer tokens cannot flood Valkey keys.
+        let rate_limit = if credential_verified {
+            self.limit_credential(defaults, credential).await?
+        } else {
+            self.limit_ip(defaults, ip).await?
+        };
+
+        if !pending.is_empty() {
+            let spec = authorizer.ok_or(Rejection::Unavailable)?;
+            let reqs: Vec<AuthzenRequest> = pending.iter().map(|(_, r)| r.clone()).collect();
             let decisions = self
                 .authorizer
                 .evaluate_all(spec, &reqs, request_id)
                 .await
                 .map_err(|_| Rejection::Unavailable)?;
-            for ((idx, _), decision) in items.into_iter().zip(decisions) {
+            for ((idx, _), decision) in pending.into_iter().zip(decisions) {
                 if decision {
                     allowed[idx] = true;
                 }
@@ -240,19 +253,24 @@ impl<A: Admit, C: Counter, P: Authorizer> Pipeline<A, C, P> {
         Ok(Checked {
             allowed,
             rate_limit,
+            key_id,
         })
     }
 
     /// One check: delegates to the pipeline's own `admit_credential` and
-    /// `prepare_authorization`, returning `External` so checks batch per PDP.
+    /// `prepare_authorization`, returning `External` so checks batch into one PDP call.
+    #[allow(clippy::too_many_arguments)]
     async fn check_one(
         &self,
         routes: &RouteMap,
         check: &Check,
         credential: &AdmitCredential,
+        external_authz: bool,
         ip: &str,
         host: Option<&str>,
         request_id: &str,
+        key_id: &mut Option<String>,
+        credential_verified: &mut bool,
     ) -> Result<CheckOutcome, CheckRefused> {
         let Some(matched) = routes.find_route_with_host(&check.path, &check.method, host) else {
             return Ok(CheckOutcome::Decided(false));
@@ -260,24 +278,30 @@ impl<A: Admit, C: Counter, P: Authorizer> Pipeline<A, C, P> {
         if matched.route.scope == Scope::Public {
             return Ok(CheckOutcome::Decided(true));
         }
-        let (_, outcome) = self
+        let (found_key_id, outcome) = self
             .admit_credential(&matched, credential.clone(), None, ip)
             .await;
+        if key_id.is_none() && found_key_id.is_some() {
+            *key_id = found_key_id;
+        }
         let caller = match outcome {
-            AdmitOutcome::Admitted(caller) => caller,
+            AdmitOutcome::Admitted(caller) => {
+                *credential_verified = true;
+                caller
+            }
             AdmitOutcome::InvalidCredential { .. } => return Err(CheckRefused::Credential),
             AdmitOutcome::Unavailable => return Err(CheckRefused::Unavailable),
             AdmitOutcome::ServiceAccount { .. }
             | AdmitOutcome::ScopedCredential { .. }
-            | AdmitOutcome::NotAdmitted { .. } => return Ok(CheckOutcome::Decided(false)),
+            | AdmitOutcome::NotAdmitted { .. } => {
+                *credential_verified = true;
+                return Ok(CheckOutcome::Decided(false));
+            }
         };
-        match prepare_authorization(&matched, &caller, ip, request_id) {
+        match prepare_authorization(&matched, &caller, external_authz, ip, request_id) {
             Ok(AuthzDecision::Allow) => Ok(CheckOutcome::Decided(true)),
             Ok(AuthzDecision::Deny) | Err(_) => Ok(CheckOutcome::Decided(false)),
-            Ok(AuthzDecision::External {
-                authorizer,
-                requests,
-            }) => Ok(CheckOutcome::External(authorizer, requests)),
+            Ok(AuthzDecision::External { requests }) => Ok(CheckOutcome::External(requests)),
         }
     }
 
@@ -293,6 +317,24 @@ impl<A: Admit, C: Counter, P: Authorizer> Pipeline<A, C, P> {
             .iter()
             .map(|p| Bucket {
                 key: format!("{}:credential:{hash}", p.name),
+                requests: p.requests,
+                window_seconds: p.window_seconds,
+            })
+            .collect();
+        self.check_buckets(&buckets, "route_checks").await
+    }
+
+    /// Fallback rate limit by client IP when a `POST /access/routes` batch only
+    /// contained public or unmatched routes with an unverified API key.
+    async fn limit_ip(
+        &self,
+        defaults: &[Policy],
+        ip: &str,
+    ) -> Result<Option<RateLimitInfo>, Rejection> {
+        let buckets: Vec<Bucket> = defaults
+            .iter()
+            .map(|p| Bucket {
+                key: format!("{}:ip:{ip}", p.name),
                 requests: p.requests,
                 window_seconds: p.window_seconds,
             })

@@ -29,16 +29,16 @@ services:
         routes:
           - path: /plans
             methods:
-              GET: { required_permissions: [organization:read] }
+              GET: { permissions: [organization:read] }
       project:
         upstream_prefix: /projects/{project.id}
         routes:
           - path: /plans
             methods:
-              GET: { required_permissions: [project:read, catalog:read] }
-              POST: { required_permissions: [catalog:write] }
+              GET: { permissions: [project:read, catalog:read] }
+              POST: { permissions: [catalog:write] }
           - path: /features
-            required_permissions: [catalog:write]
+            permissions: [catalog:write]
             methods: [GET, POST]
   notify:
     url: http://notify:3000

@@ -1,4 +1,4 @@
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
@@ -9,8 +9,8 @@ use crate::schema::FieldError;
 #[derive(Debug, Clone, Serialize)]
 pub struct ApiErrorBody {
     #[serde(rename = "type")]
-    pub error_type: String,
-    pub code: String,
+    pub error_type: &'static str,
+    pub code: &'static str,
     pub message: String,
     pub request_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -120,20 +120,15 @@ impl AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let request_id = self.request_id.clone();
         let body = ApiErrorEnvelope {
             error: ApiErrorBody {
-                error_type: self.error_type.to_string(),
-                code: self.code.to_string(),
+                error_type: self.error_type,
+                code: self.code,
                 message: self.message,
-                request_id: request_id.clone(),
+                request_id: self.request_id,
                 details: self.details.map(|d| *d),
             },
         };
-        let mut res = (self.status, Json(body)).into_response();
-        if let Ok(val) = HeaderValue::from_str(&request_id) {
-            res.headers_mut().insert("x-request-id", val);
-        }
-        res
+        (self.status, Json(body)).into_response()
     }
 }

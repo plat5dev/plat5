@@ -85,7 +85,7 @@
           "before": {
             "scope": "organization",
             "upstream": "/nodes/{organization.id}/children/folder",
-            "required_permissions": "any_member",
+            "permissions": "any_member",
             "rate_limit": [
               "standard"
             ],
@@ -100,7 +100,7 @@
           "before": {
             "scope": "organization",
             "upstream": "/nodes/{organization.id}/children/folder",
-            "required_permissions": [
+            "permissions": [
               "folder:create"
             ],
             "rate_limit": [
@@ -117,7 +117,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}",
-            "required_permissions": [
+            "permissions": [
               "folder:read"
             ],
             "rate_limit": [
@@ -134,7 +134,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}",
-            "required_permissions": [
+            "permissions": [
               "folder:write"
             ],
             "rate_limit": [
@@ -151,7 +151,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}",
-            "required_permissions": [
+            "permissions": [
               "folder:delete"
             ],
             "rate_limit": [
@@ -168,7 +168,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/bindings",
-            "required_permissions": [
+            "permissions": [
               "folder:bindings:read"
             ],
             "rate_limit": [
@@ -185,7 +185,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/bindings",
-            "required_permissions": [
+            "permissions": [
               "folder:bindings:write"
             ],
             "rate_limit": [
@@ -202,7 +202,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/bindings/{binding_id}",
-            "required_permissions": [
+            "permissions": [
               "folder:bindings:write"
             ],
             "rate_limit": [
@@ -219,7 +219,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/bindings/{binding_id}",
-            "required_permissions": [
+            "permissions": [
               "folder:bindings:write"
             ],
             "rate_limit": [
@@ -236,7 +236,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/invites",
-            "required_permissions": [
+            "permissions": [
               "guests:write"
             ],
             "rate_limit": [
@@ -253,7 +253,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/invites",
-            "required_permissions": [
+            "permissions": [
               "guests:write"
             ],
             "rate_limit": [
@@ -270,7 +270,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/invites/{invite_id}",
-            "required_permissions": [
+            "permissions": [
               "guests:write"
             ],
             "rate_limit": [
@@ -287,7 +287,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/memberships/{member.id}",
-            "required_permissions": "any_member",
+            "permissions": "any_member",
             "rate_limit": [
               "standard"
             ],
@@ -302,7 +302,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/restore",
-            "required_permissions": [
+            "permissions": [
               "folder:delete"
             ],
             "rate_limit": [
@@ -319,7 +319,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/roles",
-            "required_permissions": "any_member",
+            "permissions": "any_member",
             "rate_limit": [
               "standard"
             ],
@@ -334,7 +334,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/service-accounts",
-            "required_permissions": [
+            "permissions": [
               "folder:bindings:read"
             ],
             "rate_limit": [
@@ -351,7 +351,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/service-accounts",
-            "required_permissions": [
+            "permissions": [
               "folder:bindings:write"
             ],
             "rate_limit": [
@@ -368,7 +368,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/service-accounts/{service_account_id}",
-            "required_permissions": [
+            "permissions": [
               "folder:bindings:read"
             ],
             "rate_limit": [
@@ -385,7 +385,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/service-accounts/{service_account_id}",
-            "required_permissions": [
+            "permissions": [
               "folder:bindings:write"
             ],
             "rate_limit": [
@@ -402,7 +402,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/service-accounts/{service_account_id}",
-            "required_permissions": [
+            "permissions": [
               "folder:bindings:write"
             ],
             "rate_limit": [
@@ -419,7 +419,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/service-accounts/{service_account_id}/keys",
-            "required_permissions": [
+            "permissions": [
               "folder:bindings:write"
             ],
             "rate_limit": [
@@ -436,7 +436,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/service-accounts/{service_account_id}/keys",
-            "required_permissions": [
+            "permissions": [
               "folder:bindings:write"
             ],
             "rate_limit": [
@@ -453,7 +453,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/nodes/{folder.id}/service-accounts/{service_account_id}/keys/{key_id}",
-            "required_permissions": [
+            "permissions": [
               "folder:bindings:write"
             ],
             "rate_limit": [
@@ -470,7 +470,7 @@
           "after": {
             "scope": "project",
             "upstream": "/nodes/{project.id}/children/environment",
-            "required_permissions": "any_member",
+            "permissions": "any_member",
             "rate_limit": [
               "standard"
             ],
@@ -485,7 +485,7 @@
           "after": {
             "scope": "project",
             "upstream": "/nodes/{project.id}/children/environment",
-            "required_permissions": [
+            "permissions": [
               "environment:create"
             ],
             "rate_limit": [
@@ -502,7 +502,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}",
-            "required_permissions": [
+            "permissions": [
               "environment:read"
             ],
             "rate_limit": [
@@ -519,7 +519,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}",
-            "required_permissions": [
+            "permissions": [
               "environment:write"
             ],
             "rate_limit": [
@@ -536,7 +536,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}",
-            "required_permissions": [
+            "permissions": [
               "environment:delete"
             ],
             "rate_limit": [
@@ -553,7 +553,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/bindings",
-            "required_permissions": [
+            "permissions": [
               "environment:bindings:read"
             ],
             "rate_limit": [
@@ -570,7 +570,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/bindings",
-            "required_permissions": [
+            "permissions": [
               "environment:bindings:write"
             ],
             "rate_limit": [
@@ -587,7 +587,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/bindings/{binding_id}",
-            "required_permissions": [
+            "permissions": [
               "environment:bindings:write"
             ],
             "rate_limit": [
@@ -604,7 +604,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/bindings/{binding_id}",
-            "required_permissions": [
+            "permissions": [
               "environment:bindings:write"
             ],
             "rate_limit": [
@@ -621,7 +621,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/invites",
-            "required_permissions": [
+            "permissions": [
               "guests:write"
             ],
             "rate_limit": [
@@ -638,7 +638,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/invites",
-            "required_permissions": [
+            "permissions": [
               "guests:write"
             ],
             "rate_limit": [
@@ -655,7 +655,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/invites/{invite_id}",
-            "required_permissions": [
+            "permissions": [
               "guests:write"
             ],
             "rate_limit": [
@@ -672,7 +672,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/memberships/{member.id}",
-            "required_permissions": "any_member",
+            "permissions": "any_member",
             "rate_limit": [
               "standard"
             ],
@@ -687,7 +687,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/restore",
-            "required_permissions": [
+            "permissions": [
               "environment:delete"
             ],
             "rate_limit": [
@@ -704,7 +704,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/roles",
-            "required_permissions": "any_member",
+            "permissions": "any_member",
             "rate_limit": [
               "standard"
             ],
@@ -719,7 +719,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/service-accounts",
-            "required_permissions": [
+            "permissions": [
               "environment:bindings:read"
             ],
             "rate_limit": [
@@ -736,7 +736,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/service-accounts",
-            "required_permissions": [
+            "permissions": [
               "environment:bindings:write"
             ],
             "rate_limit": [
@@ -753,7 +753,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}",
-            "required_permissions": [
+            "permissions": [
               "environment:bindings:read"
             ],
             "rate_limit": [
@@ -770,7 +770,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}",
-            "required_permissions": [
+            "permissions": [
               "environment:bindings:write"
             ],
             "rate_limit": [
@@ -787,7 +787,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}",
-            "required_permissions": [
+            "permissions": [
               "environment:bindings:write"
             ],
             "rate_limit": [
@@ -804,7 +804,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}/keys",
-            "required_permissions": [
+            "permissions": [
               "environment:bindings:write"
             ],
             "rate_limit": [
@@ -821,7 +821,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}/keys",
-            "required_permissions": [
+            "permissions": [
               "environment:bindings:write"
             ],
             "rate_limit": [
@@ -838,7 +838,7 @@
           "after": {
             "scope": "environment",
             "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}/keys/{key_id}",
-            "required_permissions": [
+            "permissions": [
               "environment:bindings:write"
             ],
             "rate_limit": [

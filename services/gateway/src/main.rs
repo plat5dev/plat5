@@ -24,8 +24,14 @@ fn main() {
     });
     info!("gateway configuration loaded");
 
-    // Use a single Tokio runtime for all async initialization.
-    let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+    // Sidecar Tokio runtime for background tasks (control-plane follower,
+    // JWKS refresh, Valkey reconnect, audit queue, admit invalidations);
+    // Pingora manages its own request-handling worker pool.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("failed to create tokio runtime");
 
     // Routes, rate limits and CORS: wait for the first snapshot, then follow the
     // control plane.
@@ -76,7 +82,7 @@ fn main() {
     if let Some(url) = cfg.audit_url.as_deref() {
         info!(audit_url = %url, mode = cfg.audit_mode.as_str(), "audit on");
     } else {
-        tracing::warn!("AUDIT_ENABLED=false: audit is off and no audit log is recorded");
+        tracing::warn!("AUDIT_MODE=off: audit is off and no audit log is recorded");
     }
 
     let audit_drain =

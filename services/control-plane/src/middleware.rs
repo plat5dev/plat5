@@ -83,7 +83,12 @@ pub(crate) async fn http_observability(mut request: Request, next: Next) -> Resp
     }
 
     async move {
-        let response = next.run(request).await;
+        let mut response = next.run(request).await;
+        if let Ok(val) = HeaderValue::from_str(&request_id) {
+            response
+                .headers_mut()
+                .insert(header::HeaderName::from_static("x-request-id"), val);
+        }
         let status = response.status().as_u16();
         let duration_secs = start.elapsed().as_secs_f64();
         let duration_ms = duration_secs * 1000.0;
@@ -155,7 +160,12 @@ pub(crate) async fn feed_observability(mut request: Request, next: Next) -> Resp
     request
         .extensions_mut()
         .insert(RequestId(request_id.clone()));
-    let response = next.run(request).await;
+    let mut response = next.run(request).await;
+    if let Ok(val) = HeaderValue::from_str(&request_id) {
+        response
+            .headers_mut()
+            .insert(header::HeaderName::from_static("x-request-id"), val);
+    }
     let status = response.status().as_u16();
     if status >= 500 {
         let error_type = if status == 503 { "network" } else { "internal" };
@@ -203,10 +213,4 @@ pub(crate) fn request_id_from_headers(headers: &axum::http::HeaderMap) -> String
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .unwrap_or_else(|| Uuid::new_v4().to_string())
-}
-
-pub(crate) fn with_request_id(request_id: String) -> [(header::HeaderName, HeaderValue); 1] {
-    let val =
-        HeaderValue::from_str(&request_id).unwrap_or_else(|_| HeaderValue::from_static("invalid"));
-    [(header::HeaderName::from_static("x-request-id"), val)]
 }

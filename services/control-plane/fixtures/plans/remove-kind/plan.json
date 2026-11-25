@@ -47,7 +47,7 @@
           "before": {
             "scope": "folder",
             "upstream": "/folders/{folder.id}/plans",
-            "required_permissions": [
+            "permissions": [
               "folder:read"
             ],
             "rate_limit": [

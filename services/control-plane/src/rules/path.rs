@@ -15,18 +15,16 @@ pub(super) enum Scope {
     Public,
 }
 
-/// The placeholders of an upstream or authorizer resource template: `{<kind>.id}`
-/// for a kind in the chain, `{member.id}` in a non-public kind scope, `{user.id}`
-/// in `user`, and in a route's `upstream`/`resource.id` (`own` is its params) a
+/// The placeholders of an upstream or AuthZEN resource template: `{<kind>.id}`
+/// for a kind in the chain, `{member.id}` in a kind scope, `{user.id}` in
+/// `user`, and in a route's `upstream`/`resource.id` (`own` is its params) a
 /// bare `{param}` of the route's.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn check_template(
     config: &Config,
     scope_name: &str,
     scope: &Scope,
     template: &str,
     own: Option<&[String]>,
-    allow_public: bool,
     at: &str,
     errs: &mut Vec<FieldError>,
 ) {
@@ -54,9 +52,6 @@ pub(super) fn check_template(
                 "{{{body}}}: only .id exists, so slugs never reach a service"
             )),
             Some(("member", _)) => match scope {
-                Scope::Kind(_) if allow_public => Some(
-                    "{member.id} cannot be used on an allow_public route (anonymous and non-member callers have no member id)".into(),
-                ),
                 Scope::Kind(_) => None,
                 _ => Some(format!(
                     "{{member.id}} is only in a kind scope; this is {scope_name}"

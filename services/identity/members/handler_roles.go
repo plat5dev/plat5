@@ -163,7 +163,7 @@ func (h *Handler) PatchSecurityPolicy(c fiber.Ctx) error {
 			patch.RequiredIdPClaims = *claims
 		}
 	}
-	before, after, err := h.store.PatchSecurityPolicy(c.Context(), httpx.PathParam(c, "node_id"), patch)
+	before, after, err := h.store.PatchSecurityPolicy(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), patch)
 	if err != nil {
 		return mapErr(c, err, "failed to update security policy", "node", "")
 	}

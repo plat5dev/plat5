@@ -141,7 +141,7 @@ func ConflictError(message, field string, value interface{}) *ApiError {
 }
 
 // StateError is a 409 whose code names the state that refuses the request
-// (docs/reference/errors.md#which-status). CONFLICT is only for something
+// (docs/reference/errors.md). CONFLICT is only for something
 // that already exists; each other refusal has its own code.
 func StateError(code, message string, details interface{}) *ApiError {
 	return &ApiError{

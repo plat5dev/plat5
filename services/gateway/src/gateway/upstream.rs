@@ -40,11 +40,11 @@ pub fn record_admission_span(ctx: &GatewayContext, caller: &Caller) {
     let Some(span) = &ctx.root_span else {
         return;
     };
-    if let Some(member) = &caller.member_id {
-        span.record("plat5.member_id", member.as_str());
+    if let Some(member) = caller.member_id() {
+        span.record("plat5.member_id", member);
     }
-    if let Some(user) = &caller.user_id {
-        span.record("plat5.user_id", user.as_str());
+    if let Some(user) = caller.user_id() {
+        span.record("plat5.user_id", user);
     }
     if let Some(root) = caller.root_id() {
         span.record("plat5.root_id", root);
@@ -197,21 +197,30 @@ pub struct ParsedUpstream {
 
 impl ParsedUpstream {
     pub fn addr(&self) -> String {
-        format!("{}:{}", self.host, self.port)
+        if self.host.contains(':') {
+            format!("[{}]:{}", self.host, self.port)
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
     }
 
     pub fn host_header(&self) -> String {
+        let host = if self.host.contains(':') {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
         let default_port = if self.tls { 443 } else { 80 };
         if self.port == default_port {
-            self.host.clone()
+            host
         } else {
-            format!("{}:{}", self.host, self.port)
+            format!("{host}:{}", self.port)
         }
     }
 }
 
 /// Parse `http://host[:port]` (default 80), `https://host[:port]` (default 443),
-/// or legacy bare `host:port`.
+/// or legacy bare `host:port`, including bracketed IPv6 literals.
 pub fn parse_upstream(base_url: &str) -> Option<ParsedUpstream> {
     let s = base_url.trim();
     let (tls, default_port, rest) = if let Some(rest) = s.strip_prefix("https://") {
@@ -225,15 +234,32 @@ pub fn parse_upstream(base_url: &str) -> Option<ParsedUpstream> {
     if authority.is_empty() {
         return None;
     }
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((h, p)) => {
-            let port = p.parse::<u16>().ok()?;
-            if port == 0 {
+    let (host, port) = if let Some(after_open) = authority.strip_prefix('[') {
+        let (ipv6, tail) = after_open.split_once(']')?;
+        if ipv6.is_empty() || ipv6.parse::<std::net::Ipv6Addr>().is_err() {
+            return None;
+        }
+        let port = if tail.is_empty() {
+            default_port?
+        } else {
+            let p = tail.strip_prefix(':')?.parse::<u16>().ok()?;
+            if p == 0 {
                 return None;
             }
-            (h, port)
+            p
+        };
+        (ipv6, port)
+    } else {
+        match authority.rsplit_once(':') {
+            Some((h, p)) => {
+                let port = p.parse::<u16>().ok()?;
+                if port == 0 {
+                    return None;
+                }
+                (h, port)
+            }
+            None => (authority, default_port?),
         }
-        None => (authority, default_port?),
     };
     if host.is_empty() {
         return None;
@@ -528,6 +554,27 @@ mod tests {
         assert!(parse_upstream("").is_none());
         assert!(parse_upstream("http://api:0").is_none());
         assert!(parse_upstream("barehost").is_none());
+
+        // Bracketed IPv6 literals with default and explicit ports.
+        let v6_default = parse_upstream("http://[2001:db8::1]").unwrap();
+        assert_eq!(
+            v6_default,
+            ParsedUpstream {
+                tls: false,
+                host: "2001:db8::1".into(),
+                port: 80
+            }
+        );
+        assert_eq!(v6_default.addr(), "[2001:db8::1]:80");
+        assert_eq!(v6_default.host_header(), "[2001:db8::1]");
+
+        let v6_tls = parse_upstream("https://[::1]:8443").unwrap();
+        assert_eq!(v6_tls.host, "::1");
+        assert_eq!(v6_tls.port, 8443);
+        assert_eq!(v6_tls.addr(), "[::1]:8443");
+        assert_eq!(v6_tls.host_header(), "[::1]:8443");
+        assert!(parse_upstream("http://[not-ipv6]:8080").is_none());
+        assert!(parse_upstream("[::1]").is_none());
     }
 
     #[test]

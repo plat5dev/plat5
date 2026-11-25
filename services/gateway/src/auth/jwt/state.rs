@@ -57,15 +57,15 @@ impl JwtValidatorState {
         }
     }
 
-    pub async fn get_jwks(&self) -> Result<JwkSet, JwksUnavailable> {
+    pub async fn get_jwks(&self) -> Result<Arc<JwkSet>, JwksUnavailable> {
         if let Some(jwks) = self.jwks.load_full() {
-            return Ok((*jwks).clone());
+            return Ok(jwks);
         }
 
         let waiter = {
             let mut slot = self.in_flight.lock().await;
             if let Some(jwks) = self.jwks.load_full() {
-                return Ok((*jwks).clone());
+                return Ok(jwks);
             }
             if let Some(tx) = slot.as_ref() {
                 Some(tx.subscribe())
@@ -78,10 +78,10 @@ impl JwtValidatorState {
 
         if let Some(mut rx) = waiter {
             return match rx.recv().await {
-                Ok(Ok(jwks)) => Ok((*jwks).clone()),
+                Ok(Ok(jwks)) => Ok(jwks),
                 Ok(Err(msg)) => Err(JwksUnavailable(msg)),
                 Err(_) => match self.jwks.load_full() {
-                    Some(jwks) => Ok((*jwks).clone()),
+                    Some(jwks) => Ok(jwks),
                     None => Err(JwksUnavailable("in-flight jwks fetch ended".to_string())),
                 },
             };
@@ -96,7 +96,7 @@ impl JwtValidatorState {
             if let Some(tx) = slot.take() {
                 match &result {
                     Ok(j) => {
-                        let _ = tx.send(Ok(Arc::new(j.clone())));
+                        let _ = tx.send(Ok(Arc::clone(j)));
                     }
                     Err(err) => {
                         let _ = tx.send(Err(err.0.clone()));
@@ -110,9 +110,9 @@ impl JwtValidatorState {
         result
     }
 
-    async fn fetch_and_store(&self) -> Result<JwkSet, reqwest::Error> {
-        let new_jwks = fetch_jwks(&self.client, &self.jwks_uri).await?;
-        self.jwks.store(Some(Arc::new(new_jwks.clone())));
+    async fn fetch_and_store(&self) -> Result<Arc<JwkSet>, reqwest::Error> {
+        let new_jwks = Arc::new(fetch_jwks(&self.client, &self.jwks_uri).await?);
+        self.jwks.store(Some(Arc::clone(&new_jwks)));
         Ok(new_jwks)
     }
 
@@ -205,7 +205,7 @@ impl JwtValidatorState {
 }
 
 async fn fetch_jwks(client: &reqwest::Client, uri: &str) -> reqwest::Result<JwkSet> {
-    let res = client.get(uri).send().await?;
+    let res = client.get(uri).send().await?.error_for_status()?;
     res.json::<JwkSet>().await
 }
 

@@ -25,17 +25,34 @@ creator_role: admin
 
 An example role set for organization > project > environment, where an environment's routes require `project:*` permissions and its `list_permission` is `project:read` ([kinds](kinds.md)). It's honest about grants: whoever holds `bindings:write` can grant any role, so the one role that holds it is `admin`, with `*`. `admin` also shapes the tree, creating and deleting projects and environments; `developer` and `viewer` work inside it.
 
-<!-- generated from schema: roles.json#/properties/roles roles.json#/$defs/role_slug roles.json#/$defs/role/properties roles.json#/properties/creator_role roles.json#/properties/custom_roles roles.json#/properties/permissions -->
+<!-- generated from schema: roles.json#/properties/roles roles.json#/properties/creator_role roles.json#/properties/custom_roles roles.json#/properties/permissions -->
 | Field | Rule |
 |-------|------|
 | `roles` | Map of slug → role. At least one role |
+| `creator_role` | Required. What the creator of a node gets on it, where its kind binds its creator (`bind_creator`). Bindable at every kind |
+| `custom_roles` | Optional. Enables root-scoped custom roles managed through identity's API alongside predefined roles. Default `false` |
+| `permissions` | Optional map of permission → metadata (`description`, `bindable_at`, `custom_role_assignable`) augmenting the permission catalog derived from routes and kinds for custom roles |
+<!-- end generated -->
+
+### Role fields
+
+<!-- generated from schema: roles.json#/$defs/role_slug roles.json#/$defs/role/properties -->
+| Field | Rule |
+|-------|------|
 | slug | `[a-z][a-z0-9:._-]*`, max 64. Starts with a letter so predefined slugs never collide with custom role ULIDs. Opaque to Plat5 |
 | `permissions` | `[a-z0-9:._-]+`, max 64 chars, unique, max 64 permissions. `["*"]` grants every permission; `*` is valid only alone |
 | `includes` | Other roles whose permissions this one grants too, transitively. Only permissions are included: `bindable_at` stays the role's own |
 | `bindable_at` | Required. The kinds this role can be bound at |
-| `creator_role` | Required. What the creator of a node gets on it, where its kind binds its creator (`bind_creator`). Bindable at every kind |
-| `custom_roles` | Optional. Enables root-scoped custom roles managed through identity's API alongside predefined roles. Default `false` |
-| `permissions` | Optional map of permission → metadata (`description`, `bindable_at`, `custom_role_assignable`) augmenting the permission catalog derived from routes and kinds for custom roles |
+<!-- end generated -->
+
+### Permission metadata (`permissions.<name>`)
+
+<!-- generated from schema: roles.json#/$defs/permission_meta/properties -->
+| Field | Rule |
+|-------|------|
+| `description` | Optional human-readable description shown by the permissions catalog API |
+| `bindable_at` | Optional kinds where custom roles holding this permission may be bound. Omitted allows any kind |
+| `custom_role_assignable` | Whether org custom roles may include this permission. Default `true` |
 <!-- end generated -->
 
 A role grants its own `permissions` plus those of every role it includes. An included role that isn't in `roles`, or a cycle of includes, is **422**. A role may grant any permission, whether or not a route requires it: a service can check a permission no route names through identity's [evaluation API](../api/internal.md#access-evaluation), and a misspelt one grants nothing.

@@ -72,7 +72,6 @@ impl Gateway {
                 jwt_validator,
                 cfg.auth_subject_claim.clone(),
                 cfg.auth_scope_claim.clone(),
-                cfg.auth_policy_claims.clone(),
             ),
             name_claims: cfg.auth_name_claims.clone(),
             pipeline: Pipeline::with_authorizer(
@@ -178,18 +177,22 @@ impl Gateway {
             Scope::Public => Err(AuthError::MissingAuthorization),
             _ => {
                 self.authenticator
-                    .present(session.req_header(), &self.name_claims)
+                    .present(
+                        session.req_header(),
+                        &self.name_claims,
+                        &snapshot.policy_claims,
+                    )
                     .await
             }
         };
         let decided = self
             .pipeline
-            .decide_with_authorizers(
+            .decide_with_authorizer(
                 matched,
                 &ip,
                 presented,
                 &mut ctx.credential,
-                &snapshot.authorizers,
+                snapshot.authorizer.as_ref(),
                 request_id,
             )
             .await;
@@ -200,13 +203,30 @@ impl Gateway {
                 if let Some(caller) = &caller {
                     upstream::record_admission_span(ctx, caller);
                 }
-                if let (Rejection::Denied, Some(caller)) = (&rejection, &caller) {
-                    logging::log_permission_denied(ctx, route, caller);
-                    // A refusal after admit is one background event.
-                    if audited {
-                        let intent = audit_intent(session, ctx, matched, caller, request_id, &ip);
-                        self.audit
-                            .send_rejected(intent, rejection.status(), request_context(ctx));
+                if let Some(caller) = &caller {
+                    match &rejection {
+                        Rejection::Denied => {
+                            logging::log_permission_denied(ctx, route, caller);
+                            if audited {
+                                let intent =
+                                    audit_intent(session, ctx, matched, caller, request_id, &ip);
+                                self.audit.send_rejected(
+                                    intent,
+                                    rejection.status(),
+                                    request_context(ctx),
+                                );
+                            }
+                        }
+                        Rejection::BadPathParam if audited => {
+                            let intent =
+                                audit_intent(session, ctx, matched, caller, request_id, &ip);
+                            self.audit.send_rejected(
+                                intent,
+                                rejection.status(),
+                                request_context(ctx),
+                            );
+                        }
+                        _ => {}
                     }
                 }
                 return response::write_rejection(cors, session, ctx, route, rejection).await;
@@ -248,6 +268,13 @@ impl Gateway {
                     ..AuditState::default()
                 });
             } else {
+                // Arm outcome tracking BEFORE the intent write so if the intent
+                // actually committed on audit before timing out here, logging()
+                // resolves it to `rejected` (404 from audit if it never landed).
+                ctx.audit = Some(AuditState {
+                    occurred_at: Some(intent.occurred_at.clone()),
+                    ..AuditState::default()
+                });
                 if self.audit.write_intent(&intent).await.is_err() {
                     return response::write_rejection(
                         cors,
@@ -258,10 +285,6 @@ impl Gateway {
                     )
                     .await;
                 }
-                ctx.audit = Some(AuditState {
-                    occurred_at: Some(intent.occurred_at.clone()),
-                    ..AuditState::default()
-                });
             }
         }
 
@@ -352,14 +375,12 @@ fn audit_intent(
     audit::Intent {
         request_id: request_id.to_string(),
         occurred_at: audit::rfc3339_millis(ctx.received_at),
-        nodes: caller.nodes.clone(),
+        nodes: caller.nodes().to_vec(),
         actor: audit::Actor {
-            member_id: caller.member_id.clone(),
-            user_id: caller.user_id.clone(),
-            principal: caller.principal.clone(),
-            auth_type: caller
-                .auth_type
-                .map_or("none", crate::auth::AuthType::as_str),
+            member_id: caller.member_id().map(str::to_string),
+            user_id: caller.user_id().map(str::to_string),
+            principal: caller.principal.as_str().to_string(),
+            auth_type: caller.auth_type.as_str(),
             key_id: caller.key_id.clone(),
         },
         service: matched.route.service.clone(),

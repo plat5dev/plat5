@@ -7,6 +7,7 @@ import (
 
 	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
+	"github.com/plat5dev/plat5/identity/nodes"
 )
 
 // Evaluation is one access question: does the member hold the permission on
@@ -17,11 +18,15 @@ type Evaluation struct {
 	MemberID, Kind, NodeID, Permission string
 }
 
+type memberInfo struct {
+	rootID    string
+	principal string
+}
+
 // Evaluate decides each evaluation, in order, with admit's resolution: the
 // node's chain live, the member active in its tree with a principal admit
-// accepts, and the member's bindings on the chain granting the permission.
-// Anything else is false. One snapshot answers the whole batch, and each
-// distinct node's chain is read once.
+// accepts, and either built-in bindings (RBAC mode) or the external AuthZEN PDP
+// (authorizer mode) granting the permission. Anything else is false.
 func (s *Store) Evaluate(ctx context.Context, snap *feed.Snapshot, evals []Evaluation) ([]bool, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "evaluate", dbx.DefaultTimeout)
 	defer cancel()
@@ -47,92 +52,76 @@ func (s *Store) Evaluate(ctx context.Context, snap *feed.Snapshot, evals []Evalu
 	if err != nil {
 		return nil, op.Fail(err)
 	}
-	roots, err := admissibleMembers(ctx, tx, memberIDs)
+	members, err := admissibleMembers(ctx, tx, memberIDs)
 	if err != nil {
 		return nil, op.Fail(err)
 	}
 
-	// Each (member, node) that passes the node and member steps is one pair
-	// for the permission step.
+	if snap.ExternalAuthz() {
+		_ = tx.Rollback(ctx)
+		var extIdx []int
+		var reqs []AuthzenRequest
+		for i, e := range evals {
+			chain := chains[e.NodeID]
+			m, ok := members[e.MemberID]
+			if !ok || chain == nil || chain[len(chain)-1].Kind != e.Kind || m.rootID != chain[0].ID {
+				continue
+			}
+			extIdx = append(extIdx, i)
+			reqs = append(reqs, BuildNodeAuthzenRequest(e.MemberID, m.principal, chain[0].ID, e.Permission, e.Kind, e.NodeID, chain))
+		}
+		if len(reqs) > 0 {
+			decisions, err := EvaluateAuthorizerBatch(ctx, snap, s.pdp, reqs)
+			if err != nil {
+				return nil, op.Reject(err)
+			}
+			for j, idx := range extIdx {
+				out[idx] = decisions[j]
+			}
+		}
+		op.OK("ok")
+		return out, nil
+	}
+
+	// Built-in RBAC: deduplicate (member, node) targets and resolve once.
 	type key struct{ member, node string }
-	pairOf := map[key]int{}
-	var pairs []memberChain
-	pairIdx := make([]int, len(evals))
+	targetOf := map[key]int{}
+	var targets []MemberTarget
+	targetIdx := make([]int, len(evals))
 	for i, e := range evals {
-		pairIdx[i] = -1
+		targetIdx[i] = -1
 		chain := chains[e.NodeID]
-		if chain == nil || chain[len(chain)-1].Kind != e.Kind || roots[e.MemberID] != chain[0].ID {
+		m, ok := members[e.MemberID]
+		if !ok || chain == nil || chain[len(chain)-1].Kind != e.Kind || m.rootID != chain[0].ID {
 			continue
 		}
 		k := key{e.MemberID, e.NodeID}
-		p, ok := pairOf[k]
-		if !ok {
-			p = len(pairs)
-			pairOf[k] = p
-			pairs = append(pairs, memberChain{memberID: e.MemberID, nodes: chain})
+		p, exists := targetOf[k]
+		if !exists {
+			p = len(targets)
+			targetOf[k] = p
+			targets = append(targets, MemberTarget{MemberID: e.MemberID, NodeID: e.NodeID})
 		}
-		pairIdx[i] = p
+		targetIdx[i] = p
 	}
-	held, heldCustom, err := heldOnChains(ctx, tx, snap, pairs, s.now().UTC())
+	held, heldCustom, err := HeldOnTargets(ctx, tx, snap, targets, false, s.now().UTC())
 	if err != nil {
 		return nil, op.Fail(err)
 	}
-	granted := make([]Permissions, len(pairs))
-	for p := range pairs {
+	granted := make([]Permissions, len(targets))
+	for p := range targets {
 		granted[p] = ResolveWithCustom(snap, held[p], heldCustom[p])
 	}
 	for i, e := range evals {
-		out[i] = pairIdx[i] >= 0 && granted[pairIdx[i]].Has(e.Permission)
+		out[i] = targetIdx[i] >= 0 && granted[targetIdx[i]].Has(e.Permission)
 	}
-	tx.Rollback(ctx)
-
-	// Delegate any evaluation whose kind declares an external AuthZEN authorizer,
-	// batched per authorizer. Only pairs that passed the live-node and admissible-member
-	// checks reach the external PDP.
-	type extItem struct {
-		idx int
-		req AuthzenRequest
-	}
-	pending := map[string][]extItem{}
-	for i, e := range evals {
-		if pairIdx[i] < 0 {
-			continue
-		}
-		k, ok := snap.Kind(e.Kind)
-		if !ok || k.Authorizer == nil {
-			continue
-		}
-		if !NeedsExternal(k.Authorizer.Mode, out[i]) {
-			continue
-		}
-		chain := pairs[pairIdx[i]].nodes
-		pending[k.Authorizer.Name] = append(pending[k.Authorizer.Name], extItem{
-			idx: i,
-			req: BuildNodeAuthzenRequest(e.MemberID, chain[0].ID, e.Permission, e.Kind, e.NodeID, chain),
-		})
-	}
-	for name, items := range pending {
-		reqs := make([]AuthzenRequest, len(items))
-		for j, it := range items {
-			reqs[j] = it.req
-		}
-		decisions, err := EvaluateAuthorizerBatch(ctx, snap, s.pdp, name, reqs)
-		if err != nil {
-			return nil, op.Reject(err)
-		}
-		for j, it := range items {
-			out[it.idx] = decisions[j]
-		}
-	}
-
 	op.OK("ok")
 	return out, nil
 }
 
 // liveChains reads each node's chain, root first, with the node last. A node
-// that's unknown, or whose chain doesn't resolve as admit's would without
-// allow_deleted (a deleted or purged node on it), has none.
-func liveChains(ctx context.Context, q queryer, nodeIDs []string) (map[string][]ChainNode, error) {
+// that's unknown, or has any non-active node on its chain, is omitted.
+func liveChains(ctx context.Context, q dbx.Querier, nodeIDs []string) (map[string][]ChainNode, error) {
 	rows, err := q.Query(ctx, `
 		SELECT a.node_id, n.id, n.kind, n.status
 		FROM node_ancestors a JOIN nodes n ON n.id = a.ancestor_id
@@ -147,7 +136,7 @@ func liveChains(ctx context.Context, q queryer, nodeIDs []string) (map[string][]
 	var nodeID, status string
 	var n ChainNode
 	if _, err := pgx.ForEachRow(rows, []any{&nodeID, &n.ID, &n.Kind, &status}, func() error {
-		if !liveInChain(status, n.ID == nodeID, false) {
+		if status != nodes.StatusActive {
 			dead[nodeID] = true
 		}
 		read[nodeID] = append(read[nodeID], n)
@@ -161,11 +150,11 @@ func liveChains(ctx context.Context, q queryer, nodeIDs []string) (map[string][]
 	return read, nil
 }
 
-// admissibleMembers maps each active member whose principal admit would
-// accept to its tree's root. Removed and unknown members are left out.
-func admissibleMembers(ctx context.Context, q queryer, memberIDs []string) (map[string]string, error) {
+// admissibleMembers maps each active unsuspended member whose principal admit
+// would accept to its root_id and principal kind.
+func admissibleMembers(ctx context.Context, q dbx.Querier, memberIDs []string) (map[string]memberInfo, error) {
 	rows, err := q.Query(ctx, `
-		SELECT m.id, m.root_id, p.status, sn.status
+		SELECT m.id, m.root_id, m.principal, p.status, sn.status
 		FROM members m
 		JOIN principals p ON p.id = m.principal_id
 		LEFT JOIN nodes sn ON sn.id = p.node_id
@@ -174,12 +163,12 @@ func admissibleMembers(ctx context.Context, q queryer, memberIDs []string) (map[
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]string{}
-	var memberID, rootID, status string
+	out := map[string]memberInfo{}
+	var memberID, rootID, principal, status string
 	var saNodeStatus *string
-	if _, err := pgx.ForEachRow(rows, []any{&memberID, &rootID, &status, &saNodeStatus}, func() error {
+	if _, err := pgx.ForEachRow(rows, []any{&memberID, &rootID, &principal, &status, &saNodeStatus}, func() error {
 		if admissible(status, saNodeStatus) {
-			out[memberID] = rootID
+			out[memberID] = memberInfo{rootID: rootID, principal: principal}
 		}
 		return nil
 	}); err != nil {

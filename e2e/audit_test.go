@@ -98,7 +98,7 @@ func is(p *string, v string) bool { return p != nil && *p == v }
 // route that makes a tree is in that tree's log as its member; refusals are
 // recorded and filterable; audit:read decides who reads a log.
 func TestAuditLogs(t *testing.T) {
-	if os.Getenv("AUDIT_ENABLED") == "false" {
+	if os.Getenv("AUDIT_MODE") == "off" {
 		t.Skip("audit is off")
 	}
 	s := newStack(t)

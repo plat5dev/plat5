@@ -220,7 +220,7 @@ func TestListFilters(t *testing.T) {
 	app := newTestApp(s)
 
 	q := "?limit=500&starting_after=01ja2z6q3y8d5v2k9n4r7t1w0x&actor_member_id=01m&service=identity&method=PATCH" +
-		"&route=%2Forgs%2F%7Borganization%7D%2Fmembers%2F%7Bmember_id%7D&outcome=pending&status=403&request_id=req-1" +
+		"&route=%2Forgs%2F%7Borganization%7D%2Fmembers%2F%7Bmember_id%7D&outcome=pending&status=403&request_id=req-1&created_id=01c" +
 		"&params%5Bmember_id%5D=01n&occurred_after=2026-10-01T00:00:00Z&occurred_before=2026-10-09T00:00:00Z"
 	if code, body := do(t, app, http.MethodGet, "/nodes/01o/audit-events"+q, ""); code != http.StatusOK {
 		t.Fatalf("list: %d %s", code, body)
@@ -231,7 +231,7 @@ func TestListFilters(t *testing.T) {
 	}
 	if f.Route != "/orgs/{organization}/members/{member_id}" || f.Params["member_id"] != "01n" || f.ActorMemberID != "01m" ||
 		f.Method != "PATCH" || f.Outcome != OutcomePending || f.Status == nil || *f.Status != 403 || f.RequestID != "req-1" ||
-		f.OccurredAfter == nil || f.OccurredBefore == nil {
+		f.CreatedID != "01c" || f.OccurredAfter == nil || f.OccurredBefore == nil {
 		t.Fatalf("filter: %+v", f)
 	}
 
@@ -251,6 +251,7 @@ func TestListFilters(t *testing.T) {
 		"zero limit":               "?limit=0",
 		"empty value":              "?service=",
 		"bad request id":           "?request_id=a%20b",
+		"bad created id":           "?created_id=a%20b",
 		"bracketless key":          "?params=m",
 		"key prefix, no key":       "?key_prefix=plat5-k-2",
 	} {

@@ -98,7 +98,7 @@
           "after": {
             "scope": "public",
             "upstream": "/health",
-            "required_permissions": null,
+            "permissions": null,
             "rate_limit": [
               "standard"
             ],
@@ -113,7 +113,7 @@
           "after": {
             "scope": "organization",
             "upstream": "/orgs/{organization.id}/plans",
-            "required_permissions": [
+            "permissions": [
               "organization:read"
             ],
             "rate_limit": [
@@ -130,7 +130,7 @@
           "after": {
             "scope": "project",
             "upstream": "/projects/{project.id}/plans",
-            "required_permissions": [
+            "permissions": [
               "project:read"
             ],
             "rate_limit": [
@@ -147,7 +147,7 @@
           "after": {
             "scope": "project",
             "upstream": "/projects/{project.id}/plans",
-            "required_permissions": [
+            "permissions": [
               "catalog:write"
             ],
             "rate_limit": [

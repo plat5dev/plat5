@@ -36,7 +36,7 @@ Plat5's runtime services (gateway, identity, audit, control plane) return errors
 |------|------|------|---------|
 | `INVALID_REQUEST` | 400 | `invalid_request_error` | — |
 | `UNAUTHORIZED` | 401 | `invalid_request_error` | `{ reason }` |
-| `FORBIDDEN` | 403 | `invalid_request_error` | `{ required_permissions }` on kind routes, or `null` |
+| `FORBIDDEN` | 403 | `invalid_request_error` | `{ permissions }` on kind routes, or `null` |
 | `NOT_FOUND` | 404 | `invalid_request_error` | `{ resource, id }` |
 | `CONFLICT` | 409 | `invalid_request_error` | `{ field, value }` |
 | `PAYLOAD_TOO_LARGE` | 413 | `invalid_request_error` | `{ max_size_bytes }` |
@@ -49,7 +49,7 @@ Domain-specific `409` codes returned by individual Plat5 APIs (such as `PLAN_STA
 
 ## Key gateway rules
 
-- **Never leak existence (`FORBIDDEN`, 403):** On a kind route, a missing node, a caller outside the tree, and a missing permission all return the same **403** body (`"Permission denied, or it may not exist."`) with `details.required_permissions` (or `null` on `any_member` routes). The caller's own permissions are never in the body. A service account calling a user route gets **403** with `details: null`.
+- **Never leak existence (`FORBIDDEN`, 403):** On a kind route, a missing node, a caller outside the tree, and a missing permission all return the same **403** body (`"Permission denied, or it may not exist."`) with `details.permissions` (or `null` on `any_member` routes). The caller's own permissions are never in the body. A service account calling a user route gets **403** with `details: null`.
 - **Gateway owns `UNAUTHORIZED` (401):** Returned for missing, malformed, expired, unknown, or revoked credentials, suspended people, or keys of service accounts on deleted nodes. Downstream services behind the gateway do not authenticate callers.
-- **Status distinction in Plat5 APIs:** **400** for malformed requests before values are read; **422** for invalid input; **409** when current state refuses the request; **503** when a dependency (Postgres, Valkey, identity, audit) is unavailable. (Exception: identity's AuthZEN `/access/v1/evaluation*` endpoints return **400** for invalid bodies per the AuthZEN spec.)
+- **Status distinction in Plat5 APIs:** **400** for malformed requests before values are read; **422** for invalid input; **409** when current state refuses the request; **503** when a fail-closed dependency (Postgres, identity, external authorizer, or sync audit) is unavailable. (Exception: identity's AuthZEN `/access/v1/evaluation*` endpoints return **400** for invalid bodies per the AuthZEN spec.)
 - **Rate limits (`RATE_LIMITED`, 429):** Carries `Retry-After` (seconds) matching `details.retry_after_seconds`, plus `X-RateLimit-*` on admitted route limits.

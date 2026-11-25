@@ -22,10 +22,6 @@ use crate::time::parse_rfc3339_utc;
 
 const CACHE_CAPACITY: u64 = 50_000;
 
-fn is_false(b: &bool) -> bool {
-    !*b
-}
-
 /// One admit call: a credential and the route's chain. An empty chain is a user route.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AdmitRequest {
@@ -33,8 +29,6 @@ pub struct AdmitRequest {
     pub credential: AdmitCredential,
     pub chain: Vec<ChainRef>,
     pub allow_deleted: bool,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub allow_public: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -43,7 +37,7 @@ pub enum AdmitCredential {
     /// A bearer value that isn't a JWT, as presented.
     Credential(String),
     /// A verified JWT's issuer, subject, optional name, optional OAuth scopes,
-    /// and optional policy claims (`AUTH_POLICY_CLAIMS`).
+    /// and optional policy claims (`policy_claims`).
     Idp {
         issuer: String,
         subject: String,
@@ -54,16 +48,13 @@ pub enum AdmitCredential {
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         claims: BTreeMap<String, Vec<String>>,
     },
-    /// Unauthenticated caller on an `allow_public: true` kind route.
-    Anonymous(bool),
 }
 
 impl AdmitCredential {
-    pub fn auth_type(&self) -> Option<AuthType> {
+    pub fn auth_type(&self) -> AuthType {
         match self {
-            AdmitCredential::Credential(_) => Some(AuthType::ApiKey),
-            AdmitCredential::Idp { .. } => Some(AuthType::Jwt),
-            AdmitCredential::Anonymous(_) => None,
+            AdmitCredential::Credential(_) => AuthType::ApiKey,
+            AdmitCredential::Idp { .. } => AuthType::Jwt,
         }
     }
 }
@@ -91,7 +82,6 @@ pub struct AdmitAnswer {
     #[serde(deserialize_with = "Option::deserialize")]
     pub key_id: Option<String>,
     pub allowed_cidrs: Vec<String>,
-    #[serde(default)]
     pub org_allowed_cidrs: Vec<String>,
     pub nodes: Vec<NodeRef>,
     #[serde(deserialize_with = "Option::deserialize")]
@@ -99,7 +89,7 @@ pub struct AdmitAnswer {
     #[serde(deserialize_with = "Option::deserialize")]
     pub user_id: Option<String>,
     pub permissions: Vec<String>,
-    #[serde(default)]
+    #[serde(deserialize_with = "Option::deserialize")]
     pub credential_scopes: Option<Vec<String>>,
     #[serde(deserialize_with = "Option::deserialize")]
     pub rate_limit_tier: Option<String>,
@@ -109,33 +99,38 @@ pub struct AdmitAnswer {
     pub config_revision: i64,
 }
 
-impl AdmitAnswer {
-    /// A refusal: an invalid credential, or on a tree route no member (and on
-    /// `allow_public` routes, no public node/permission admission either).
-    pub fn refused(&self, req: &AdmitRequest) -> bool {
-        self.refused_with_external(req, false)
-    }
+/// A validated [`AdmitAnswer`] with pre-parsed IP allowlists so cache hits
+/// avoid re-parsing CIDRs on every request.
+#[derive(Clone, Debug)]
+pub struct CachedAdmit {
+    pub answer: AdmitAnswer,
+    allowed_cidrs: Vec<Cidr>,
+    org_allowed_cidrs: Vec<Cidr>,
+}
 
-    /// Like [`Self::refused`], except when `external_can_grant` is true on an
-    /// `allow_public` route a resolved node chain is forwarded to the external
-    /// AuthZEN PDP even if built-in public bindings are empty.
-    pub fn refused_with_external(&self, req: &AdmitRequest, external_can_grant: bool) -> bool {
-        if !self.valid {
-            return true;
-        }
-        if req.chain.is_empty() {
-            return false;
-        }
-        if self.member_id.is_some() {
-            return false;
-        }
-        if req.allow_public {
-            if self.nodes.is_empty() {
-                return true;
-            }
-            return !external_can_grant && self.permissions.is_empty();
-        }
-        true
+impl std::ops::Deref for CachedAdmit {
+    type Target = AdmitAnswer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.answer
+    }
+}
+
+impl CachedAdmit {
+    fn from_answer(answer: AdmitAnswer) -> Result<Self, &'static str> {
+        let (allowed_cidrs, org_allowed_cidrs) = if answer.valid {
+            (
+                parse_cidrs(&answer.allowed_cidrs)?,
+                parse_cidrs(&answer.org_allowed_cidrs)?,
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        Ok(Self {
+            answer,
+            allowed_cidrs,
+            org_allowed_cidrs,
+        })
     }
 
     /// Whether the client IP is permitted by the key's IP allowlist.
@@ -151,16 +146,27 @@ impl AdmitAnswer {
     }
 }
 
-fn cidrs_allow(cidrs: &[String], ip: &str) -> bool {
+impl AdmitAnswer {
+    /// A refusal: an invalid credential, or on a tree route no member.
+    pub fn refused(&self, req: &AdmitRequest) -> bool {
+        !self.valid || (!req.chain.is_empty() && self.member_id.is_none())
+    }
+}
+
+fn parse_cidrs(raw: &[String]) -> Result<Vec<Cidr>, &'static str> {
+    raw.iter()
+        .map(|s| Cidr::parse(s).map_err(|_| "allowed_cidrs"))
+        .collect()
+}
+
+fn cidrs_allow(cidrs: &[Cidr], ip: &str) -> bool {
     if cidrs.is_empty() {
         return true;
     }
     let Ok(addr) = ip.parse::<IpAddr>() else {
         return false;
     };
-    cidrs
-        .iter()
-        .any(|raw| Cidr::parse(raw).is_ok_and(|c| c.contains(addr)))
+    cidrs.iter().any(|c| c.contains(addr))
 }
 
 /// Identity didn't answer usably: transport, non-2xx, or a malformed body. **503**.
@@ -203,7 +209,7 @@ impl Admit for HttpAdmit {
 
 #[derive(Clone)]
 struct Entry {
-    answer: Arc<AdmitAnswer>,
+    answer: Arc<CachedAdmit>,
     ttl: Duration,
     global_gen: u64,
     seq: i64,
@@ -215,7 +221,7 @@ enum ComputeErr {
     Unavailable(AdmitUnavailable),
     /// Hit a lagging identity replica whose `config_revision` is behind what we
     /// already know: return the answer to the caller without caching it.
-    Uncached(Arc<AdmitAnswer>),
+    Uncached(Arc<CachedAdmit>),
 }
 
 /// Admit answers by credential (a key as presented, or a JWT's issuer and subject),
@@ -273,7 +279,7 @@ impl<A: Admit> AdmitCache<A> {
             .await
     }
 
-    pub async fn get(&self, req: &AdmitRequest) -> Result<Arc<AdmitAnswer>, Arc<AdmitUnavailable>> {
+    pub async fn get(&self, req: &AdmitRequest) -> Result<Arc<CachedAdmit>, Arc<AdmitUnavailable>> {
         let key = cache_key(req);
         if let Some(entry) = self.entries.get(&key).await {
             if self.entry_is_fresh(&entry).await {
@@ -297,38 +303,29 @@ impl<A: Admit> AdmitCache<A> {
                     .admit(req)
                     .await
                     .map_err(ComputeErr::Unavailable)?;
-                if answer.valid
-                    && (answer.allowed_cidrs.iter().any(|c| Cidr::parse(c).is_err())
-                        || answer
-                            .org_allowed_cidrs
-                            .iter()
-                            .any(|c| Cidr::parse(c).is_err()))
-                {
+                let cached = CachedAdmit::from_answer(answer).map_err(|e| {
                     warn!(
-                        error_message = "allowed_cidrs",
+                        error_message = e,
                         "admit answered with an invalid CIDR"
                     );
-                    return Err(ComputeErr::Unavailable(AdmitUnavailable(
-                        "allowed_cidrs".to_string(),
-                    )));
-                }
-                // On `allow_public` routes, a valid answer with a resolved node chain may
-                // still be permitted by an external authorizer even if built-in public
-                // bindings are empty, so validate its chain and subject it to invalidation.
-                let is_negative = answer.refused_with_external(req, req.allow_public);
+                    ComputeErr::Unavailable(AdmitUnavailable(e.to_string()))
+                })?;
+                let is_negative = cached.refused(req);
                 if !is_negative {
-                    check_admitted(&answer, req).map_err(|e| {
+                    check_admitted(&cached.answer, req).map_err(|e| {
                         warn!(error_message = e, "admit answered without a field it needs");
                         ComputeErr::Unavailable(AdmitUnavailable(e.to_string()))
                     })?;
                 }
-                let min_rev = self.tracker.observe_config_revision(answer.config_revision);
-                if !is_negative && answer.config_revision < min_rev {
-                    return Err(ComputeErr::Uncached(Arc::new(answer)));
+                let min_rev = self
+                    .tracker
+                    .observe_config_revision(cached.config_revision);
+                if !is_negative && cached.config_revision < min_rev {
+                    return Err(ComputeErr::Uncached(Arc::new(cached)));
                 }
                 let ttl = if is_negative {
                     self.negative_ttl
-                } else if let Some(raw) = answer.expires_at.as_deref() {
+                } else if let Some(raw) = cached.expires_at.as_deref() {
                     let Some(exp) = parse_rfc3339_utc(raw) else {
                         warn!(
                             error_message = "expires_at",
@@ -340,15 +337,15 @@ impl<A: Admit> AdmitCache<A> {
                     };
                     match exp.duration_since(SystemTime::now()) {
                         Ok(remaining) if !remaining.is_zero() => self.ttl.min(remaining),
-                        _ => return Err(ComputeErr::Uncached(Arc::new(answer))),
+                        _ => return Err(ComputeErr::Uncached(Arc::new(cached))),
                     }
                 } else {
                     self.ttl
                 };
-                let seq = self.tracker.entry_seq(stamp, answer.invalidation_seq);
-                let config_revision = answer.config_revision;
+                let seq = self.tracker.entry_seq(stamp, cached.invalidation_seq);
+                let config_revision = cached.config_revision;
                 Ok(Op::Put(Entry {
-                    answer: Arc::new(answer),
+                    answer: Arc::new(cached),
                     ttl,
                     global_gen: stamp.global_gen,
                     seq,
@@ -371,18 +368,15 @@ impl<A: Admit> AdmitCache<A> {
     }
 }
 
-/// An admitted answer names the principal, and on a tree route one node per chain
-/// ref, by kind; on a user route, a person's user. A service account has no
-/// user, and the gateway refuses it there.
+/// An admitted answer names the principal, and on a tree route a member and one
+/// node per chain ref, by kind; on a user route, a person's user. A service
+/// account has no user, and the gateway refuses it there.
 fn check_admitted(answer: &AdmitAnswer, req: &AdmitRequest) -> Result<(), &'static str> {
-    let principal = match (
-        &req.credential,
-        answer.principal.as_deref().filter(|p| !p.is_empty()),
-    ) {
-        (_, Some(p)) => p,
-        (AdmitCredential::Anonymous(_), None) => "anonymous",
-        (_, None) => return Err("principal"),
-    };
+    let principal = answer
+        .principal
+        .as_deref()
+        .filter(|p| *p == "person" || *p == "service_account")
+        .ok_or("principal")?;
     if req.chain.is_empty() {
         return match answer.user_id.as_deref() {
             _ if principal == "service_account" => Ok(()),
@@ -393,7 +387,7 @@ fn check_admitted(answer: &AdmitAnswer, req: &AdmitRequest) -> Result<(), &'stat
             _ => Err("user_id"),
         };
     }
-    if answer.member_id.as_deref().is_some_and(str::is_empty) {
+    if answer.member_id.as_deref().is_none_or(str::is_empty) {
         return Err("member_id");
     }
     let kinds_match = answer.nodes.len() == req.chain.len()
@@ -415,7 +409,7 @@ pub(crate) fn hash_part(h: &mut blake3::Hasher, s: &str) {
 }
 
 /// The credential as the cache keys it: a key as presented, or a JWT's issuer,
-/// subject and forwarded scopes.
+/// subject, forwarded scopes, and policy claims.
 fn hash_credential(h: &mut blake3::Hasher, credential: &AdmitCredential) {
     match credential {
         AdmitCredential::Credential(key) => {
@@ -451,9 +445,6 @@ fn hash_credential(h: &mut blake3::Hasher, credential: &AdmitCredential) {
                 }
             }
         }
-        AdmitCredential::Anonymous(_) => {
-            hash_part(h, "anonymous");
-        }
     }
 }
 
@@ -465,12 +456,11 @@ pub fn credential_hash(credential: &AdmitCredential) -> String {
     h.finalize().to_hex().to_string()
 }
 
-/// A hash of the credential, `allow_deleted`, `allow_public`, and the chain refs as written.
+/// A hash of the credential, `allow_deleted`, and the chain refs as written.
 fn cache_key(req: &AdmitRequest) -> String {
     let mut h = blake3::Hasher::new();
     hash_credential(&mut h, &req.credential);
     hash_part(&mut h, if req.allow_deleted { "1" } else { "0" });
-    hash_part(&mut h, if req.allow_public { "1" } else { "0" });
     for link in &req.chain {
         hash_part(&mut h, &link.kind);
         hash_part(&mut h, &link.reference);
@@ -686,7 +676,6 @@ pub mod tests {
                 })
                 .collect(),
             allow_deleted,
-            allow_public: false,
         }
     }
 
@@ -733,8 +722,10 @@ pub mod tests {
     #[test]
     fn every_answer_field_is_required() {
         let full = serde_json::json!({
-            "valid": true, "principal": "person", "key_id": null, "allowed_cidrs": [], "nodes": [],
+            "valid": true, "principal": "person", "key_id": null, "allowed_cidrs": [],
+            "org_allowed_cidrs": [], "nodes": [],
             "member_id": null, "user_id": "01u", "permissions": [],
+            "credential_scopes": null,
             "rate_limit_tier": null, "expires_at": null,
             "invalidation_seq": 0, "config_revision": 1
         });
@@ -744,10 +735,12 @@ pub mod tests {
             "principal",
             "key_id",
             "allowed_cidrs",
+            "org_allowed_cidrs",
             "nodes",
             "member_id",
             "user_id",
             "permissions",
+            "credential_scopes",
             "rate_limit_tier",
             "expires_at",
             "invalidation_seq",
@@ -863,30 +856,6 @@ pub mod tests {
             cache_key(&request(mfa, &[], false)),
             cache_key(&request(pwd, &[], false))
         );
-        // allow_public must not share a cache entry with allow_public=false.
-        let mut pub_req = request(idp("s", None), &[("organization", "acme")], false);
-        let priv_key = cache_key(&pub_req);
-        pub_req.allow_public = true;
-        assert_ne!(priv_key, cache_key(&pub_req));
-        // Anonymous request serializes cleanly.
-        let anon = AdmitRequest {
-            credential: AdmitCredential::Anonymous(true),
-            chain: vec![ChainRef {
-                kind: "organization".into(),
-                reference: "acme".into(),
-            }],
-            allow_deleted: false,
-            allow_public: true,
-        };
-        assert_eq!(
-            serde_json::to_value(&anon).unwrap(),
-            serde_json::json!({
-                "anonymous": true,
-                "chain": [{ "kind": "organization", "ref": "acme" }],
-                "allow_deleted": false,
-                "allow_public": true
-            })
-        );
     }
 
     #[test]
@@ -956,8 +925,8 @@ pub mod tests {
             invalid(),
         ] {
             let (c, fake) = cache(Ok(answer.clone()));
-            assert_eq!(*c.get(&req).await.unwrap(), answer);
-            assert_eq!(*c.get(&req).await.unwrap(), answer);
+            assert_eq!(c.get(&req).await.unwrap().answer, answer);
+            assert_eq!(c.get(&req).await.unwrap().answer, answer);
             assert_eq!(fake.calls.load(Ordering::SeqCst), 1);
         }
     }
@@ -1032,16 +1001,18 @@ pub mod tests {
     #[test]
     fn allows_ip_matches_cidrs_and_fails_closed() {
         let mut ans = admitted(&[("organization", "01o")], &[]);
-        assert!(ans.allows_ip("203.0.113.7"));
-        assert!(ans.allows_ip("not-an-ip"));
+        let cached = CachedAdmit::from_answer(ans.clone()).unwrap();
+        assert!(cached.allows_ip("203.0.113.7"));
+        assert!(cached.allows_ip("not-an-ip"));
 
         ans.allowed_cidrs = vec!["203.0.113.0/24".into(), "2001:db8::1/128".into()];
-        assert!(ans.allows_ip("203.0.113.7"));
-        assert!(ans.allows_ip("::ffff:203.0.113.99"));
-        assert!(ans.allows_ip("2001:db8::1"));
-        assert!(!ans.allows_ip("198.51.100.1"));
-        assert!(!ans.allows_ip("2001:db8::2"));
-        assert!(!ans.allows_ip("not-an-ip"));
+        let cached = CachedAdmit::from_answer(ans).unwrap();
+        assert!(cached.allows_ip("203.0.113.7"));
+        assert!(cached.allows_ip("::ffff:203.0.113.99"));
+        assert!(cached.allows_ip("2001:db8::1"));
+        assert!(!cached.allows_ip("198.51.100.1"));
+        assert!(!cached.allows_ip("2001:db8::2"));
+        assert!(!cached.allows_ip("not-an-ip"));
     }
 
     #[tokio::test]

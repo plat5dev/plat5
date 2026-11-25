@@ -11,10 +11,9 @@ One call that turns a credential and the route's node chain into the member and 
 ```
 POST /internal/admit
 {
-  "credential": "e10s-k-2-…",          // or "idp": { "issuer", "subject", "name"?, "scopes"?, "claims"? }, or "anonymous": true
+  "credential": "e10s-k-2-…",          // or "idp": { "issuer", "subject", "name"?, "scopes"?, "claims"? }
   "chain": [ { "kind": "organization", "ref": "gruow" }, { "kind": "project", "ref": "gatheroom" } ],
-  "allow_deleted": false,
-  "allow_public": false
+  "allow_deleted": false
 }
 → 200
 {
@@ -35,26 +34,26 @@ POST /internal/admit
 }
 ```
 
-1. **Principal.** Hash the key, look up the IdP link, or accept an `anonymous: true` admit (requires `allow_public: true` and a non-empty `chain`). A new IdP subject creates the person. `name`, the first non-empty claim of `AUTH_NAME_CLAIMS`, sets the person's name if it is currently empty ([a person's name](../idp.md#a-persons-name)). `valid` means only that the credential is good: a known, unrevoked, unexpired key, an IdP subject of an active principal, or a valid anonymous public request. A suspended person, an unknown, revoked or expired key, a key identity can't read, or a service account whose node is deleted is `valid: false`, on any chain.
+1. **Principal.** Hash the key or look up the IdP link. A new IdP subject creates the person. `name`, the first non-empty claim of `AUTH_NAME_CLAIMS`, sets the person's name if it is currently empty ([a person's name](../idp.md#a-persons-name)). `valid` means only that the credential is good: a known, unrevoked, unexpired key, or an IdP subject of an active principal. A suspended person, an unknown, revoked or expired key, a key identity can't read, or a service account whose node is deleted is `valid: false`, on any chain.
 2. **Nodes.** Resolve each `ref` (slug or id) under the previous node, by kind. A missing, purged or deleted node ends here. With `allow_deleted`, the last node may be deleted (not purged), and its own bindings still count. Nothing else ever counts a deleted node's bindings.
-3. **Root security policy & member.** Load the resolved root's security policy (`org_allowed_cidrs`, `allow_personal_keys`, `required_idp_claims`). For a personal key when `allow_personal_keys` is `false`, or a JWT whose forwarded `idp.claims` fail `required_idp_claims`, admit refuses access in this tree (`member_id: null`, empty `nodes` and `permissions`). Otherwise find the principal's active, unsuspended member in the chain's tree (or if `allowed_roots` on a key excludes the root, `member_id: null`). A suspended member of the tree is refused and never falls back to public bindings.
-4. **Permissions.** The union of the roles (predefined and custom) of that member's unexpired direct bindings and group bindings on any node in the chain, includes resolved ([`concepts/access.md`](../../concepts/access.md#resolution)), plus matching `all_users` / `all_authenticated_users` bindings when `allow_public: true` (and the caller is not a suspended member of the tree), intersected with the key's `scopes` (when non-empty) or the JWT's `scopes` (when sent). `rate_limit_tier` is the resolved root's tier (`null` when unset or on a user route). `expires_at` is the earliest RFC 3339 UTC expiration among the key and the counting bindings (`null` when none expire), used by the gateway to cap its admit cache TTL.
+3. **Root security policy & member.** Load the resolved root's security policy (`org_allowed_cidrs`, `allow_personal_keys`, `required_idp_claims`). For a personal key when `allow_personal_keys` is `false`, or a JWT whose forwarded `idp.claims` fail `required_idp_claims`, admit refuses access in this tree (`member_id: null`, empty `nodes` and `permissions`). Otherwise find the principal's active, unsuspended member in the chain's tree (or if `allowed_roots` on a key excludes the root, `member_id: null`).
+4. **Permissions.** In built-in RBAC mode, the union of the roles (predefined and, when `custom_roles: true`, custom) of that member's unexpired direct bindings and group bindings on any node in the chain, includes resolved ([`concepts/access.md`](../../concepts/access.md#resolution)), intersected with the key's `scopes` (when non-empty) or the JWT's `scopes` (when sent). In external `authorizer` mode, `permissions` is empty (the gateway consults the external PDP). `rate_limit_tier` is the resolved root's tier (`null` when unset or on a user route). `expires_at` is the earliest RFC 3339 UTC expiration among the key and the counting bindings (`null` when none expire), used by the gateway to cap its admit cache TTL.
 
-An empty `chain` is a user route: `nodes`, `member_id` and `permissions` are empty, and `rate_limit_tier` is `null`. For a person with an unrestricted credential, `user_id` is the person's. A valid service account, or a personal key narrowed by `scopes` or `allowed_roots`, answers `valid: true` with `user_id: null`, and the gateway refuses it with **403** on a user route. On a tree route `user_id` is `null`, except on `allow_public: true` routes for an authenticated non-member where `user_id` is included solely for external AuthZEN `subject: { "type": "user", "id": … }` evaluation (never forwarded as `X-Plat5-User-Id`).
+An empty `chain` is a user route: `nodes`, `member_id` and `permissions` are empty, and `rate_limit_tier` is `null`. For a person with an unrestricted credential, `user_id` is the person's. A valid service account, or a personal key narrowed by `scopes` or `allowed_roots`, answers `valid: true` with `user_id: null`, and the gateway refuses it with **403** on a user route. On a tree route `user_id` is always `null`.
 
-Every field is in every answer, so the gateway never sees a missing one. With `valid: false`, `principal`, `key_id`, `member_id`, `user_id`, and `credential_scopes` are `null`, and `allowed_cidrs`, `nodes` and `permissions` are empty. A missing node and a caller outside the tree both answer `member_id: null` with empty `nodes` and `permissions`. `key_id` is the key's id for a key, `null` for a JWT. `allowed_cidrs` is the key's IP allowlist (`[]` for a JWT or an unrestricted key). `credential_scopes` is the credential's scope list when narrowed by key `scopes` or JWT `AUTH_SCOPE_CLAIM` (`null` when unscoped), used by the gateway to keep outbound authorizers within the credential's scope. `permissions` is sorted, with `*` as the role wrote it. `invalidation_seq` is the commit-ordered head of identity's invalidation log as of this read, and `config_revision` is the control-plane revision identity used to resolve permissions.
+Every field is in every answer, so the gateway never sees a missing one. With `valid: false`, `principal`, `key_id`, `member_id`, `user_id`, and `credential_scopes` are `null`, and `allowed_cidrs`, `org_allowed_cidrs`, `nodes`, and `permissions` are empty. A missing node and a caller outside the tree both answer `member_id: null` with empty `nodes` and `permissions`. `key_id` is the key's id for a key, `null` for a JWT. `allowed_cidrs` is the key's IP allowlist (`[]` for a JWT or an unrestricted key). `credential_scopes` is the credential's scope list when narrowed by key `scopes` or JWT `AUTH_SCOPE_CLAIM` (`null` when unscoped), used by the gateway to keep outbound authorizer decisions within the credential's scope. `permissions` is sorted, with `*` as the role wrote it. `invalidation_seq` is the commit-ordered head of identity's invalidation log as of this read, and `config_revision` is the control-plane revision identity used to resolve permissions.
 
-Identity resolves `chain` by kind name only and doesn't check it against its kinds: a gateway a revision ahead or behind gets `member_id: null`, not an error. A body identity can't read is **422**: none or more than one of `credential`, `idp`, and `anonymous: true`, an `idp` without `issuer` or `subject`, or `anonymous: true` without `allow_public: true` and a non-empty `chain`.
+Identity resolves `chain` by kind name only and doesn't check it against its kinds: a gateway a revision ahead or behind gets `member_id: null`, not an error. A body identity can't read is **422**: neither or both of `credential` and `idp`, or an `idp` without `issuer` or `subject`.
 
 #### What the gateway answers
 
 | Admit result | Status |
 |--------------|--------|
-| `valid: false`, or `allowed_cidrs` non-empty and doesn't contain the [client IP](../gateway.md#client-ip), or an anonymous `allow_public` request denied at any check | **401** |
-| `principal: "service_account"` on a user route | **403** |
-| `org_allowed_cidrs` non-empty and doesn't contain the [client IP](../gateway.md#client-ip) (authenticated request) | **403** |
-| `member_id: null` (and no public access on an `allow_public` route) on a kind route | **403** |
-| `permissions` share none with the route, and the route isn't `any_member` | **403** |
+| `valid: false`, or `allowed_cidrs` non-empty and doesn't contain the [client IP](../gateway.md#client-ip) | **401** |
+| `user_id: null` on a user route (a service account, or a personal key narrowed by `scopes` or `allowed_roots`) | **403** |
+| `org_allowed_cidrs` non-empty and doesn't contain the [client IP](../gateway.md#client-ip) | **403** |
+| `member_id: null` on a kind route | **403** |
+| Built-in `permissions` share none with the route (or external `authorizer` denies), and the route isn't `any_member` | **403** |
 | Otherwise | Forwarded |
 | Transport error, non-2xx, missing fields | **503** |
 
@@ -173,7 +172,7 @@ POST /access/v1/evaluation
 
 1. **Node.** The node exists, its kind is `resource.type`, and it and every node above it are live.
 2. **Member.** The member is active and unsuspended in the node's tree, and admit would accept its principal: a person who isn't suspended, or a service account whose node is live.
-3. **Permission.** The union of the roles (predefined and custom) of the member's unexpired direct bindings and group bindings on the node and its ancestors grants `action.name`: `includes` resolved, `*` granting every permission ([resolution](../../concepts/access.md#resolution)). When the node's kind declares an external `authorizer` ([authorizers](../config/authorizers.md)), identity composes this result with the external AuthZEN PDP according to its mode (`replace`, `and`, or `or`), batching multiple items per authorizer.
+3. **Permission.** In built-in RBAC mode, the union of the roles (predefined and, when `custom_roles: true`, custom) of the member's unexpired direct bindings and group bindings on the node and its ancestors grants `action.name`: `includes` resolved, `*` granting every permission ([resolution](../../concepts/access.md#resolution)). When top-level `authorizer` is configured ([authorizer](../config/authorizer.md)), identity evaluates `(member, action.name, resource)` against the external AuthZEN PDP instead of built-in bindings, batching multiple items.
 
 Anything else is `false`, never an error: a deleted, purged or unknown node, a `resource.type` that isn't the node's kind, a removed, suspended or unknown member, a member of another tree, or no binding/authorizer grant. Identity keeps no cache for these answers: each one reads the bindings as they are, and roles as identity has them ([config](../../concepts/config.md#how-a-change-reaches-readers)). An unavailable external authorizer answers **503** `SERVICE_UNAVAILABLE`.
 
@@ -243,8 +242,8 @@ POST /access/v1/search/resource
 | `page` | Optional. `{ limit?, token? }`: `limit` 1 to 1000 (default 100); `token` is a lowercase ULID cursor (`id > token`) |
 | `context` | Optional. Accepted and ignored |
 
-- **Short-circuit (`all: true`).** When the member is admissible, `scope` (or their root) is live with live ancestors, `resource.type` is a kind at or below `scope`'s kind, and the member's unexpired direct or group bindings on `scope` or its ancestors already grant `action.name`, identity answers `{ "all": true, "results": [] }` without enumerating descendants — unless the target kind has an external `authorizer` in `replace` or `and` mode (which can still deny individual nodes; `or` mode still short-circuits when built-in RBAC allows).
-- **Explicit results (`all: false`).** Otherwise, `results` lists each live node of `resource.type` at or below `scope` (whose ancestors are all live) on which the member holds `action.name` through direct/group bindings composed with any kind-level external `authorizer`, ordered by `id` ascending. When more results follow, `page.next_token` is the last id returned.
+- **Short-circuit (`all: true`).** In built-in RBAC mode, when the member is admissible, `scope` (or their root) is live with live ancestors, `resource.type` is a kind at or below `scope`'s kind, and the member's unexpired direct or group bindings on `scope` or its ancestors already grant `action.name`, identity answers `{ "all": true, "results": [] }` without enumerating descendants. In external `authorizer` mode, no built-in short-circuit runs because the PDP can decide per node.
+- **Explicit results (`all: false`).** Otherwise, `results` lists each live node of `resource.type` at or below `scope` (whose ancestors are all live) on which the member holds `action.name` via built-in bindings or the external `authorizer` (batched), ordered by `id` ascending. When more results follow, `page.next_token` is the last id returned.
 - **No matches.** An unknown, removed, suspended, or inadmissible member, a missing/deleted/purged scope, a scope in another tree, or an unknown/unreachable kind answers `{ "all": false, "results": [] }`, never an error. Identity keeps no cache for these answers.
 
 #### Errors
@@ -263,19 +262,19 @@ On `INTERNAL_PORT`. Each is one read, at one head, in one Postgres snapshot. Eac
 
 | Path | Reader | `200` body |
 |------|--------|------------|
-| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "rate_limits", "defaults", "cors", "authorizers"? }`. **404** before the first apply. `defaults` is `{ "rate_limit" }` (empty array when `defaults.rate_limit` is unset), used to rate-limit `POST /access/routes`. `authorizers` includes only authorizers referenced by routes (omitted when none) |
-| `GET /internal/identity` | identity | `{ "revision", "deletion_grace", "reserved_slugs", "kinds", "roles", "creator_role", "custom_roles"?, "permissions"?, "authorizers"? }`. **404** before the first apply. `custom_roles` is included when `true`; `permissions` is the derived permission catalog when `custom_roles` is `true` or `permissions` metadata is set; `authorizers` includes only authorizers referenced by kinds (omitted when none) |
+| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "rate_limits", "defaults", "cors", "policy_claims", "authorizer"? }`. **404** before the first apply. `kinds` carries `{ "parent"?, "path", "host"? }`. `defaults` is `{ "rate_limit" }` (empty array when `defaults.rate_limit` is unset), used to rate-limit `POST /access/routes`. `authorizer` is included when top-level `authorizer` is configured |
+| `GET /internal/identity` | identity | `{ "revision", "deletion_grace", "reserved_slugs", "policy_claims", "kinds", "roles"?, "creator_role"?, "custom_roles"?, "permissions"?, "authorizer"? }`. **404** before the first apply. `kinds` carries `{ "parent"?, "list_permission", "bind_creator" }`. In built-in RBAC mode, includes `roles`, `creator_role`, optional `custom_roles`, and `permissions` catalog; in external `authorizer` mode, includes `authorizer` (`{ "url", "timeout", "token_env"? }`) instead |
 
 The gateway's `services` are expanded: each service's `url`, and its own `timeouts` and `max_body_bytes` with the config's `defaults` filled in, and its `routes` as the gateway matches them, one per method:
 
 ```json
 { "path": "/orgs/{organization}/projects/{project}/plans/{plan_id}/versions", "method": "POST",
   "scope": "project", "upstream": "/projects/{project.id}/plans/{plan_id}/versions",
-  "required_permissions": ["catalog:write"], "rate_limit": ["standard"], "audit": true,
-  "allow_deleted": false, "allow_public": false, "authorizer": null }
+  "permissions": ["catalog:write"], "rate_limit": ["standard"], "audit": true,
+  "allow_deleted": false }
 ```
 
-`rate_limit` is resolved (`defaults.rate_limit` for a route that names none, or `[]` when `defaults.rate_limit` is unset or the route says `false`), `audit` is the method default filled in (`false` in `public`, which is never audited), `authorizer` is resolved across kind → service → scope → route → verb inheritance (skipping `any_member` routes for implicit kind authorizers; omitted when none applies), and `required_permissions` is a list or `"any_member"` (`null` outside a kind scope). Roles are served as written, with `includes`; identity resolves them. Kinds are served with `list_permission` filled in (plus `host`, `allow_public`, and `authorizer` when set). Other keys have defaults filled in: `deletion_grace` `30d`, `reserved_slugs` `[]`, `rate_limits` `{}` (each policy including `tiers` when set), and `cors` `{ "allowed_origins": [], "allowed_headers": [] }` when omitted.
+`rate_limit` is resolved (`defaults.rate_limit` for a route that names none, or `[]` when `defaults.rate_limit` is unset or the route says `false`), `audit` is the method default filled in (`false` in `public`, which is never audited), `resource` (`{ "type", "id" }`) is included only when set on a route/verb in external `authorizer` mode, and `permissions` is a list of strings or `"any_member"` (`null` outside a kind scope). Roles are served as written, with `includes`; identity resolves them. Other keys have defaults filled in: `deletion_grace` `30d`, `reserved_slugs` `[]`, `policy_claims` `[]`, `rate_limits` `{}` (each policy including `tiers` when set), and `cors` `{ "allowed_origins": [], "allowed_headers": [] }` when omitted.
 
 Without `after`, the answer is immediate. With `?after={revision}`, the control plane waits until the head is past `after`, for up to 25 seconds. Nothing newer in that time is **204**, and the reader asks again. A cursor ahead of the head (the store was reset) is answered at once.
 

@@ -23,7 +23,7 @@ const PAGES: &[&str] = &[
     "settings.md",
     "kinds.md",
     "roles.md",
-    "authorizers.md",
+    "authorizer.md",
     "rate-limits.md",
     "cors.md",
     "services.md",

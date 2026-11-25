@@ -6,7 +6,7 @@ These are ordinary [service definitions](services.md). The control plane adds no
 
 ## The files
 
-One scope block per kind, with `upstream_prefix: /nodes/{K.id}`, so most routes need no `upstream`. A route whose upstream isn't the prefix plus its path names it. Each verb carries its own `required_permissions`. Shown for `organization` (`/orgs/{organization}`) and `project` under it (`/projects/{project}`), cut short:
+One scope block per kind, with `upstream_prefix: /nodes/{K.id}`, so most routes need no `upstream`. A route whose upstream isn't the prefix plus its path names it. Each verb carries its own `permissions`. Shown for `organization` (`/orgs/{organization}`) and `project` under it (`/projects/{project}`), cut short:
 
 ```yaml
 # services/identity.yml
@@ -18,23 +18,23 @@ identity:
       routes:
         - path: /
           methods:
-            GET: { required_permissions: [organization:read] }
-            PATCH: { required_permissions: [organization:write] }
-            DELETE: { required_permissions: [organization:delete] }
+            GET: { permissions: organization:read }
+            PATCH: { permissions: organization:write }
+            DELETE: { permissions: organization:delete }
         - path: /restore
           allow_deleted: true
           methods:
-            POST: { required_permissions: [organization:delete] }
+            POST: { permissions: organization:delete }
         - path: /projects
           upstream: /nodes/{organization.id}/children/project
           methods:
-            GET: { required_permissions: any_member }
-            POST: { required_permissions: [project:create] }
+            GET: { permissions: any_member }
+            POST: { permissions: project:create }
         - path: /membership
           upstream: /nodes/{organization.id}/memberships/{member.id}
           methods:
-            GET: { required_permissions: any_member }
-            DELETE: { required_permissions: any_member }
+            GET: { permissions: any_member }
+            DELETE: { permissions: any_member }
         # …
     user:
       routes:
@@ -57,7 +57,7 @@ audit:
       routes:
         - path: /audit-events
           methods:
-            GET: { required_permissions: [audit:read] }
+            GET: { permissions: audit:read }
     # … one block per kind
     user:
       routes:

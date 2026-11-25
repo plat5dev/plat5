@@ -27,5 +27,5 @@ services:
         upstream_prefix: /orgs/{organization.id}
         routes:
           - path: /projects/archived
-            required_permissions: [organization:read]
+            permissions: [organization:read]
             methods: [GET]

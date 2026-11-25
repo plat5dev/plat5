@@ -54,22 +54,14 @@ async fn main() {
     };
     metrics::register_process_metrics();
 
-    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+    let database_url = nonempty_env("DATABASE_URL").unwrap_or_else(|| {
         error!("DATABASE_URL is required");
         std::process::exit(1);
     });
-    if database_url.is_empty() {
-        error!("DATABASE_URL must not be empty");
-        std::process::exit(1);
-    }
-    let admin_token = std::env::var("ADMIN_TOKEN").unwrap_or_else(|_| {
+    let admin_token = nonempty_env("ADMIN_TOKEN").unwrap_or_else(|| {
         error!("ADMIN_TOKEN is required");
         std::process::exit(1);
     });
-    if admin_token.is_empty() {
-        error!("ADMIN_TOKEN must not be empty");
-        std::process::exit(1);
-    }
 
     let port: u16 = std::env::var("PORT")
         .ok()
@@ -108,15 +100,14 @@ async fn main() {
 
     {
         let store = store.clone();
-        let shutdown = watch_shutdown(shutdown_rx.clone());
+        let mut shutdown = shutdown_rx.clone();
         tokio::spawn(async move {
-            tokio::pin!(shutdown);
             let mut interval = tokio::time::interval(REPLICA_PRUNE_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             interval.tick().await;
             loop {
                 tokio::select! {
-                    _ = &mut shutdown => break,
+                    _ = feed::wait_shutdown(&mut shutdown) => break,
                     _ = interval.tick() => {}
                 }
                 if let Err(e) = store.prune_stale_replicas().await {
@@ -155,13 +146,12 @@ async fn main() {
             std::process::exit(1);
         });
 
-    let public_shutdown = watch_shutdown(shutdown_rx.clone());
-    let internal_shutdown = watch_shutdown(shutdown_rx);
-
-    let public_server =
-        axum::serve(public_listener, public).with_graceful_shutdown(public_shutdown);
-    let internal_server =
-        axum::serve(internal_listener, internal).with_graceful_shutdown(internal_shutdown);
+    let mut public_rx = shutdown_rx.clone();
+    let mut internal_rx = shutdown_rx;
+    let public_server = axum::serve(public_listener, public)
+        .with_graceful_shutdown(async move { feed::wait_shutdown(&mut public_rx).await });
+    let internal_server = axum::serve(internal_listener, internal)
+        .with_graceful_shutdown(async move { feed::wait_shutdown(&mut internal_rx).await });
 
     let (public_result, internal_result) = tokio::join!(public_server, internal_server);
     if let Err(e) = public_result {
@@ -197,16 +187,5 @@ async fn wait_for_shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
-    }
-}
-
-async fn watch_shutdown(mut rx: tokio::sync::watch::Receiver<bool>) {
-    loop {
-        if *rx.borrow_and_update() {
-            return;
-        }
-        if rx.changed().await.is_err() {
-            return;
-        }
     }
 }

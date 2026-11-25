@@ -16,7 +16,7 @@ defaults:
 # a route in a service definition
 - path: /subscribers/{subscriber_id}/entitlements/check
   methods:
-    POST: { required_permissions: [check], rate_limit: [evals-project, evals-org] }
+    POST: { permissions: check, rate_limit: [evals-project, evals-org] }
 ```
 
 <!-- generated from schema: rate_limits.json#/properties/rate_limits rate_limits.json#/$defs/policy_name rate_limits.json#/$defs/policy/properties -->

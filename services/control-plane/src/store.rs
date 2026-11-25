@@ -248,8 +248,22 @@ impl Store {
     }
 
     pub async fn revision(&self, revision: i64) -> Result<Option<Revision>, StoreError> {
-        let mut conn = self.pool.acquire().await?;
-        revision_in(&mut conn, revision).await
+        let row: Option<(Value, Value, String, DateTime<Utc>)> = sqlx::query_as(
+            "SELECT config, summary, request_id, created_at
+             FROM config_revisions WHERE revision = $1",
+        )
+        .bind(revision)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(
+            row.map(|(config, summary, request_id, created_at)| Revision {
+                revision,
+                config,
+                summary,
+                request_id,
+                created_at,
+            }),
+        )
     }
 
     /// Keeps a gateway replica's latest report, seen now.
@@ -328,26 +342,4 @@ pub struct Report {
 pub struct Replica {
     pub report: Report,
     pub seen_at: DateTime<Utc>,
-}
-
-async fn revision_in(
-    conn: &mut sqlx::PgConnection,
-    revision: i64,
-) -> Result<Option<Revision>, StoreError> {
-    let row: Option<(Value, Value, String, DateTime<Utc>)> = sqlx::query_as(
-        "SELECT config, summary, request_id, created_at
-         FROM config_revisions WHERE revision = $1",
-    )
-    .bind(revision)
-    .fetch_optional(conn)
-    .await?;
-    Ok(
-        row.map(|(config, summary, request_id, created_at)| Revision {
-            revision,
-            config,
-            summary,
-            request_id,
-            created_at,
-        }),
-    )
 }

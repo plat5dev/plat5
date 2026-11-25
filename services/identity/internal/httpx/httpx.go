@@ -34,7 +34,7 @@ func IsJSON(c fiber.Ctx) bool {
 
 // Body decodes a required JSON body into out. A body not sent as
 // application/json, an empty one, or one that isn't JSON is 400
-// INVALID_REQUEST (docs/reference/errors.md#which-status).
+// INVALID_REQUEST (docs/reference/errors.md).
 func Body(c fiber.Ctx, out any) error {
 	if !IsJSON(c) || len(c.Body()) == 0 {
 		return errors.InvalidRequestError()
@@ -165,23 +165,17 @@ func LogError(ctx context.Context, msg string, err error, kind errors.ErrorKind)
 }
 
 // DBErr maps store sentinel errors to API errors.
-// NotFound/Conflict are the package sentinels to match (e.g. nodes.ErrNotFound).
-// When a sentinel matches, Resource/ResourceID or Field/FieldValue fill the API details.
+// NotFound is the package sentinel to match (e.g. nodes.ErrNotFound); when it
+// matches, Resource and ResourceID fill the API details.
 type DBErr struct {
 	NotFound   error
 	Resource   string
 	ResourceID interface{}
-
-	Conflict   error
-	Field      string
-	FieldValue interface{}
-	Message    string
 }
 
 // MapDB maps store sentinels and *errors.ApiError through. Anything else is
 // logged: Postgres unavailable is 503 SERVICE_UNAVAILABLE, the rest 500.
 // NotFound always maps when the sentinel matches (Resource defaults to "resource").
-// Conflict maps only when Conflict sentinel is set and matches.
 func MapDB(ctx context.Context, err error, msg string, m DBErr) error {
 	if err == nil {
 		return nil
@@ -196,9 +190,6 @@ func MapDB(ctx context.Context, err error, msg string, m DBErr) error {
 			resource = "resource"
 		}
 		return errors.NotFoundError(resource, m.ResourceID)
-	}
-	if m.Conflict != nil && stderrors.Is(err, m.Conflict) {
-		return errors.ConflictError(m.Message, m.Field, m.FieldValue)
 	}
 	LogError(ctx, msg, err, errors.KindDB)
 	if dbx.Unavailable(err) {

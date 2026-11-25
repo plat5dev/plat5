@@ -299,16 +299,16 @@ func (f fieldErrs) err() error {
 	return errors.ValidationFields("", f...)
 }
 
-// filterText is an exact-match value: 1..maxTextLen bytes of printable ASCII.
+// filterText is an exact-match value: 1..maxTextLen bytes of visible ASCII (0x21..0x7e).
 func filterText(bad *fieldErrs, key, value string) string {
-	if value == "" || len(value) > maxTextLen || !printableASCII(value) {
+	if value == "" || len(value) > maxTextLen || !visibleASCII(value) {
 		bad.add(key)
 		return ""
 	}
 	return value
 }
 
-func printableASCII(s string) bool {
+func visibleASCII(s string) bool {
 	for i := 0; i < len(s); i++ {
 		if s[i] < 0x21 || s[i] > 0x7e {
 			return false

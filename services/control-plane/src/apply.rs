@@ -4,9 +4,9 @@
 //! the stored bodies; nothing here runs on a feed read.
 
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
-use crate::config::{Config, APPLY_ONLY_KEYS};
+use crate::config::Config;
 use crate::counts::Counts;
 use crate::plan::{self, Expect, Plan, Refused, Summary};
 use crate::rules::{self, Checked};
@@ -66,13 +66,7 @@ pub fn prepare(body: Value) -> Result<Prepared, Failure> {
             "the config must be an object",
         )]));
     };
-    let mut pre = Map::new();
-    for key in APPLY_ONLY_KEYS {
-        if let Some(v) = body.remove(*key) {
-            pre.insert(key.to_string(), v);
-        }
-    }
-    let expect = match pre.remove("expect") {
+    let expect = match body.remove("expect") {
         None => None,
         Some(v) => Some(
             serde_json::from_value::<Expect>(v)
@@ -147,10 +141,7 @@ pub async fn apply(
     request_id: &str,
 ) -> Result<Applied, Failure> {
     let Some(expect) = prepared.expect.as_ref() else {
-        return Err(Failure::Invalid(vec![FieldError::new(
-            "expect",
-            "required: the revision the plan was made against (0 for the first apply)",
-        )]));
+        return Err(Failure::Invalid(vec![plan::missing_expect_error()]));
     };
     let (revision, current) = store.served().await?;
     let next = Served::of_checked(&prepared.config, &prepared.checked);

@@ -16,7 +16,8 @@ use crate::auth::admit::hash_part;
 use crate::metrics;
 
 use super::client::{
-    Authorizer, AuthorizerUnavailable, AuthzenRequest, BatchSemantic, MAX_BATCH_EVALUATIONS,
+    Authorizer, AuthorizerUnavailable, AuthzenRequest, BatchSemantic, AUTHORIZER_METRIC_LABEL,
+    MAX_BATCH_EVALUATIONS,
 };
 use super::config::AuthorizerSpec;
 
@@ -70,7 +71,6 @@ impl<P: Authorizer> AuthorizerCache<P> {
 
     fn cache_key(spec: &AuthorizerSpec, req: &AuthzenRequest) -> String {
         let mut h = blake3::Hasher::new();
-        hash_part(&mut h, &spec.name);
         hash_part(&mut h, &spec.url);
         hash_part(&mut h, &req.subject.r#type);
         hash_part(&mut h, &req.subject.id);
@@ -105,10 +105,10 @@ impl<P: Authorizer> AuthorizerCache<P> {
         }
         let key = Self::cache_key(spec, req);
         if let Some(entry) = self.entries.get(&key).await {
-            metrics::record_authorizer_cache(&spec.name, "hit");
+            metrics::record_authorizer_cache(AUTHORIZER_METRIC_LABEL, "hit");
             return Ok(entry.decision);
         }
-        metrics::record_authorizer_cache(&spec.name, "miss");
+        metrics::record_authorizer_cache(AUTHORIZER_METRIC_LABEL, "miss");
 
         enum EvalErr {
             Unavailable(AuthorizerUnavailable),
@@ -193,14 +193,14 @@ impl<P: Authorizer> AuthorizerCache<P> {
             for (i, req) in reqs.iter().enumerate() {
                 let key = Self::cache_key(spec, req);
                 if let Some(entry) = self.entries.get(&key).await {
-                    metrics::record_authorizer_cache(&spec.name, "hit");
+                    metrics::record_authorizer_cache(AUTHORIZER_METRIC_LABEL, "hit");
                     results[i] = Some(entry.decision);
                     if semantic == BatchSemantic::PermitOnFirstPermit && entry.decision {
                         return Ok(vec![true]);
                     }
                     continue;
                 }
-                metrics::record_authorizer_cache(&spec.name, "miss");
+                metrics::record_authorizer_cache(AUTHORIZER_METRIC_LABEL, "miss");
                 misses.push(i);
             }
         } else {
@@ -298,7 +298,6 @@ mod tests {
 
     fn sample_spec(cache_secs: u64) -> AuthorizerSpec {
         AuthorizerSpec {
-            name: "topaz".into(),
             url: "http://topaz:8383".into(),
             timeout: Duration::from_secs(2),
             cache_ttl: Duration::from_secs(cache_secs),

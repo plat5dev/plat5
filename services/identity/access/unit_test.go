@@ -65,10 +65,17 @@ func TestResolve(t *testing.T) {
 		t.Fatalf("IntersectScopes(admin, empty) = %v", got)
 	}
 
-	// ResolveWithCustom unions custom permissions and ignores "*".
-	custom := ResolveWithCustom(snap, []string{"viewer"}, []string{"billing:read", "*", "project:read"})
+	// ResolveWithCustom ignores custom permissions when custom_roles is false.
+	disabled := ResolveWithCustom(snap, []string{"viewer"}, []string{"billing:read", "*", "project:read"})
+	if disabled.All || disabled.Has("billing:read") || !disabled.Has("project:read") {
+		t.Fatalf("ResolveWithCustom (disabled) = %+v", disabled)
+	}
+
+	// ResolveWithCustom unions custom permissions and ignores "*" when custom_roles is true.
+	snapWithCustom := parseUnitConfig(t, strings.Replace(unitTestConfig, `"creator_role": "admin"`, `"creator_role": "admin", "custom_roles": true`, 1))
+	custom := ResolveWithCustom(snapWithCustom, []string{"viewer"}, []string{"billing:read", "*", "project:read"})
 	if custom.All || !custom.Has("billing:read") || !custom.Has("project:read") || custom.Has("other:perm") {
-		t.Fatalf("ResolveWithCustom = %+v", custom)
+		t.Fatalf("ResolveWithCustom (enabled) = %+v", custom)
 	}
 }
 
@@ -91,19 +98,16 @@ func TestMatchesRequiredClaims(t *testing.T) {
 	}
 }
 
-func TestCheckAdmitTier2(t *testing.T) {
-	if err := checkAdmit(AdmitInput{Anonymous: true, AllowPublic: true, Chain: []ChainRef{{Kind: "organization", Ref: "acme"}}}); err != nil {
-		t.Fatalf("expected anonymous allow_public kind admit valid, got %v", err)
-	}
-	if err := checkAdmit(AdmitInput{Anonymous: true, AllowPublic: false, Chain: []ChainRef{{Kind: "organization", Ref: "acme"}}}); err == nil {
-		t.Fatal("expected anonymous without allow_public to fail")
-	}
-	if err := checkAdmit(AdmitInput{Anonymous: true, AllowPublic: true}); err == nil {
-		t.Fatal("expected anonymous on user route to fail")
+func TestCheckAdmit(t *testing.T) {
+	if err := checkAdmit(AdmitInput{Chain: []ChainRef{{Kind: "organization", Ref: "acme"}}}); err == nil {
+		t.Fatal("expected missing credential and idp to fail")
 	}
 	cred := "k"
-	if err := checkAdmit(AdmitInput{Credential: &cred, Anonymous: true, AllowPublic: true, Chain: []ChainRef{{Kind: "organization", Ref: "acme"}}}); err == nil {
-		t.Fatal("expected credential + anonymous to fail")
+	if err := checkAdmit(AdmitInput{Credential: &cred, IdP: &IdPClaims{Issuer: "https://idp.test", Subject: "s"}}); err == nil {
+		t.Fatal("expected credential + idp to fail")
+	}
+	if err := checkAdmit(AdmitInput{Credential: &cred, Chain: []ChainRef{{Kind: "organization", Ref: "acme"}}}); err != nil {
+		t.Fatalf("expected credential kind admit valid, got %v", err)
 	}
 }
 
@@ -131,7 +135,7 @@ func TestKindAtOrBelow(t *testing.T) {
 
 func TestGrantingPairs(t *testing.T) {
 	snap := parseUnitConfig(t, unitTestConfig)
-	kinds, roles := grantingPairs(snap, "project:write")
+	kinds, roles := snap.GrantingPairs("project:write")
 	var pairs []string
 	for i := range kinds {
 		pairs = append(pairs, kinds[i]+":"+roles[i])
@@ -143,11 +147,11 @@ func TestGrantingPairs(t *testing.T) {
 		"project:admin", "project:developer",
 	}
 	if !slices.Equal(pairs, want) {
-		t.Fatalf("grantingPairs(project:write) = %v, want %v", pairs, want)
+		t.Fatalf("GrantingPairs(project:write) = %v, want %v", pairs, want)
 	}
 
 	// A permission granted only by "*".
-	kinds, roles = grantingPairs(snap, "billing:export")
+	kinds, roles = snap.GrantingPairs("billing:export")
 	if len(kinds) != 3 {
 		t.Fatalf("wildcard-only pairs: %v %v", kinds, roles)
 	}

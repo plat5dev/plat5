@@ -26,11 +26,9 @@ import (
 )
 
 const (
-	PrincipalPerson                = "person"
-	PrincipalServiceAccount        = "service_account"
-	PrincipalGroup                 = "group"
-	PrincipalAllUsers              = "all_users"
-	PrincipalAllAuthenticatedUsers = "all_authenticated_users"
+	PrincipalPerson         = "person"
+	PrincipalServiceAccount = "service_account"
+	PrincipalGroup          = "group"
 
 	StatusActive    = "active"
 	StatusSuspended = "suspended"
@@ -53,6 +51,10 @@ var (
 	errPrincipalGone = stderrors.New("the principal was deleted")
 )
 
+func errBuiltInRBACDisabled() error {
+	return errors.FieldError("authorizer", "Built-in RBAC is disabled when an external authorizer is configured.")
+}
+
 // Store writes everything about who can reach a node. Writes that touch a
 // tree's members or bindings hold that tree's lock (nodes.LockTrees), so "one
 // active member per principal per tree" and "removed when left with no
@@ -68,8 +70,9 @@ type Store struct {
 }
 
 // NewStore needs SECRET_BRAND for the keys and invite tokens it mints and reads.
+// It also wires PurgeNodes into nodeStore so members owns cleanup of its own tables.
 func NewStore(pool *pgxpool.Pool, nodeStore *nodes.Store, brand string) *Store {
-	return &Store{
+	s := &Store{
 		pool:   pool,
 		nodes:  nodeStore,
 		brand:  brand,
@@ -77,9 +80,13 @@ func NewStore(pool *pgxpool.Pool, nodeStore *nodes.Store, brand string) *Store {
 		tracer: otel.Tracer(storeTracerName),
 		now:    time.Now,
 	}
+	if nodeStore != nil {
+		nodeStore.WithPurgeHook(s.PurgeNodes)
+	}
+	return s
 }
 
-// WithPDP returns a copy of the store using a custom AuthZEN PDP client, for tests.
+// WithPDP returns a copy of the store using a custom AuthZEN PDP client.
 func (s *Store) WithPDP(pdp access.PDP) *Store {
 	c := *s
 	c.pdp = pdp
@@ -98,7 +105,107 @@ func (s *Store) WithClock(now func() time.Time) *Store {
 	c := *s
 	c.now = now
 	c.nodes = s.nodes.WithClock(now)
+	c.nodes.WithPurgeHook(c.PurgeNodes)
 	return &c
+}
+
+// PurgeNodes cleans up all member/RBAC rows hanging off purged nodes inside
+// nodes.Store's purgeTree transaction, returning member.removed lifecycle events.
+func (s *Store) PurgeNodes(ctx context.Context, tx pgx.Tx, rootID string, purgedIDs []string, rootPurged bool, now time.Time) ([]lifecycle.Event, error) {
+	type removal struct{ memberID, principal string }
+	var removed []removal
+	removeMembers := func(sql string, args ...any) error {
+		rows, err := tx.Query(ctx, sql, args...)
+		if err != nil {
+			return err
+		}
+		got, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (removal, error) {
+			var m removal
+			err := r.Scan(&m.memberID, &m.principal)
+			return m, err
+		})
+		if err != nil {
+			return err
+		}
+		removed = append(removed, got...)
+		return nil
+	}
+
+	// Service accounts that belong to a purged node go with it.
+	if err := removeMembers(`
+		UPDATE members m SET removed_at = $2
+		FROM principals p
+		WHERE p.id = m.principal_id AND p.node_id = ANY($1) AND m.removed_at IS NULL
+		RETURNING m.id, m.principal
+	`, purgedIDs, now); err != nil {
+		return nil, err
+	}
+	if rootPurged {
+		if err := removeMembers(`
+			UPDATE members m SET removed_at = $2
+			WHERE m.root_id = $1 AND m.removed_at IS NULL
+			RETURNING m.id, m.principal
+		`, rootID, now); err != nil {
+			return nil, err
+		}
+	}
+	removedIDs := make([]string, len(removed))
+	for i, m := range removed {
+		removedIDs[i] = m.memberID
+	}
+	if len(removedIDs) > 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM group_members WHERE member_id = ANY($1)`, removedIDs); err != nil {
+			return nil, err
+		}
+	}
+	if rootPurged {
+		if _, err := tx.Exec(ctx, `DELETE FROM groups WHERE root_id = $1`, rootID); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM org_roles WHERE root_id = $1`, rootID); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM root_security_policies WHERE root_id = $1`, rootID); err != nil {
+			return nil, err
+		}
+	}
+	rows, err := tx.Query(ctx, `
+		WITH deleted AS (
+			DELETE FROM bindings WHERE node_id = ANY($1) OR member_id = ANY($2)
+			RETURNING member_id
+		)
+		SELECT DISTINCT member_id FROM deleted WHERE member_id IS NOT NULL
+	`, purgedIDs, removedIDs)
+	if err != nil {
+		return nil, err
+	}
+	touched, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, err
+	}
+	// A person's member left with no direct bindings and no group memberships is removed.
+	if err := removeMembers(`
+		UPDATE members m SET removed_at = $2
+		WHERE m.principal = 'person' AND m.id = ANY($1) AND m.removed_at IS NULL
+		  AND NOT EXISTS (SELECT 1 FROM bindings b WHERE b.member_id = m.id)
+		  AND NOT EXISTS (SELECT 1 FROM group_members gm WHERE gm.member_id = m.id)
+		RETURNING m.id, m.principal
+	`, touched, now); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM invites WHERE node_id = ANY($1)`, purgedIDs); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM principals WHERE kind = 'service_account' AND node_id = ANY($1)`, purgedIDs); err != nil {
+		return nil, err
+	}
+
+	sort.Slice(removed, func(i, j int) bool { return removed[i].memberID < removed[j].memberID })
+	events := make([]lifecycle.Event, 0, len(removed))
+	for _, m := range removed {
+		events = append(events, lifecycle.MemberEvent(lifecycle.TypeMemberRemoved, m.memberID, rootID, m.principal))
+	}
+	return events, nil
 }
 
 // write is one transaction whose lifecycle events and admit invalidations are
@@ -285,12 +392,4 @@ func checkRoleTx(ctx context.Context, q dbx.Querier, snap *feed.Snapshot, rootID
 		}
 	}
 	return errors.FieldError(field, "That role doesn't exist.")
-}
-
-// page trims a limit+1 read to limit and says whether there was more.
-func page[T any](items []T, limit int) ([]T, bool) {
-	if len(items) > limit {
-		return items[:limit], true
-	}
-	return items, false
 }

@@ -27,5 +27,5 @@ services:
         upstream_prefix: /projects/{project.id}
         routes:
           - path: /files/{name}.json
-            required_permissions: [organization:read]
+            permissions: [organization:read]
             methods: [GET]

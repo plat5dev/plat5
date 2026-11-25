@@ -19,9 +19,10 @@ Every credential is `Authorization: Bearer`. Three dot-separated segments is a J
 
 ```
 POST {IDENTITY_INTERNAL_URL}/internal/admit
-{ "credential" | "idp" | "anonymous": true, "chain": [{ "kind", "ref" }], "allow_deleted", "allow_public" }
-→ { "valid", "principal", "key_id", "allowed_cidrs", "org_allowed_cidrs", "nodes": [{ "kind", "id" }],
-    "member_id", "user_id", "permissions", "rate_limit_tier", "expires_at", "invalidation_seq", "config_revision" }
+{ "credential" | "idp", "chain": [{ "kind", "ref" }], "allow_deleted" }
+→ { "valid", "principal", "key_id", "allowed_cidrs", "org_allowed_cidrs", "credential_scopes",
+    "nodes": [{ "kind", "id" }], "member_id", "user_id", "permissions", "rate_limit_tier",
+    "expires_at", "invalidation_seq", "config_revision" }
 ```
 
 On identity's `INTERNAL_PORT`. An empty chain is a user route. Contract: [`reference/api/internal.md`](api/internal.md#admit).
@@ -32,7 +33,7 @@ In-process per replica, backed by identity's invalidation feed (`GET {IDENTITY_I
 
 | | |
 |--|--|
-| Key | The credential (a key as presented, anonymous flag, or a verified JWT's issuer, subject, forwarded scopes when `AUTH_SCOPE_CLAIM` is set, and forwarded policy claims when `AUTH_POLICY_CLAIMS` is set), `allow_deleted`, `allow_public`, and the chain refs as written in the path |
+| Key | The credential (a key as presented, or a verified JWT's issuer, subject, forwarded scopes when `AUTH_SCOPE_CLAIM` is set, and forwarded policy claims when `policy_claims` is set in config), `allow_deleted`, and the chain refs as written in the path |
 | Invalidation | Targeted epoch checks (`key_id`, `user_id`, `member_id`, `root_id`, global reset, and identity's `config_revision`) driven by identity's invalidation feed; entries stamped before the admit call so in-flight revocations are never pinned. A lagging identity replica returning an older `config_revision` is served without caching |
 | TTL | `ADMIT_CACHE_TTL` (default `5m`), capped at `expires_at - now` when admit returns a key or binding expiry — fallback upper bound if the invalidation feed is disconnected |
 | Negative entries | For invalid credentials and `member_id: null`, for `ADMIT_NEGATIVE_CACHE_TTL` (default `10s`). Never for identity errors |
@@ -67,7 +68,7 @@ Policies and buckets: [rate limits](config/rate-limits.md).
 
 ## Audit
 
-Controlled by `AUDIT_ENABLED` (default `true`) and `AUDIT_MODE` (`sync` or `async`, default `sync`). In `sync` mode, on an audited route other than `public`, the gateway writes an intent after the permission check and before forward, and an outcome after; an unwritten intent returns **503** and the service isn't called. In `async` mode, audited requests forward immediately and queue one completed event in the background after the response. In both modes, gateway refusals after admit are one background event. `AUDIT_URL` is required to boot unless `AUDIT_ENABLED=false`. Contract: [`concepts/audit.md`](../concepts/audit.md).
+Controlled by `AUDIT_MODE` (`sync`, `async`, or `off`, default `sync`). In `sync` mode, on an audited route other than `public`, the gateway writes an intent after the permission check and before forward, and an outcome after; an unwritten intent returns **503** and the service isn't called. In `async` mode, audited requests forward immediately and queue one completed event in the background after the response. In both modes, gateway refusals after admit are one background event. `AUDIT_URL` is required to boot unless `AUDIT_MODE=off`. Contract: [`concepts/audit.md`](../concepts/audit.md).
 
 ## Client IP
 
@@ -115,10 +116,10 @@ Each `allowed` runs the gateway's own route match, admit (using the admit cache)
 | None matches the path and method | `false` |
 | `public` | `true` |
 | `user` | `true` for a person, `false` for a service account |
-| A kind | `true` when admit accepts the caller on the chain (a deleted node only on an `allow_deleted` route; public principals when `allow_public: true`), the root's `allowed_cidrs` permits the client IP, and built-in permissions plus any attached outbound `authorizer` (batched per authorizer) allow the route |
+| A kind | `true` when admit accepts the caller on the chain (a deleted node only on an `allow_deleted` route), the root's `allowed_cidrs` permits the client IP, and either built-in permissions or the configured top-level `authorizer` (batched) allows the route |
 
 - **Credential.** Missing, malformed, or locally refused JWT → **401**. Any admit answering `valid: false` makes the whole call **401** (counted once by the failed-auth limiter when enabled). A batch that needs no admit (all `public` or unmatched) never calls identity.
-- **Rate limit.** When rate limiting is enabled and `defaults.rate_limit` is set, counted once per call against `defaults.rate_limit` per credential (a key's hash, or a JWT's issuer and subject), with `X-RateLimit-*` on 200 and 429.
+- **Rate limit.** When rate limiting is enabled and `defaults.rate_limit` is set, counted once per call against `defaults.rate_limit` per admitted credential (or by client IP when the batch needs no admit), with `X-RateLimit-*` on 200 and 429.
 - **Not audited**, and nothing is forwarded. A new person's first check that hits admit creates them, like any first request.
 - **Validation.** Bad JSON, `checks` outside 1–100, or bad `method`/`path` → **422** `VALIDATION_ERROR`. Body over 256 KiB → **413** `PAYLOAD_TOO_LARGE`. Other methods on `/access/routes` → **404**.
 
@@ -131,9 +132,9 @@ TLS terminates at the edge or load balancer, not the gateway. Services behind th
 - **Request signing.** Set `UPSTREAM_SIGNING_KEY` (and optionally `UPSTREAM_SIGNING_KEY_ID`) to attach an Ed25519 `X-Plat5-Signature` header to every forwarded request ([`reference/headers.md`](headers.md#upstream-request-signing)), so services outside the private network can verify requests came from the gateway.
 - **Private-IP blocking.** Set `UPSTREAM_BLOCK_PRIVATE_IPS=true` to refuse upstream connections (and outbound AuthZEN PDP calls) whose DNS-resolved address is loopback, private (RFC1918 / IPv6 ULA), link-local (`169.254.0.0/16` / `fe80::/10`), CGNAT (`100.64.0.0/10`), unspecified, or an IPv4-mapped IPv6 address pointing to any of those. Blocked upstream requests return **502** `SERVICE_UNAVAILABLE`; blocked authorizer calls return **503** `SERVICE_UNAVAILABLE`.
 
-## Outbound authorizers
+## Outbound authorizer
 
-Routes in a kind scope may attach (or inherit from their kind) an external OpenID AuthZEN 1.0 PDP ([`reference/config/authorizers.md`](config/authorizers.md)) in `replace`, `and`, or `or` mode, with optional record-level `resource: { type, id }` templates. Decisions fail closed (**503** on timeout/error), respect credential scope narrowing, and batch per authorizer during `POST /access/routes`. Per-authorizer `cache_ttl` and `negative_cache_ttl` control response caching (`0s` by default for immediate consistency).
+When top-level `authorizer` is configured in place of built-in RBAC ([`reference/config/authorizer.md`](config/authorizer.md)), every permission-gated kind route consults that external OpenID AuthZEN 1.0 PDP (using the route's `resource: { type, id }` template when set, or the route's target node). Decisions fail closed (**503** on timeout/error), respect credential scope narrowing, and batch into one `/access/v1/evaluations` call during `POST /access/routes`. `cache_ttl` and `negative_cache_ttl` control response caching (`0s` by default for immediate consistency).
 
 ## CORS
 
@@ -166,7 +167,7 @@ The gateway listens only once it has a control-plane snapshot. `/health/ready` i
 
 | Case | Code |
 |------|------|
-| Bad or missing credential, key IP allowlist refusal, or denied anonymous `allow_public` request | `UNAUTHORIZED` (401) |
+| Bad or missing credential, or key IP allowlist refusal | `UNAUTHORIZED` (401) |
 | Node not found, not in the tree, org security policy/IP refusal, or permission/authorizer denied | `FORBIDDEN` (403) |
 | A service account or narrowed personal key on a user route | `FORBIDDEN` (403) |
 | Route not registered | `NOT_FOUND` (404) |

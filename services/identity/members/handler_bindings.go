@@ -11,12 +11,11 @@ import (
 )
 
 type CreateBindingRequest struct {
-	MemberID        string           `json:"member_id"`
-	GroupID         string           `json:"group_id"`
-	PublicPrincipal string           `json:"public_principal"`
-	Role            string           `json:"role"`
-	ExpiresAt       httpx.PatchField `json:"expires_at"`
-	ExpiresIn       httpx.PatchField `json:"expires_in"`
+	MemberID  string           `json:"member_id"`
+	GroupID   string           `json:"group_id"`
+	Role      string           `json:"role"`
+	ExpiresAt httpx.PatchField `json:"expires_at"`
+	ExpiresIn httpx.PatchField `json:"expires_in"`
 }
 
 type PatchBindingRequest struct {
@@ -52,34 +51,20 @@ func (h *Handler) CreateBinding(c fiber.Ctx) error {
 	}
 	memberID := strings.TrimSpace(req.MemberID)
 	groupID := strings.TrimSpace(req.GroupID)
-	publicPrincipal := strings.TrimSpace(req.PublicPrincipal)
-	subjects := 0
-	if memberID != "" {
-		subjects++
-	}
-	if groupID != "" {
-		subjects++
-	}
-	if publicPrincipal != "" {
-		subjects++
-	}
-	if subjects != 1 {
-		if subjects == 0 {
-			return errors.FieldError("member_id", "Choose a member, group, or public_principal.")
+	if (memberID == "") == (groupID == "") {
+		if memberID == "" {
+			return errors.FieldError("member_id", "Choose a member or a group.")
 		}
-		return errors.FieldError("group_id", "Send only one of member_id, group_id, or public_principal.")
+		return errors.FieldError("group_id", "Send either member_id or group_id, not both.")
 	}
 	_, expiresAt, err := parseExpiry(req.ExpiresAt, req.ExpiresIn, h.store.now().UTC())
 	if err != nil {
 		return err
 	}
 	var b *Binding
-	switch {
-	case groupID != "":
+	if groupID != "" {
 		b, err = h.store.CreateGroupBinding(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), groupID, req.Role, expiresAt)
-	case publicPrincipal != "":
-		b, err = h.store.CreatePublicBinding(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), publicPrincipal, req.Role, expiresAt)
-	default:
+	} else {
 		b, err = h.store.CreateBinding(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), memberID, req.Role, expiresAt)
 	}
 	if err != nil {
@@ -123,7 +108,7 @@ func (h *Handler) PatchBinding(c fiber.Ctx) error {
 
 func (h *Handler) DeleteBinding(c fiber.Ctx) error {
 	bindingID := httpx.PathParam(c, "binding_id")
-	b, err := h.store.DeleteBinding(c.Context(), httpx.PathParam(c, "node_id"), bindingID)
+	b, err := h.store.DeleteBinding(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), bindingID)
 	if err != nil {
 		return mapErr(c, err, "failed to delete binding", "binding", bindingID)
 	}
@@ -133,8 +118,6 @@ func (h *Handler) DeleteBinding(c fiber.Ctx) error {
 			d["member_id"] = *b.MemberID
 		} else if b.GroupID != nil {
 			d["group_id"] = *b.GroupID
-		} else if b.PublicPrincipal != nil {
-			d["public_principal"] = *b.PublicPrincipal
 		}
 		auditx.Set(c, d)
 	}
@@ -147,5 +130,15 @@ func (h *Handler) Membership(c fiber.Ctx) error {
 	if err != nil {
 		return mapErr(c, err, "failed to read membership", "member", memberID)
 	}
-	return c.JSON(MembershipResponse{MemberID: m.MemberID, Bindings: bindingResponses(m.Bindings), Permissions: m.Permissions})
+	resp := MembershipResponse{MemberID: m.MemberID, Status: m.Status}
+	if !m.ExternalAuthz {
+		bindings := bindingResponses(m.Bindings)
+		perms := m.Permissions
+		if perms == nil {
+			perms = []string{}
+		}
+		resp.Bindings = &bindings
+		resp.Permissions = &perms
+	}
+	return c.JSON(resp)
 }

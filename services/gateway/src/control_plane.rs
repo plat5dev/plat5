@@ -17,7 +17,8 @@ use serde_json::Value;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
-use crate::authorizer::{parse_authorizers, AuthorizerDoc, AuthorizerSpec};
+use crate::auth::parse_claim_path;
+use crate::authorizer::{parse_authorizer, AuthorizerDoc, AuthorizerSpec};
 use crate::cors::CorsPolicy;
 use crate::kinds::{KindDoc, Kinds};
 use crate::metrics;
@@ -36,8 +37,10 @@ pub struct Snapshot {
     /// The policies `defaults.rate_limit` names, counted per credential for
     /// `POST /access/routes`. Empty when `defaults.rate_limit` is unset.
     pub default_policies: Vec<Policy>,
-    /// External AuthZEN 1.0 authorizers declared in the config.
-    pub authorizers: BTreeMap<String, AuthorizerSpec>,
+    /// Deployment-wide external AuthZEN 1.0 authorizer, if configured.
+    pub authorizer: Option<AuthorizerSpec>,
+    /// Dotted claim paths forwarded from JWTs to identity for per-root security policy checks.
+    pub policy_claims: Vec<(String, Vec<String>)>,
 }
 
 #[derive(Deserialize)]
@@ -49,7 +52,9 @@ struct GatewayFeed {
     defaults: DefaultsFeed,
     cors: CorsFeed,
     #[serde(default)]
-    authorizers: BTreeMap<String, AuthorizerDoc>,
+    policy_claims: Vec<String>,
+    #[serde(default)]
+    authorizer: Option<AuthorizerDoc>,
 }
 
 /// `defaults`. The gateway reads only `rate_limit`: a route's own timeouts
@@ -258,9 +263,10 @@ fn revision_of(feed: &Value) -> Option<i64> {
 pub fn build(feed: Value) -> Result<Snapshot, String> {
     let feed: GatewayFeed = serde_json::from_value(feed).map_err(|e| e.to_string())?;
     let kinds = Kinds::from_feed(&feed.kinds);
-    let authorizers = parse_authorizers(&feed.authorizers)?;
+    let authorizer = parse_authorizer(feed.authorizer.as_ref())?;
     let compiled_policies = crate::route_map::compile_policies(&feed.rate_limits)?;
-    let routes = RouteMap::from_compiled(&feed.services, &compiled_policies, &kinds, &authorizers)?;
+    let routes =
+        RouteMap::from_compiled(&feed.services, &compiled_policies, &kinds, authorizer.as_ref())?;
     let default_policies = feed
         .defaults
         .rate_limit
@@ -273,6 +279,17 @@ pub fn build(feed: Value) -> Result<Snapshot, String> {
             Some(p) => Ok(p.into_policy(None)),
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let mut policy_claims = Vec::new();
+    for item in &feed.policy_claims {
+        let parts = parse_claim_path(item);
+        if parts.is_empty() {
+            continue;
+        }
+        let canonical = parts.join(".");
+        if !policy_claims.iter().any(|(name, _)| name == &canonical) {
+            policy_claims.push((canonical, parts));
+        }
+    }
     Ok(Snapshot {
         revision: feed.revision,
         routes,
@@ -281,7 +298,8 @@ pub fn build(feed: Value) -> Result<Snapshot, String> {
             &feed.cors.allowed_headers,
         )),
         default_policies,
-        authorizers,
+        authorizer,
+        policy_claims,
     })
 }
 
@@ -349,7 +367,7 @@ mod tests {
         json!({ "widgets": {
             "url": "http://widgets:3000", "timeouts": timeouts, "max_body_bytes": 2048,
             "routes": [{ "path": "/widgets", "method": "GET", "scope": "public", "upstream": "/widgets",
-                         "required_permissions": null, "rate_limit": [], "audit": false,
+                         "permissions": null, "rate_limit": [], "audit": false,
                          "allow_deleted": false }]
         }})
     }

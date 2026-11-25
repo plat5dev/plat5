@@ -27,7 +27,7 @@ services:
         upstream_prefix: /orgs/{organization.id}
         routes:
           - path: /plans/{id}
-            required_permissions: [organization:read]
+            permissions: [organization:read]
             methods: [GET]
   e10s:
     url: http://e10s:3000
@@ -36,5 +36,5 @@ services:
         upstream_prefix: /orgs/{organization.id}
         routes:
           - path: /plans/{plan_id}
-            required_permissions: [organization:read]
+            permissions: [organization:read]
             methods: [GET, PUT]

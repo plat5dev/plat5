@@ -25,12 +25,12 @@ CREATE TABLE audit_events (
     status            INTEGER,
     details           JSONB,
     created_id        TEXT,
-    named_node_ids       TEXT[]      NOT NULL DEFAULT '{}',
+    named_node_ids    TEXT[]      NOT NULL DEFAULT '{}',
     named_member_id   TEXT,
     PRIMARY KEY (id, occurred_at),
     -- The partition key must be in a unique constraint. A retried intent sends
     -- the same body, so this is the request_id dedupe; the insert also checks
-    -- request_id alone.
+    -- request_id within a ±1 day occurred_at window to prune monthly partitions.
     UNIQUE (request_id, occurred_at)
 ) PARTITION BY RANGE (occurred_at);
 

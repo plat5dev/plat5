@@ -131,7 +131,8 @@ func (s *Store) CreateIntent(ctx context.Context, in *Intent, final *Outcome) (c
 	created, err = insert()
 	if isNoPartition(err) {
 		// Maintenance runs ahead of the clock; this is a boot or skew race.
-		if err := s.EnsurePartitions(ctx, in.OccurredAt, in.OccurredAt); err != nil {
+		// Detach from CreateIntent's 5s deadline so EnsurePartitions gets its full partitionTimeout.
+		if err := s.EnsurePartitions(context.WithoutCancel(ctx), in.OccurredAt, in.OccurredAt); err != nil {
 			return false, op.Fail(err)
 		}
 		created, err = insert()
@@ -143,14 +144,17 @@ func (s *Store) CreateIntent(ctx context.Context, in *Intent, final *Outcome) (c
 	return created, nil
 }
 
-// addLogs puts the event in each log. A log it's already in is kept.
+// addLogs puts the event in each log. Empty keys are ignored; a log it's
+// already in is kept.
 func addLogs(ctx context.Context, tx pgx.Tx, logs []string, eventID string, at time.Time) error {
 	if len(logs) == 0 {
 		return nil
 	}
 	_, err := tx.Exec(ctx, `
 		INSERT INTO audit_log_keys (log, event_id, occurred_at)
-		SELECT DISTINCT unnest($1::text[]), $2::text, $3::timestamptz
+		SELECT DISTINCT x, $2::text, $3::timestamptz
+		FROM unnest($1::text[]) AS x
+		WHERE x <> ''
 		ON CONFLICT DO NOTHING
 	`, logs, eventID, at)
 	return err

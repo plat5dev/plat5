@@ -3,12 +3,14 @@ package members
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/plat5dev/plat5/identity/errors"
+	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 	"github.com/plat5dev/plat5/identity/lifecycle"
 	"github.com/plat5dev/plat5/identity/nodes"
@@ -48,7 +50,7 @@ func defaultSecurityPolicy() *RootSecurityPolicy {
 	}
 }
 
-func normalizeRequiredIdPClaims(raw map[string][]string) (map[string][]string, error) {
+func normalizeRequiredIdPClaims(snap *feed.Snapshot, raw map[string][]string) (map[string][]string, error) {
 	out := map[string][]string{}
 	if len(raw) == 0 {
 		return out, nil
@@ -60,6 +62,9 @@ func normalizeRequiredIdPClaims(raw map[string][]string) (map[string][]string, e
 		key := strings.TrimSpace(k)
 		if !policyClaimKeyRe.MatchString(key) {
 			return nil, errors.FieldError("required_idp_claims", "Claim names must be 1 to 64 of letters, digits, '.', '_' or '-'.")
+		}
+		if snap == nil || !snap.PolicyClaims[key] {
+			return nil, errors.FieldError("required_idp_claims."+key, fmt.Sprintf("Claim %q is not enabled in policy_claims.", key))
 		}
 		if len(vals) == 0 || len(vals) > maxPolicyClaimValues {
 			return nil, errors.FieldError("required_idp_claims."+key, "Each claim rule must list 1 to 32 allowed values.")
@@ -148,7 +153,7 @@ func claimMapsEqual(a, b map[string][]string) bool {
 
 // PatchSecurityPolicy updates a root node's security policy and emits a root
 // admit invalidation when changed.
-func (s *Store) PatchSecurityPolicy(ctx context.Context, rootID string, patch SecurityPolicyPatch) (*RootSecurityPolicy, *RootSecurityPolicy, error) {
+func (s *Store) PatchSecurityPolicy(ctx context.Context, snap *feed.Snapshot, rootID string, patch SecurityPolicyPatch) (*RootSecurityPolicy, *RootSecurityPolicy, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "patch_security_policy", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
@@ -167,7 +172,7 @@ func (s *Store) PatchSecurityPolicy(ctx context.Context, rootID string, patch Se
 	var claims map[string][]string
 	if patch.RequiredIdPClaimsSet {
 		var err error
-		claims, err = normalizeRequiredIdPClaims(patch.RequiredIdPClaims)
+		claims, err = normalizeRequiredIdPClaims(snap, patch.RequiredIdPClaims)
 		if err != nil {
 			return nil, nil, op.Expected("invalid", err)
 		}
@@ -194,6 +199,7 @@ func (s *Store) PatchSecurityPolicy(ctx context.Context, rootID string, patch Se
 		AllowPersonalKeys: before.AllowPersonalKeys,
 		AllowedCIDRs:      slices.Clone(before.AllowedCIDRs),
 		RequiredIdPClaims: before.RequiredIdPClaims,
+		UpdatedAt:         before.UpdatedAt,
 	}
 	if patch.AllowPersonalKeys != nil {
 		next.AllowPersonalKeys = *patch.AllowPersonalKeys
@@ -205,26 +211,28 @@ func (s *Store) PatchSecurityPolicy(ctx context.Context, rootID string, patch Se
 		next.RequiredIdPClaims = claims
 	}
 
-	claimsJSON, err := json.Marshal(next.RequiredIdPClaims)
-	if err != nil {
-		return nil, nil, op.Fail(err)
-	}
-	now := s.now().UTC()
-	if _, err := w.tx.Exec(ctx, `
-		INSERT INTO root_security_policies (root_id, allow_personal_keys, allowed_cidrs, required_idp_claims, updated_at)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (root_id) DO UPDATE SET
-			allow_personal_keys = EXCLUDED.allow_personal_keys,
-			allowed_cidrs       = EXCLUDED.allowed_cidrs,
-			required_idp_claims = EXCLUDED.required_idp_claims,
-			updated_at          = EXCLUDED.updated_at
-	`, root.ID, next.AllowPersonalKeys, next.AllowedCIDRs, claimsJSON, now); err != nil {
-		return nil, nil, op.Fail(err)
-	}
-	next.UpdatedAt = &now
 	changed := before.AllowPersonalKeys != next.AllowPersonalKeys ||
 		!slices.Equal(before.AllowedCIDRs, next.AllowedCIDRs) ||
 		!claimMapsEqual(before.RequiredIdPClaims, next.RequiredIdPClaims)
+	if changed || before.UpdatedAt == nil {
+		claimsJSON, err := json.Marshal(next.RequiredIdPClaims)
+		if err != nil {
+			return nil, nil, op.Fail(err)
+		}
+		now := s.now().UTC()
+		if _, err := w.tx.Exec(ctx, `
+			INSERT INTO root_security_policies (root_id, allow_personal_keys, allowed_cidrs, required_idp_claims, updated_at)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (root_id) DO UPDATE SET
+				allow_personal_keys = EXCLUDED.allow_personal_keys,
+				allowed_cidrs       = EXCLUDED.allowed_cidrs,
+				required_idp_claims = EXCLUDED.required_idp_claims,
+				updated_at          = EXCLUDED.updated_at
+		`, root.ID, next.AllowPersonalKeys, next.AllowedCIDRs, claimsJSON, now); err != nil {
+			return nil, nil, op.Fail(err)
+		}
+		next.UpdatedAt = &now
+	}
 	if changed {
 		w.invalidate(lifecycle.InvalidateRoot(root.ID))
 	}

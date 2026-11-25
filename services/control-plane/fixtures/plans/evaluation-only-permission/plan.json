@@ -99,7 +99,7 @@
           "after": {
             "scope": "project",
             "upstream": "/projects/{project.id}/plans",
-            "required_permissions": [
+            "permissions": [
               "project:read"
             ],
             "rate_limit": [
@@ -116,7 +116,7 @@
           "after": {
             "scope": "project",
             "upstream": "/projects/{project.id}/plans",
-            "required_permissions": [
+            "permissions": [
               "project:read"
             ],
             "rate_limit": [

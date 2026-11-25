@@ -30,7 +30,7 @@
           "method": "GET",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/audit-events",
-          "required_permissions": [
+          "permissions": [
             "audit:read"
           ],
           "rate_limit": [
@@ -44,7 +44,7 @@
           "method": "GET",
           "scope": "project",
           "upstream": "/nodes/{project.id}/audit-events",
-          "required_permissions": [
+          "permissions": [
             "audit:read"
           ],
           "rate_limit": [
@@ -58,7 +58,7 @@
           "method": "GET",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/audit-events",
-          "required_permissions": [
+          "permissions": [
             "audit:read"
           ],
           "rate_limit": [
@@ -72,7 +72,7 @@
           "method": "GET",
           "scope": "user",
           "upstream": "/users/{user.id}/audit-events",
-          "required_permissions": null,
+          "permissions": null,
           "rate_limit": [
             "standard"
           ],
@@ -94,7 +94,7 @@
           "method": "POST",
           "scope": "user",
           "upstream": "/roots/organization",
-          "required_permissions": null,
+          "permissions": null,
           "rate_limit": [
             "standard"
           ],
@@ -106,7 +106,7 @@
           "method": "GET",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}",
-          "required_permissions": [
+          "permissions": [
             "organization:read"
           ],
           "rate_limit": [
@@ -120,7 +120,7 @@
           "method": "PATCH",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}",
-          "required_permissions": [
+          "permissions": [
             "organization:write"
           ],
           "rate_limit": [
@@ -134,7 +134,7 @@
           "method": "DELETE",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}",
-          "required_permissions": [
+          "permissions": [
             "organization:delete"
           ],
           "rate_limit": [
@@ -148,7 +148,7 @@
           "method": "GET",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/bindings",
-          "required_permissions": [
+          "permissions": [
             "organization:bindings:read"
           ],
           "rate_limit": [
@@ -162,7 +162,7 @@
           "method": "POST",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/bindings",
-          "required_permissions": [
+          "permissions": [
             "organization:bindings:write"
           ],
           "rate_limit": [
@@ -176,7 +176,7 @@
           "method": "PATCH",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/bindings/{binding_id}",
-          "required_permissions": [
+          "permissions": [
             "organization:bindings:write"
           ],
           "rate_limit": [
@@ -190,7 +190,7 @@
           "method": "DELETE",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/bindings/{binding_id}",
-          "required_permissions": [
+          "permissions": [
             "organization:bindings:write"
           ],
           "rate_limit": [
@@ -204,7 +204,7 @@
           "method": "GET",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/invites",
-          "required_permissions": [
+          "permissions": [
             "organization:bindings:write"
           ],
           "rate_limit": [
@@ -218,7 +218,7 @@
           "method": "POST",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/invites",
-          "required_permissions": [
+          "permissions": [
             "organization:bindings:write"
           ],
           "rate_limit": [
@@ -232,7 +232,7 @@
           "method": "DELETE",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/invites/{invite_id}",
-          "required_permissions": [
+          "permissions": [
             "organization:bindings:write"
           ],
           "rate_limit": [
@@ -246,7 +246,7 @@
           "method": "GET",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/members",
-          "required_permissions": [
+          "permissions": [
             "organization:bindings:read"
           ],
           "rate_limit": [
@@ -260,7 +260,7 @@
           "method": "GET",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/members/{member_id}",
-          "required_permissions": "any_member",
+          "permissions": "any_member",
           "rate_limit": [
             "standard"
           ],
@@ -272,7 +272,7 @@
           "method": "DELETE",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/members/{member_id}",
-          "required_permissions": [
+          "permissions": [
             "organization:bindings:write"
           ],
           "rate_limit": [
@@ -286,7 +286,7 @@
           "method": "GET",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/memberships/{member.id}",
-          "required_permissions": "any_member",
+          "permissions": "any_member",
           "rate_limit": [
             "standard"
           ],
@@ -298,7 +298,7 @@
           "method": "DELETE",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/memberships/{member.id}",
-          "required_permissions": "any_member",
+          "permissions": "any_member",
           "rate_limit": [
             "standard"
           ],
@@ -310,7 +310,7 @@
           "method": "GET",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/children/project",
-          "required_permissions": "any_member",
+          "permissions": "any_member",
           "rate_limit": [
             "standard"
           ],
@@ -322,7 +322,7 @@
           "method": "POST",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/children/project",
-          "required_permissions": [
+          "permissions": [
             "project:create"
           ],
           "rate_limit": [
@@ -336,7 +336,7 @@
           "method": "GET",
           "scope": "project",
           "upstream": "/nodes/{project.id}",
-          "required_permissions": [
+          "permissions": [
             "project:read"
           ],
           "rate_limit": [
@@ -350,7 +350,7 @@
           "method": "PATCH",
           "scope": "project",
           "upstream": "/nodes/{project.id}",
-          "required_permissions": [
+          "permissions": [
             "project:write"
           ],
           "rate_limit": [
@@ -364,7 +364,7 @@
           "method": "DELETE",
           "scope": "project",
           "upstream": "/nodes/{project.id}",
-          "required_permissions": [
+          "permissions": [
             "project:delete"
           ],
           "rate_limit": [
@@ -378,7 +378,7 @@
           "method": "GET",
           "scope": "project",
           "upstream": "/nodes/{project.id}/bindings",
-          "required_permissions": [
+          "permissions": [
             "project:bindings:read"
           ],
           "rate_limit": [
@@ -392,7 +392,7 @@
           "method": "POST",
           "scope": "project",
           "upstream": "/nodes/{project.id}/bindings",
-          "required_permissions": [
+          "permissions": [
             "project:bindings:write"
           ],
           "rate_limit": [
@@ -406,7 +406,7 @@
           "method": "PATCH",
           "scope": "project",
           "upstream": "/nodes/{project.id}/bindings/{binding_id}",
-          "required_permissions": [
+          "permissions": [
             "project:bindings:write"
           ],
           "rate_limit": [
@@ -420,7 +420,7 @@
           "method": "DELETE",
           "scope": "project",
           "upstream": "/nodes/{project.id}/bindings/{binding_id}",
-          "required_permissions": [
+          "permissions": [
             "project:bindings:write"
           ],
           "rate_limit": [
@@ -434,7 +434,7 @@
           "method": "GET",
           "scope": "project",
           "upstream": "/nodes/{project.id}/children/environment",
-          "required_permissions": "any_member",
+          "permissions": "any_member",
           "rate_limit": [
             "standard"
           ],
@@ -446,7 +446,7 @@
           "method": "POST",
           "scope": "project",
           "upstream": "/nodes/{project.id}/children/environment",
-          "required_permissions": [
+          "permissions": [
             "environment:create"
           ],
           "rate_limit": [
@@ -460,7 +460,7 @@
           "method": "GET",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}",
-          "required_permissions": [
+          "permissions": [
             "environment:read"
           ],
           "rate_limit": [
@@ -474,7 +474,7 @@
           "method": "PATCH",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}",
-          "required_permissions": [
+          "permissions": [
             "environment:write"
           ],
           "rate_limit": [
@@ -488,7 +488,7 @@
           "method": "DELETE",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}",
-          "required_permissions": [
+          "permissions": [
             "environment:delete"
           ],
           "rate_limit": [
@@ -502,7 +502,7 @@
           "method": "GET",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/bindings",
-          "required_permissions": [
+          "permissions": [
             "environment:bindings:read"
           ],
           "rate_limit": [
@@ -516,7 +516,7 @@
           "method": "POST",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/bindings",
-          "required_permissions": [
+          "permissions": [
             "environment:bindings:write"
           ],
           "rate_limit": [
@@ -530,7 +530,7 @@
           "method": "PATCH",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/bindings/{binding_id}",
-          "required_permissions": [
+          "permissions": [
             "environment:bindings:write"
           ],
           "rate_limit": [
@@ -544,7 +544,7 @@
           "method": "DELETE",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/bindings/{binding_id}",
-          "required_permissions": [
+          "permissions": [
             "environment:bindings:write"
           ],
           "rate_limit": [
@@ -558,7 +558,7 @@
           "method": "GET",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/invites",
-          "required_permissions": [
+          "permissions": [
             "guests:write"
           ],
           "rate_limit": [
@@ -572,7 +572,7 @@
           "method": "POST",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/invites",
-          "required_permissions": [
+          "permissions": [
             "guests:write"
           ],
           "rate_limit": [
@@ -586,7 +586,7 @@
           "method": "DELETE",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/invites/{invite_id}",
-          "required_permissions": [
+          "permissions": [
             "guests:write"
           ],
           "rate_limit": [
@@ -600,7 +600,7 @@
           "method": "GET",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/memberships/{member.id}",
-          "required_permissions": "any_member",
+          "permissions": "any_member",
           "rate_limit": [
             "standard"
           ],
@@ -612,7 +612,7 @@
           "method": "POST",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/restore",
-          "required_permissions": [
+          "permissions": [
             "environment:delete"
           ],
           "rate_limit": [
@@ -626,7 +626,7 @@
           "method": "GET",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/roles",
-          "required_permissions": "any_member",
+          "permissions": "any_member",
           "rate_limit": [
             "standard"
           ],
@@ -638,7 +638,7 @@
           "method": "GET",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/service-accounts",
-          "required_permissions": [
+          "permissions": [
             "environment:bindings:read"
           ],
           "rate_limit": [
@@ -652,7 +652,7 @@
           "method": "POST",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/service-accounts",
-          "required_permissions": [
+          "permissions": [
             "environment:bindings:write"
           ],
           "rate_limit": [
@@ -666,7 +666,7 @@
           "method": "GET",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}",
-          "required_permissions": [
+          "permissions": [
             "environment:bindings:read"
           ],
           "rate_limit": [
@@ -680,7 +680,7 @@
           "method": "PATCH",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}",
-          "required_permissions": [
+          "permissions": [
             "environment:bindings:write"
           ],
           "rate_limit": [
@@ -694,7 +694,7 @@
           "method": "DELETE",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}",
-          "required_permissions": [
+          "permissions": [
             "environment:bindings:write"
           ],
           "rate_limit": [
@@ -708,7 +708,7 @@
           "method": "GET",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}/keys",
-          "required_permissions": [
+          "permissions": [
             "environment:bindings:write"
           ],
           "rate_limit": [
@@ -722,7 +722,7 @@
           "method": "POST",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}/keys",
-          "required_permissions": [
+          "permissions": [
             "environment:bindings:write"
           ],
           "rate_limit": [
@@ -736,7 +736,7 @@
           "method": "DELETE",
           "scope": "environment",
           "upstream": "/nodes/{environment.id}/service-accounts/{service_account_id}/keys/{key_id}",
-          "required_permissions": [
+          "permissions": [
             "environment:bindings:write"
           ],
           "rate_limit": [
@@ -750,7 +750,7 @@
           "method": "GET",
           "scope": "project",
           "upstream": "/nodes/{project.id}/invites",
-          "required_permissions": [
+          "permissions": [
             "guests:write"
           ],
           "rate_limit": [
@@ -764,7 +764,7 @@
           "method": "POST",
           "scope": "project",
           "upstream": "/nodes/{project.id}/invites",
-          "required_permissions": [
+          "permissions": [
             "guests:write"
           ],
           "rate_limit": [
@@ -778,7 +778,7 @@
           "method": "DELETE",
           "scope": "project",
           "upstream": "/nodes/{project.id}/invites/{invite_id}",
-          "required_permissions": [
+          "permissions": [
             "guests:write"
           ],
           "rate_limit": [
@@ -792,7 +792,7 @@
           "method": "GET",
           "scope": "project",
           "upstream": "/nodes/{project.id}/memberships/{member.id}",
-          "required_permissions": "any_member",
+          "permissions": "any_member",
           "rate_limit": [
             "standard"
           ],
@@ -804,7 +804,7 @@
           "method": "POST",
           "scope": "project",
           "upstream": "/nodes/{project.id}/restore",
-          "required_permissions": [
+          "permissions": [
             "project:delete"
           ],
           "rate_limit": [
@@ -818,7 +818,7 @@
           "method": "GET",
           "scope": "project",
           "upstream": "/nodes/{project.id}/roles",
-          "required_permissions": "any_member",
+          "permissions": "any_member",
           "rate_limit": [
             "standard"
           ],
@@ -830,7 +830,7 @@
           "method": "GET",
           "scope": "project",
           "upstream": "/nodes/{project.id}/service-accounts",
-          "required_permissions": [
+          "permissions": [
             "project:bindings:read"
           ],
           "rate_limit": [
@@ -844,7 +844,7 @@
           "method": "POST",
           "scope": "project",
           "upstream": "/nodes/{project.id}/service-accounts",
-          "required_permissions": [
+          "permissions": [
             "project:bindings:write"
           ],
           "rate_limit": [
@@ -858,7 +858,7 @@
           "method": "GET",
           "scope": "project",
           "upstream": "/nodes/{project.id}/service-accounts/{service_account_id}",
-          "required_permissions": [
+          "permissions": [
             "project:bindings:read"
           ],
           "rate_limit": [
@@ -872,7 +872,7 @@
           "method": "PATCH",
           "scope": "project",
           "upstream": "/nodes/{project.id}/service-accounts/{service_account_id}",
-          "required_permissions": [
+          "permissions": [
             "project:bindings:write"
           ],
           "rate_limit": [
@@ -886,7 +886,7 @@
           "method": "DELETE",
           "scope": "project",
           "upstream": "/nodes/{project.id}/service-accounts/{service_account_id}",
-          "required_permissions": [
+          "permissions": [
             "project:bindings:write"
           ],
           "rate_limit": [
@@ -900,7 +900,7 @@
           "method": "GET",
           "scope": "project",
           "upstream": "/nodes/{project.id}/service-accounts/{service_account_id}/keys",
-          "required_permissions": [
+          "permissions": [
             "project:bindings:write"
           ],
           "rate_limit": [
@@ -914,7 +914,7 @@
           "method": "POST",
           "scope": "project",
           "upstream": "/nodes/{project.id}/service-accounts/{service_account_id}/keys",
-          "required_permissions": [
+          "permissions": [
             "project:bindings:write"
           ],
           "rate_limit": [
@@ -928,7 +928,7 @@
           "method": "DELETE",
           "scope": "project",
           "upstream": "/nodes/{project.id}/service-accounts/{service_account_id}/keys/{key_id}",
-          "required_permissions": [
+          "permissions": [
             "project:bindings:write"
           ],
           "rate_limit": [
@@ -942,7 +942,7 @@
           "method": "POST",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/restore",
-          "required_permissions": [
+          "permissions": [
             "organization:delete"
           ],
           "rate_limit": [
@@ -956,7 +956,7 @@
           "method": "GET",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/roles",
-          "required_permissions": "any_member",
+          "permissions": "any_member",
           "rate_limit": [
             "standard"
           ],
@@ -968,7 +968,7 @@
           "method": "GET",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/service-accounts",
-          "required_permissions": [
+          "permissions": [
             "organization:bindings:read"
           ],
           "rate_limit": [
@@ -982,7 +982,7 @@
           "method": "POST",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/service-accounts",
-          "required_permissions": [
+          "permissions": [
             "organization:bindings:write"
           ],
           "rate_limit": [
@@ -996,7 +996,7 @@
           "method": "GET",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/service-accounts/{service_account_id}",
-          "required_permissions": [
+          "permissions": [
             "organization:bindings:read"
           ],
           "rate_limit": [
@@ -1010,7 +1010,7 @@
           "method": "PATCH",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/service-accounts/{service_account_id}",
-          "required_permissions": [
+          "permissions": [
             "organization:bindings:write"
           ],
           "rate_limit": [
@@ -1024,7 +1024,7 @@
           "method": "DELETE",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/service-accounts/{service_account_id}",
-          "required_permissions": [
+          "permissions": [
             "organization:bindings:write"
           ],
           "rate_limit": [
@@ -1038,7 +1038,7 @@
           "method": "GET",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/service-accounts/{service_account_id}/keys",
-          "required_permissions": [
+          "permissions": [
             "organization:bindings:write"
           ],
           "rate_limit": [
@@ -1052,7 +1052,7 @@
           "method": "POST",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/service-accounts/{service_account_id}/keys",
-          "required_permissions": [
+          "permissions": [
             "organization:bindings:write"
           ],
           "rate_limit": [
@@ -1066,7 +1066,7 @@
           "method": "DELETE",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/service-accounts/{service_account_id}/keys/{key_id}",
-          "required_permissions": [
+          "permissions": [
             "organization:bindings:write"
           ],
           "rate_limit": [
@@ -1080,7 +1080,7 @@
           "method": "GET",
           "scope": "user",
           "upstream": "/users/{user.id}",
-          "required_permissions": null,
+          "permissions": null,
           "rate_limit": [
             "standard"
           ],
@@ -1092,7 +1092,7 @@
           "method": "PATCH",
           "scope": "user",
           "upstream": "/users/{user.id}",
-          "required_permissions": null,
+          "permissions": null,
           "rate_limit": [
             "standard"
           ],
@@ -1104,7 +1104,7 @@
           "method": "DELETE",
           "scope": "user",
           "upstream": "/users/{user.id}",
-          "required_permissions": null,
+          "permissions": null,
           "rate_limit": [
             "standard"
           ],
@@ -1116,7 +1116,7 @@
           "method": "POST",
           "scope": "user",
           "upstream": "/users/{user.id}/invites/redeem",
-          "required_permissions": null,
+          "permissions": null,
           "rate_limit": [
             "standard"
           ],
@@ -1128,7 +1128,7 @@
           "method": "GET",
           "scope": "user",
           "upstream": "/users/{user.id}/keys",
-          "required_permissions": null,
+          "permissions": null,
           "rate_limit": [
             "standard"
           ],
@@ -1140,7 +1140,7 @@
           "method": "POST",
           "scope": "user",
           "upstream": "/users/{user.id}/keys",
-          "required_permissions": null,
+          "permissions": null,
           "rate_limit": [
             "standard"
           ],
@@ -1152,7 +1152,7 @@
           "method": "DELETE",
           "scope": "user",
           "upstream": "/users/{user.id}/keys/{key_id}",
-          "required_permissions": null,
+          "permissions": null,
           "rate_limit": [
             "standard"
           ],
@@ -1164,7 +1164,7 @@
           "method": "GET",
           "scope": "user",
           "upstream": "/users/{user.id}/nodes",
-          "required_permissions": null,
+          "permissions": null,
           "rate_limit": [
             "standard"
           ],

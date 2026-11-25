@@ -62,6 +62,11 @@ type Node struct {
 	UpdatedAt     time.Time
 }
 
+// PurgeHook cleans up domain tables owned by members (bindings, groups,
+// custom roles, security policies, invites, service accounts, members) inside
+// purgeTree's transaction and returns any additional lifecycle events to record.
+type PurgeHook func(ctx context.Context, tx pgx.Tx, rootID string, purgedIDs []string, rootPurged bool, now time.Time) ([]lifecycle.Event, error)
+
 // Store changes the tree. Every write that changes a tree's structure holds
 // that tree's lock, so a create never lands under a node being deleted, and a
 // delete or restore sees the whole subtree.
@@ -70,10 +75,17 @@ type Store struct {
 	tracer       trace.Tracer
 	now          func() time.Time
 	onInvalidate func(int64)
+	purgeHook    PurgeHook
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool, tracer: otel.Tracer(storeTracerName), now: time.Now}
+}
+
+// WithPurgeHook registers the callback that removes member/RBAC rows hanging
+// off purged nodes inside purgeTree's transaction.
+func (s *Store) WithPurgeHook(fn PurgeHook) {
+	s.purgeHook = fn
 }
 
 // WithInvalidationNotifier registers a callback invoked after a transaction
@@ -722,102 +734,19 @@ func (s *Store) purgeTree(ctx context.Context, rootID string, now time.Time) (in
 		rootPurged = rootPurged || p.id == rootID
 	}
 
-	type removal struct{ memberID, principal string }
-	var removed []removal
-	removeMembers := func(sql string, args ...any) error {
-		rows, err := tx.Query(ctx, sql, args...)
+	var extraEvents []lifecycle.Event
+	if s.purgeHook != nil {
+		extraEvents, err = s.purgeHook(ctx, tx, rootID, ids, rootPurged, now)
 		if err != nil {
-			return err
+			return 0, err
 		}
-		got, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (removal, error) {
-			var m removal
-			err := r.Scan(&m.memberID, &m.principal)
-			return m, err
-		})
-		if err != nil {
-			return err
-		}
-		removed = append(removed, got...)
-		return nil
 	}
 
-	// Service accounts that belong to a purged node go with it.
-	if err := removeMembers(`
-		UPDATE members m SET removed_at = $2
-		FROM principals p
-		WHERE p.id = m.principal_id AND p.node_id = ANY($1) AND m.removed_at IS NULL
-		RETURNING m.id, m.principal
-	`, ids, now); err != nil {
-		return 0, err
-	}
-	if rootPurged {
-		if err := removeMembers(`
-			UPDATE members m SET removed_at = $2
-			WHERE m.root_id = $1 AND m.removed_at IS NULL
-			RETURNING m.id, m.principal
-		`, rootID, now); err != nil {
-			return 0, err
-		}
-	}
-	removedIDs := make([]string, len(removed))
-	for i, m := range removed {
-		removedIDs[i] = m.memberID
-	}
-	if len(removedIDs) > 0 {
-		if _, err := tx.Exec(ctx, `DELETE FROM group_members WHERE member_id = ANY($1)`, removedIDs); err != nil {
-			return 0, err
-		}
-	}
-	if rootPurged {
-		if _, err := tx.Exec(ctx, `DELETE FROM groups WHERE root_id = $1`, rootID); err != nil {
-			return 0, err
-		}
-		if _, err := tx.Exec(ctx, `DELETE FROM org_roles WHERE root_id = $1`, rootID); err != nil {
-			return 0, err
-		}
-		if _, err := tx.Exec(ctx, `DELETE FROM root_security_policies WHERE root_id = $1`, rootID); err != nil {
-			return 0, err
-		}
-	}
-	rows, err = tx.Query(ctx, `
-		WITH deleted AS (
-			DELETE FROM bindings WHERE node_id = ANY($1) OR member_id = ANY($2)
-			RETURNING member_id
-		)
-		SELECT DISTINCT member_id FROM deleted WHERE member_id IS NOT NULL
-	`, ids, removedIDs)
-	if err != nil {
-		return 0, err
-	}
-	touched, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		return 0, err
-	}
-	// A person's member left with no direct bindings and no group memberships is removed.
-	if err := removeMembers(`
-		UPDATE members m SET removed_at = $2
-		WHERE m.principal = 'person' AND m.id = ANY($1) AND m.removed_at IS NULL
-		  AND NOT EXISTS (SELECT 1 FROM bindings b WHERE b.member_id = m.id)
-		  AND NOT EXISTS (SELECT 1 FROM group_members gm WHERE gm.member_id = m.id)
-		RETURNING m.id, m.principal
-	`, touched, now); err != nil {
-		return 0, err
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM invites WHERE node_id = ANY($1)`, ids); err != nil {
-		return 0, err
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM principals WHERE kind = 'service_account' AND node_id = ANY($1)`, ids); err != nil {
-		return 0, err
-	}
-
-	sort.Slice(removed, func(i, j int) bool { return removed[i].memberID < removed[j].memberID })
-	events := make([]lifecycle.Event, 0, len(purged)+len(removed))
+	events := make([]lifecycle.Event, 0, len(purged)+len(extraEvents))
 	for _, n := range purged {
 		events = append(events, lifecycle.NodeEvent(lifecycle.TypeNodePurged, n.kind, n.id, n.rootID))
 	}
-	for _, m := range removed {
-		events = append(events, lifecycle.MemberEvent(lifecycle.TypeMemberRemoved, m.memberID, rootID, m.principal))
-	}
+	events = append(events, extraEvents...)
 	invHead, err := lifecycle.RecordCommit(ctx, tx, events, []lifecycle.Invalidation{lifecycle.InvalidateRoot(rootID)})
 	if err != nil {
 		return 0, err

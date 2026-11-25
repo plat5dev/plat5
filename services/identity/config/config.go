@@ -27,6 +27,9 @@ type Config struct {
 	// ControlPlaneURL is CONTROL_PLANE_URL: the control plane's internal base
 	// URL, where identity reads the config. Required.
 	ControlPlaneURL string
+	// UpstreamBlockPrivateIPs is UPSTREAM_BLOCK_PRIVATE_IPS: blocks outbound
+	// AuthZEN PDP calls from resolving to private, loopback, or link-local IPs.
+	UpstreamBlockPrivateIPs bool
 }
 
 func Load() (Config, error) {
@@ -42,13 +45,33 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	blockPrivate, err := parseBoolEnv("UPSTREAM_BLOCK_PRIVATE_IPS", false)
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
-		Port:            envOr("PORT", defaultPort),
-		InternalPort:    envOr("INTERNAL_PORT", defaultInternalPort),
-		DatabaseURL:     databaseURL,
-		SecretBrand:     brand,
-		ControlPlaneURL: controlPlane,
+		Port:                    envOr("PORT", defaultPort),
+		InternalPort:            envOr("INTERNAL_PORT", defaultInternalPort),
+		DatabaseURL:             databaseURL,
+		SecretBrand:             brand,
+		ControlPlaneURL:         controlPlane,
+		UpstreamBlockPrivateIPs: blockPrivate,
 	}, nil
+}
+
+func parseBoolEnv(key string, fallback bool) (bool, error) {
+	raw, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "true", "1":
+		return true, nil
+	case "false", "0":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be true or false, got %q", key, raw)
+	}
 }
 
 func parseDatabaseURL(raw string) (string, error) {

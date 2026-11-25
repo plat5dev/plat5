@@ -59,13 +59,11 @@ type AdmitRequest struct {
 		Scopes  *[]string           `json:"scopes"`
 		Claims  map[string][]string `json:"claims"`
 	} `json:"idp"`
-	Anonymous bool `json:"anonymous"`
-	Chain     []struct {
+	Chain []struct {
 		Kind string `json:"kind"`
 		Ref  string `json:"ref"`
 	} `json:"chain"`
 	AllowDeleted bool `json:"allow_deleted"`
-	AllowPublic  bool `json:"allow_public"`
 }
 
 type AdmitNode struct {
@@ -99,9 +97,7 @@ func (h *Handler) Admit(c fiber.Ctx) error {
 	}
 	in := AdmitInput{
 		Credential:   req.Credential,
-		Anonymous:    req.Anonymous,
 		AllowDeleted: req.AllowDeleted,
-		AllowPublic:  req.AllowPublic,
 	}
 	if req.IdP != nil {
 		claims := &IdPClaims{

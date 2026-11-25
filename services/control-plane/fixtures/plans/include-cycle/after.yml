@@ -32,5 +32,5 @@ services:
         upstream_prefix: /projects/{project.id}
         routes:
           - path: /plans
-            required_permissions: [project:read]
+            permissions: [project:read]
             methods: [GET]

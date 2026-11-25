@@ -4,6 +4,7 @@ use prometheus::{
     histogram_opts, register_histogram_vec, register_int_counter_vec, register_int_gauge,
     HistogramVec, IntCounterVec, IntGauge,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
 
 /// Registers process metrics (CPU, memory, file descriptors, etc.)
@@ -83,7 +84,7 @@ pub static AUTH_CACHE_MISSES_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
 pub static AUDIT_WRITES_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     register_int_counter_vec!(
         "audit_writes_total",
-        "Audit writes to the audit service by write (intent, outcome, rejected) and result",
+        "Audit writes to the audit service by write (intent, outcome, rejected, event) and result",
         &["write", "result"]
     )
     .expect("failed to register audit_writes_total")
@@ -291,9 +292,17 @@ static OTEL: LazyLock<OtelInstruments> = LazyLock::new(|| {
     }
 });
 
+static OTEL_ENABLED: AtomicBool = AtomicBool::new(false);
+
 /// Force OTEL instrument creation after MeterProvider is installed.
 pub fn init_otel_instruments() {
     LazyLock::force(&OTEL);
+    OTEL_ENABLED.store(true, Ordering::Release);
+}
+
+#[inline]
+fn otel_enabled() -> bool {
+    OTEL_ENABLED.load(Ordering::Relaxed)
 }
 
 pub fn record_request(route: &str, method: &str, status: u16, duration_secs: f64) {
@@ -305,82 +314,98 @@ pub fn record_request(route: &str, method: &str, status: u16, duration_secs: f64
         .with_label_values(&[route, method])
         .observe(duration_secs);
 
-    let attrs = [
-        KeyValue::new("route", route.to_string()),
-        KeyValue::new("method", method.to_string()),
-        KeyValue::new("status", status_s),
-    ];
-    OTEL.http_requests.add(1, &attrs);
-    OTEL.http_duration.record(duration_secs, &attrs[..2]);
+    if otel_enabled() {
+        let attrs = [
+            KeyValue::new("route", route.to_string()),
+            KeyValue::new("method", method.to_string()),
+            KeyValue::new("status", status_s),
+        ];
+        OTEL.http_requests.add(1, &attrs);
+        OTEL.http_duration.record(duration_secs, &attrs[..2]);
+    }
 }
 
 pub fn record_auth_failure(auth_type: &str, reason: &str) {
     AUTH_FAILURES_TOTAL
         .with_label_values(&[auth_type, reason])
         .inc();
-    OTEL.auth_failures.add(
-        1,
-        &[
-            KeyValue::new("auth_type", auth_type.to_string()),
-            KeyValue::new("reason", reason.to_string()),
-        ],
-    );
+    if otel_enabled() {
+        OTEL.auth_failures.add(
+            1,
+            &[
+                KeyValue::new("auth_type", auth_type.to_string()),
+                KeyValue::new("reason", reason.to_string()),
+            ],
+        );
+    }
 }
 
 pub fn record_auth_validation(auth_type: &str, outcome: &str, duration_secs: f64) {
     AUTH_VALIDATION_DURATION_SECONDS
         .with_label_values(&[auth_type, outcome])
         .observe(duration_secs);
-    OTEL.auth_validation.record(
-        duration_secs,
-        &[
-            KeyValue::new("auth_type", auth_type.to_string()),
-            KeyValue::new("outcome", outcome.to_string()),
-        ],
-    );
+    if otel_enabled() {
+        OTEL.auth_validation.record(
+            duration_secs,
+            &[
+                KeyValue::new("auth_type", auth_type.to_string()),
+                KeyValue::new("outcome", outcome.to_string()),
+            ],
+        );
+    }
 }
 
 pub fn record_auth_cache_hit(auth_type: &str) {
     AUTH_CACHE_HITS_TOTAL.with_label_values(&[auth_type]).inc();
-    OTEL.auth_cache_hits
-        .add(1, &[KeyValue::new("auth_type", auth_type.to_string())]);
+    if otel_enabled() {
+        OTEL.auth_cache_hits
+            .add(1, &[KeyValue::new("auth_type", auth_type.to_string())]);
+    }
 }
 
 pub fn record_auth_cache_miss(auth_type: &str) {
     AUTH_CACHE_MISSES_TOTAL
         .with_label_values(&[auth_type])
         .inc();
-    OTEL.auth_cache_misses
-        .add(1, &[KeyValue::new("auth_type", auth_type.to_string())]);
+    if otel_enabled() {
+        OTEL.auth_cache_misses
+            .add(1, &[KeyValue::new("auth_type", auth_type.to_string())]);
+    }
 }
 
-/// `write` is `intent`, `outcome` or `rejected`. `result`: `ok`, `failed`,
+/// `write` is `intent`, `outcome`, `rejected`, or `event`. `result`: `ok`, `failed`,
 /// `not_found` (outcome with no intent), or `dropped` (background queue full).
 pub fn record_audit_write(write: &str, result: &str) {
     AUDIT_WRITES_TOTAL.with_label_values(&[write, result]).inc();
-    OTEL.audit_writes.add(
-        1,
-        &[
-            KeyValue::new("write", write.to_string()),
-            KeyValue::new("result", result.to_string()),
-        ],
-    );
+    if otel_enabled() {
+        OTEL.audit_writes.add(
+            1,
+            &[
+                KeyValue::new("write", write.to_string()),
+                KeyValue::new("result", result.to_string()),
+            ],
+        );
+    }
 }
 
 pub fn record_audit_intent_duration(result: &str, duration_secs: f64) {
     AUDIT_INTENT_DURATION_SECONDS
         .with_label_values(&[result])
         .observe(duration_secs);
-    OTEL.audit_intent_duration.record(
-        duration_secs,
-        &[KeyValue::new("result", result.to_string())],
-    );
+    if otel_enabled() {
+        OTEL.audit_intent_duration.record(
+            duration_secs,
+            &[KeyValue::new("result", result.to_string())],
+        );
+    }
 }
 
 /// The revision this replica now serves.
 pub fn record_config_revision(revision: i64) {
     GATEWAY_CONFIG_REVISION.set(revision);
-    OTEL.config_revision.record(revision, &[]);
+    if otel_enabled() {
+        OTEL.config_revision.record(revision, &[]);
+    }
 }
 
 /// A snapshot this replica refused.
@@ -389,8 +414,10 @@ pub fn record_config_refused(revision: i64) {
     GATEWAY_CONFIG_REFUSED_TOTAL
         .with_label_values(&[&revision])
         .inc();
-    OTEL.config_refused
-        .add(1, &[KeyValue::new("revision", revision)]);
+    if otel_enabled() {
+        OTEL.config_refused
+            .add(1, &[KeyValue::new("revision", revision)]);
+    }
 }
 
 /// A rate-limit check allowed fail-open while Valkey was unavailable.
@@ -399,26 +426,34 @@ pub fn record_rate_limit_fail_open(reason: &str) {
     RATE_LIMIT_FAIL_OPEN_TOTAL
         .with_label_values(&[reason])
         .inc();
-    OTEL.rate_limit_fail_open
-        .add(1, &[KeyValue::new("reason", reason.to_string())]);
+    if otel_enabled() {
+        OTEL.rate_limit_fail_open
+            .add(1, &[KeyValue::new("reason", reason.to_string())]);
+    }
 }
 
 pub fn record_valkey_up(up: bool) {
     let val = i64::from(up);
     VALKEY_UP.set(val);
-    OTEL.valkey_up.record(val, &[]);
+    if otel_enabled() {
+        OTEL.valkey_up.record(val, &[]);
+    }
 }
 
 pub fn record_audit_queue_depth(depth: i64) {
     AUDIT_QUEUE_DEPTH.set(depth);
-    OTEL.audit_queue_depth.record(depth, &[]);
+    if otel_enabled() {
+        OTEL.audit_queue_depth.record(depth, &[]);
+    }
 }
 
 /// An admit cache invalidation received from identity (`key`, `user`, `member`, `root`, `reset`, `config_revision`).
 pub fn record_admit_invalidation(scope: &str) {
     ADMIT_INVALIDATIONS_TOTAL.with_label_values(&[scope]).inc();
-    OTEL.admit_invalidations
-        .add(1, &[KeyValue::new("scope", scope.to_string())]);
+    if otel_enabled() {
+        OTEL.admit_invalidations
+            .add(1, &[KeyValue::new("scope", scope.to_string())]);
+    }
 }
 
 pub fn record_authorizer_request(
@@ -433,24 +468,28 @@ pub fn record_authorizer_request(
     AUTHORIZER_DURATION_SECONDS
         .with_label_values(&[authorizer, operation])
         .observe(duration_secs);
-    let attrs = [
-        KeyValue::new("authorizer", authorizer.to_string()),
-        KeyValue::new("operation", operation.to_string()),
-        KeyValue::new("result", result.to_string()),
-    ];
-    OTEL.authorizer_requests.add(1, &attrs);
-    OTEL.authorizer_duration.record(duration_secs, &attrs[..2]);
+    if otel_enabled() {
+        let attrs = [
+            KeyValue::new("authorizer", authorizer.to_string()),
+            KeyValue::new("operation", operation.to_string()),
+            KeyValue::new("result", result.to_string()),
+        ];
+        OTEL.authorizer_requests.add(1, &attrs);
+        OTEL.authorizer_duration.record(duration_secs, &attrs[..2]);
+    }
 }
 
 pub fn record_authorizer_cache(authorizer: &str, result: &str) {
     AUTHORIZER_CACHE_TOTAL
         .with_label_values(&[authorizer, result])
         .inc();
-    OTEL.authorizer_cache.add(
-        1,
-        &[
-            KeyValue::new("authorizer", authorizer.to_string()),
-            KeyValue::new("result", result.to_string()),
-        ],
-    );
+    if otel_enabled() {
+        OTEL.authorizer_cache.add(
+            1,
+            &[
+                KeyValue::new("authorizer", authorizer.to_string()),
+                KeyValue::new("result", result.to_string()),
+            ],
+        );
+    }
 }

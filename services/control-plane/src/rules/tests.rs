@@ -59,7 +59,7 @@ fn the_base_passes() {
     run(base()).unwrap();
     run(route(
         "project",
-        json!({ "path": "/", "methods": ["GET"], "required_permissions": ["organization:read"] }),
+        json!({ "path": "/", "methods": ["GET"], "permissions": ["organization:read"] }),
     ))
     .unwrap();
 }
@@ -98,13 +98,24 @@ fn kinds() {
     c["roles"]["admin"]["bindable_at"] = json!(["organization", "project", "workspace"]);
     errors_at(c, "kinds.workspace.host");
 
-    // Non-tree kind errors (host, authorizer) do not suppress downstream rule errors.
+    // Non-tree kind errors (host) do not suppress downstream rule errors.
     let mut c = base();
-    c["kinds"]["project"]["authorizer"] = json!("missing");
+    c["kinds"]["project"]["host"] = json!("{project}.api.example.com");
     c["creator_role"] = json!("ghost");
     let errs = run(c).unwrap_err();
-    assert!(errs.iter().any(|e| e.path == "kinds.project.authorizer"));
+    assert!(errs.iter().any(|e| e.path == "kinds.project.host"));
     assert!(errs.iter().any(|e| e.path == "creator_role"));
+
+    // Sibling kinds cannot share the same collection path.
+    let mut c = base();
+    c["kinds"]["workspace"] = json!({ "path": "/orgs/{workspace}" });
+    c["roles"]["admin"]["bindable_at"] = json!(["organization", "project", "workspace"]);
+    errors_at(c, "kinds.workspace.path");
+
+    // Duration overflow (exceeding 36500d) is refused.
+    let mut c = base();
+    c["deletion_grace"] = json!("200000d");
+    errors_at(c, "deletion_grace");
 
     // rate_limits tiers pass schema and rules.
     let mut c = base();
@@ -114,7 +125,7 @@ fn kinds() {
     });
     run(c).unwrap();
 
-    // Tier 2: custom_roles, permissions catalog, and allow_public kinds/routes.
+    // custom_roles and permissions catalog.
     let mut c = base();
     c["custom_roles"] = json!(true);
     c["permissions"] = json!({
@@ -128,74 +139,23 @@ fn kinds() {
         "reports:export": { "bindable_at": ["ghost"] }
     });
     errors_at(c, "permissions.reports:export.bindable_at[0]");
-
-    // allow_public on a route requires allow_public on the kind or an ancestor, and explicit permissions.
-    let c = route(
-        "project",
-        json!({ "path": "/public-items", "methods": ["GET"], "required_permissions": ["project:read"], "allow_public": true }),
-    );
-    errors_at(c, &format!("{AT}.project.routes[0].allow_public"));
-
-    let mut c = route(
-        "project",
-        json!({ "path": "/public-items", "methods": ["GET"], "required_permissions": ["project:read"], "allow_public": true }),
-    );
-    c["kinds"]["project"]["allow_public"] = json!(true);
-    run(c).unwrap();
-
-    // Ancestor allow_public also enables descendant allow_public routes.
-    let mut c = route(
-        "project",
-        json!({ "path": "/public-items", "methods": ["GET"], "required_permissions": ["project:read"], "allow_public": true }),
-    );
-    c["kinds"]["organization"]["allow_public"] = json!(true);
-    run(c).unwrap();
-
-    // {member.id} is refused on allow_public routes.
-    let mut c = route(
-        "project",
-        json!({
-            "path": "/public-items",
-            "upstream": "/members/{member.id}/items",
-            "methods": ["GET"],
-            "required_permissions": ["project:read"],
-            "allow_public": true
-        }),
-    );
-    c["kinds"]["project"]["allow_public"] = json!(true);
-    errors_at(c, &format!("{AT}.project.routes[0].upstream"));
-
-    let mut c = route(
-        "project",
-        json!({ "path": "/public-items", "methods": ["GET"], "required_permissions": "any_member", "allow_public": true }),
-    );
-    c["kinds"]["project"]["allow_public"] = json!(true);
-    errors_at(c, &format!("{AT}.project.routes[0].allow_public"));
-
-    let c = route(
-        "user",
-        json!({ "path": "/user/a", "methods": ["GET"], "allow_public": true }),
-    );
-    errors_at(c, &format!("{AT}.user.routes[0].allow_public"));
 }
 
 #[test]
-fn authorizers() {
+fn authorizer_all_or_nothing() {
     let mut c = base();
-    c["authorizers"] = json!({
-        "topaz": {
-            "url": "http://topaz:8383",
-            "timeout": "3s",
-            "cache_ttl": "5s",
-            "negative_cache_ttl": "1s",
-            "token_env": "TOPAZ_API_KEY"
-        }
+    c.as_object_mut().unwrap().remove("roles");
+    c.as_object_mut().unwrap().remove("creator_role");
+    c["authorizer"] = json!({
+        "url": "http://topaz:8383",
+        "timeout": "3s",
+        "cache_ttl": "5s",
+        "negative_cache_ttl": "1s",
+        "token_env": "TOPAZ_API_KEY"
     });
-    c["kinds"]["project"]["authorizer"] = json!({ "name": "topaz", "mode": "or" });
     c["services"] = json!({
         "docs": {
             "url": "http://docs:3000",
-            "authorizer": "topaz",
             "scopes": {
                 "project": {
                     "upstream_prefix": "/projects/{project.id}",
@@ -203,35 +163,23 @@ fn authorizers() {
                         {
                             "path": "/docs",
                             "methods": ["GET"],
-                            "required_permissions": ["project:read"]
+                            "permissions": "project:read"
                         },
                         {
                             "path": "/docs/{doc_id}",
+                            "resource": { "type": "document", "id": "{project.id}:{doc_id}" },
                             "methods": {
-                                "GET": {
-                                    "required_permissions": ["project:read"],
-                                    "authorizer": {
-                                        "name": "topaz",
-                                        "mode": "and",
-                                        "resource": { "type": "document", "id": "{doc_id}" }
-                                    }
-                                },
+                                "GET": { "permissions": "docs:read" },
                                 "DELETE": {
-                                    "required_permissions": "any_member",
-                                    "authorizer": {
-                                        "name": "topaz",
-                                        "mode": "replace",
-                                        "resource": { "type": "document", "id": "{project.id}:{doc_id}" },
-                                        "action": "document:delete"
-                                    }
+                                    "permissions": ["docs:delete"],
+                                    "resource": { "type": "document", "id": "{doc_id}" }
                                 }
                             }
                         },
                         {
-                            "path": "/summary",
+                            "path": "/membership",
                             "methods": ["GET"],
-                            "required_permissions": ["project:read"],
-                            "authorizer": false
+                            "permissions": "any_member"
                         }
                     ]
                 },
@@ -241,73 +189,79 @@ fn authorizers() {
             }
         }
     });
-    run(c.clone()).unwrap();
-
-    // Kind authorizer inherits onto permissioned routes in that kind's scope, skips any_member,
-    // and can be opted out with false.
-    let mut inherited = base();
-    inherited["authorizers"] = json!({ "topaz": { "url": "http://topaz:8383" } });
-    inherited["kinds"]["project"]["authorizer"] = json!({ "name": "topaz", "mode": "or" });
-    inherited["services"] = json!({
-        "docs": {
-            "url": "http://docs:3000",
-            "scopes": {
-                "project": {
-                    "routes": [
-                        { "path": "/items", "methods": ["GET"], "required_permissions": ["project:read"] },
-                        { "path": "/membership", "methods": ["GET"], "required_permissions": "any_member" },
-                        { "path": "/local", "methods": ["GET"], "required_permissions": ["project:read"], "authorizer": false }
-                    ]
-                }
-            }
-        }
-    });
-    let checked = run(inherited).unwrap();
+    let checked = run(c.clone()).unwrap();
     let routes = &checked.services["docs"].routes;
-    let items = routes.iter().find(|r| r.path.ends_with("/items")).unwrap();
-    assert_eq!(items.authorizer.as_ref().unwrap().name, "topaz");
-    assert_eq!(
-        items.authorizer.as_ref().unwrap().mode,
-        crate::config::AuthorizerMode::Or
-    );
-    let membership = routes
+    let get_doc = routes
         .iter()
-        .find(|r| r.path.ends_with("/membership"))
+        .find(|r| r.method == "GET" && r.path.ends_with("/docs/{doc_id}"))
         .unwrap();
-    assert!(membership.authorizer.is_none());
-    let local = routes.iter().find(|r| r.path.ends_with("/local")).unwrap();
-    assert!(local.authorizer.is_none());
-
-    // Unknown authorizer on kind, service, and route are refused.
-    let mut bad = base();
-    bad["kinds"]["project"]["authorizer"] = json!("missing");
-    errors_at(bad, "kinds.project.authorizer");
-
-    let mut bad = c.clone();
-    bad["services"]["docs"]["authorizer"] = json!("missing");
-    errors_at(bad, "services.docs.authorizer");
-
-    // Explicit authorizer on user or public scope is refused.
-    let mut bad = c.clone();
-    bad["services"]["docs"]["scopes"]["public"]["routes"][0]["authorizer"] = json!("topaz");
-    errors_at(bad, "services.docs.scopes.public.routes[0].authorizer");
-
-    // any_member with authorizer requires an explicit action.
-    let mut bad = c.clone();
-    bad["services"]["docs"]["scopes"]["project"]["routes"][1]["methods"]["DELETE"]["authorizer"] =
-        json!({ "name": "topaz", "mode": "replace" });
-    errors_at(
-        bad,
-        "services.docs.scopes.project.routes[1].methods.DELETE.authorizer",
+    assert_eq!(
+        get_doc.permissions,
+        Some(crate::config::Required::Permissions(vec!["docs:read".into()]))
     );
+    assert_eq!(get_doc.resource.as_ref().unwrap().id, "{project.id}:{doc_id}");
+    let del_doc = routes
+        .iter()
+        .find(|r| r.method == "DELETE" && r.path.ends_with("/docs/{doc_id}"))
+        .unwrap();
+    assert_eq!(del_doc.resource.as_ref().unwrap().id, "{doc_id}");
+
+    // Mixing authorizer with roles / creator_role / custom_roles / permissions is refused.
+    let mut bad = c.clone();
+    bad["roles"] = json!({ "admin": { "permissions": ["*"], "bindable_at": ["organization"] } });
+    errors_at(bad, "roles");
+
+    let mut bad = c.clone();
+    bad["creator_role"] = json!("admin");
+    errors_at(bad, "creator_role");
+
+    let mut bad = c.clone();
+    bad["custom_roles"] = json!(true);
+    errors_at(bad, "custom_roles");
+
+    let mut bad = c.clone();
+    bad["permissions"] = json!({ "docs:read": { "description": "Read" } });
+    errors_at(bad, "permissions");
+
+    // Neither roles nor authorizer is refused.
+    let mut bad = base();
+    bad.as_object_mut().unwrap().remove("roles");
+    bad.as_object_mut().unwrap().remove("creator_role");
+    let errs = run(bad).unwrap_err();
+    assert!(errs.iter().any(|e| e.path == "roles"));
+    assert!(errs.iter().any(|e| e.path == "creator_role"));
+
+    // resource without top-level authorizer is refused.
+    let bad = route(
+        "project",
+        json!({
+            "path": "/docs/{doc_id}",
+            "methods": ["GET"],
+            "permissions": "docs:read",
+            "resource": { "type": "document", "id": "{doc_id}" }
+        }),
+    );
+    errors_at(bad, &format!("{AT}.project.routes[0].resource"));
+
+    // resource on public/user scope is refused.
+    let mut bad = c.clone();
+    bad["services"]["docs"]["scopes"]["public"]["routes"][0]["resource"] =
+        json!({ "type": "doc", "id": "1" });
+    errors_at(bad, "services.docs.scopes.public.routes[0].resource");
+
+    // resource on any_member route is refused.
+    let mut bad = c.clone();
+    bad["services"]["docs"]["scopes"]["project"]["routes"][2]["resource"] =
+        json!({ "type": "project", "id": "{project.id}" });
+    errors_at(bad, "services.docs.scopes.project.routes[2].resource");
 
     // Unknown placeholder in resource.id is refused.
     let mut bad = c.clone();
-    bad["services"]["docs"]["scopes"]["project"]["routes"][1]["methods"]["GET"]["authorizer"]
-        ["resource"]["id"] = json!("{nope}");
+    bad["services"]["docs"]["scopes"]["project"]["routes"][1]["methods"]["DELETE"]["resource"]
+        ["id"] = json!("{nope}");
     errors_at(
         bad,
-        "services.docs.scopes.project.routes[1].methods.GET.authorizer.resource.id",
+        "services.docs.scopes.project.routes[1].methods.DELETE.resource.id",
     );
 }
 
@@ -341,7 +295,7 @@ fn a_role_may_grant_any_permission() {
     // And a route may require one no role grants.
     run(route(
         "project",
-        json!({ "path": "/a", "methods": ["GET"], "required_permissions": ["nobody:has"] }),
+        json!({ "path": "/a", "methods": ["GET"], "permissions": ["nobody:has"] }),
     ))
     .unwrap();
 }
@@ -379,7 +333,7 @@ fn a_child_collection() {
     let r = |path: &str| {
         route(
             "organization",
-            json!({ "path": path, "methods": ["GET"], "required_permissions": ["organization:read"] }),
+            json!({ "path": path, "methods": ["GET"], "permissions": ["organization:read"] }),
         )
     };
     errors_at(r("/projects/archived"), &at);
@@ -397,26 +351,26 @@ fn scopes_and_permissions() {
     errors_at(c, &format!("{AT}.team"));
     errors_at(
         route("project", json!({ "path": "/a", "methods": ["GET"] })),
-        &format!("{AT}.project.routes[0].required_permissions"),
+        &format!("{AT}.project.routes[0].permissions"),
     );
     errors_at(
         route(
             "project",
-            json!({ "path": "/a", "methods": { "GET": null, "POST": { "required_permissions": ["organization:read"] } } }),
+            json!({ "path": "/a", "methods": { "GET": null, "POST": { "permissions": ["organization:read"] } } }),
         ),
-        &format!("{AT}.project.routes[0].methods.GET.required_permissions"),
+        &format!("{AT}.project.routes[0].methods.GET.permissions"),
     );
     run(route(
         "project",
-        json!({ "path": "/a", "required_permissions": "any_member", "methods": { "GET": null, "POST": { "required_permissions": ["organization:read"] } } }),
+        json!({ "path": "/a", "permissions": "any_member", "methods": { "GET": null, "POST": { "permissions": ["organization:read"] } } }),
     ))
     .unwrap();
     errors_at(
         route(
             "user",
-            json!({ "path": "/user/a", "methods": ["GET"], "required_permissions": ["organization:read"] }),
+            json!({ "path": "/user/a", "methods": ["GET"], "permissions": ["organization:read"] }),
         ),
-        &format!("{AT}.user.routes[0].required_permissions"),
+        &format!("{AT}.user.routes[0].permissions"),
     );
     errors_at(
         route(
@@ -439,7 +393,7 @@ fn placeholders() {
     let ok = |scope: &str, prefix: Option<&str>, path: &str, upstream: Option<&str>| {
         let mut r = json!({ "path": path, "methods": ["GET"] });
         if scope != "user" && scope != "public" {
-            r["required_permissions"] = json!("any_member");
+            r["permissions"] = json!("any_member");
         }
         if let Some(u) = upstream {
             r["upstream"] = json!(u);
@@ -495,7 +449,7 @@ fn rate_limits() {
     let r = |scope: &str, rl: Value| {
         let mut r = json!({ "path": "/a", "methods": ["GET"], "rate_limit": rl });
         if scope == "organization" || scope == "project" {
-            r["required_permissions"] = json!("any_member");
+            r["permissions"] = json!("any_member");
         }
         route(scope, r)
     };
@@ -561,7 +515,7 @@ fn same_shape_twice() {
     // Across services.
     let mut c = route(
         "organization",
-        json!({ "path": "/", "methods": ["GET"], "required_permissions": ["organization:read"] }),
+        json!({ "path": "/", "methods": ["GET"], "permissions": ["organization:read"] }),
     );
     c["services"]["identity"] = identity();
     let errs = errors_at(c, "services.identity.scopes.organization.routes[0].path");
@@ -622,13 +576,13 @@ fn identity() -> Value {
                 "upstream_prefix": "/nodes/{organization.id}",
                 "routes": [
                     { "path": "/", "methods": {
-                        "GET": { "required_permissions": ["organization:read"] },
-                        "PATCH": { "required_permissions": ["organization:write"] }
+                        "GET": { "permissions": ["organization:read"] },
+                        "PATCH": { "permissions": ["organization:write"] }
                     } },
                     { "path": "/membership", "upstream": "/nodes/{organization.id}/memberships/{member.id}",
                       "methods": {
-                        "GET": { "required_permissions": "any_member" },
-                        "DELETE": { "required_permissions": "any_member" }
+                        "GET": { "permissions": "any_member" },
+                        "DELETE": { "permissions": "any_member" }
                     } }
                 ]
             },

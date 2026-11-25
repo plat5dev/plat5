@@ -401,7 +401,7 @@ func TestOrgProjectServiceAccountDeleteRestore(t *testing.T) {
 	if denied.Error.Message != "Permission denied, or it may not exist." {
 		t.Fatalf("permission 403: %+v", denied)
 	}
-	if fmt.Sprint(denied.Error.Details["required_permissions"]) != "[project:delete]" {
+	if fmt.Sprint(denied.Error.Details["permissions"]) != "[project:delete]" {
 		t.Fatalf("permission 403 details: %+v", denied.Error.Details)
 	}
 	// …and above its bindings: nothing at the project.

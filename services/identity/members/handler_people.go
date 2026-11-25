@@ -50,7 +50,11 @@ func (h *Handler) AddMember(c fiber.Ctx) error {
 	if err != nil {
 		return mapErr(c, err, "failed to add member", "member", "")
 	}
-	auditx.Set(c, auditx.Details{"member_id": m.ID, "binding_id": b.ID})
+	d := auditx.Details{"member_id": m.ID}
+	if b != nil {
+		d["binding_id"] = b.ID
+	}
+	auditx.Set(c, d)
 	auditx.SetCreated(c, m.ID)
 	return c.Status(fiber.StatusCreated).JSON(memberResponse(m))
 }
@@ -84,13 +88,13 @@ func (h *Handler) SetMemberStatus(c fiber.Ctx) error {
 
 func (h *Handler) RemoveMember(c fiber.Ctx) error {
 	memberID := httpx.PathParam(c, "member_id")
-	changed, err := h.store.RemoveMember(c.Context(), httpx.PathParam(c, "node_id"), memberID)
+	priorStatus, changed, err := h.store.RemoveMember(c.Context(), httpx.PathParam(c, "node_id"), memberID)
 	if err != nil {
 		return mapErr(c, err, "failed to remove member", "member", memberID)
 	}
 	if changed {
 		d := auditx.Details{"member_id": memberID}
-		d.Changed("status", StatusActive, StatusRemoved)
+		d.Changed("status", priorStatus, StatusRemoved)
 		auditx.Set(c, d)
 	}
 	return c.SendStatus(fiber.StatusNoContent)
@@ -136,7 +140,7 @@ func (h *Handler) CreateGroup(c fiber.Ctx) error {
 	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
-	g, err := h.store.CreateGroup(c.Context(), httpx.PathParam(c, "node_id"), req.Name)
+	g, err := h.store.CreateGroup(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), req.Name)
 	if err != nil {
 		return mapErr(c, err, "failed to create group", "group", "")
 	}
@@ -160,7 +164,7 @@ func (h *Handler) RenameGroup(c fiber.Ctx) error {
 		return err
 	}
 	groupID := httpx.PathParam(c, "group_id")
-	before, after, err := h.store.RenameGroup(c.Context(), httpx.PathParam(c, "node_id"), groupID, req.Name)
+	before, after, err := h.store.RenameGroup(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), groupID, req.Name)
 	if err != nil {
 		return mapErr(c, err, "failed to rename group", "group", groupID)
 	}
@@ -172,7 +176,7 @@ func (h *Handler) RenameGroup(c fiber.Ctx) error {
 
 func (h *Handler) DeleteGroup(c fiber.Ctx) error {
 	groupID := httpx.PathParam(c, "group_id")
-	g, err := h.store.DeleteGroup(c.Context(), httpx.PathParam(c, "node_id"), groupID)
+	g, err := h.store.DeleteGroup(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), groupID)
 	if err != nil {
 		return mapErr(c, err, "failed to delete group", "group", groupID)
 	}
@@ -206,7 +210,7 @@ func (h *Handler) AddGroupMember(c fiber.Ctx) error {
 	}
 	groupID := httpx.PathParam(c, "group_id")
 	memberID := strings.TrimSpace(req.MemberID)
-	m, err := h.store.AddGroupMember(c.Context(), httpx.PathParam(c, "node_id"), groupID, memberID)
+	m, err := h.store.AddGroupMember(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), groupID, memberID)
 	if err != nil {
 		return mapErr(c, err, "failed to add group member", "group", groupID)
 	}
@@ -217,7 +221,7 @@ func (h *Handler) AddGroupMember(c fiber.Ctx) error {
 func (h *Handler) RemoveGroupMember(c fiber.Ctx) error {
 	groupID := httpx.PathParam(c, "group_id")
 	memberID := httpx.PathParam(c, "member_id")
-	changed, err := h.store.RemoveGroupMember(c.Context(), httpx.PathParam(c, "node_id"), groupID, memberID)
+	changed, err := h.store.RemoveGroupMember(c.Context(), h.src.Current(), httpx.PathParam(c, "node_id"), groupID, memberID)
 	if err != nil {
 		return mapErr(c, err, "failed to remove group member", "group", groupID)
 	}
@@ -254,7 +258,7 @@ func (r CreateInviteRequest) read() (InviteInput, error) {
 	}
 	if r.ExpiresIn != nil {
 		d, err := feed.ParseDuration(*r.ExpiresIn)
-		if err != nil || *r.ExpiresIn == "" {
+		if err != nil {
 			return in, ExpiresInError()
 		}
 		in.ExpiresIn = d

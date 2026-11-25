@@ -35,169 +35,169 @@ services:
         routes:
           - path: /
             methods:
-              GET: { required_permissions: [organization:read] }
-              PATCH: { required_permissions: [organization:write] }
-              DELETE: { required_permissions: [organization:delete] }
+              GET: { permissions: [organization:read] }
+              PATCH: { permissions: [organization:write] }
+              DELETE: { permissions: [organization:delete] }
           - path: /restore
             allow_deleted: true
             methods:
-              POST: { required_permissions: [organization:delete] }
+              POST: { permissions: [organization:delete] }
           - path: /projects
             upstream: /nodes/{organization.id}/children/project
             methods:
-              GET: { required_permissions: any_member }
-              POST: { required_permissions: [project:create] }
+              GET: { permissions: any_member }
+              POST: { permissions: [project:create] }
           - path: /folders
             upstream: /nodes/{organization.id}/children/folder
             methods:
-              GET: { required_permissions: any_member }
-              POST: { required_permissions: [folder:create] }
+              GET: { permissions: any_member }
+              POST: { permissions: [folder:create] }
           - path: /membership
             upstream: /nodes/{organization.id}/memberships/{member.id}
             methods:
-              GET: { required_permissions: any_member }
-              DELETE: { required_permissions: any_member }
+              GET: { permissions: any_member }
+              DELETE: { permissions: any_member }
           - path: /bindings
             methods:
-              GET: { required_permissions: [organization:bindings:read] }
-              POST: { required_permissions: [organization:bindings:write] }
+              GET: { permissions: [organization:bindings:read] }
+              POST: { permissions: [organization:bindings:write] }
           - path: /bindings/{binding_id}
             methods:
-              PATCH: { required_permissions: [organization:bindings:write] }
-              DELETE: { required_permissions: [organization:bindings:write] }
+              PATCH: { permissions: [organization:bindings:write] }
+              DELETE: { permissions: [organization:bindings:write] }
           - path: /service-accounts
             methods:
-              GET: { required_permissions: [organization:bindings:read] }
-              POST: { required_permissions: [organization:bindings:write] }
+              GET: { permissions: [organization:bindings:read] }
+              POST: { permissions: [organization:bindings:write] }
           - path: /service-accounts/{service_account_id}
             methods:
-              GET: { required_permissions: [organization:bindings:read] }
-              PATCH: { required_permissions: [organization:bindings:write] }
-              DELETE: { required_permissions: [organization:bindings:write] }
+              GET: { permissions: [organization:bindings:read] }
+              PATCH: { permissions: [organization:bindings:write] }
+              DELETE: { permissions: [organization:bindings:write] }
           - path: /service-accounts/{service_account_id}/keys
             methods:
-              GET: { required_permissions: [organization:bindings:write] }
-              POST: { required_permissions: [organization:bindings:write] }
+              GET: { permissions: [organization:bindings:write] }
+              POST: { permissions: [organization:bindings:write] }
           - path: /service-accounts/{service_account_id}/keys/{key_id}
             methods:
-              DELETE: { required_permissions: [organization:bindings:write] }
+              DELETE: { permissions: [organization:bindings:write] }
           - path: /invites
             methods:
-              GET: { required_permissions: [organization:bindings:write] }
-              POST: { required_permissions: [organization:bindings:write] }
+              GET: { permissions: [organization:bindings:write] }
+              POST: { permissions: [organization:bindings:write] }
           - path: /invites/{invite_id}
             methods:
-              DELETE: { required_permissions: [organization:bindings:write] }
+              DELETE: { permissions: [organization:bindings:write] }
           - path: /roles
             methods:
-              GET: { required_permissions: any_member }
+              GET: { permissions: any_member }
           - path: /members
             methods:
-              GET: { required_permissions: [organization:bindings:read] }
+              GET: { permissions: [organization:bindings:read] }
           - path: /members/{member_id}
             methods:
-              GET: { required_permissions: any_member }
-              DELETE: { required_permissions: [organization:bindings:write] }
+              GET: { permissions: any_member }
+              DELETE: { permissions: [organization:bindings:write] }
       project:
         upstream_prefix: /nodes/{project.id}
         routes:
           - path: /
             methods:
-              GET: { required_permissions: [project:read] }
-              PATCH: { required_permissions: [project:write] }
-              DELETE: { required_permissions: [project:delete] }
+              GET: { permissions: [project:read] }
+              PATCH: { permissions: [project:write] }
+              DELETE: { permissions: [project:delete] }
           - path: /restore
             allow_deleted: true
             methods:
-              POST: { required_permissions: [project:delete] }
+              POST: { permissions: [project:delete] }
           - path: /membership
             upstream: /nodes/{project.id}/memberships/{member.id}
             methods:
-              GET: { required_permissions: any_member }
+              GET: { permissions: any_member }
           - path: /bindings
             methods:
-              GET: { required_permissions: [project:bindings:read] }
-              POST: { required_permissions: [project:bindings:write] }
+              GET: { permissions: [project:bindings:read] }
+              POST: { permissions: [project:bindings:write] }
           - path: /bindings/{binding_id}
             methods:
-              PATCH: { required_permissions: [project:bindings:write] }
-              DELETE: { required_permissions: [project:bindings:write] }
+              PATCH: { permissions: [project:bindings:write] }
+              DELETE: { permissions: [project:bindings:write] }
           - path: /service-accounts
             methods:
-              GET: { required_permissions: [project:bindings:read] }
-              POST: { required_permissions: [project:bindings:write] }
+              GET: { permissions: [project:bindings:read] }
+              POST: { permissions: [project:bindings:write] }
           - path: /service-accounts/{service_account_id}
             methods:
-              GET: { required_permissions: [project:bindings:read] }
-              PATCH: { required_permissions: [project:bindings:write] }
-              DELETE: { required_permissions: [project:bindings:write] }
+              GET: { permissions: [project:bindings:read] }
+              PATCH: { permissions: [project:bindings:write] }
+              DELETE: { permissions: [project:bindings:write] }
           - path: /service-accounts/{service_account_id}/keys
             methods:
-              GET: { required_permissions: [project:bindings:write] }
-              POST: { required_permissions: [project:bindings:write] }
+              GET: { permissions: [project:bindings:write] }
+              POST: { permissions: [project:bindings:write] }
           - path: /service-accounts/{service_account_id}/keys/{key_id}
             methods:
-              DELETE: { required_permissions: [project:bindings:write] }
+              DELETE: { permissions: [project:bindings:write] }
           - path: /invites
             methods:
-              GET: { required_permissions: [guests:write] }
-              POST: { required_permissions: [guests:write] }
+              GET: { permissions: [guests:write] }
+              POST: { permissions: [guests:write] }
           - path: /invites/{invite_id}
             methods:
-              DELETE: { required_permissions: [guests:write] }
+              DELETE: { permissions: [guests:write] }
           - path: /roles
             methods:
-              GET: { required_permissions: any_member }
+              GET: { permissions: any_member }
       folder:
         upstream_prefix: /nodes/{folder.id}
         routes:
           - path: /
             methods:
-              GET: { required_permissions: [folder:read] }
-              PATCH: { required_permissions: [folder:write] }
-              DELETE: { required_permissions: [folder:delete] }
+              GET: { permissions: [folder:read] }
+              PATCH: { permissions: [folder:write] }
+              DELETE: { permissions: [folder:delete] }
           - path: /restore
             allow_deleted: true
             methods:
-              POST: { required_permissions: [folder:delete] }
+              POST: { permissions: [folder:delete] }
           - path: /membership
             upstream: /nodes/{folder.id}/memberships/{member.id}
             methods:
-              GET: { required_permissions: any_member }
+              GET: { permissions: any_member }
           - path: /bindings
             methods:
-              GET: { required_permissions: [folder:bindings:read] }
-              POST: { required_permissions: [folder:bindings:write] }
+              GET: { permissions: [folder:bindings:read] }
+              POST: { permissions: [folder:bindings:write] }
           - path: /bindings/{binding_id}
             methods:
-              PATCH: { required_permissions: [folder:bindings:write] }
-              DELETE: { required_permissions: [folder:bindings:write] }
+              PATCH: { permissions: [folder:bindings:write] }
+              DELETE: { permissions: [folder:bindings:write] }
           - path: /service-accounts
             methods:
-              GET: { required_permissions: [folder:bindings:read] }
-              POST: { required_permissions: [folder:bindings:write] }
+              GET: { permissions: [folder:bindings:read] }
+              POST: { permissions: [folder:bindings:write] }
           - path: /service-accounts/{service_account_id}
             methods:
-              GET: { required_permissions: [folder:bindings:read] }
-              PATCH: { required_permissions: [folder:bindings:write] }
-              DELETE: { required_permissions: [folder:bindings:write] }
+              GET: { permissions: [folder:bindings:read] }
+              PATCH: { permissions: [folder:bindings:write] }
+              DELETE: { permissions: [folder:bindings:write] }
           - path: /service-accounts/{service_account_id}/keys
             methods:
-              GET: { required_permissions: [folder:bindings:write] }
-              POST: { required_permissions: [folder:bindings:write] }
+              GET: { permissions: [folder:bindings:write] }
+              POST: { permissions: [folder:bindings:write] }
           - path: /service-accounts/{service_account_id}/keys/{key_id}
             methods:
-              DELETE: { required_permissions: [folder:bindings:write] }
+              DELETE: { permissions: [folder:bindings:write] }
           - path: /invites
             methods:
-              GET: { required_permissions: [guests:write] }
-              POST: { required_permissions: [guests:write] }
+              GET: { permissions: [guests:write] }
+              POST: { permissions: [guests:write] }
           - path: /invites/{invite_id}
             methods:
-              DELETE: { required_permissions: [guests:write] }
+              DELETE: { permissions: [guests:write] }
           - path: /roles
             methods:
-              GET: { required_permissions: any_member }
+              GET: { permissions: any_member }
       user:
         routes:
           - path: /orgs

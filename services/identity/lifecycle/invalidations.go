@@ -122,6 +122,48 @@ func (s *InvalidationStore) State(ctx context.Context) (head, prunedThrough int6
 	return head, prunedThrough, err
 }
 
+// Poll reads (head, prunedThrough) and invalidations after `after` in one
+// consistent RepeatableRead snapshot, preventing a concurrent PruneOlderThan
+// from skipping rows between reading state and listing events.
+func (s *InvalidationStore) Poll(ctx context.Context, after int64, limit int) (head, prunedThrough int64, events []Invalidation, err error) {
+	ctx, cancel := context.WithTimeout(ctx, dbx.DefaultTimeout)
+	defer cancel()
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	defer tx.Rollback(ctx)
+	if err := tx.QueryRow(ctx, `
+		WITH w AS (SELECT COALESCE((SELECT pruned_through FROM admit_invalidation_watermark WHERE id = 1), 0) AS pruned)
+		SELECT GREATEST(COALESCE((SELECT MAX(id) FROM admit_invalidations), 0), w.pruned), w.pruned
+		FROM w
+	`).Scan(&head, &prunedThrough); err != nil {
+		return 0, 0, nil, err
+	}
+	if after > head || after < prunedThrough {
+		return head, prunedThrough, nil, nil
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id, scope, target
+		FROM admit_invalidations
+		WHERE id > $1
+		ORDER BY id
+		LIMIT $2
+	`, after, limit)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	events, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (Invalidation, error) {
+		var inv Invalidation
+		err := r.Scan(&inv.ID, &inv.Scope, &inv.Target)
+		return inv, err
+	})
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	return head, prunedThrough, events, nil
+}
+
 // List returns invalidations with id > after, ascending, up to limit.
 func (s *InvalidationStore) List(ctx context.Context, after int64, limit int) ([]Invalidation, error) {
 	ctx, cancel := context.WithTimeout(ctx, dbx.DefaultTimeout)
@@ -194,7 +236,7 @@ type ConfigRevisionSource interface {
 type invalidationStoreIface interface {
 	Head(ctx context.Context) (int64, error)
 	State(ctx context.Context) (head, prunedThrough int64, err error)
-	List(ctx context.Context, after int64, limit int) ([]Invalidation, error)
+	Poll(ctx context.Context, after int64, limit int) (head, prunedThrough int64, events []Invalidation, err error)
 }
 
 // InvalidationHandler serves GET /internal/admit-invalidations
@@ -291,9 +333,9 @@ func (h *InvalidationHandler) List(c fiber.Ctx) error {
 			revChanged = h.config.Changed()
 			currentRev = h.config.Revision()
 		}
-		head, prunedThrough, err := h.store.State(ctx)
+		head, prunedThrough, events, err := h.store.Poll(ctx, after, limit)
 		if err != nil {
-			return httpx.MapDB(ctx, err, "failed to read invalidations state", httpx.DBErr{})
+			return httpx.MapDB(ctx, err, "failed to read invalidations", httpx.DBErr{})
 		}
 		h.head.Sync(head)
 		// Head may be 0 if all rows were pruned; if cursor is ahead of head or
@@ -305,10 +347,6 @@ func (h *InvalidationHandler) List(c fiber.Ctx) error {
 				Reset:          true,
 				Events:         []Invalidation{},
 			})
-		}
-		events, err := h.store.List(ctx, after, limit)
-		if err != nil {
-			return httpx.MapDB(ctx, err, "failed to list invalidations", httpx.DBErr{})
 		}
 		if len(events) > 0 || (hasConfigRev && currentRev != clientConfigRev) {
 			if events == nil {

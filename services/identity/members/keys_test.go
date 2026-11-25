@@ -36,12 +36,12 @@ func TestNormalizeAllowedCIDRs(t *testing.T) {
 		t.Fatalf("valid: %v", err)
 	}
 	want := []string{
-		"203.0.113.7/32",
-		"198.51.100.0/24",
-		"2001:db8::1/128",
-		"2001:db8::/64",
-		"192.0.2.5/32",
 		"192.0.2.0/24",
+		"192.0.2.5/32",
+		"198.51.100.0/24",
+		"2001:db8::/64",
+		"2001:db8::1/128",
+		"203.0.113.7/32",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got %v, want %v", got, want)

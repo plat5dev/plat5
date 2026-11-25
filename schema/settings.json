@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://plat5.com/schema/settings.json",
   "title": "Settings",
-  "description": "Deployment-wide settings: deletion_grace, reserved_slugs and defaults.",
+  "description": "Deployment-wide settings: deletion_grace, reserved_slugs, policy_claims and defaults.",
   "type": "object",
   "properties": {
     "deletion_grace": {
@@ -16,6 +16,18 @@
       "type": "array",
       "uniqueItems": true,
       "items": { "$ref": "#/$defs/slug" }
+    },
+    "policy_claims": {
+      "title": "policy_claims",
+      "description": "JWT claim paths (dot-separated for nested objects, e.g. `acr`, `amr`, `org.sso`) extracted by the gateway for root security policy `required_idp_claims` checks. Identity rejects `required_idp_claims` keys not listed here.",
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)*$"
+      }
     },
     "defaults": {
       "title": "defaults",

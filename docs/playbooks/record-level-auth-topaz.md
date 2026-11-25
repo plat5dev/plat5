@@ -1,14 +1,8 @@
-# Playbook: Record-level auth with Topaz (AuthZEN 1.0)
+# Playbook: External authorization with Topaz (AuthZEN 1.0)
 
-How to pair Plat5's multi-tenant runtime with [Topaz](https://www.topaz.sh/) (or any OpenID AuthZEN 1.0 PDP such as Cerbos or OpenFGA with an AuthZEN adapter) for fine-grained ReBAC/ABAC — **without** losing zero-auth services, uniform edge **403**s, or `POST /access/routes`.
+How to pair Plat5's multi-tenant runtime with [Topaz](https://www.topaz.sh/) (or any OpenID AuthZEN 1.0 PDP such as Cerbos or OpenFGA with an AuthZEN adapter) for ReBAC/ABAC — **without** losing zero-auth services, uniform edge **403**s, node list filtering, or `POST /access/routes`.
 
-## When to use each mode
-
-| Mode | Behavior | Best for |
-|------|----------|----------|
-| `or` | Built-in RBAC runs first; org/project admins bypass the PDP. Otherwise calls Topaz | Additive per-record sharing (e.g., share one document with a colleague who doesn't have project-wide read) |
-| `and` | Built-in RBAC must allow first; then Topaz must also allow | Narrowing writes/deletes to record owners/editors, ABAC rules, or explicit denies |
-| `replace` | Topaz decides alone (Plat5 still enforces credentials, org security policies, suspension, and credential scopes) | Fully delegating a kind's or service's authorization to Topaz |
+Authorization in Plat5 is all-or-nothing: a deployment uses either built-in RBAC (`roles` + `creator_role`) or a single top-level `authorizer`. When `authorizer` is set, the PDP decides every permission-gated route, node list filter (`list_permission`), and identity `/access/v1/*` check across all kinds, while Plat5 still handles authentication, tree membership, org security policies, suspension, credential scope narrowing, rate limits, and audit.
 
 ## 1. Topaz manifest (`topaz/manifest.yaml`)
 
@@ -20,6 +14,18 @@ model:
 
 types:
   member: {}
+
+  organization:
+    relations:
+      admin: member
+      viewer: member
+    permissions:
+      organization:read: viewer | admin
+      organization:write: admin
+      organization:delete: admin
+      organization:bindings:read: admin
+      organization:bindings:write: admin
+      project:create: admin
 
   project:
     relations:
@@ -44,64 +50,7 @@ Run Topaz on your `plat5` Docker network exposing its AuthZEN HTTP gateway on `:
 
 ## 2. Plat5 config (`plat5.yml` & `services/docs.yml`)
 
-Declare `topaz` under `authorizers:` in `plat5.yml` ([authorizers reference](../reference/config/authorizers.md)):
-
-```yaml
-authorizers:
-  topaz:
-    url: http://topaz:8383
-    timeout: 2s
-    cache_ttl: 5s
-    negative_cache_ttl: 2s
-    # token_env: TOPAZ_API_KEY   # optional bearer token read from gateway/identity env
-```
-
-Attach it to routes in `services/docs.yml`. Notice how `authorizer` inherits from kind → service → scope → route → verb, and how record routes use `resource: { type, id }`:
-
-```yaml
-docs:
-  url: http://docs:3000
-  scopes:
-    project:
-      upstream_prefix: /projects/{project.id}
-      routes:
-        # Collection: coarse project permission via Plat5 RBAC alone
-        - path: /documents
-          methods:
-            GET:  { required_permissions: [project:read] }
-            POST: { required_permissions: [project:write] }
-
-        # Record-level routes: compose Plat5 RBAC with Topaz on document {doc_id}
-        - path: /documents/{doc_id}
-          methods:
-            GET:
-              required_permissions: [project:read]
-              authorizer:
-                name: topaz
-                mode: or          # project readers/admins pass fast; shared viewers pass via Topaz
-                resource: { type: document, id: "{project.id}:{doc_id}" }
-                action: docs:read
-            PATCH:
-              required_permissions: [project:write]
-              authorizer:
-                name: topaz
-                mode: and         # must hold project:write AND be document editor/owner in Topaz
-                resource: { type: document, id: "{project.id}:{doc_id}" }
-                action: docs:write
-            DELETE:
-              required_permissions: [project:write]
-              authorizer:
-                name: topaz
-                mode: replace     # only Topaz document owner can delete (even org admins must own it)
-                resource: { type: document, id: "{project.id}:{doc_id}" }
-                action: docs:delete
-```
-
-Using `{project.id}:{doc_id}` (or globally unique ULIDs) as `resource.id` guarantees tenant-scoped object IDs inside Topaz.
-
-### Optional: delegate node listing (`list_permission`) to Topaz
-
-If Topaz also owns project-level visibility (for example, `GET /orgs/{org}/projects` and `POST /access/v1/search/resource`), attach `authorizer` to the kind itself in `plat5.yml`:
+Declare top-level `authorizer:` in `plat5.yml` instead of `roles` / `creator_role` ([authorizer reference](../reference/config/authorizer.md)):
 
 ```yaml
 kinds:
@@ -110,12 +59,48 @@ kinds:
   project:
     parent: organization
     path: /projects/{project}
-    authorizer:
-      name: topaz
-      mode: or
+    bind_creator: false
+
+authorizer:
+  url: http://topaz:8383
+  timeout: 2s
+  cache_ttl: 5s
+  negative_cache_ttl: 2s
+  # token_env: TOPAZ_API_KEY   # optional bearer token read from gateway/identity env
 ```
 
-Identity will batch-evaluate projects against Topaz on child lists and `/access/v1/*` calls, short-circuiting when built-in RBAC already decides the answer, and any `project`-scoped route with explicit `required_permissions` inherits this authorizer unless it overrides it or sets `authorizer: false`.
+In `services/docs.yml`, declare route `permissions` as usual, and add a flat `resource: { type, id }` on routes that check a record instead of the node:
+
+```yaml
+docs:
+  url: http://docs:3000
+  scopes:
+    project:
+      upstream_prefix: /projects/{project.id}
+      routes:
+        # Collection: checked against resource { type: "project", id: "<project ulid>" }
+        - path: /documents
+          methods:
+            GET:  { permissions: project:read }
+            POST: { permissions: project:write }
+
+        # Record-level routes: checked against resource { type: "document", id: "<project ulid>:<doc_id>" }
+        - path: /documents/{doc_id}
+          methods:
+            GET:
+              permissions: docs:read
+              resource: { type: document, id: "{project.id}:{doc_id}" }
+            PATCH:
+              permissions: docs:write
+              resource: { type: document, id: "{project.id}:{doc_id}" }
+            DELETE:
+              permissions: docs:delete
+              resource: { type: document, id: "{project.id}:{doc_id}" }
+```
+
+Using `{project.id}:{doc_id}` (or globally unique ULIDs) as `resource.id` guarantees tenant-scoped object IDs inside Topaz.
+
+Identity automatically queries Topaz on node lists (`GET /orgs/{org}/projects` using each kind's `list_permission`) and `/access/v1/*` calls. In external `authorizer` mode, creating a root/member/invite/service account creates the `member` without requiring a `role` (and built-in RBAC writes to `/bindings`, `/groups`, and custom `/roles` return **422**).
 
 ## 3. What your service does
 
@@ -141,4 +126,4 @@ POST /access/routes
 }
 ```
 
-The gateway batches all checks per authorizer into a single AuthZEN `POST /access/v1/evaluations` call and returns `{ "checks": [{ "allowed": true }, { "allowed": false }] }`.
+The gateway batches all checks into a single AuthZEN `POST /access/v1/evaluations` call and returns `{ "checks": [{ "allowed": true }, { "allowed": false }] }`.

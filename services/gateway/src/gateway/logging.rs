@@ -75,8 +75,8 @@ pub(super) fn log_permission_denied(ctx: &GatewayContext, route: &Route, caller:
         node_id = cred.node_id.as_deref(),
         member_id = cred.member_id.as_deref(),
         required_permissions = %required,
-        permissions = %permission_list(&caller.permissions),
-        "required_permissions denied"
+        permissions = %permission_list(caller.permissions()),
+        "permissions denied"
     );
 }
 

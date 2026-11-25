@@ -17,12 +17,12 @@
           "method": "DELETE",
           "path": "/orgs/{organization}",
           "before": {
-            "required_permissions": [
+            "permissions": [
               "organization:delete"
             ]
           },
           "after": {
-            "required_permissions": [
+            "permissions": [
               "organization:admin"
             ]
           }
@@ -34,7 +34,7 @@
           "after": {
             "scope": "organization",
             "upstream": "/nodes/{organization.id}/children/project",
-            "required_permissions": "any_member",
+            "permissions": "any_member",
             "rate_limit": [
               "standard"
             ],
@@ -49,7 +49,7 @@
           "after": {
             "scope": "organization",
             "upstream": "/nodes/{organization.id}/children/project",
-            "required_permissions": [
+            "permissions": [
               "project:create"
             ],
             "rate_limit": [
@@ -66,7 +66,7 @@
           "before": {
             "scope": "organization",
             "upstream": "/nodes/{organization.id}/children/project",
-            "required_permissions": "any_member",
+            "permissions": "any_member",
             "rate_limit": [
               "standard"
             ],
@@ -81,7 +81,7 @@
           "before": {
             "scope": "organization",
             "upstream": "/nodes/{organization.id}/children/project",
-            "required_permissions": [
+            "permissions": [
               "project:create"
             ],
             "rate_limit": [
@@ -98,7 +98,7 @@
           "before": {
             "scope": "project",
             "upstream": "/nodes/{project.id}/invites",
-            "required_permissions": [
+            "permissions": [
               "guests:write"
             ],
             "rate_limit": [
@@ -115,7 +115,7 @@
           "before": {
             "scope": "project",
             "upstream": "/nodes/{project.id}/invites",
-            "required_permissions": [
+            "permissions": [
               "guests:write"
             ],
             "rate_limit": [

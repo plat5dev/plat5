@@ -1,6 +1,6 @@
 # Config
 
-The deployment's desired state: settings, kinds, roles, authorizers, rate limits, CORS and services, as one config. Each apply submits the whole config to the control plane: a dry run shows the plan, and the apply carries a precondition that makes a stale plan fail. The control plane validates the config as a whole, records it as a revision in Postgres with the bodies it serves, and serves them to the gateway and identity. It is Plat5's only supported write path for any of these.
+The deployment's desired state: settings, kinds, built-in RBAC (`roles` + `creator_role`) or an external `authorizer`, rate limits, CORS, and services, as one config. Each apply submits the whole config to the control plane: a dry run shows the plan, and the apply carries a precondition that makes a stale plan fail. The control plane validates the config as a whole, records it as a revision in Postgres with the bodies it serves, and serves them to the gateway and identity. It is Plat5's only supported write path for any of these.
 
 The runtime reads no config files from disk — it accepts JSON or YAML over the control plane's [admin API](../reference/api/control-plane.md). Teams managing config in Git typically use the [`plat5` CLI](https://github.com/plat5dev/cli) (`plat5.yml` plus one file per service); an API client or control UI can call `POST /apply` directly.
 
@@ -10,37 +10,36 @@ The control plane holds the operator's typed, deployment-wide state that changes
 
 | Document | Read by | Contract |
 |----------|---------|----------|
-| Settings: `deletion_grace`, `reserved_slugs`, `defaults` | identity, gateway | [settings](../reference/config/settings.md) |
+| Settings: `deletion_grace`, `reserved_slugs`, `policy_claims`, `defaults` | identity, gateway | [settings](../reference/config/settings.md) |
 | `kinds` | gateway, identity | [kinds](../reference/config/kinds.md) |
 | `roles`, `creator_role`, `custom_roles`, `permissions` | identity | [roles](../reference/config/roles.md) |
-| `authorizers` | gateway, identity | [authorizers](../reference/config/authorizers.md) |
+| `authorizer` | gateway, identity | [authorizer](../reference/config/authorizer.md) |
 | `rate_limits` | gateway | [rate limits](../reference/config/rate-limits.md) |
 | `cors` | gateway | [cors](../reference/config/cors.md) |
 | `services` | gateway | [services](../reference/config/services.md); identity's and audit's [routes](../reference/config/generated-routes.md) |
 
-Each document has a published schema ([below](#schema)), and the [rules at apply](#validation-at-apply) check them together. There is no free-form key. Only `kinds`, `roles`, and `creator_role` are required; everything else is optional.
+Each document has a published schema ([below](#schema)), and the [rules at apply](#validation-at-apply) check them together. There is no free-form key. `kinds` is required, and the config must specify either `roles` + `creator_role` (built-in RBAC) or `authorizer` (external AuthZEN PDP) — mutually exclusive. Everything else is optional.
 
 These stay out of it, as process env:
 
 | Kept out | Why |
 |----------|-----|
-| Wiring and module switches: URLs, ports, `AUDIT_ENABLED` / `AUDIT_MODE` / `AUDIT_URL`, `RATE_LIMIT_ENABLED` / `VALKEY_URL` | Needed to boot and connect infrastructure, and kept out of the config so `ADMIN_TOKEN` can't turn audit or rate limiting off ([audit](audit.md#on-and-off), [gateway](../reference/gateway.md#rate-limits)) |
+| Wiring and module switches: URLs, ports, `AUDIT_MODE` / `AUDIT_URL`, `RATE_LIMIT_ENABLED` / `VALKEY_URL` | Needed to boot and connect infrastructure, and kept out of the config so `ADMIN_TOKEN` can't turn audit or rate limiting off ([audit](audit.md#on-and-off), [gateway](../reference/gateway.md#rate-limits)) |
 | Secrets: `ADMIN_TOKEN`, `UPSTREAM_SIGNING_KEY`, authorizer `token_env` values | Not desired state; never stored in config revisions |
-| IdP trust anchors and claim mappings: `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_ALLOWED_AUDIENCES`, `AUTH_SUBJECT_CLAIM`, `AUTH_NAME_CLAIMS`, `AUTH_SCOPE_CLAIM`, `AUTH_POLICY_CLAIMS` | Changing the issuer lets you sign in as anyone; `ADMIN_TOKEN` must not be able to |
+| IdP trust anchors and claim mappings: `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_ALLOWED_AUDIENCES`, `AUTH_SUBJECT_CLAIM`, `AUTH_NAME_CLAIMS`, `AUTH_SCOPE_CLAIM` | Changing the issuer lets you sign in as anyone; `ADMIN_TOKEN` must not be able to |
 | `SECRET_BRAND`, `ADMIT_CACHE_TTL`, `ADMIT_NEGATIVE_CACHE_TTL` | Set at boot; changing them while running buys nothing (and changing `SECRET_BRAND` invalidates minted keys) |
 | Per-tree data | Identity |
 
 ## The config shape
 
-The control plane validates and stores one flat object (`schema/config.json`): top-level settings, `kinds`, `roles`, `creator_role`, optional `custom_roles`, `permissions`, `authorizers`, `rate_limits` and `cors`, and `services` as a map of service name to service.
+The control plane validates and stores one flat object (`schema/config.json`): top-level settings (`deletion_grace`, `reserved_slugs`, `policy_claims`, `defaults`), `kinds`, either `roles` + `creator_role` (+ optional `custom_roles`, `permissions`) or `authorizer`, optional `rate_limits` and `cors`, and `services` as a map of service name to service.
 
 ```yaml
 deletion_grace: 30d
 reserved_slugs: [new, settings, api, admin]
 kinds: { … }
-roles: { … }
+roles: { … }       # or top-level authorizer: { url: … } (mutually exclusive)
 creator_role: admin
-authorizers: { … }
 rate_limits: { … }
 cors:
   allowed_origins: [https://app.example.com]
@@ -66,9 +65,9 @@ Identity's and audit's public routes are ordinary entries under `services` — t
 The control plane is the one validator: it checks the schema, then these rules, on every apply. The gateway and identity trust what it serves and don't check it again. Each error names the field path, such as `services.api.scopes.project.routes[2].path` or `kinds.project.parent`.
 
 1. Every `parent` is a kind, and there are no cycles. Kind names are lowercase identifiers and not `public`, `member` or `user`. `host` is only on root kinds and must be unique across roots.
-2. Every `bindable_at` kind (on roles and `permissions` metadata) exists. Every role in `includes` exists, and includes don't cycle. `creator_role` is a role bindable at every kind.
-3. Every route's scope is a kind, `user` or `public`, and its path, methods, permissions, `allow_public`, `authorizer`, and upstream follow the [route rules](../reference/config/services.md#validation).
-4. Every `authorizer` reference (on a kind, service, scope, route, or verb) names an entry in `authorizers`, and any `resource.id` template placeholders exist in the route's scope/path.
+2. Either `roles` + `creator_role` (built-in RBAC) or `authorizer` (external AuthZEN PDP) is declared, never both (`custom_roles` and `permissions` require built-in RBAC mode). In built-in RBAC mode, every `bindable_at` kind (on roles and `permissions` metadata) exists, every role in `includes` exists without cycles, and `creator_role` is bindable at every kind.
+3. Every route's scope is a kind, `user` or `public`, and its path, methods, `permissions`, `resource`, and upstream follow the [route rules](../reference/config/services.md#validation).
+4. Route `resource: { type, id }` templates require top-level `authorizer` (and `permissions != "any_member"`), and every `{placeholder}` in `resource.id` must exist in the route's scope/path.
 5. No two routes, in one service or across services, have the same method and shape ([route matching](../reference/config/services.md#matching)). No route matches `/access/routes`, where the gateway answers [route checks](../reference/gateway.md#route-checks), in any method.
 6. Every policy `defaults.rate_limit` names is in `rate_limits` and has no `count_at`. Every route's `rate_limit` names a policy in `rate_limits`, and a policy's `count_at` is the route's kind or an ancestor.
 
@@ -117,16 +116,16 @@ A dry run ignores `expect`. The apply recomputes the plan and fails with **409**
     { "op": "change", "what": "service", "name": "identity",
       "routes": [
         { "op": "add", "method": "GET", "path": "/orgs/{organization}/projects/{project}/envs",
-          "after": { "scope": "project", "upstream": "/nodes/{project.id}/children/environment", "required_permissions": "any_member", "rate_limit": ["standard"] } }
+          "after": { "scope": "project", "upstream": "/nodes/{project.id}/children/environment", "permissions": "any_member", "rate_limit": ["standard"] } }
       ] }
   ]
 }
 ```
 
-Changes are ordered kinds, settings, roles, authorizers, rate limits, CORS, services, then by name.
+Changes are ordered kinds, settings, roles, permissions, authorizer, rate limits, CORS, services, then by name.
 
 - `revision` is the config revision the plan was made against, `0` before the first apply. The apply sends it back as `expect.revision`.
-- `what` is `kind`, `setting` (`deletion_grace`, `reserved_slugs`, `defaults`, `creator_role`, `custom_roles`, or `permissions`), `role`, `authorizer`, `rate_limit`, `cors`, or `service`. `op` is `add`, `change` or `remove`.
+- `what` is `kind`, `setting` (`deletion_grace`, `reserved_slugs`, `policy_claims`, `defaults`, `creator_role`, or `custom_roles`), `role`, `permission`, `authorizer`, `rate_limit`, `cors`, or `service`. `op` is `add`, `change` or `remove`.
 - `before` and `after` show what changed, field by field: `before` comes from what readers are served now (the head's stored bodies); `after` is the new config expanded by the running control plane. After an upgrade, a plan of unchanged config shows exactly what the new version would serve differently ([upgrading](#upgrading)).
 - A service line lists its `routes`, expanded as the gateway will match them, each with its own `op`, `before` and `after`.
 - `summary` counts lines. A `blocked` line counts only in `blocked`, and any `blocked` line stops the whole apply.

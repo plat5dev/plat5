@@ -77,7 +77,7 @@ func (o *Op) Fail(err error) error {
 // Unavailable reports whether err means Postgres couldn't be reached or didn't
 // answer in time: a failed connect, a closed connection, a network
 // error, a timeout, or Postgres refusing connections. Those are 503s
-// (docs/reference/errors.md#which-status); any other failure is a 500.
+// (docs/reference/errors.md); any other failure is a 500.
 func Unavailable(err error) bool {
 	if err == nil {
 		return false

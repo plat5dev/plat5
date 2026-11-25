@@ -25,7 +25,7 @@
           "title": "url",
           "description": "Upstream, `http://host[:port]` (default port `80`) or `https://host[:port]` (default port `443`), no path or query, from the **gateway's** network view. Credentials in the URL, a port outside 1–65535, or any other form is **422**.",
           "type": "string",
-          "pattern": "^https?://[^/?#@:\\s]+(:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$"
+          "pattern": "^https?://(\\[[0-9a-fA-F:.]+\\]|[^/?#@:\\s]+)(:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$"
         },
         "timeouts": {
           "title": "timeouts",
@@ -36,11 +36,6 @@
           "title": "max_body_bytes",
           "description": "The largest request body forwarded to this service. Larger is **413**. Omitted uses `defaults.max_body_bytes`.",
           "$ref": "settings.json#/$defs/max_body_bytes"
-        },
-        "authorizer": {
-          "title": "authorizer",
-          "description": "Optional default external AuthZEN authorizer inherited by kind-scoped routes in this service, overriding a kind's authorizer, or `false` to opt out ([authorizers](authorizers.md)).",
-          "$ref": "authorizers.json#/$defs/route_authorizer"
         },
         "scopes": {
           "title": "scopes",
@@ -69,11 +64,6 @@
           "description": "Prepended to each route's path to make its default upstream. Placeholders with a dot only ([below](#upstream)).",
           "$ref": "#/$defs/upstream"
         },
-        "authorizer": {
-          "title": "authorizer",
-          "description": "Optional external AuthZEN authorizer inherited by routes in this scope (kind scopes only, [authorizers](authorizers.md)).",
-          "$ref": "authorizers.json#/$defs/route_authorizer"
-        },
         "routes": {
           "title": "routes",
           "description": "At least one.",
@@ -101,7 +91,7 @@
         },
         "methods": {
           "title": "methods",
-          "description": "The verbs: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`. A list is a map with no overrides. In a map, each verb's `required_permissions`, `rate_limit`, `audit`, `allow_public` and `authorizer` override the route's.",
+          "description": "The verbs: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`. A list is a map with no overrides. In a map, each verb's `permissions`, `rate_limit`, `audit`, and `resource` override the route's.",
           "oneOf": [
             { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/verb" } },
             {
@@ -114,10 +104,10 @@
             }
           ]
         },
-        "required_permissions": {
-          "title": "required_permissions",
-          "description": "Any one of these permissions admits. `any_member` admits any member of the tree, guests included. Required for every verb in a kind scope, from the route or the verb. Not in `user` or `public`.",
-          "$ref": "#/$defs/required_permissions"
+        "permissions": {
+          "title": "permissions",
+          "description": "Any one of these permissions admits (single permission string or list), or `any_member` for any member of the tree, guests included. Required for every verb in a kind scope, from the route or the verb. Not in `user` or `public`.",
+          "$ref": "#/$defs/permissions"
         },
         "rate_limit": {
           "title": "rate_limit",
@@ -134,15 +124,10 @@
           "description": "Default `false`. `true` lets the route's node be deleted (not purged); its own bindings are kept until purge and still count here, so whoever managed the node can restore it. For identity's restore route ([`reference/api/internal.md`](../api/internal.md#admit)). Kind scopes only.",
           "type": "boolean"
         },
-        "allow_public": {
-          "title": "allow_public",
-          "description": "Default `false`. Kind scopes only, when this kind or an ancestor sets `allow_public: true`. Lets unauthenticated (`all_users`) and non-member authenticated (`all_authenticated_users`) callers reach the route when a public binding grants a required permission.",
-          "type": "boolean"
-        },
-        "authorizer": {
-          "title": "authorizer",
-          "description": "Optional external AuthZEN authorizer for this route, or `false` to opt out of a kind/service/scope default (kind scopes only, [authorizers](authorizers.md)).",
-          "$ref": "authorizers.json#/$defs/route_authorizer"
+        "resource": {
+          "title": "resource",
+          "description": "Optional AuthZEN resource override (`{ type, id }`) when top-level `authorizer` is configured (kind scopes only, [authorizer](authorizer.md)).",
+          "$ref": "authorizer.json#/$defs/resource"
         }
       }
     },
@@ -164,15 +149,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "required_permissions": { "$ref": "#/$defs/required_permissions" },
+        "permissions": { "$ref": "#/$defs/permissions" },
         "rate_limit": { "$ref": "#/$defs/rate_limit" },
         "audit": { "type": "boolean" },
-        "allow_public": { "type": "boolean" },
-        "authorizer": { "$ref": "authorizers.json#/$defs/route_authorizer" }
+        "resource": { "$ref": "authorizer.json#/$defs/resource" }
       }
     },
-    "required_permissions": {
+    "permissions": {
       "oneOf": [
+        { "$ref": "roles.json#/$defs/permission" },
         {
           "type": "array",
           "minItems": 1,

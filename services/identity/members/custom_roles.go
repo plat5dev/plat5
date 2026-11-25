@@ -184,26 +184,32 @@ func (s *Store) ListRoles(ctx context.Context, snap *feed.Snapshot, nodeID strin
 		all = false
 	}
 	out := []RoleView{}
+	if snap.ExternalAuthz() {
+		op.OK("ok")
+		return out, nil
+	}
 	for _, slug := range snap.RoleSlugs() {
 		r := snap.Roles[slug]
 		if all || r.BindableAtKind(n.Kind) {
 			out = append(out, systemRoleView(r))
 		}
 	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, display_name, description, permissions, bindable_at, created_at, updated_at
-		FROM org_roles
-		WHERE root_id = $1 AND ($2 OR $3 = ANY(bindable_at))
-		ORDER BY id ASC
-	`, n.RootID, all, n.Kind)
-	if err != nil {
-		return nil, op.Fail(err)
+	if snap.CustomRoles {
+		rows, err := s.pool.Query(ctx, `
+			SELECT id, display_name, description, permissions, bindable_at, created_at, updated_at
+			FROM org_roles
+			WHERE root_id = $1 AND ($2 OR $3 = ANY(bindable_at))
+			ORDER BY id ASC
+		`, n.RootID, all, n.Kind)
+		if err != nil {
+			return nil, op.Fail(err)
+		}
+		customs, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (RoleView, error) { return scanCustomRole(r) })
+		if err != nil {
+			return nil, op.Fail(err)
+		}
+		out = append(out, customs...)
 	}
-	customs, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (RoleView, error) { return scanCustomRole(r) })
-	if err != nil {
-		return nil, op.Fail(err)
-	}
-	out = append(out, customs...)
 	op.OK("ok")
 	return out, nil
 }
@@ -218,12 +224,15 @@ func (s *Store) GetRole(ctx context.Context, snap *feed.Snapshot, nodeID, roleRe
 	if err != nil {
 		return nil, op.Reject(err, nodes.ErrNotFound)
 	}
+	if snap.ExternalAuthz() {
+		return nil, op.Expected("not found", ErrNotFound)
+	}
 	if r, ok := snap.Role(roleRef); ok {
 		v := systemRoleView(r)
 		op.OK("ok")
 		return &v, nil
 	}
-	if !id.Valid(roleRef) {
+	if !snap.CustomRoles || !id.Valid(roleRef) {
 		return nil, op.Expected("not found", ErrNotFound)
 	}
 	r, err := scanCustomRole(s.pool.QueryRow(ctx, `
@@ -240,18 +249,34 @@ func (s *Store) GetRole(ctx context.Context, snap *feed.Snapshot, nodeID, roleRe
 	return &r, nil
 }
 
+func collidesWithSystemRole(snap *feed.Snapshot, displayName string) bool {
+	lower := strings.ToLower(displayName)
+	for slug := range snap.Roles {
+		if strings.ToLower(slug) == lower {
+			return true
+		}
+	}
+	return false
+}
+
 // CreateCustomRole creates a custom role scoped to rootID.
 func (s *Store) CreateCustomRole(ctx context.Context, snap *feed.Snapshot, rootID string, in CustomRoleInput) (*RoleView, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_custom_role", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
+	if snap.ExternalAuthz() {
+		return nil, op.Expected("disabled", errBuiltInRBACDisabled())
+	}
 	if !snap.CustomRoles {
 		return nil, op.Expected("disabled", errors.FieldError("custom_roles", "Custom roles are not enabled for this deployment."))
 	}
 	displayName, err := normalizeRoleDisplayName(in.DisplayName)
 	if err != nil {
 		return nil, op.Expected("invalid", err)
+	}
+	if collidesWithSystemRole(snap, displayName) {
+		return nil, op.Expected("conflict", errors.ConflictError("A role with that name already exists.", "display_name", displayName))
 	}
 	desc, err := normalizeRoleDescription(in.Description)
 	if err != nil {
@@ -281,6 +306,9 @@ func (s *Store) CreateCustomRole(ctx context.Context, snap *feed.Snapshot, rootI
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
 		RETURNING id, display_name, description, permissions, bindable_at, created_at, updated_at
 	`, roleID, root.ID, displayName, desc, perms, bindableAt, now))
+	if dbx.IsUniqueViolation(err) {
+		return nil, op.Expected("conflict", errors.ConflictError("A role with that name already exists.", "display_name", displayName))
+	}
 	if err != nil {
 		return nil, op.Fail(err)
 	}
@@ -298,6 +326,9 @@ func (s *Store) PatchCustomRole(ctx context.Context, snap *feed.Snapshot, rootID
 	defer cancel()
 	defer op.End()
 
+	if snap.ExternalAuthz() {
+		return nil, nil, op.Expected("disabled", errBuiltInRBACDisabled())
+	}
 	if !snap.CustomRoles {
 		return nil, nil, op.Expected("disabled", errors.FieldError("custom_roles", "Custom roles are not enabled for this deployment."))
 	}
@@ -339,6 +370,9 @@ func (s *Store) PatchCustomRole(ctx context.Context, snap *feed.Snapshot, rootID
 		if displayName, err = normalizeRoleDisplayName(*patch.DisplayName); err != nil {
 			return nil, nil, op.Expected("invalid", err)
 		}
+		if collidesWithSystemRole(snap, displayName) {
+			return nil, nil, op.Expected("conflict", errors.ConflictError("A role with that name already exists.", "display_name", displayName))
+		}
 	}
 	desc := before.Description
 	if patch.Description != nil {
@@ -360,12 +394,20 @@ func (s *Store) PatchCustomRole(ctx context.Context, snap *feed.Snapshot, rootID
 		}
 	}
 
+	changed := before.DisplayName != displayName ||
+		before.Description != desc ||
+		!slices.Equal(before.Permissions, perms) ||
+		!slices.Equal(before.BindableAt, bindableAt)
 	after, err := scanCustomRole(w.tx.QueryRow(ctx, `
 		UPDATE org_roles
-		SET display_name = $2, description = $3, permissions = $4, bindable_at = $5, updated_at = $6
+		SET display_name = $2, description = $3, permissions = $4, bindable_at = $5,
+		    updated_at = CASE WHEN $6 THEN $7 ELSE updated_at END
 		WHERE id = $1
 		RETURNING id, display_name, description, permissions, bindable_at, created_at, updated_at
-	`, before.ID, displayName, desc, perms, bindableAt, s.now().UTC()))
+	`, before.ID, displayName, desc, perms, bindableAt, changed, s.now().UTC()))
+	if dbx.IsUniqueViolation(err) {
+		return nil, nil, op.Expected("conflict", errors.ConflictError("A role with that name already exists.", "display_name", displayName))
+	}
 	if err != nil {
 		return nil, nil, op.Fail(err)
 	}
@@ -385,6 +427,10 @@ func (s *Store) DeleteCustomRole(ctx context.Context, snap *feed.Snapshot, rootI
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "delete_custom_role", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
+
+	if snap.ExternalAuthz() {
+		return nil, op.Expected("disabled", errBuiltInRBACDisabled())
+	}
 
 	if _, isSystem := snap.Role(roleID); isSystem {
 		return nil, op.Expected("system role", errors.FieldError("role_id", "System roles cannot be deleted."))

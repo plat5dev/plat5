@@ -121,6 +121,13 @@ pub enum Refused {
 
 const KIND_NOT_EMPTY: &str = "kind_not_empty";
 
+pub(crate) fn missing_expect_error() -> FieldError {
+    FieldError::new(
+        "expect",
+        "required: the revision the plan was made against (0 for the first apply)",
+    )
+}
+
 /// The dry run: the plan against the bodies served at `revision` (`None`
 /// before the first apply). Writes nothing and ignores `expect`.
 pub async fn dry_run(
@@ -144,10 +151,7 @@ pub async fn apply(
     request_id: &str,
 ) -> Result<Plan, Refused> {
     let Some(expect) = expect else {
-        return Err(Refused::Invalid(vec![FieldError::new(
-            "expect",
-            "required: the revision the plan was made against (0 for the first apply)",
-        )]));
+        return Err(Refused::Invalid(vec![missing_expect_error()]));
     };
     if expect.revision != revision {
         return Err(Refused::Stale {
@@ -196,13 +200,6 @@ fn named(body: &Value, key: &str) -> BTreeMap<String, Value> {
         .and_then(Value::as_object)
         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_default()
-}
-
-/// Union of authorizers served to either gateway or identity.
-fn all_authorizers(s: &Served) -> BTreeMap<String, Value> {
-    let mut out = named(&s.identity, "authorizers");
-    out.extend(named(&s.gateway, "authorizers"));
-    out
 }
 
 async fn make_plan(
@@ -263,17 +260,25 @@ async fn make_plan(
     // Settings, with their defaults filled in. Before the first apply, a
     // setting at its default isn't a change.
     let old_settings = current.map_or_else(default_settings, settings);
-    for (name, value) in settings(next) {
-        match old_settings.get(&name) {
-            Some(old) if *old == value => {}
+    let new_settings = settings(next);
+    for (name, value) in &new_settings {
+        match old_settings.get(name) {
+            Some(old) if old == value => {}
             Some(old) if current.is_some() => changes.push(line(
                 Op::Change,
                 What::Setting,
-                &name,
+                name,
                 Some(old),
-                Some(&value),
+                Some(value),
             )),
-            _ => changes.push(line(Op::Add, What::Setting, &name, None, Some(&value))),
+            _ => changes.push(line(Op::Add, What::Setting, name, None, Some(value))),
+        }
+    }
+    if current.is_some() {
+        for (name, old) in &old_settings {
+            if !new_settings.contains_key(name) {
+                changes.push(line(Op::Remove, What::Setting, name, Some(old), None));
+            }
         }
     }
 
@@ -284,11 +289,36 @@ async fn make_plan(
             .unwrap_or_default(),
         &named(&next.identity, "roles"),
     ));
-    changes.extend(diff_map(
-        What::Authorizer,
-        &current.map(all_authorizers).unwrap_or_default(),
-        &all_authorizers(next),
-    ));
+
+    match (
+        current.and_then(|c| c.gateway.get("authorizer")),
+        next.gateway.get("authorizer"),
+    ) {
+        (None, None) => {}
+        (None, Some(after)) => changes.push(line(
+            Op::Add,
+            What::Authorizer,
+            "authorizer",
+            None,
+            Some(after),
+        )),
+        (Some(before), None) => changes.push(line(
+            Op::Remove,
+            What::Authorizer,
+            "authorizer",
+            Some(before),
+            None,
+        )),
+        (Some(before), Some(after)) if before != after => changes.push(line(
+            Op::Change,
+            What::Authorizer,
+            "authorizer",
+            Some(before),
+            Some(after),
+        )),
+        (Some(_), Some(_)) => {}
+    }
+
     changes.extend(diff_map(
         What::RateLimit,
         &current
@@ -355,21 +385,32 @@ async fn make_plan(
     })
 }
 
-/// The settings by name, as served, with their defaults filled in.
-fn settings(s: &Served) -> BTreeMap<String, Value> {
-    let mut slugs: Vec<Value> = s.identity["reserved_slugs"]
-        .as_array()
+fn sorted_string_array(body: &Value, key: &str) -> Value {
+    let mut vals: Vec<Value> = body
+        .get(key)
+        .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    slugs.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
-    BTreeMap::from([
+    vals.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+    Value::Array(vals)
+}
+
+/// The settings by name, as served, with their defaults filled in.
+fn settings(s: &Served) -> BTreeMap<String, Value> {
+    let mut map = BTreeMap::from([
         (
             "deletion_grace".into(),
             s.identity["deletion_grace"].clone(),
         ),
-        ("reserved_slugs".into(), Value::Array(slugs)),
+        (
+            "reserved_slugs".into(),
+            sorted_string_array(&s.identity, "reserved_slugs"),
+        ),
+        (
+            "policy_claims".into(),
+            sorted_string_array(&s.identity, "policy_claims"),
+        ),
         ("defaults".into(), s.gateway["defaults"].clone()),
-        ("creator_role".into(), s.identity["creator_role"].clone()),
         (
             "custom_roles".into(),
             s.identity
@@ -384,24 +425,33 @@ fn settings(s: &Served) -> BTreeMap<String, Value> {
                 .cloned()
                 .unwrap_or_else(|| json!({})),
         ),
-    ])
+    ]);
+    if let Some(creator_role) = s.identity.get("creator_role") {
+        map.insert("creator_role".into(), creator_role.clone());
+    }
+    map
 }
 
-/// What each setting is before the first apply. `creator_role` has none: every
-/// config states it.
+/// What each setting is before the first apply. `creator_role` has none: RBAC
+/// configs state it, authorizer configs omit it.
 fn default_settings() -> BTreeMap<String, Value> {
     BTreeMap::from([
         ("deletion_grace".into(), json!(DEFAULT_DELETION_GRACE)),
         ("reserved_slugs".into(), json!([])),
+        ("policy_claims".into(), json!([])),
         ("defaults".into(), json!({ "rate_limit": [] })),
         ("custom_roles".into(), json!(false)),
         ("permissions".into(), json!({})),
     ])
 }
 
-/// A service's own fields, as the gateway is served them.
+/// A service's own fields, as the gateway is served them (everything except `routes`).
 fn own(s: &Value) -> Value {
-    json!({ "url": s["url"], "timeouts": s["timeouts"], "max_body_bytes": s["max_body_bytes"] })
+    let mut v = s.clone();
+    if let Some(fields) = v.as_object_mut() {
+        fields.shift_remove("routes");
+    }
+    v
 }
 
 /// A line. On a change, `before` and `after` keep only the fields that differ.

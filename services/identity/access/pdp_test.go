@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,72 +13,90 @@ import (
 	"github.com/plat5dev/plat5/identity/feed"
 )
 
-func TestNeedsExternalModes(t *testing.T) {
-	cases := []struct {
-		mode    string
-		builtin bool
-		want    bool
-	}{
-		{feed.AuthorizerModeReplace, true, true},
-		{feed.AuthorizerModeReplace, false, true},
-		{feed.AuthorizerModeAnd, true, true},
-		{feed.AuthorizerModeAnd, false, false},
-		{feed.AuthorizerModeOr, true, false},
-		{feed.AuthorizerModeOr, false, true},
-	}
-	for _, tc := range cases {
-		if got := NeedsExternal(tc.mode, tc.builtin); got != tc.want {
-			t.Errorf("NeedsExternal(%q, %v) = %v, want %v", tc.mode, tc.builtin, got, tc.want)
-		}
-	}
-}
-
-func TestFeedParsesAuthorizersAndTokenEnv(t *testing.T) {
+func TestFeedParsesAuthorizerAndTokenEnv(t *testing.T) {
 	t.Setenv("TEST_TOPAZ_TOKEN", "tok-abc")
 	raw := []byte(`{
 		"revision": 3,
 		"deletion_grace": "30d",
 		"reserved_slugs": [],
-		"authorizers": {
-			"topaz": {
-				"url": "http://topaz:8383/",
-				"timeout": "3s",
-				"cache_ttl": "0s",
-				"negative_cache_ttl": "5s",
-				"token_env": "TEST_TOPAZ_TOKEN"
-			}
+		"policy_claims": ["amr", "idp_connection"],
+		"authorizer": {
+			"url": "http://topaz:8383/",
+			"timeout": "3s",
+			"token_env": "TEST_TOPAZ_TOKEN"
 		},
 		"kinds": {
 			"organization": { "list_permission": "organization:read" },
 			"project": {
 				"parent": "organization",
-				"list_permission": "project:read",
-				"authorizer": { "name": "topaz", "mode": "or" }
+				"list_permission": "project:read"
 			}
-		},
-		"roles": { "admin": { "permissions": ["*"], "bindable_at": ["organization", "project"] } },
-		"creator_role": "admin"
+		}
 	}`)
 	snap, err := feed.Parse(raw)
 	if err != nil {
 		t.Fatalf("Parse failed: %v", err)
 	}
-	authz, ok := snap.Authorizers["topaz"]
-	if !ok {
-		t.Fatal("missing topaz authorizer")
+	if !snap.ExternalAuthz() || snap.Authorizer == nil {
+		t.Fatal("expected external authorizer mode")
 	}
-	if authz.URL != "http://topaz:8383" || authz.Timeout != 3*time.Second || authz.Token != "tok-abc" {
-		t.Fatalf("unexpected authorizer: %+v", authz)
+	if snap.Authorizer.URL != "http://topaz:8383" || snap.Authorizer.Timeout != 3*time.Second || snap.Authorizer.Token != "tok-abc" {
+		t.Fatalf("unexpected authorizer: %+v", snap.Authorizer)
 	}
-	proj, _ := snap.Kind("project")
-	if proj.Authorizer == nil || proj.Authorizer.Name != "topaz" || proj.Authorizer.Mode != feed.AuthorizerModeOr {
-		t.Fatalf("unexpected project authorizer: %+v", proj.Authorizer)
+	if !snap.PolicyClaims["amr"] || !snap.PolicyClaims["idp_connection"] {
+		t.Fatalf("unexpected policy_claims: %+v", snap.PolicyClaims)
 	}
 
 	// Missing env var refuses the snapshot.
 	t.Setenv("TEST_TOPAZ_TOKEN", "")
 	if _, err := feed.Parse(raw); err == nil {
 		t.Fatal("expected error when token_env is unset")
+	}
+
+	// Mutual exclusion: authorizer + roles is refused.
+	t.Setenv("TEST_TOPAZ_TOKEN", "tok-abc")
+	both := []byte(`{
+		"revision": 4,
+		"authorizer": { "url": "http://topaz:8383", "timeout": "3s", "token_env": "TEST_TOPAZ_TOKEN" },
+		"kinds": { "organization": { "list_permission": "organization:read" } },
+		"roles": { "admin": { "permissions": ["*"], "bindable_at": ["organization"] } },
+		"creator_role": "admin"
+	}`)
+	if _, err := feed.Parse(both); err == nil {
+		t.Fatal("expected error when both authorizer and roles are set")
+	}
+}
+
+func TestBuildNodeAuthzenRequest(t *testing.T) {
+	req := BuildNodeAuthzenRequest("01m1", "person", "01r1", "project:read", "project", "01p1", []ChainNode{
+		{Kind: "organization", ID: "01r1"},
+	})
+	if req.Subject.Type != "member" || req.Subject.ID != "01m1" {
+		t.Fatalf("unexpected subject: %+v", req.Subject)
+	}
+	if req.Subject.Properties["principal"] != "person" || req.Subject.Properties["root_id"] != "01r1" {
+		t.Fatalf("unexpected subject properties: %+v", req.Subject.Properties)
+	}
+	if req.Action.Name != "project:read" || req.Resource.Type != "project" || req.Resource.ID != "01p1" {
+		t.Fatalf("unexpected action/resource: %+v %+v", req.Action, req.Resource)
+	}
+	if req.Resource.Properties["root_id"] != "01r1" {
+		t.Fatalf("unexpected resource properties: %+v", req.Resource.Properties)
+	}
+}
+
+func TestIsBlockedIP(t *testing.T) {
+	blocked := []string{"127.0.0.1", "10.0.0.1", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "::1", "fc00::1", "fe80::1", "::ffff:127.0.0.1"}
+	for _, s := range blocked {
+		if !isBlockedIP(net.ParseIP(s)) {
+			t.Errorf("isBlockedIP(%s) = false, want true", s)
+		}
+	}
+	allowed := []string{"8.8.8.8", "1.1.1.1", "93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"}
+	for _, s := range allowed {
+		if isBlockedIP(net.ParseIP(s)) {
+			t.Errorf("isBlockedIP(%s) = true, want false", s)
+		}
 	}
 }
 
@@ -117,7 +136,7 @@ func TestHTTPPDPWireAndFailClosed(t *testing.T) {
 		},
 	}
 
-	authz := feed.Authorizer{Name: "topaz", URL: "http://topaz.internal:8383", Timeout: time.Second, Token: "secret"}
+	authz := feed.Authorizer{URL: "http://topaz.internal:8383", Timeout: time.Second, Token: "secret"}
 
 	// Single evaluation hits /access/v1/evaluation.
 	res, err := pdp.EvaluateBatch(context.Background(), authz, []AuthzenRequest{
@@ -158,6 +177,18 @@ func TestHTTPPDPWireAndFailClosed(t *testing.T) {
 	}
 	if _, err := badPDP.EvaluateBatch(context.Background(), authz, []AuthzenRequest{{}}); !errors.Is(err, ErrPDPUnavailable) {
 		t.Fatalf("expected ErrPDPUnavailable, got %v", err)
+	}
+
+	// Redirects are never followed and fail closed as ErrPDPUnavailable.
+	redirectPDP := NewHTTPPDP()
+	redirectPDP.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		rec := httptest.NewRecorder()
+		rec.Header().Set("Location", "http://169.254.169.254/latest/meta-data/")
+		rec.WriteHeader(http.StatusFound)
+		return rec.Result(), nil
+	})
+	if _, err := redirectPDP.EvaluateBatch(context.Background(), authz, []AuthzenRequest{{}}); !errors.Is(err, ErrPDPUnavailable) {
+		t.Fatalf("expected ErrPDPUnavailable on redirect, got %v", err)
 	}
 
 	// Batch evaluation with omitted decision fails closed with ErrPDPUnavailable.

@@ -128,12 +128,17 @@ func (s *Store) FirstSignIn(ctx context.Context, issuer, subject, name string) (
 		return "", "", "", err
 	}
 	if err := w.tx.QueryRow(ctx, `
-		UPDATE principals SET name = CASE
-			WHEN $2 = '' THEN name
-			ELSE COALESCE(name, $2)
-		END
+		UPDATE principals
+		SET name = CASE
+				WHEN $2 = '' THEN name
+				ELSE COALESCE(name, $2)
+			END,
+			updated_at = CASE
+				WHEN $2 = '' OR name IS NOT NULL THEN updated_at
+				ELSE $3
+			END
 		WHERE id = $1 RETURNING user_id, status
-	`, principalID, name).Scan(&userID, &status); err != nil {
+	`, principalID, name, s.now().UTC()).Scan(&userID, &status); err != nil {
 		return "", "", "", err
 	}
 	return principalID, userID, status, w.commit(ctx)
@@ -202,8 +207,14 @@ func (s *Store) addMember(ctx context.Context, snap *feed.Snapshot, rootID strin
 	if err := nodes.Writable(root); err != nil {
 		return nil, nil, op.Reject(err)
 	}
-	if err := checkRoleTx(ctx, w.tx, snap, root.ID, in.Role, root.Kind, "role"); err != nil {
-		return nil, nil, op.Expected("invalid", err)
+	if snap.ExternalAuthz() {
+		if strings.TrimSpace(in.Role) != "" {
+			return nil, nil, op.Expected("invalid", errors.FieldError("role", "Roles are managed by the external authorizer."))
+		}
+	} else {
+		if err := checkRoleTx(ctx, w.tx, snap, root.ID, in.Role, root.Kind, "role"); err != nil {
+			return nil, nil, op.Expected("invalid", err)
+		}
 	}
 	principalID, userID, err := s.ensurePerson(ctx, w, issuer, subject)
 	if err != nil {
@@ -223,9 +234,12 @@ func (s *Store) addMember(ctx context.Context, snap *feed.Snapshot, rootID strin
 	if err != nil {
 		return nil, nil, op.Fail(err)
 	}
-	b, err := s.insertBinding(ctx, w, memberID, root.ID, in.Role, nil)
-	if err != nil {
-		return nil, nil, op.Reject(err)
+	var b *Binding
+	if !snap.ExternalAuthz() {
+		b, err = s.insertBinding(ctx, w, memberID, root.ID, in.Role, nil)
+		if err != nil {
+			return nil, nil, op.Reject(err)
+		}
 	}
 	w.invalidate(lifecycle.InvalidateUser(userID))
 	m, err := s.getMember(ctx, w.tx, memberID)
@@ -256,7 +270,7 @@ func (s *Store) ListMembers(ctx context.Context, rootID string, limit int, start
 	if err != nil {
 		return nil, false, op.Fail(err)
 	}
-	out, hasMore := page(out, limit)
+	out, hasMore := dbx.Page(out, limit)
 	op.OK("ok")
 	return out, hasMore, nil
 }
@@ -282,43 +296,48 @@ func (s *Store) GetMember(ctx context.Context, rootID, memberID string) (*Member
 
 // RemoveMember removes a member from a root's tree: bindings deleted,
 // member.removed. Final. A member already removed is left as it is: changed
-// is false. A service account's member goes only with the service account.
-func (s *Store) RemoveMember(ctx context.Context, rootID, memberID string) (bool, error) {
+// is false. Returns the member's status prior to removal when changed is true.
+// A service account's member goes only with the service account.
+func (s *Store) RemoveMember(ctx context.Context, rootID, memberID string) (string, bool, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "remove_member", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
 	w, err := s.begin(ctx)
 	if err != nil {
-		return false, op.Fail(err)
+		return "", false, op.Fail(err)
 	}
 	defer w.rollback(ctx)
 	root, err := s.lockedRoot(ctx, w, rootID)
 	if err != nil {
-		return false, op.Reject(err, nodes.ErrNotFound)
+		return "", false, op.Reject(err, nodes.ErrNotFound)
 	}
 	m, err := s.lockedMember(ctx, w, memberID)
 	if err == nil && m.rootID != root.ID {
 		err = ErrNotFound
 	}
 	if err != nil {
-		return false, op.Reject(err, ErrNotFound)
+		return "", false, op.Reject(err, ErrNotFound)
 	}
 	if m.principal == PrincipalServiceAccount {
-		return false, op.Expected("service account", errors.FieldError("member_id", "Delete the service account to remove it."))
+		return "", false, op.Expected("service account", errors.FieldError("member_id", "Delete the service account to remove it."))
 	}
 	if m.removed {
 		op.OK("unchanged")
-		return false, nil
+		return StatusRemoved, false, nil
+	}
+	prior := StatusActive
+	if m.suspended {
+		prior = StatusSuspended
 	}
 	if err := s.removeMember(ctx, w, m); err != nil {
-		return false, op.Fail(err)
+		return "", false, op.Fail(err)
 	}
 	if err := w.commit(ctx); err != nil {
-		return false, op.Fail(err)
+		return "", false, op.Fail(err)
 	}
 	op.OK("removed")
-	return true, nil
+	return prior, true, nil
 }
 
 // SetMemberStatus reversibly suspends or reactivates a member within one tree

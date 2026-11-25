@@ -11,9 +11,9 @@ flowchart LR
   gateway -->|"/internal/gateway feed<br/>CONTROL_PLANE_URL"| cp[control-plane]
   gateway -->|audited writes<br/>AUDIT_URL| audit
   gateway --> valkey[(Valkey<br/>rate limits)]
-  gateway -.->|optional AuthZEN 1.0<br/>authorizers| pdp([external PDP])
-  identity -->|identity feed: kinds, roles, authorizers<br/>blocks boot| cp
-  identity -.->|optional AuthZEN 1.0<br/>kind authorizers| pdp
+  gateway -.->|optional AuthZEN 1.0<br/>authorizer| pdp([external PDP])
+  identity -->|identity feed: kinds, roles, authorizer<br/>blocks boot| cp
+  identity -.->|optional AuthZEN 1.0<br/>authorizer| pdp
   cp -.->|plan counts, only when a plan<br/>removes a kind or changes a parent| identity
   identity --> pg[(Postgres)]
   audit --> pg
@@ -96,7 +96,7 @@ No cycles. `events` is the only domain package.
 |---|---|---|---|
 | **gateway** (service) | The public edge: routing, auth, outbound AuthZEN, rate limits, CORS, upstream signing, audit emission | identity, control-plane, audit, Valkey, optional AuthZEN PDP | clients, e2e |
 | gw `gateway` | Pingora request handler, route checks, request logging, Ed25519 request signing | nearly every module | `lib`, `config` (`signing`) |
-| gw `pipeline` | Per-request decision: admit, permissions, outbound authorizer composition, rate limits, route checks, upstream fill | route_map, auth, authorizer, rate_limit, control_plane, error, kinds, metrics | gateway |
+| gw `pipeline` | Per-request decision: admit, permissions, outbound authorizer, rate limits, route checks, upstream fill | route_map, auth, authorizer, rate_limit, control_plane, error, kinds, metrics | gateway |
 | gw `route_map` | Route table built from the control-plane snapshot, subdomain host matching, compiled upstream templates | kinds, duration | gateway, pipeline, control_plane, error |
 | gw `auth` | JWT validation (including scope and policy claims), admit calls and cache, admit invalidation follower/epochs, IP allowlist checks | error, internal_http, client_ip, time, metrics | gateway, pipeline, audit, config, health |
 | gw `authorizer` | Outbound OpenID AuthZEN 1.0 client and TTL response cache | internal_http, route_map, net, metrics | gateway, pipeline |

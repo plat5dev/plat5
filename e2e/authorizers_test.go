@@ -128,22 +128,26 @@ func startEchoUpstream(t *testing.T, dockerHost string) string {
 }
 
 func configWithDocsAuthorizer(base map[string]any, authzURL, upstreamURL, cacheTTL string) map[string]any {
-	base["authorizers"] = map[string]any{
-		"pdp": map[string]any{
-			"url":                authzURL,
-			"timeout":            "2s",
-			"cache_ttl":          cacheTTL,
-			"negative_cache_ttl": cacheTTL,
-		},
+	delete(base, "roles")
+	delete(base, "creator_role")
+	delete(base, "custom_roles")
+	delete(base, "permissions")
+	base["authorizer"] = map[string]any{
+		"url":                authzURL,
+		"timeout":            "2s",
+		"cache_ttl":          cacheTTL,
+		"negative_cache_ttl": cacheTTL,
 	}
-	kinds := base["kinds"].(map[string]any)
-	projKind := kinds["project"].(map[string]any)
-	projKind["authorizer"] = map[string]any{"name": "pdp", "mode": "or"}
 
 	services := base["services"].(map[string]any)
 	services["docs"] = map[string]any{
 		"url": upstreamURL,
 		"scopes": map[string]any{
+			"public": map[string]any{
+				"routes": []any{
+					map[string]any{"path": "/pdp-ready", "methods": []string{"GET"}},
+				},
+			},
 			"project": map[string]any{
 				"upstream_prefix": "/projects/{project.id}",
 				"routes": []any{
@@ -151,28 +155,16 @@ func configWithDocsAuthorizer(base map[string]any, authzURL, upstreamURL, cacheT
 						"path": "/docs/{doc_id}",
 						"methods": map[string]any{
 							"GET": map[string]any{
-								"required_permissions": []string{"docs:read"},
-								"authorizer": map[string]any{
-									"name":     "pdp",
-									"mode":     "or",
-									"resource": map[string]any{"type": "document", "id": "{doc_id}"},
-								},
+								"permissions": "docs:read",
+								"resource":    map[string]any{"type": "document", "id": "{doc_id}"},
 							},
 							"PATCH": map[string]any{
-								"required_permissions": []string{"docs:write"},
-								"authorizer": map[string]any{
-									"name":     "pdp",
-									"mode":     "and",
-									"resource": map[string]any{"type": "document", "id": "{doc_id}"},
-								},
+								"permissions": "docs:write",
+								"resource":    map[string]any{"type": "document", "id": "{doc_id}"},
 							},
 							"DELETE": map[string]any{
-								"required_permissions": []string{"docs:delete"},
-								"authorizer": map[string]any{
-									"name":     "pdp",
-									"mode":     "replace",
-									"resource": map[string]any{"type": "document", "id": "{doc_id}"},
-								},
+								"permissions": "docs:delete",
+								"resource":    map[string]any{"type": "document", "id": "{doc_id}"},
 							},
 						},
 					},
@@ -183,9 +175,20 @@ func configWithDocsAuthorizer(base map[string]any, authzURL, upstreamURL, cacheT
 	return base
 }
 
-// TestOutboundAuthZEN exercises replace/and/or composition modes, record-level
-// resource templates, POST /access/routes batching, identity list_permission
-// filtering, and fail-closed 503 end to end.
+func waitForPublicRoute(t *testing.T, s *stack, c caller, path string, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for s.routeChecks(c, check{"GET", path})[0] != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("gateway never reflected %s (want %v)", path, want)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// TestOutboundAuthZEN exercises top-level all-or-nothing external authorization,
+// record-level resource templates, POST /access/routes batching, identity
+// list_permission filtering, and fail-closed 503 end to end.
 func TestOutboundAuthZEN(t *testing.T) {
 	s := newStack(t)
 	dockerHost := env("E2E_DOCKER_HOST", "host.docker.internal")
@@ -193,53 +196,62 @@ func TestOutboundAuthZEN(t *testing.T) {
 	pdp := startMockPDP(t, dockerHost)
 	upstream := startEchoUpstream(t, dockerHost)
 
-	base := s.config()
-	t.Cleanup(func() { s.apply(s.config()) })
-	s.apply(configWithDocsAuthorizer(base, pdp.url, upstream, "0s"))
-
 	run := fmt.Sprintf("%d", time.Now().UnixNano())
 	owner := s.person("e2e-authz-owner-" + run)
 	bob := s.person("e2e-authz-bob-" + run)
 
+	base := s.config()
+	t.Cleanup(func() {
+		s.apply(s.config())
+		waitForPublicRoute(t, s, owner, "/pdp-ready", false)
+	})
+	s.apply(configWithDocsAuthorizer(base, pdp.url, upstream, "0s"))
+	waitForPublicRoute(t, s, owner, "/pdp-ready", true)
+
 	var org, proj1, proj2 node
 	s.call(owner, "POST", "/orgs", map[string]string{"display_name": "AuthZEN " + run}, 201, &org)
 	orgPath := "/orgs/" + org.Slug
+
+	var ownerM membership
+	s.call(owner, "GET", orgPath+"/membership", nil, 200, &ownerM)
+
+	// In PDP mode, all permission-gated routes consult the authorizer.
+	pdp.grant(ownerM.MemberID, "project:create", "organization", org.ID, true)
+	pdp.grant(ownerM.MemberID, "organization:bindings:write", "organization", org.ID, true)
+
 	s.call(owner, "POST", orgPath+"/projects", map[string]string{"display_name": "Alpha"}, 201, &proj1)
 	s.call(owner, "POST", orgPath+"/projects", map[string]string{"display_name": "Beta"}, 201, &proj2)
 
 	var invite struct {
 		Token string `json:"token"`
 	}
-	s.call(owner, "POST", orgPath+"/invites", map[string]string{"role": "member"}, 201, &invite)
+	s.call(owner, "POST", orgPath+"/invites", map[string]any{}, 201, &invite)
 	var redeemed struct {
 		MemberID string `json:"member_id"`
 	}
 	s.call(bob, "POST", "/user/invites/redeem", map[string]string{"token": invite.Token}, 200, &redeemed)
 	bobM := redeemed.MemberID
 
-	var ownerM membership
-	s.call(owner, "GET", orgPath+"/membership", nil, 200, &ownerM)
-
 	docPath := orgPath + "/projects/" + proj1.Slug + "/docs/doc-42"
 
-	// 1. `or` mode: owner (admin *) succeeds without PDP grant; bob is denied until PDP grants doc-42.
-	s.call(owner, "GET", docPath, nil, 200, nil)
+	// 1. Neither owner nor bob can read doc-42 until the PDP grants docs:read.
+	s.call(owner, "GET", docPath, nil, 403, nil)
 	s.call(bob, "GET", docPath, nil, 403, nil)
 
 	pdp.grant(bobM, "docs:read", "document", "doc-42", true)
 	s.call(bob, "GET", docPath, nil, 200, nil)
+	s.call(owner, "GET", docPath, nil, 403, nil)
 
-	// 2. `and` mode: owner has `*`, still denied until PDP also grants docs:write.
+	// 2. PATCH and DELETE each require their own PDP grant on document:doc-42.
 	s.call(owner, "PATCH", docPath, map[string]any{}, 403, nil)
 	pdp.grant(ownerM.MemberID, "docs:write", "document", "doc-42", true)
 	s.call(owner, "PATCH", docPath, map[string]any{}, 200, nil)
 
-	// 3. `replace` mode: even owner (`*`) needs PDP grant for DELETE.
 	s.call(owner, "DELETE", docPath, nil, 403, nil)
 	pdp.grant(ownerM.MemberID, "docs:delete", "document", "doc-42", true)
 	s.call(owner, "DELETE", docPath, nil, 200, nil)
 
-	// 4. `POST /access/routes` reflects external record-level decisions for bob.
+	// 3. `POST /access/routes` reflects external record-level decisions for bob.
 	var checksResp struct {
 		Checks []struct {
 			Allowed bool `json:"allowed"`
@@ -256,18 +268,18 @@ func TestOutboundAuthZEN(t *testing.T) {
 		t.Fatalf("unexpected /access/routes checks: %+v", checksResp.Checks)
 	}
 
-	// 5. Identity `list_permission` (`project.authorizer: or`): bob has no built-in project binding,
-	//    so PDP granting project:read on proj2 makes only proj2 appear in GET /orgs/{org}/projects.
+	// 4. Identity `list_permission` (`project:read`): PDP granting project:read
+	//    on proj2 makes only proj2 appear in GET /orgs/{org}/projects.
 	pdp.grant(bobM, "project:read", "project", proj2.ID, true)
 	var listResp struct {
-		Data []node `json:"data"`
+		Nodes []node `json:"nodes"`
 	}
 	s.call(bob, "GET", orgPath+"/projects", nil, 200, &listResp)
-	if len(listResp.Data) != 1 || listResp.Data[0].ID != proj2.ID {
-		t.Fatalf("expected only proj2 (%s), got %+v", proj2.ID, listResp.Data)
+	if len(listResp.Nodes) != 1 || listResp.Nodes[0].ID != proj2.ID {
+		t.Fatalf("expected only proj2 (%s), got %+v", proj2.ID, listResp.Nodes)
 	}
 
-	// 6. Fail closed 503 when PDP is down.
+	// 5. Fail closed 503 when PDP is down.
 	pdp.down.Store(true)
 	s.call(bob, "GET", docPath, nil, 503, nil)
 	pdp.down.Store(false)
@@ -293,24 +305,45 @@ func TestOutboundAuthZENTopaz(t *testing.T) {
 	}
 	topazDo(t, s.http, http.MethodPost, topazDir+"/api/v3/directory/manifest", apiKey, "application/yaml", manifest)
 
-	upstream := startEchoUpstream(t, dockerHost)
-	base := s.config()
-	t.Cleanup(func() { s.apply(s.config()) })
-	s.apply(configWithDocsAuthorizer(base, topazInternal, upstream, "0s"))
-
 	run := fmt.Sprintf("%d", time.Now().UnixNano())
 	owner := s.person("e2e-topaz-owner-" + run)
 	bob := s.person("e2e-topaz-bob-" + run)
 
+	upstream := startEchoUpstream(t, dockerHost)
+	base := s.config()
+	t.Cleanup(func() {
+		s.apply(s.config())
+		waitForPublicRoute(t, s, owner, "/pdp-ready", false)
+	})
+	s.apply(configWithDocsAuthorizer(base, topazInternal, upstream, "0s"))
+	waitForPublicRoute(t, s, owner, "/pdp-ready", true)
+
 	var org, proj node
 	s.call(owner, "POST", "/orgs", map[string]string{"display_name": "Topaz " + run}, 201, &org)
 	orgPath := "/orgs/" + org.Slug
+
+	var ownerM membership
+	s.call(owner, "GET", orgPath+"/membership", nil, 200, &ownerM)
+
+	// Grant owner admin on the org in Topaz so they can create projects and invites.
+	for _, obj := range []map[string]any{
+		{"object": map[string]any{"type": "member", "id": ownerM.MemberID}},
+		{"object": map[string]any{"type": "organization", "id": org.ID}},
+	} {
+		b, _ := json.Marshal(obj)
+		topazDo(t, s.http, http.MethodPost, topazDir+"/api/v3/directory/object", apiKey, "application/json", b)
+	}
+	b, _ := json.Marshal(map[string]any{
+		"relation": map[string]any{"subject_type": "member", "subject_id": ownerM.MemberID, "relation": "admin", "object_type": "organization", "object_id": org.ID},
+	})
+	topazDo(t, s.http, http.MethodPost, topazDir+"/api/v3/directory/relation", apiKey, "application/json", b)
+
 	s.call(owner, "POST", orgPath+"/projects", map[string]string{"display_name": "Docs"}, 201, &proj)
 
 	var invite struct {
 		Token string `json:"token"`
 	}
-	s.call(owner, "POST", orgPath+"/invites", map[string]string{"role": "member"}, 201, &invite)
+	s.call(owner, "POST", orgPath+"/invites", map[string]any{}, 201, &invite)
 	var redeemed struct {
 		MemberID string `json:"member_id"`
 	}
@@ -345,11 +378,11 @@ func TestOutboundAuthZENTopaz(t *testing.T) {
 	s.call(bob, "DELETE", docPath, nil, 403, nil)
 
 	var listResp struct {
-		Data []node `json:"data"`
+		Nodes []node `json:"nodes"`
 	}
 	s.call(bob, "GET", orgPath+"/projects", nil, 200, &listResp)
-	if len(listResp.Data) != 1 || listResp.Data[0].ID != proj.ID {
-		t.Fatalf("expected Topaz-granted project %s, got %+v", proj.ID, listResp.Data)
+	if len(listResp.Nodes) != 1 || listResp.Nodes[0].ID != proj.ID {
+		t.Fatalf("expected Topaz-granted project %s, got %+v", proj.ID, listResp.Nodes)
 	}
 }
 

@@ -106,18 +106,23 @@ services:
       AUTH_ALLOWED_AUDIENCES: ${AUTH_ALLOWED_AUDIENCES:-plat5}
       AUTH_SUBJECT_CLAIM: ${AUTH_SUBJECT_CLAIM:-properties.user_id}
       AUTH_NAME_CLAIMS: ${AUTH_NAME_CLAIMS:-name,preferred_username}
+      AUTH_SCOPE_CLAIM: ${AUTH_SCOPE_CLAIM:-}
       IDENTITY_INTERNAL_URL: http://identity:3001
       ADMIT_CACHE_TTL: ${ADMIT_CACHE_TTL:-5m}
       ADMIT_NEGATIVE_CACHE_TTL: ${ADMIT_NEGATIVE_CACHE_TTL:-10s}
-      # Audit is on unless AUDIT_ENABLED=false (then audit need not run).
-      AUDIT_ENABLED: ${AUDIT_ENABLED:-true}
+      # Audit is sync by default; set AUDIT_MODE=off to disable (then audit need not run).
+      AUDIT_MODE: ${AUDIT_MODE:-sync}
       AUDIT_URL: http://audit:3003
       # Rate limiting is on unless RATE_LIMIT_ENABLED=false (then valkey need not run).
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
       VALKEY_URL: redis://valkey:6379
+      VALKEY_KEY_PREFIX: ${VALKEY_KEY_PREFIX:-}
       RATE_LIMIT_AUTH_FAILURE_REQUESTS: ${RATE_LIMIT_AUTH_FAILURE_REQUESTS:-60}
       RATE_LIMIT_AUTH_FAILURE_WINDOW: ${RATE_LIMIT_AUTH_FAILURE_WINDOW:-60s}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      UPSTREAM_SIGNING_KEY: ${UPSTREAM_SIGNING_KEY:-}
+      UPSTREAM_SIGNING_KEY_ID: ${UPSTREAM_SIGNING_KEY_ID:-}
+      UPSTREAM_BLOCK_PRIVATE_IPS: ${UPSTREAM_BLOCK_PRIVATE_IPS:-}
       RUST_LOG: info
       # Kinds, routes, rate limits and CORS (docs/reference/gateway.md#control-plane).
       CONTROL_PLANE_URL: http://control-plane:5003
@@ -145,6 +150,7 @@ services:
       start_period: 30s
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    restart: unless-stopped
 
   identity:
     build:
@@ -160,6 +166,7 @@ services:
       SECRET_BRAND: ${SECRET_BRAND:-plat5}
       DATABASE_URL: postgres://plat5:plat5@postgres:5432/plat5?sslmode=disable
       CONTROL_PLANE_URL: http://control-plane:5003
+      UPSTREAM_BLOCK_PRIVATE_IPS: ${UPSTREAM_BLOCK_PRIVATE_IPS:-}
       OTEL_SERVICE_NAME: identity
       OTEL_RESOURCE_ATTRIBUTES: service.namespace=identity,deployment.environment=docker
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}

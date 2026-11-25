@@ -121,7 +121,6 @@ pub struct Authenticator {
     jwt_cache: JwtCache,
     subject_claim: Vec<String>,
     scope_claim: Option<Vec<String>>,
-    policy_claims: Vec<(String, Vec<String>)>,
 }
 
 impl Authenticator {
@@ -129,23 +128,23 @@ impl Authenticator {
         jwt_validator: JwtValidatorState,
         subject_claim: Vec<String>,
         scope_claim: Option<Vec<String>>,
-        policy_claims: Vec<(String, Vec<String>)>,
     ) -> Self {
         Self {
             jwt_validator,
             jwt_cache: JwtCache::new(JWT_CACHE_CAPACITY, JWT_CACHE_TTL_BUFFER_SECS),
             subject_claim,
             scope_claim,
-            policy_claims,
         }
     }
 
     /// The request's credential, from `Authorization: Bearer`. `name_claims` is
     /// `AUTH_NAME_CLAIMS`: a JWT's name is the first of them that's non-empty.
+    /// `policy_claims` comes from the live control-plane snapshot.
     pub async fn present(
         &self,
         req: &RequestHeader,
         name_claims: &[Vec<String>],
+        policy_claims: &[(String, Vec<String>)],
     ) -> Result<Presented, AuthError> {
         let authorization = req
             .headers
@@ -200,7 +199,7 @@ impl Authenticator {
             .scope_claim
             .as_deref()
             .and_then(|path| extract_scopes(&claims, path));
-        let policy_claims = extract_policy_claims(&claims, &self.policy_claims);
+        let policy_claims = extract_policy_claims(&claims, policy_claims);
         Ok(Presented::Jwt {
             // Validation checked `iss` against the configured issuer.
             issuer: self.jwt_validator.get_issuer(),
@@ -226,24 +225,7 @@ pub fn jwt_error_reason(err: &jsonwebtoken::errors::Error) -> &'static str {
     }
 }
 
-/// Walk a dotted path into JWT claims JSON (e.g. `sub`, `properties.user_id`).
-/// A missing or empty string is None.
-pub fn extract_claim_path(claims: &Value, path: &[String]) -> Option<String> {
-    let mut cur = claims;
-    for key in path {
-        cur = cur.get(key)?;
-    }
-    let s = cur.as_str()?;
-    if s.is_empty() {
-        return None;
-    }
-    Some(s.to_string())
-}
-
-/// Walk a dotted path into JWT claims JSON for OAuth scopes (`AUTH_SCOPE_CLAIM`).
-/// Accepts a space-delimited string or a JSON array of strings, returning sorted,
-/// deduplicated values. Missing, `null`, or non-string/array values return `None`.
-pub fn extract_scopes(claims: &Value, path: &[String]) -> Option<Vec<String>> {
+fn walk_claim_path<'a>(claims: &'a Value, path: &[String]) -> Option<&'a Value> {
     if path.is_empty() {
         return None;
     }
@@ -251,6 +233,21 @@ pub fn extract_scopes(claims: &Value, path: &[String]) -> Option<Vec<String>> {
     for key in path {
         cur = cur.get(key)?;
     }
+    Some(cur)
+}
+
+/// Walk a dotted path into JWT claims JSON (e.g. `sub`, `properties.user_id`).
+/// A missing or empty string is None.
+pub fn extract_claim_path(claims: &Value, path: &[String]) -> Option<String> {
+    let s = walk_claim_path(claims, path)?.as_str()?;
+    (!s.is_empty()).then(|| s.to_string())
+}
+
+/// Walk a dotted path into JWT claims JSON for OAuth scopes (`AUTH_SCOPE_CLAIM`).
+/// Accepts a space-delimited string or a JSON array of strings, returning sorted,
+/// deduplicated values. Missing, `null`, or non-string/array values return `None`.
+pub fn extract_scopes(claims: &Value, path: &[String]) -> Option<Vec<String>> {
+    let cur = walk_claim_path(claims, path)?;
     let mut scopes: Vec<String> = match cur {
         Value::String(s) => s.split_whitespace().map(str::to_string).collect(),
         Value::Array(items) => items
@@ -267,7 +264,7 @@ pub fn extract_scopes(claims: &Value, path: &[String]) -> Option<Vec<String>> {
     Some(scopes)
 }
 
-/// Extract discrete claim values configured by `AUTH_POLICY_CLAIMS` from JWT
+/// Extract discrete claim values configured by `policy_claims` from JWT
 /// claims JSON. Accepts string, bool, number, or an array of those values,
 /// returning sorted, deduplicated strings per claim name.
 pub fn extract_policy_claims(
@@ -276,21 +273,9 @@ pub fn extract_policy_claims(
 ) -> BTreeMap<String, Vec<String>> {
     let mut out = BTreeMap::new();
     for (canonical, path) in paths {
-        if path.is_empty() {
+        let Some(cur) = walk_claim_path(claims, path) else {
             continue;
-        }
-        let mut cur = claims;
-        let mut found = true;
-        for key in path {
-            let Some(next) = cur.get(key) else {
-                found = false;
-                break;
-            };
-            cur = next;
-        }
-        if !found {
-            continue;
-        }
+        };
         let mut vals: Vec<String> = match cur {
             Value::String(s) => {
                 let t = s.trim();
@@ -445,7 +430,6 @@ mod tests {
             ),
             parse_subject_claim("sub"),
             None,
-            Vec::new(),
         )
     }
 
@@ -534,8 +518,12 @@ mod tests {
         let a = authenticator();
         for key in ["plat5-k-2-abc", "sk_live_x", "a.b", "a.b.c.d"] {
             assert_eq!(
-                a.present(&request(Some(&format!("Bearer {key}"))), &paths(&["name"]))
-                    .await,
+                a.present(
+                    &request(Some(&format!("Bearer {key}"))),
+                    &paths(&["name"]),
+                    &[]
+                )
+                .await,
                 Ok(Presented::Key(key.to_string())),
                 "{key}"
             );
@@ -547,26 +535,27 @@ mod tests {
     async fn a_jwt_needs_jwks_and_other_schemes_are_refused() {
         let a = authenticator();
         assert_eq!(
-            a.present(&request(None), &paths(&["name"])).await,
+            a.present(&request(None), &paths(&["name"]), &[]).await,
             Err(AuthError::MissingAuthorization)
         );
         for value in ["Basic abc", "Bearer", "Bearer a b", "bearer x"] {
             assert_eq!(
-                a.present(&request(Some(value)), &paths(&["name"])).await,
+                a.present(&request(Some(value)), &paths(&["name"]), &[])
+                    .await,
                 Err(AuthError::InvalidAuthorizationHeader),
                 "{value}"
             );
         }
         // The JWKS URL answers nothing: a JWT can't be verified.
         assert_eq!(
-            a.present(&request(Some("Bearer h.p.s")), &paths(&["name"]))
+            a.present(&request(Some("Bearer h.p.s")), &paths(&["name"]), &[])
                 .await,
             Err(AuthError::JwtValidationUnavailable)
         );
         let mut req = request(None);
         req.insert_header("X-API-Key", "plat5-k-2-abc").unwrap();
         assert_eq!(
-            a.present(&req, &paths(&["name"])).await,
+            a.present(&req, &paths(&["name"]), &[]).await,
             Err(AuthError::MissingAuthorization),
             "X-API-Key is not a credential"
         );
@@ -619,8 +608,12 @@ mod tests {
                 )
                 .await;
             assert_eq!(
-                a.present(&request(Some(&format!("Bearer {tok}"))), &paths(&["name"]))
-                    .await,
+                a.present(
+                    &request(Some(&format!("Bearer {tok}"))),
+                    &paths(&["name"]),
+                    &[]
+                )
+                .await,
                 Err(AuthError::InvalidToken {
                     reason: "token_expired"
                 }),

@@ -14,7 +14,7 @@ use crate::apply::{self, Failure};
 use crate::error::AppError;
 use crate::metrics;
 use crate::middleware::{
-    admin_auth_middleware, feed_observability, http_observability, with_request_id, RequestId,
+    admin_auth_middleware, feed_observability, http_observability, RequestId,
 };
 use crate::schema;
 use crate::served;
@@ -155,17 +155,13 @@ async fn apply_config(
         let dry_run = apply::dry_run(&state.store, state.counts.as_ref(), &prepared, &request_id)
             .await
             .map_err(|f| failure(&request_id, f))?;
-        return Ok((with_request_id(request_id), Json(dry_run)).into_response());
+        return Ok(Json(dry_run).into_response());
     }
     let applied = apply::apply(&state.store, state.counts.as_ref(), &prepared, &request_id)
         .await
         .map_err(|f| failure(&request_id, f))?;
     state.feed.advance(applied.revision);
-    Ok((
-        with_request_id(request_id),
-        Json(json!({ "revision": applied.revision, "summary": applied.summary })),
-    )
-        .into_response())
+    Ok(Json(json!({ "revision": applied.revision, "summary": applied.summary })).into_response())
 }
 
 /// A revision's source, for a pull. Read strictly first: a source the
@@ -194,7 +190,7 @@ async fn get_config(
     match current {
         Some(r) => {
             let body = revision_body(&r, &request_id)?;
-            Ok((with_request_id(request_id), Json(body)).into_response())
+            Ok(Json(body).into_response())
         }
         None => Err(AppError::not_found(request_id, "config", "head")),
     }
@@ -220,11 +216,7 @@ async fn list_revisions(
             })
         })
         .collect();
-    Ok((
-        with_request_id(request_id),
-        Json(json!({ "revisions": revisions })),
-    )
-        .into_response())
+    Ok(Json(json!({ "revisions": revisions })).into_response())
 }
 
 async fn get_revision(
@@ -242,7 +234,7 @@ async fn get_revision(
     match revision {
         Some(r) => {
             let body = revision_body(&r, &request_id)?;
-            Ok((with_request_id(request_id), Json(body)).into_response())
+            Ok(Json(body).into_response())
         }
         None => Err(AppError::not_found(
             request_id,
@@ -281,15 +273,11 @@ async fn get_status(
             })
         })
         .collect();
-    Ok((
-        with_request_id(request_id),
-        Json(json!({ "revision": head, "gateway": gateway })),
-    )
-        .into_response())
+    Ok(Json(json!({ "revision": head, "gateway": gateway })).into_response())
 }
 
-async fn get_schema(Extension(RequestId(request_id)): Extension<RequestId>) -> Response {
-    (with_request_id(request_id), Json(schema::bundle())).into_response()
+async fn get_schema() -> Response {
+    Json(schema::bundle()).into_response()
 }
 
 #[derive(Deserialize)]
@@ -342,8 +330,10 @@ async fn feed(
 async fn gateway_feed(
     State(state): State<AppState>,
     Extension(RequestId(request_id)): Extension<RequestId>,
-    Query(query): Query<GatewayQuery>,
+    query: Result<Query<GatewayQuery>, QueryRejection>,
 ) -> Result<Response, AppError> {
+    let Query(query) =
+        query.map_err(|e| AppError::invalid_request(request_id.clone(), e.body_text()))?;
     if let Some(replica) = query.replica.filter(|r| !r.is_empty()) {
         let report = Report {
             replica,
@@ -362,7 +352,9 @@ async fn gateway_feed(
 async fn identity_feed(
     State(state): State<AppState>,
     Extension(RequestId(request_id)): Extension<RequestId>,
-    Query(query): Query<FeedQuery>,
+    query: Result<Query<FeedQuery>, QueryRejection>,
 ) -> Result<Response, AppError> {
+    let Query(query) =
+        query.map_err(|e| AppError::invalid_request(request_id.clone(), e.body_text()))?;
     feed(state, query.after, request_id, Reader::Identity).await
 }

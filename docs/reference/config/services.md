@@ -17,12 +17,12 @@ e10s:
       routes:
         - path: /subscribers/{subscriber_id}/entitlements/check
           methods:
-            POST: { required_permissions: [check], rate_limit: [evals-project, evals-org], audit: false }
+            POST: { permissions: check, rate_limit: [evals-project, evals-org], audit: false }
         - path: /plans/{plan_id}/versions
-          required_permissions: [project:read]
+          permissions: project:read
           methods:
             GET:
-            POST: { required_permissions: [catalog:write] }
+            POST: { permissions: catalog:write }
     user:
       routes:
         - path: /user/notification-settings
@@ -45,7 +45,6 @@ With the kinds in [kinds](kinds.md), the versions route is `GET` and `POST /orgs
 | `url` | `string` | Upstream, `http://host[:port]` (default port `80`) or `https://host[:port]` (default port `443`), no path or query, from the **gateway's** network view. Credentials in the URL, a port outside 1–65535, or any other form is **422** |
 | `timeouts` | `{connect, read}?` | Upstream timeouts, each a duration. One left out uses `defaults.timeouts` ([settings](settings.md)) |
 | `max_body_bytes` | `integer?` | The largest request body forwarded to this service. Larger is **413**. Omitted uses `defaults.max_body_bytes` |
-| `authorizer` | `string \| false \| {name, mode, resource, action}?` | Optional default external AuthZEN authorizer inherited by kind-scoped routes in this service, overriding a kind's authorizer, or `false` to opt out ([authorizers](authorizers.md)) |
 | `scopes` | `map<scope, scope block>` | One block per scope: a kind name, `user` or `public`. At least one route in all |
 <!-- end generated -->
 
@@ -55,7 +54,6 @@ With the kinds in [kinds](kinds.md), the versions route is `GET` and `POST /orgs
 | Field | Type | Rule |
 |-------|------|------|
 | `upstream_prefix` | `string?` | Prepended to each route's path to make its default upstream. Placeholders with a dot only ([below](#upstream)) |
-| `authorizer` | `string \| false \| {name, mode, resource, action}?` | Optional external AuthZEN authorizer inherited by routes in this scope (kind scopes only, [authorizers](authorizers.md)) |
 | `routes` | `array<route>` | At least one |
 <!-- end generated -->
 
@@ -66,13 +64,12 @@ With the kinds in [kinds](kinds.md), the versions route is `GET` and `POST /orgs
 |-------|------|------|
 | `path` | `string` | In a kind scope, relative to the node: `/` is the node itself. In `user` and `public`, absolute |
 | `upstream` | `string?` | A full upstream template, replacing `upstream_prefix` plus `path` |
-| `methods` | `array<string> \| map<string, null \| method>` | The verbs: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`. A list is a map with no overrides. In a map, each verb's `required_permissions`, `rate_limit`, `audit`, `allow_public` and `authorizer` override the route's |
-| `required_permissions` | `array<string> \| "any_member"?` | Any one of these permissions admits. `any_member` admits any member of the tree, guests included. Required for every verb in a kind scope, from the route or the verb. Not in `user` or `public` |
+| `methods` | `array<string> \| map<string, null \| method>` | The verbs: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`. A list is a map with no overrides. In a map, each verb's `permissions`, `rate_limit`, `audit`, and `resource` override the route's |
+| `permissions` | `string \| array<string> \| "any_member"?` | Any one of these permissions admits (single permission string or list), or `any_member` for any member of the tree, guests included. Required for every verb in a kind scope, from the route or the verb. Not in `user` or `public` |
 | `rate_limit` | `array<string> \| false?` | Policies from `rate_limits` ([rate limits](rate-limits.md)). Omitted: `defaults.rate_limit` if set, else unlimited. `false`: unlimited |
 | `audit` | `bool?` | Omitted: the method default. Not in `public` |
 | `allow_deleted` | `bool?` | Default `false`. `true` lets the route's node be deleted (not purged); its own bindings are kept until purge and still count here, so whoever managed the node can restore it. For identity's restore route ([`reference/api/internal.md`](../api/internal.md#admit)). Kind scopes only |
-| `allow_public` | `bool?` | Default `false`. Kind scopes only, when this kind or an ancestor sets `allow_public: true`. Lets unauthenticated (`all_users`) and non-member authenticated (`all_authenticated_users`) callers reach the route when a public binding grants a required permission |
-| `authorizer` | `string \| false \| {name, mode, resource, action}?` | Optional external AuthZEN authorizer for this route, or `false` to opt out of a kind/service/scope default (kind scopes only, [authorizers](authorizers.md)) |
+| `resource` | `resource?` | Optional AuthZEN resource override (`{ type, id }`) when top-level `authorizer` is configured (kind scopes only, [authorizer](authorizer.md)) |
 <!-- end generated -->
 
 Unknown fields are **422**.
@@ -111,13 +108,13 @@ Apply-time **422**:
 - A bare `{param}` that isn't one of the route's own params, or one in `upstream_prefix`.
 - An upstream that isn't an absolute path (starts with `/`, no `?` or `#`).
 
-## `required_permissions`
+## `permissions`
 
-Permissions follow role hygiene: `[a-z0-9:._-]+`, max 64 chars, max 32 per route, unique. Permissions are opaque: `catalog:write` does not imply `project:read`.
+Permissions follow role hygiene: `[a-z0-9:._-]+`, max 64 chars, max 32 per route, unique. Permissions are opaque: `catalog:write` does not imply `project:read`. A single permission may be written as a string shorthand (`permissions: docs:read`), which expands canonically to `["docs:read"]`.
 
-After admit, and before the rate limit, the caller's permissions on the node (the union of the roles of its bindings on the node and its ancestors) must hold `*` or one of the route's, or the gateway answers **403** "permission denied, or it may not exist". `[a, b]` means a or b. `any_member` admits any member of the tree, guests included: to keep guests out of an org-level route, require a permission at the org, such as `organization:read`, since a guest's bindings sit only below the root. A route can't require `*` itself. `[]` is **422**: write `any_member`. Roles and bindings: [`concepts/access.md`](../../concepts/access.md).
+After admit, and before the rate limit, in built-in RBAC mode the caller's permissions on the node (the union of the roles of its bindings on the node and its ancestors) must hold `*` or one of the route's; in external `authorizer` mode, the gateway queries the external AuthZEN PDP for any of the route's permissions (using the route's `resource` template when set, or the route's target node). Otherwise the gateway answers **403** "permission denied, or it may not exist" with `details.permissions`. `[a, b]` means a or b. `any_member` admits any member of the tree, guests included (without querying an external authorizer): to keep guests out of an org-level route, require a permission at the org, such as `organization:read`, since a guest's bindings sit only below the root. A route can't require `*` itself. `[]` is **422**: write `any_member`. Roles and bindings: [`concepts/access.md`](../../concepts/access.md).
 
-A route permission that no role grants is legal: only `*` grants it, which is deliberate for routes meant for admins alone.
+A route permission that no role grants is legal in built-in RBAC mode: only `*` grants it, which is deliberate for routes meant for admins alone.
 
 ## `audit`
 
@@ -147,8 +144,8 @@ The [schema](../../concepts/config.md#schema) defines the shape, and the control
 - A path is visible ASCII, at most 1024 bytes, at most 32 params
 - `methods` not empty; map keys are uppercase verbs other than `OPTIONS`
 - Placeholders and upstreams as [above](#upstream)
-- `required_permissions` stated for every verb in a kind scope; absent in `user` and `public`
-- `allow_deleted`, `allow_public`, and `authorizer` only in kind scopes (`allow_public: true` requires `allow_public: true` on the scope's kind or an ancestor); `audit` not in `public`
-- Every `authorizer` names an entry in `authorizers`, and any `resource.id` placeholders exist in the scope's chain or route params
+- `permissions` stated for every verb in a kind scope; absent in `user` and `public`
+- `allow_deleted` and `resource` only in kind scopes; `audit` not in `public`
+- `resource` (`{ type, id }`) requires top-level `authorizer` in config and `permissions != "any_member"`, and any `{placeholder}` in `resource.id` must exist in the scope's chain or route params
 - Every `rate_limit` name is a policy; a policy with `count_at` only in a kind scope, at that kind or an ancestor
 - Timeouts are durations; `max_body_bytes` at least 1

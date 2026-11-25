@@ -69,7 +69,7 @@ func TestNames(t *testing.T) {
 	}
 
 	// The edit is in the person's own log.
-	if os.Getenv("AUDIT_ENABLED") != "false" {
+	if os.Getenv("AUDIT_MODE") != "off" {
 		var set []auditEvent
 		for _, e := range s.events(bare, "/user/audit-events", "PATCH /user") {
 			if e.Method == "PATCH" && e.Route == "/user" && e.Status != nil && *e.Status == 200 {

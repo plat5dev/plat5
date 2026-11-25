@@ -90,28 +90,19 @@ where
         SystemTime.format_time(&mut Writer::new(&mut timestamp))?;
         let mut fields = LineFields::default();
         event.record(&mut fields);
-        let mut line = vec![
-            ("timestamp", Value::String(timestamp)),
-            (
-                "level",
-                Value::String(level(event.metadata().level()).into()),
-            ),
-        ];
+        let mut map = serde_json::Map::new();
+        map.insert("timestamp".into(), Value::String(timestamp));
+        map.insert(
+            "level".into(),
+            Value::String(level(event.metadata().level()).into()),
+        );
         if let Some(message) = fields.message {
-            line.push(("message", Value::String(message)));
+            map.insert("message".into(), Value::String(message));
         }
-        line.extend(fields.rest);
-        let mut out = String::from("{");
-        for (i, (key, value)) in line.iter().enumerate() {
-            if i > 0 {
-                out.push(',');
-            }
-            out.push_str(&Value::String((*key).to_string()).to_string());
-            out.push(':');
-            out.push_str(&value.to_string());
+        for (key, value) in fields.rest {
+            map.insert(key.into(), value);
         }
-        out.push('}');
-        writeln!(writer, "{out}")
+        writeln!(writer, "{}", Value::Object(map))
     }
 }
 
@@ -348,13 +339,13 @@ impl Settings {
     fn traces_on(&self) -> bool {
         !self.sdk_disabled
             && self.traces_endpoint.is_some()
-            && exporter_includes_otlp(self.traces_exporters.as_deref(), true)
+            && exporter_includes_otlp(self.traces_exporters.as_deref())
     }
 
     fn metrics_on(&self) -> bool {
         !self.sdk_disabled
             && self.metrics_endpoint.is_some()
-            && exporter_includes_otlp(self.metrics_exporters.as_deref(), true)
+            && exporter_includes_otlp(self.metrics_exporters.as_deref())
     }
 }
 
@@ -524,9 +515,9 @@ fn sampler_from_ratio(ratio: f64) -> sdktrace::Sampler {
 }
 
 /// Traces and metrics: default when unset = true (otlp when dest exists).
-fn exporter_includes_otlp(list: Option<&[String]>, default_when_unset: bool) -> bool {
+fn exporter_includes_otlp(list: Option<&[String]>) -> bool {
     match list {
-        None => default_when_unset,
+        None => true,
         Some(exporters) => exporters.iter().any(|e| e == "otlp"),
     }
 }

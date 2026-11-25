@@ -66,7 +66,7 @@ func TestRouteChecks(t *testing.T) {
 			"project": map[string]any{
 				"routes": []any{map[string]any{
 					"path": "/tasks", "upstream": "/projects/{project.id}/tasks",
-					"required_permissions": []string{"project:read"}, "methods": []string{"GET"},
+					"permissions": "project:read", "methods": []string{"GET"},
 				}},
 			},
 			"public": map[string]any{

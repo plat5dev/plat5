@@ -105,12 +105,26 @@ func (s *Store) CreateInvite(ctx context.Context, snap *feed.Snapshot, nodeID st
 	if err != nil {
 		return nil, op.Reject(err, nodes.ErrNotFound)
 	}
-	if err := checkRoleTx(ctx, w.tx, snap, n.RootID, in.Role, n.Kind, "role"); err != nil {
-		return nil, op.Expected("invalid", err)
-	}
-	grants, err := s.checkGrants(ctx, w, snap, n, in.Grants)
-	if err != nil {
-		return nil, op.Reject(err)
+	var role string
+	var grants []Grant
+	if snap.ExternalAuthz() {
+		if in.Role != "" {
+			return nil, op.Expected("invalid", errors.FieldError("role", "Roles are managed by the external authorizer."))
+		}
+		if len(in.Grants) > 0 {
+			return nil, op.Expected("invalid", errors.FieldError("grants", "Grants are managed by the external authorizer."))
+		}
+		grants = []Grant{}
+	} else {
+		if err := checkRoleTx(ctx, w.tx, snap, n.RootID, in.Role, n.Kind, "role"); err != nil {
+			return nil, op.Expected("invalid", err)
+		}
+		var err error
+		grants, err = s.checkGrants(ctx, w, snap, n, in.Grants)
+		if err != nil {
+			return nil, op.Reject(err)
+		}
+		role = in.Role
 	}
 	grantsJSON, err := json.Marshal(grants)
 	if err != nil {
@@ -127,7 +141,7 @@ func (s *Store) CreateInvite(ctx context.Context, snap *feed.Snapshot, nodeID st
 		INSERT INTO invites (id, node_id, role, grants, token_hash, token_prefix, status, max_uses, expires_at, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9)
 		RETURNING `+inviteColumns,
-		id.New(), n.ID, in.Role, grantsJSON, secret.Hash(token),
+		id.New(), n.ID, role, grantsJSON, secret.Hash(token),
 		secret.DisplayPrefix(token, prefix), in.MaxUses, now.Add(in.ExpiresIn), now))
 	if err != nil {
 		return nil, op.Fail(err)
@@ -209,7 +223,7 @@ func (s *Store) ListInvites(ctx context.Context, nodeID string, limit int, start
 	if err != nil {
 		return nil, false, op.Fail(err)
 	}
-	out, hasMore := page(out, limit)
+	out, hasMore := dbx.Page(out, limit)
 	op.OK("ok")
 	return out, hasMore, nil
 }
@@ -331,6 +345,20 @@ func (s *Store) Redeem(ctx context.Context, userID, token string) (*Redeemed, er
 			fmt.Sprintf("This invite's %s was deleted.", n.Kind), "node_deleted"))
 	}
 
+	// Re-check principal status inside the transaction to prevent TOCTOU if the
+	// user was suspended or deleted concurrently with this redeem.
+	var principalStatus string
+	err = w.tx.QueryRow(ctx, `SELECT status FROM principals WHERE id = $1 FOR SHARE`, u.principalID).Scan(&principalStatus)
+	if dbx.IsNoRows(err) {
+		return nil, op.Expected("account deleted", ErrNotFound)
+	}
+	if err != nil {
+		return nil, op.Fail(err)
+	}
+	if principalStatus != StatusActive {
+		return nil, op.Expected("suspended user", errors.InviteNotRedeemableError("This account is suspended.", "user_suspended"))
+	}
+
 	out := &Redeemed{Node: n}
 	var memberSuspended bool
 	err = w.tx.QueryRow(ctx, `
@@ -355,14 +383,17 @@ func (s *Store) Redeem(ctx context.Context, userID, token string) (*Redeemed, er
 		out.MemberCreated = true
 		w.invalidate(lifecycle.InvalidateUser(u.ID))
 	}
-	if out.Binding, err = s.bindIfNotHeld(ctx, w, out.MemberID, n.ID, inv.Role); err != nil {
-		return nil, op.Fail(err)
+	var granted bool
+	if inv.Role != "" {
+		if out.Binding, err = s.bindIfNotHeld(ctx, w, out.MemberID, n.ID, inv.Role); err != nil {
+			return nil, op.Fail(err)
+		}
+		granted, err = s.applyGrants(ctx, w, out.MemberID, inv.Grants)
+		if err != nil {
+			return nil, op.Fail(err)
+		}
 	}
-	granted, err := s.applyGrants(ctx, w, out.MemberID, inv.Grants)
-	if err != nil {
-		return nil, op.Fail(err)
-	}
-	if out.Binding == nil && !granted {
+	if !out.MemberCreated && out.Binding == nil && !granted {
 		if err := w.commit(ctx); err != nil {
 			return nil, op.Fail(err)
 		}

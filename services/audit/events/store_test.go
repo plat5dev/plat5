@@ -276,7 +276,11 @@ func TestListNewestFirstWithFilters(t *testing.T) {
 		}
 	}
 	for i, status := range []int{200, 403} {
-		if _, err := s.ApplyOutcome(ctx, fmt.Sprintf("req-%d", i), &Outcome{Outcome: OutcomeResponded, Status: intPtr(status)}); err != nil {
+		out := &Outcome{Outcome: OutcomeResponded, Status: intPtr(status)}
+		if i == 0 {
+			out.CreatedID = strPtr("01created")
+		}
+		if _, err := s.ApplyOutcome(ctx, fmt.Sprintf("req-%d", i), out); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -305,6 +309,7 @@ func TestListNewestFirstWithFilters(t *testing.T) {
 		"route":   {Filter{Route: "/orgs/{organization}/projects/{project}/bindings/{binding_id}", Method: "PATCH"}, []string{"req-4", "req-3", "req-2", "req-1", "req-0"}},
 		"outcome": {Filter{Outcome: OutcomeResponded}, []string{"req-1", "req-0"}},
 		"status":  {Filter{Status: intPtr(403)}, []string{"req-1"}},
+		"created": {Filter{CreatedID: "01created"}, []string{"req-0"}},
 		"request": {Filter{RequestID: "req-other-org"}, nil},
 		"window": {Filter{
 			OccurredAfter:  ptrTime(base.Add(time.Minute)),

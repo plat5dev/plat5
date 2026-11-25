@@ -141,7 +141,7 @@ func TestCreateChildBindsTheCreator(t *testing.T) {
 	before := e.count(`SELECT count(*) FROM nodes WHERE kind = 'folder'`)
 	e.expect(e.call("POST", "/nodes/"+org.ID+"/children/folder", otherAdmin, `{"display_name": "X"}`), 400, "caller from another tree")
 	gone := e.join(org, "gone", "member")
-	if _, err := e.store.RemoveMember(e.ctx, org.ID, gone); err != nil {
+	if _, _, err := e.store.RemoveMember(e.ctx, org.ID, gone); err != nil {
 		t.Fatal(err)
 	}
 	e.expect(e.call("POST", "/nodes/"+org.ID+"/children/folder", gone, `{"display_name": "X"}`), 400, "removed caller")

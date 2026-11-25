@@ -4,7 +4,7 @@
 
 Plat5 is the front door for multi-tenant APIs. It owns a tree of nodes whose kinds the deployment declares, the principals who can reach each node, and the check at the gateway. Services own everything inside a node.
 
-On every request the gateway answers three questions: who is calling (the credential), which node the request is about (the path or root subdomain), and whether the caller is allowed to call the route on that node (from built-in bindings, an optional external AuthZEN authorizer, or both). It then forwards the request with node ids and the caller's member id. Slugs and principal ids never reach a service.
+On every request the gateway answers three questions: who is calling (the credential), which node the request is about (the path or root subdomain), and whether the caller is allowed to call the route on that node (from built-in RBAC bindings, or from an external AuthZEN authorizer). It then forwards the request with node ids and the caller's member id. Slugs and principal ids never reach a service.
 
 ## Concepts
 
@@ -18,11 +18,11 @@ On every request the gateway answers three questions: who is calling (the creden
 | **User** | A person as their own routes see them. A person's user id is sent only on user routes (`X-Plat5-User-Id`) and in user events, never with a tree |
 | **Member** | A principal's presence in one tree: one per principal per tree, kept after removal. Can be reversibly suspended within a tree. The id services see as the caller on tree routes (`X-Plat5-Member-Id`) |
 | **Group** | A flat collection of active members in one tree, owned by its root. A group holds bindings like a member, and every member in the group inherits them |
-| **Binding** | A role for a member, a group, or (where opted in) a public principal (`all_users` / `all_authenticated_users`) on one node of its tree, optionally expiring (`expires_at`). A subject can hold multiple distinct roles on the same node |
+| **Binding** | A role for a member or a group on one node of its tree, optionally expiring (`expires_at`). A subject can hold multiple distinct roles on the same node |
 | **Guest** | A person's member with no effective binding on its tree's root (neither directly nor through a group), only on nodes below it. Created by redeeming an invite below the root. Derived, not stored. A service account is never a guest |
 | **Role** | A named set of permissions, bindable at some kinds: predefined in the deployment's roles document, or (when `custom_roles: true`) defined per root via identity's API ([`concepts/access.md`](access.md)). Plat5 names no roles |
 | **Permission** | What a route can require, and what a service asks identity about outside a request |
-| **Authorizer** | An optional external OpenID AuthZEN 1.0 PDP attached to a kind, service, scope, route, or verb (`replace`, `and`, or `or` mode), including record-level resources ([`reference/config/authorizers.md`](../reference/config/authorizers.md)) |
+| **Authorizer** | An optional external OpenID AuthZEN 1.0 PDP configured at the top level in place of built-in RBAC, optionally paired with record-level `resource` templates on routes ([`reference/config/authorizer.md`](../reference/config/authorizer.md)) |
 | **Security policy** | Optional per-root guardrails enforced at admit: `allow_personal_keys`, root-wide `allowed_cidrs`, and `required_idp_claims` ([`concepts/access.md`](access.md#roles-and-bindings)) |
 | **Route scope** | `scope: <kind>` addresses a node of that kind; `scope: user` is the caller as a person, with no node; `scope: public` has no caller ([`reference/config/services.md`](../reference/config/services.md)) |
 | **Credential** | An IdP token or a personal API key (people), or a service account key. Belongs to the principal, not to a tree, and may be narrowed with `scopes`, `allowed_roots`, `allowed_cidrs`, and `expires_at` |
@@ -50,11 +50,11 @@ A path segment that starts with a digit is read as a node id, anything else as a
 
 1. **The tree is config; nodes are data; no scope is special.**
 2. **Plat5 owns the tree and who can reach each node; services own what's inside a node.**
-3. **Access is enforced at the front door,** from built-in ancestor bindings, an optional external AuthZEN authorizer, or both — and outside requests by asking identity. Services never re-implement auth.
+3. **Access is enforced at the front door,** from built-in ancestor bindings or an external AuthZEN authorizer — and outside requests by asking identity. Services never re-implement auth.
 4. **The path (or root host) names the node; the credential names the principal.**
-5. **Services see node ids and the caller's member id on tree routes (omitted on anonymous or non-member `allow_public` requests), and a user id only on user routes and in user events. Never a principal id.**
+5. **Services see node ids and the caller's member id on tree routes, and a user id only on user routes and in user events. Never a principal id.**
 6. **Services do no auth, so any front door can call them.** A service's API is its paths and documented headers, reachable only on the private network (or verified with `X-Plat5-Signature`). Plat5's gateway is one front door; others (an operator plane, an internal job, a custom gateway) bring their own rules and docs.
-7. **The deployment's data, not Plat5's names.** Kinds, roles, permissions, authorizers and routes are all config (plus optional per-root custom roles).
+7. **The deployment's data, not Plat5's names.** Kinds, roles, permissions, authorizer, and routes are all config (plus optional per-root custom roles).
 8. **Config changes are planned before they apply; deletes are soft only for nodes.** A deleted node can be restored until it's purged. Deleting a service account, a binding, a group, a custom role or an account is final.
 9. **Defaults, not limits.** Where reasonable teams would choose differently, Plat5 picks a default and the deployment can change it. Plat5 fixes only what isolation, security, or the shared contract needs.
 
@@ -62,12 +62,12 @@ A path segment that starts with a digit is read as a node id, anything else as a
 
 | Question | Decided by |
 |---|---|
-| Who is this? | The IdP or identity, from the credential (or anonymous on `allow_public` routes) |
+| Who is this? | The IdP or identity, from the credential |
 | Which node? | The path (or root `host` subdomain), resolved by the gateway from slugs or ids |
-| May they call this route on this node? | The gateway: org security policy, credential scopes, built-in bindings (node + ancestors) and/or an attached AuthZEN authorizer |
-| Does this member hold this permission on this node, outside a request or for someone other than the caller? | Identity, asked by the service, from the same bindings and any kind-level authorizer ([access](access.md#outside-a-request)) |
-| Which nodes can they see? | Plat5, filtering node lists by each kind's `list_permission` (and any kind-level authorizer) |
-| May they touch this record inside a node? | An attached AuthZEN authorizer with a record `resource` template at the gateway, and/or the service's state rules |
+| May they call this route on this node? | The gateway: org security policy, credential scopes, and either built-in bindings (node + ancestors) or the external AuthZEN authorizer |
+| Does this member hold this permission on this node, outside a request or for someone other than the caller? | Identity, asked by the service, from built-in bindings or the external AuthZEN authorizer ([access](access.md#outside-a-request)) |
+| Which nodes can they see? | Plat5, filtering node lists by each kind's `list_permission` (via built-in bindings or the external authorizer) |
+| May they touch this record inside a node? | A route's `resource` template evaluated against the external AuthZEN authorizer at the gateway, and/or the service's state rules |
 | Is this valid for the resource's current state? | The service |
 | Who did it? | The record, when logic needs it (the member id as author or owner); audit otherwise |
 

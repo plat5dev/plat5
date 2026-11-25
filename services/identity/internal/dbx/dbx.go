@@ -51,10 +51,6 @@ func (o *Op) End() {
 	o.span.End()
 }
 
-func (o *Op) Span() trace.Span {
-	return o.span
-}
-
 // OK records success metrics and sets span status.
 func (o *Op) OK(msg string) {
 	if msg == "" {
@@ -69,13 +65,6 @@ func (o *Op) Expected(msg string, err error) error {
 	metrics.RecordDBOperation(o.name, time.Since(o.start), nil)
 	o.span.SetStatus(codes.Ok, msg)
 	return err
-}
-
-// SoftFail records metricErr on the error counter but Ok span status (e.g. unique conflict).
-func (o *Op) SoftFail(msg string, metricErr, ret error) error {
-	metrics.RecordDBOperation(o.name, time.Since(o.start), metricErr)
-	o.span.SetStatus(codes.Ok, msg)
-	return ret
 }
 
 // Fail records error metrics/span and wraps err with the op name.
@@ -101,11 +90,6 @@ func (o *Op) Reject(err error, sentinels ...error) error {
 	return o.Fail(err)
 }
 
-// Attr sets extra span attributes mid-op.
-func (o *Op) Attr(attrs ...attribute.KeyValue) {
-	o.span.SetAttributes(attrs...)
-}
-
 func IsUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
@@ -124,7 +108,7 @@ func IsDeadlock(err error) bool {
 // Unavailable reports whether err means Postgres couldn't be reached or didn't
 // answer in time: a failed connect, a closed connection, a network
 // error, a timeout, or Postgres refusing connections. Those are 503s
-// (docs/reference/errors.md#which-status); any other failure is a 500.
+// (docs/reference/errors.md); any other failure is a 500.
 func Unavailable(err error) bool {
 	if err == nil {
 		return false
@@ -158,10 +142,19 @@ func IsNoRows(err error) bool {
 
 // Querier is a pool or a transaction.
 type Querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 // Scannable is pgx.Row / pgx.Rows.
 type Scannable interface {
 	Scan(dest ...any) error
+}
+
+// Page trims a limit+1 read to limit and reports whether more items exist.
+func Page[T any](items []T, limit int) ([]T, bool) {
+	if len(items) > limit {
+		return items[:limit], true
+	}
+	return items, false
 }

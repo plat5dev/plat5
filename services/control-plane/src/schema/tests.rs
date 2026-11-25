@@ -80,8 +80,8 @@ fn a_full_config_passes() {
                     "upstream_prefix": "/projects/{project.id}",
                     "routes": [{
                         "path": "/plans/{plan_id}/versions",
-                        "required_permissions": ["project:read"],
-                        "methods": { "GET": null, "POST": { "required_permissions": ["catalog:write"] } }
+                        "permissions": ["project:read"],
+                        "methods": { "GET": null, "POST": { "permissions": "catalog:write" } }
                     }]
                 },
                 "user": { "routes": [{
@@ -167,10 +167,12 @@ fn shape_errors() {
             Box::new(|c| c["roles"]["admin"] = json!({ "permissions": [] })),
         ),
         (
-            "",
-            Box::new(|c| {
-                c.as_object_mut().unwrap().remove("creator_role");
-            }),
+            "permissions.x.bindable_at",
+            Box::new(|c| c["permissions"] = json!({ "x": { "bindable_at": [] } })),
+        ),
+        (
+            "policy_claims[0]",
+            Box::new(|c| c["policy_claims"] = json!(["bad..claim"])),
         ),
         (
             "rate_limits.p",
@@ -239,11 +241,15 @@ fn route_shapes() {
     };
     ok(
         "project",
-        json!({ "path": "/", "methods": ["GET"], "required_permissions": "any_member" }),
+        json!({ "path": "/", "methods": ["GET"], "permissions": "any_member" }),
     );
     ok(
         "project",
-        json!({ "path": "/a", "methods": { "GET": null, "HEAD": { "audit": true } }, "required_permissions": ["a"] }),
+        json!({ "path": "/s", "methods": ["GET"], "permissions": "project:read" }),
+    );
+    ok(
+        "project",
+        json!({ "path": "/a", "methods": { "GET": null, "HEAD": { "audit": true } }, "permissions": ["a"] }),
     );
     for rl in [json!(false), json!(["p"]), json!(["p", "q"])] {
         ok(
@@ -254,20 +260,19 @@ fn route_shapes() {
     // A route can't require "*", and [] is spelled any_member.
     let bad = with_route(
         "project",
-        json!({ "path": "/a", "methods": ["GET"], "required_permissions": ["*"] }),
+        json!({ "path": "/a", "methods": ["GET"], "permissions": ["*"] }),
     );
-    assert!(has_error_at(
-        bad,
-        &format!("{}.required_permissions", at("project"))
-    ));
+    assert!(has_error_at(bad, &format!("{}.permissions", at("project"))));
     let bad = with_route(
         "project",
-        json!({ "path": "/a", "methods": ["GET"], "required_permissions": [] }),
+        json!({ "path": "/a", "methods": ["GET"], "permissions": [] }),
     );
-    assert!(has_error_at(
-        bad,
-        &format!("{}.required_permissions", at("project"))
-    ));
+    assert!(has_error_at(bad, &format!("{}.permissions", at("project"))));
+    let bad = with_route(
+        "project",
+        json!({ "path": "/a", "methods": ["GET"], "permissions": ["any_member"] }),
+    );
+    assert!(has_error_at(bad, &format!("{}.permissions", at("project"))));
     for rl in [
         json!(true),
         json!("p"),
@@ -364,7 +369,7 @@ fn with_service(name: &str, service: Value) -> Value {
 fn identity_and_audit_are_ordinary_services() {
     let identity = json!({ "url": "http://identity:3000", "scopes": { "organization": {
         "upstream_prefix": "/nodes/{organization.id}",
-        "routes": [{ "path": "/", "methods": { "GET": { "required_permissions": ["organization:read"] } } }]
+        "routes": [{ "path": "/", "methods": { "GET": { "permissions": ["organization:read"] } } }]
     } } });
     check_config(&with_service("identity", identity.clone())).unwrap();
     for (field, value) in [
@@ -386,11 +391,11 @@ fn identity_and_audit_are_ordinary_services() {
     // `{kind}` is no placeholder in a permission.
     let route = with_route(
         "project",
-        json!({ "path": "/a", "methods": ["GET"], "required_permissions": ["{kind}:read"] }),
+        json!({ "path": "/a", "methods": ["GET"], "permissions": ["{kind}:read"] }),
     );
     assert!(has_error_at(
         route,
-        "services.s.scopes.project.routes[0].required_permissions"
+        "services.s.scopes.project.routes[0].permissions"
     ));
 }
 

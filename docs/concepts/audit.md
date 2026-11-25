@@ -22,10 +22,10 @@ An audit event is one request, not one change. It says who called which route, o
 
 Two settings, independent of each other:
 
-- **Whether and how the gateway writes events** is wiring, in the gateway's env: `AUDIT_ENABLED`, `AUDIT_MODE` (`sync` or `async`, default `sync`), and `AUDIT_URL` ([env](../reference/env.md#gateway)). It stays out of the config, so the admin token can't turn audit off or weaken its delivery mode. Events already written mean the same either way.
+- **Whether and how the gateway writes events** is wiring, in the gateway's env: `AUDIT_MODE` (`sync`, `async`, or `off`, default `sync`) and `AUDIT_URL` ([env](../reference/env.md#gateway)). It stays out of the config, so the admin token can't turn audit off or weaken its delivery mode. Events already written mean the same either way.
 - **Whether audit's read routes are published** at the gateway is `services/audit.yml`, like any service file ([generated routes](../reference/config/generated-routes.md#audits-routes)). Leaving it out of `services` hides the reads; the gateway still writes events.
 
-| | `AUDIT_MODE=sync` (default) | `AUDIT_MODE=async` | Audit off (`AUDIT_ENABLED=false`) |
+| | `AUDIT_MODE=sync` (default) | `AUDIT_MODE=async` | `AUDIT_MODE=off` |
 |---|---|---|---|
 | Gateway `AUDIT_URL` | Required to boot | Required to boot | Ignored |
 | `audit` service | Runs | Runs | Need not run. If `services/audit.yml` stays in the config, its read routes answer as an unreachable upstream does |

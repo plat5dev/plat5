@@ -11,7 +11,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::config::{Config, Required};
 use crate::expand::{self, ExpandedRoute, ExpandedService};
-use crate::schema::FieldError;
+use crate::schema::{FieldError, MAX_ERRORS};
+
+/// Upper bound on any duration (100 years in seconds), keeping values well
+/// within Go's signed 64-bit nanosecond `time.Duration` (~292 years).
+const MAX_DURATION_SECS: u64 = 36_500 * 86_400;
 
 /// The validated, pre-expanded result of `rules::check`, reused directly by
 /// `served::Served::of_checked` so routes and permissions are only expanded once.
@@ -25,6 +29,7 @@ pub struct Checked {
 /// a field path.
 pub fn check(config: &Config) -> Result<Checked, Vec<FieldError>> {
     let mut errs = Vec::new();
+    check_durations(config, &mut errs);
     check_kinds_tree(config, &mut errs);
     let mut routes_by_service: BTreeMap<String, Vec<ExpandedRoute>> = BTreeMap::new();
     let mut route_permissions = BTreeSet::new();
@@ -32,19 +37,14 @@ pub fn check(config: &Config) -> Result<Checked, Vec<FieldError>> {
     if errs.is_empty() {
         check_kinds_extras(config, &mut errs);
         check_policies(config, &mut errs);
-        check_service_authorizers(config, &mut errs);
         let mut valid = Vec::new();
         for spec in &expand::specs(config) {
             if routes::check_spec(config, spec, &mut errs) {
                 if config.kinds.contains_key(&spec.scope) {
                     for verb in &spec.verbs {
-                        if let Some(req) = &verb.required {
+                        if let Some(req) = &verb.permissions {
                             if let Required::Permissions(perms) = &req.value {
-                                for p in perms {
-                                    if p != "*" {
-                                        route_permissions.insert(p.clone());
-                                    }
-                                }
+                                route_permissions.extend(perms.iter().cloned());
                             }
                         }
                     }
@@ -58,9 +58,8 @@ pub fn check(config: &Config) -> Result<Checked, Vec<FieldError>> {
             }
         }
         routes::check_shapes(&valid, &mut errs);
-        routes::check_route_checks(&valid, &mut errs);
-        check_roles(config, &mut errs);
-        check_permissions(config, &mut errs);
+        routes::check_route_checks(config, &valid, &mut errs);
+        check_authz_mode(config, &mut errs);
     }
     if errs.is_empty() {
         return Ok(Checked {
@@ -70,7 +69,64 @@ pub fn check(config: &Config) -> Result<Checked, Vec<FieldError>> {
     }
     let mut seen = BTreeSet::new();
     errs.retain(|e| seen.insert((e.path.clone(), e.message.clone())));
+    errs.truncate(MAX_ERRORS);
     Err(errs)
+}
+
+fn check_duration(raw: &str, at: impl Into<String>, errs: &mut Vec<FieldError>) {
+    let Some((num_part, unit)) = raw.split_at_checked(raw.len().saturating_sub(1)) else {
+        return;
+    };
+    let mult: u64 = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        "d" => 86_400,
+        _ => return,
+    };
+    let secs = num_part
+        .parse::<u64>()
+        .ok()
+        .and_then(|n| n.checked_mul(mult));
+    if secs.is_none_or(|s| s > MAX_DURATION_SECS) {
+        errs.push(FieldError::new(
+            at,
+            format!("{raw:?} exceeds the maximum duration (36500d)"),
+        ));
+    }
+}
+
+fn check_durations(config: &Config, errs: &mut Vec<FieldError>) {
+    check_duration(&config.deletion_grace, "deletion_grace", errs);
+    if let Some(d) = &config.defaults.timeouts.connect {
+        check_duration(d, "defaults.timeouts.connect", errs);
+    }
+    if let Some(d) = &config.defaults.timeouts.read {
+        check_duration(d, "defaults.timeouts.read", errs);
+    }
+    if let Some(a) = &config.authorizer {
+        check_duration(&a.timeout, "authorizer.timeout", errs);
+        check_duration(&a.cache_ttl, "authorizer.cache_ttl", errs);
+        check_duration(&a.negative_cache_ttl, "authorizer.negative_cache_ttl", errs);
+    }
+    for (name, p) in &config.rate_limits {
+        check_duration(&p.window, format!("rate_limits.{name}.window"), errs);
+        for (tier, tl) in &p.tiers {
+            check_duration(
+                &tl.window,
+                format!("rate_limits.{name}.tiers.{tier}.window"),
+                errs,
+            );
+        }
+    }
+    for (name, s) in &config.services {
+        if let Some(d) = &s.timeouts.connect {
+            check_duration(d, format!("services.{name}.timeouts.connect"), errs);
+        }
+        if let Some(d) = &s.timeouts.read {
+            check_duration(d, format!("services.{name}.timeouts.read"), errs);
+        }
+    }
 }
 
 /// Structural tree checks: every parent is a kind, no cycles, and each kind's
@@ -120,10 +176,21 @@ fn check_kinds_tree(config: &Config, errs: &mut Vec<FieldError>) {
     }
 }
 
-/// Non-structural kind checks (`host`, `authorizer`) that don't invalidate the tree.
+/// Non-structural kind checks (`host`, sibling collection uniqueness).
 fn check_kinds_extras(config: &Config, errs: &mut Vec<FieldError>) {
     let mut host_suffixes: BTreeMap<String, String> = BTreeMap::new();
+    let mut collections: BTreeMap<(Option<&str>, &str), &str> = BTreeMap::new();
     for (name, kind) in &config.kinds {
+        let key = (kind.parent.as_deref(), kind.collection());
+        if let Some(other) = collections.insert(key, name.as_str()) {
+            errs.push(FieldError::new(
+                format!("kinds.{name}.path"),
+                format!(
+                    "collection {:?} is already used by sibling kind {other:?}",
+                    kind.collection()
+                ),
+            ));
+        }
         if let Some((param, suffix)) = kind.host_parts() {
             if kind.parent.is_some() {
                 errs.push(FieldError::new(
@@ -139,27 +206,6 @@ fn check_kinds_extras(config: &Config, errs: &mut Vec<FieldError>) {
                 errs.push(FieldError::new(
                     format!("kinds.{name}.host"),
                     format!("host suffix {suffix:?} is already used by kind {other:?}"),
-                ));
-            }
-        }
-        if let Some(authz) = &kind.authorizer {
-            if !config.authorizers.contains_key(&authz.name) {
-                errs.push(FieldError::new(
-                    format!("kinds.{name}.authorizer"),
-                    format!("{:?} is not an authorizer in authorizers", authz.name),
-                ));
-            }
-        }
-    }
-}
-
-fn check_service_authorizers(config: &Config, errs: &mut Vec<FieldError>) {
-    for (name, service) in &config.services {
-        if let Some(resolved) = service.authorizer.as_ref().and_then(|a| a.resolve()) {
-            if !config.authorizers.contains_key(&resolved.name) {
-                errs.push(FieldError::new(
-                    format!("services.{name}.authorizer"),
-                    format!("{:?} is not an authorizer in authorizers", resolved.name),
                 ));
             }
         }
@@ -195,10 +241,77 @@ fn check_policies(config: &Config, errs: &mut Vec<FieldError>) {
     }
 }
 
-/// Rule 2: roles bind at kinds and include roles, and `creator_role` binds
-/// everywhere. A role may grant any permission
-/// (docs/reference/config/roles.md).
-fn check_roles(config: &Config, errs: &mut Vec<FieldError>) {
+/// Rule 2: all-or-nothing authz mode — either built-in RBAC (`roles` +
+/// `creator_role`) or external `authorizer`, mutually exclusive.
+fn check_authz_mode(config: &Config, errs: &mut Vec<FieldError>) {
+    if config.authorizer.is_some() {
+        if !config.roles.is_empty() {
+            errs.push(FieldError::new(
+                "roles",
+                "cannot be set when authorizer is configured",
+            ));
+        }
+        if config.creator_role.is_some() {
+            errs.push(FieldError::new(
+                "creator_role",
+                "cannot be set when authorizer is configured",
+            ));
+        }
+        if config.custom_roles {
+            errs.push(FieldError::new(
+                "custom_roles",
+                "cannot be set when authorizer is configured",
+            ));
+        }
+        if !config.permissions.is_empty() {
+            errs.push(FieldError::new(
+                "permissions",
+                "cannot be set when authorizer is configured",
+            ));
+        }
+        return;
+    }
+
+    if config.roles.is_empty() {
+        errs.push(FieldError::new(
+            "roles",
+            "required unless authorizer is configured",
+        ));
+    }
+    match config.creator_role.as_deref() {
+        None => errs.push(FieldError::new(
+            "creator_role",
+            "required unless authorizer is configured",
+        )),
+        Some(creator_role) => {
+            if !config.roles.is_empty() {
+                match config.roles.get(creator_role) {
+                    None => errs.push(FieldError::new(
+                        "creator_role",
+                        format!("{creator_role:?} is not a role"),
+                    )),
+                    Some(role) => {
+                        let missing: Vec<&str> = config
+                            .kinds
+                            .keys()
+                            .filter(|k| !role.bindable_at.contains(k))
+                            .map(String::as_str)
+                            .collect();
+                        if !missing.is_empty() {
+                            errs.push(FieldError::new(
+                                "creator_role",
+                                format!(
+                                    "{creator_role:?} must be bindable at every kind; it isn't at {}",
+                                    missing.join(", ")
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     for (slug, role) in &config.roles {
         for (i, kind) in role.bindable_at.iter().enumerate() {
             if !config.kinds.contains_key(kind) {
@@ -223,30 +336,7 @@ fn check_roles(config: &Config, errs: &mut Vec<FieldError>) {
             format!("includes form a cycle: {}", cycle.join(" → ")),
         ));
     }
-    match config.roles.get(&config.creator_role) {
-        None => errs.push(FieldError::new(
-            "creator_role",
-            format!("{:?} is not a role", config.creator_role),
-        )),
-        Some(role) => {
-            let missing: Vec<&str> = config
-                .kinds
-                .keys()
-                .filter(|k| !role.bindable_at.contains(k))
-                .map(String::as_str)
-                .collect();
-            if !missing.is_empty() {
-                errs.push(FieldError::new(
-                    "creator_role",
-                    format!(
-                        "{:?} must be bindable at every kind; it isn't at {}",
-                        config.creator_role,
-                        missing.join(", ")
-                    ),
-                ));
-            }
-        }
-    }
+    check_permissions(config, errs);
 }
 
 fn check_permissions(config: &Config, errs: &mut Vec<FieldError>) {

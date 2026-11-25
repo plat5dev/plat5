@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plat5.com/schema/authorizer.json",
+  "title": "Authorizer",
+  "description": "Optional external OpenID AuthZEN 1.0 policy decision point (PDP) replacing Plat5's built-in RBAC for the whole deployment.",
+  "type": "object",
+  "properties": {
+    "authorizer": {
+      "title": "authorizer",
+      "description": "External OpenID AuthZEN 1.0 PDP configuration. Mutually exclusive with `roles`, `creator_role`, `custom_roles`, and `permissions`.",
+      "$ref": "#/$defs/authorizer"
+    }
+  },
+  "$defs": {
+    "authorizer": {
+      "title": "authorizer",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "title": "url",
+          "description": "Base URL of an OpenID AuthZEN 1.0 PDP (`http://` or `https://`, optional path prefix without trailing slash, no credentials or query). Plat5 appends `/access/v1/evaluation` and `/access/v1/evaluations`.",
+          "type": "string",
+          "pattern": "^https?://(\\[[0-9a-fA-F:.]+\\]|[^/?#@:\\s]+)(:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(/[^?#\\s]*[^/?#\\s])?$"
+        },
+        "timeout": {
+          "title": "timeout",
+          "description": "HTTP timeout for each AuthZEN request, as a duration (`2s`). Default `2s`.",
+          "$ref": "settings.json#/$defs/duration"
+        },
+        "cache_ttl": {
+          "title": "cache_ttl",
+          "description": "How long the gateway caches positive (`decision: true`) answers from the authorizer (`0s` disables caching). Default `0s`.",
+          "$ref": "#/$defs/non_negative_duration"
+        },
+        "negative_cache_ttl": {
+          "title": "negative_cache_ttl",
+          "description": "How long the gateway caches negative (`decision: false`) answers from the authorizer (`0s` disables caching). Default `0s`.",
+          "$ref": "#/$defs/non_negative_duration"
+        },
+        "token_env": {
+          "title": "token_env",
+          "description": "Optional environment variable name on the gateway and identity holding a bearer token sent as `Authorization: Bearer <value>` to the PDP. Never put plaintext secrets in config.",
+          "type": "string",
+          "pattern": "^[A-Z_][A-Z0-9_]{0,127}$"
+        }
+      }
+    },
+    "non_negative_duration": {
+      "title": "non-negative duration",
+      "description": "A whole number (`0` or positive) and a unit: `s`, `m`, `h` or `d`.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,8})[smhd]$"
+    },
+    "resource": {
+      "title": "resource",
+      "description": "Optional AuthZEN resource override for a kind-scoped route or verb (`{ type, id }`), valid only when top-level `authorizer` is configured. Defaults to the route's scope kind and leaf node id. `id` accepts `{<kind>.id}`, `{member.id}`, and route `{param}` placeholders.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": {
+          "title": "type",
+          "description": "AuthZEN `resource.type` name (e.g. `document`).",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9:._-]{1,64}$"
+        },
+        "id": {
+          "title": "id",
+          "description": "AuthZEN `resource.id` template (e.g. `{doc_id}` or `{project.id}:{doc_id}`).",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[\\x21-\\x7e]+$"
+        }
+      }
+    }
+  }
+}

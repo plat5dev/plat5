@@ -32,7 +32,7 @@ func newPurgedTree(e *env) purgedTree {
 	tr.project = e.child(tr.folder, "project", "Site")
 	tr.bob = e.join(tr.org, "bob", "member")
 	tr.binding = e.bind(tr.project, tr.bob, "developer").ID
-	g, err := e.store.CreateGroup(e.ctx, tr.org.ID, "Team")
+	g, err := e.store.CreateGroup(e.ctx, e.snap(), tr.org.ID, "Team")
 	if err != nil {
 		e.t.Fatal(err)
 	}

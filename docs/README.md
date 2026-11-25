@@ -28,7 +28,7 @@ Concepts hold the rules, reference holds the wire and config shapes, guides walk
 
 | Doc | Contents |
 |-----|----------|
-| [config/settings](reference/config/settings.md), [kinds](reference/config/kinds.md), [roles](reference/config/roles.md), [authorizers](reference/config/authorizers.md), [rate limits](reference/config/rate-limits.md), [cors](reference/config/cors.md), [services](reference/config/services.md) | Control-plane config shapes (field tables generated from `schema/`) |
+| [config/settings](reference/config/settings.md), [kinds](reference/config/kinds.md), [roles](reference/config/roles.md), [authorizer](reference/config/authorizer.md), [rate limits](reference/config/rate-limits.md), [cors](reference/config/cors.md), [services](reference/config/services.md) | Control-plane config shapes (field tables generated from `schema/`) |
 | [config/generated-routes](reference/config/generated-routes.md) | Reference routes for exposing `identity` and `audit` through the gateway |
 | [api/identity](reference/api/identity.md) | Identity service API |
 | [api/control-plane](reference/api/control-plane.md) | Control plane admin API |
@@ -54,8 +54,8 @@ End-to-end recipes combining Plat5 features for common SaaS architectures:
 | Playbook | Setup |
 |----------|-------|
 | [Enterprise B2B SaaS](playbooks/enterprise-b2b.md) | Custom roles, per-org SSO/MFA & IP policies, scoped keys, reversible suspension, JIT bindings, tiered rate limits |
-| [Record-level auth with Topaz](playbooks/record-level-auth-topaz.md) | Outbound AuthZEN 1.0 PDP, Topaz ReBAC manifest, `or`/`and`/`replace` modes, active cache invalidation |
-| [Public portals & subdomain routing](playbooks/public-and-subdomain-saas.md) | `kind.host` subdomains, `allow_public` (`all_users` / `all_authenticated_users`), guest invites, anonymous service handlers |
+| [Record-level auth with Topaz](playbooks/record-level-auth-topaz.md) | Top-level AuthZEN 1.0 authorizer, Topaz ReBAC manifest, record-level `resource` templates, list filtering |
+| [Public portals & subdomain routing](playbooks/public-and-subdomain-saas.md) | `kind.host` subdomains, `scope: public` routes, guest invites |
 
 ## Runtime standards & internals
 

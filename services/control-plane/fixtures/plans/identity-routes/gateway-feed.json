@@ -25,7 +25,7 @@
           "method": "GET",
           "scope": "public",
           "upstream": "/health",
-          "required_permissions": null,
+          "permissions": null,
           "rate_limit": [
             "standard"
           ],
@@ -37,7 +37,7 @@
           "method": "GET",
           "scope": "organization",
           "upstream": "/orgs/{organization.id}/plans",
-          "required_permissions": [
+          "permissions": [
             "organization:read"
           ],
           "rate_limit": [
@@ -51,7 +51,7 @@
           "method": "GET",
           "scope": "project",
           "upstream": "/projects/{project.id}/plans",
-          "required_permissions": [
+          "permissions": [
             "project:read"
           ],
           "rate_limit": [
@@ -65,7 +65,7 @@
           "method": "POST",
           "scope": "project",
           "upstream": "/projects/{project.id}/plans",
-          "required_permissions": [
+          "permissions": [
             "catalog:write"
           ],
           "rate_limit": [
@@ -89,7 +89,7 @@
           "method": "GET",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}",
-          "required_permissions": [
+          "permissions": [
             "organization:read"
           ],
           "rate_limit": [
@@ -103,7 +103,7 @@
           "method": "PATCH",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}",
-          "required_permissions": [
+          "permissions": [
             "organization:write"
           ],
           "rate_limit": [
@@ -117,7 +117,7 @@
           "method": "DELETE",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}",
-          "required_permissions": [
+          "permissions": [
             "organization:admin"
           ],
           "rate_limit": [
@@ -131,7 +131,7 @@
           "method": "GET",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/children/project",
-          "required_permissions": "any_member",
+          "permissions": "any_member",
           "rate_limit": [
             "standard"
           ],
@@ -143,7 +143,7 @@
           "method": "POST",
           "scope": "organization",
           "upstream": "/nodes/{organization.id}/children/project",
-          "required_permissions": [
+          "permissions": [
             "project:create"
           ],
           "rate_limit": [
@@ -157,7 +157,7 @@
           "method": "GET",
           "scope": "project",
           "upstream": "/nodes/{project.id}",
-          "required_permissions": [
+          "permissions": [
             "project:read"
           ],
           "rate_limit": [

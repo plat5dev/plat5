@@ -39,8 +39,6 @@ pub struct GatewayConfig {
     pub auth_name_claims: NameClaims,
     /// Optional dotted claim path for JWT OAuth scopes (`AUTH_SCOPE_CLAIM`).
     pub auth_scope_claim: Option<Vec<String>>,
-    /// Optional dotted claim paths forwarded to identity for per-root auth policy checks (`AUTH_POLICY_CLAIMS`).
-    pub auth_policy_claims: Vec<(String, Vec<String>)>,
 
     /// Identity's internal base URL (`IDENTITY_INTERNAL_URL`); admit is at `/internal/admit`.
     pub identity_internal_url: String,
@@ -53,9 +51,9 @@ pub struct GatewayConfig {
     pub rate_limit_auth_failure_requests: u64,
     pub rate_limit_auth_failure_window_seconds: u64,
 
-    /// Audit's internal base URL. None = audit off (`AUDIT_ENABLED=false`).
+    /// Audit's internal base URL. None = audit off (`AUDIT_MODE=off`).
     pub audit_url: Option<String>,
-    /// Audit delivery mode (`AUDIT_MODE`): `sync` (default) or `async`.
+    /// Audit delivery mode (`AUDIT_MODE`): `sync` (default), `async`, or `off`.
     pub audit_mode: crate::audit::AuditMode,
 
     /// Proxies whose `X-Forwarded-For` names the client (`TRUSTED_PROXIES`).
@@ -100,8 +98,6 @@ impl GatewayConfig {
             &env::var("AUTH_NAME_CLAIMS").unwrap_or_else(|_| DEFAULT_NAME_CLAIMS.to_string()),
         );
         let auth_scope_claim = parse_scope_claim(env::var("AUTH_SCOPE_CLAIM").ok().as_deref());
-        let auth_policy_claims =
-            parse_policy_claims(env::var("AUTH_POLICY_CLAIMS").ok().as_deref())?;
         let identity_internal_url = base_url(require_env("IDENTITY_INTERNAL_URL")?);
         let control_plane_url = base_url(require_env("CONTROL_PLANE_URL")?);
         let valkey_url = optional_module_url(
@@ -111,14 +107,10 @@ impl GatewayConfig {
             env::var("VALKEY_URL").ok().as_deref(),
             false,
         )?;
-        let audit_url = optional_module_url(
-            "AUDIT_ENABLED",
-            "AUDIT_URL",
-            env::var("AUDIT_ENABLED").ok().as_deref(),
+        let (audit_mode, audit_url) = parse_audit_config(
+            env::var("AUDIT_MODE").ok().as_deref(),
             env::var("AUDIT_URL").ok().as_deref(),
-            true,
         )?;
-        let audit_mode = parse_audit_mode(env::var("AUDIT_MODE").ok().as_deref())?;
         let rate_limit_auth_failure_requests = parse_u64_env(
             "RATE_LIMIT_AUTH_FAILURE_REQUESTS",
             DEFAULT_RATE_LIMIT_AUTH_FAILURE_REQUESTS,
@@ -163,7 +155,6 @@ impl GatewayConfig {
             ),
             auth_name_claims,
             auth_scope_claim,
-            auth_policy_claims,
 
             identity_internal_url,
 
@@ -210,34 +201,6 @@ fn parse_name_claims(raw: &str) -> NameClaims {
 fn parse_scope_claim(raw: Option<&str>) -> Option<Vec<String>> {
     let parts = parse_claim_path(raw?);
     (!parts.is_empty()).then_some(parts)
-}
-
-const MAX_POLICY_CLAIMS: usize = 16;
-
-fn parse_policy_claims(
-    raw: Option<&str>,
-) -> Result<Vec<(String, Vec<String>)>, GatewayConfigError> {
-    let Some(raw) = raw else {
-        return Ok(Vec::new());
-    };
-    let mut out = Vec::new();
-    for item in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-        let parts = parse_claim_path(item);
-        if parts.is_empty() {
-            continue;
-        }
-        let canonical = parts.join(".");
-        if !out.iter().any(|(name, _)| name == &canonical) {
-            out.push((canonical, parts));
-        }
-    }
-    if out.len() > MAX_POLICY_CLAIMS {
-        return Err(GatewayConfigError::Invalid {
-            key: "AUTH_POLICY_CLAIMS",
-            message: format!("at most {MAX_POLICY_CLAIMS} claim paths are allowed"),
-        });
-    }
-    Ok(out)
 }
 
 fn base_url(raw: String) -> String {
@@ -307,7 +270,7 @@ fn parse_positive_duration(key: &'static str, raw: &str) -> Result<Duration, Gat
     Ok(duration)
 }
 
-/// Fail-closed module switch (`AUDIT_ENABLED` / `RATE_LIMIT_ENABLED`): on unless
+/// Fail-closed module switch (`RATE_LIMIT_ENABLED`): on unless
 /// explicitly `"false"`. When on, its backing URL is required so a forgotten
 /// URL fails boot instead of silently disabling the module.
 fn optional_module_url(
@@ -350,14 +313,26 @@ fn parse_key_prefix(raw: Option<&str>) -> Result<String, GatewayConfigError> {
     Ok(raw.to_string())
 }
 
-fn parse_audit_mode(raw: Option<&str>) -> Result<crate::audit::AuditMode, GatewayConfigError> {
-    match raw.map(str::trim) {
-        None | Some("") | Some("sync") => Ok(crate::audit::AuditMode::Sync),
-        Some("async") => Ok(crate::audit::AuditMode::Async),
-        Some(other) => Err(GatewayConfigError::Invalid {
-            key: "AUDIT_MODE",
-            message: format!("must be sync or async, got {other:?}"),
-        }),
+/// Parse `AUDIT_MODE` (`sync` | `async` | `off`, default `sync`) and require
+/// `AUDIT_URL` unless `AUDIT_MODE=off` so a forgotten URL fails boot closed.
+fn parse_audit_config(
+    mode_raw: Option<&str>,
+    url_raw: Option<&str>,
+) -> Result<(crate::audit::AuditMode, Option<String>), GatewayConfigError> {
+    let mode = match mode_raw.map(str::trim) {
+        None | Some("") | Some("sync") => crate::audit::AuditMode::Sync,
+        Some("async") => crate::audit::AuditMode::Async,
+        Some("off") => return Ok((crate::audit::AuditMode::Sync, None)),
+        Some(other) => {
+            return Err(GatewayConfigError::Invalid {
+                key: "AUDIT_MODE",
+                message: format!("must be sync, async, or off, got {other:?}"),
+            })
+        }
+    };
+    match url_raw.map(str::trim) {
+        Some(u) if !u.is_empty() => Ok((mode, Some(u.trim_end_matches('/').to_string()))),
+        _ => Err(GatewayConfigError::Missing("AUDIT_URL")),
     }
 }
 
@@ -420,15 +395,15 @@ mod tests {
     fn optional_modules_fail_closed_when_enabled() {
         assert_eq!(
             optional_module_url(
-                "AUDIT_ENABLED",
-                "AUDIT_URL",
+                "RATE_LIMIT_ENABLED",
+                "VALKEY_URL",
                 None,
-                Some("http://audit:3003/"),
+                Some("redis://valkey:6379/"),
                 true
             )
             .unwrap()
             .as_deref(),
-            Some("http://audit:3003")
+            Some("redis://valkey:6379")
         );
         assert!(matches!(
             optional_module_url("RATE_LIMIT_ENABLED", "VALKEY_URL", None, None, false),
@@ -446,11 +421,11 @@ mod tests {
             None
         );
         assert!(optional_module_url(
-            "AUDIT_ENABLED",
-            "AUDIT_URL",
+            "RATE_LIMIT_ENABLED",
+            "VALKEY_URL",
             Some("no"),
-            Some("http://audit:3003"),
-            true
+            Some("redis://valkey:6379"),
+            false
         )
         .is_err());
     }
@@ -475,22 +450,6 @@ mod tests {
             parse_scope_claim(Some("auth.scp")),
             Some(vec!["auth".into(), "scp".into()])
         );
-        assert_eq!(parse_policy_claims(None).unwrap(), vec![]);
-        assert_eq!(
-            parse_policy_claims(Some("amr, org.idp_connection, amr")).unwrap(),
-            vec![
-                ("amr".into(), vec!["amr".into()]),
-                (
-                    "org.idp_connection".into(),
-                    vec!["org".into(), "idp_connection".into()]
-                ),
-            ]
-        );
-        let too_many = (0..=MAX_POLICY_CLAIMS)
-            .map(|i| format!("c{i}"))
-            .collect::<Vec<_>>()
-            .join(",");
-        assert!(parse_policy_claims(Some(&too_many)).is_err());
     }
 
     #[test]
@@ -556,13 +515,37 @@ mod tests {
     }
 
     #[test]
-    fn audit_mode_parses_strictly() {
+    fn audit_mode_parses_strictly_and_fails_closed() {
         use crate::audit::AuditMode;
-        assert_eq!(parse_audit_mode(None).unwrap(), AuditMode::Sync);
-        assert_eq!(parse_audit_mode(Some("")).unwrap(), AuditMode::Sync);
-        assert_eq!(parse_audit_mode(Some("sync")).unwrap(), AuditMode::Sync);
-        assert_eq!(parse_audit_mode(Some("async")).unwrap(), AuditMode::Async);
-        assert!(parse_audit_mode(Some("best_effort")).is_err());
+        assert_eq!(
+            parse_audit_config(None, Some("http://audit:3003/")).unwrap(),
+            (AuditMode::Sync, Some("http://audit:3003".into()))
+        );
+        assert_eq!(
+            parse_audit_config(Some(""), Some("http://audit:3003")).unwrap(),
+            (AuditMode::Sync, Some("http://audit:3003".into()))
+        );
+        assert_eq!(
+            parse_audit_config(Some("sync"), Some("http://audit:3003")).unwrap(),
+            (AuditMode::Sync, Some("http://audit:3003".into()))
+        );
+        assert_eq!(
+            parse_audit_config(Some("async"), Some("http://audit:3003")).unwrap(),
+            (AuditMode::Async, Some("http://audit:3003".into()))
+        );
+        assert_eq!(
+            parse_audit_config(Some("off"), None).unwrap().1,
+            None
+        );
+        assert!(matches!(
+            parse_audit_config(None, None),
+            Err(GatewayConfigError::Missing("AUDIT_URL"))
+        ));
+        assert!(matches!(
+            parse_audit_config(Some("async"), Some("   ")),
+            Err(GatewayConfigError::Missing("AUDIT_URL"))
+        ));
+        assert!(parse_audit_config(Some("best_effort"), Some("http://audit:3003")).is_err());
     }
 
     #[test]

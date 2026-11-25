@@ -4,9 +4,9 @@ Who can do what, in one place: the ancestor rule, who can be in a tree, roles an
 
 ## The rule
 
-- **Ancestor rule.** Built-in RBAC allows a request when the caller holds one of the route's permissions through an unexpired binding on the route's node or an ancestor. Built-in access is the union of those bindings; there are no built-in deny rules.
+- **Ancestor rule (built-in RBAC).** When the deployment declares `roles` + `creator_role`, built-in RBAC allows a request when the caller holds one of the route's permissions through an unexpired binding on the route's node or an ancestor. Built-in access is the union of those bindings; there are no built-in deny rules.
 
-- **External AuthZEN authorizers.** Any kind, service, scope, route, or verb can attach an external OpenID AuthZEN 1.0 PDP ([`reference/config/authorizers.md`](../reference/config/authorizers.md)) in `replace`, `and`, or `or` mode — including record-level `resource: { type, id }` templates (for example, ReBAC, ABAC, or explicit deny rules in Topaz, Cerbos, or OpenFGA). A kind-level `authorizer` covers that kind's list filtering, identity `/access/v1/*` evaluation, and kind-scoped routes with explicit `required_permissions` (unless overridden or opted out with `authorizer: false`). Plat5 still enforces authentication, org security policies, suspension, credential scope narrowing, rate limits, and audit.
+- **External AuthZEN authorizer (all-or-nothing PDP mode).** A deployment may instead declare a single top-level `authorizer` ([`reference/config/authorizer.md`](../reference/config/authorizer.md)) pointing to an external OpenID AuthZEN 1.0 PDP (such as Topaz, Cerbos, or OpenFGA). `authorizer` and `roles`/`creator_role` are mutually exclusive: when `authorizer` is set, the PDP decides every permission-gated route, node list filter (`list_permission`), and identity `/access/v1/*` evaluation across all kinds, and individual routes/verbs may add a `resource: { type, id }` template for record-level checks. Plat5 still enforces authentication, tree membership, org security policies, suspension, credential scope narrowing, rate limits, and audit.
 
 - **Default-deny below the root.** Joining a root grants the role stated on the add or the invite. With a role that holds no permissions for child kinds, members see no projects until a role is bound at a project, or at the org for all of them. A deployment that wants default-allow gives new members a role with those permissions.
 
@@ -27,9 +27,7 @@ Who can do what, in one place: the ancestor rule, who can be in a tree, roles an
 
 - **Guests.** A person's member with no effective binding at its root (directly or through a group), only on nodes below it, made by redeeming an invite below the root. Service accounts are never guests. Invites below a root need `guests:write`, checked like any permission: on the invite's node or an ancestor. A deployment turns guests on by granting it, and keeps guest invites in the root's hands by not granting it, or `*`, through any role bindable below the root. Guests are listed on the root's members list, marked, so an admin sees everyone who can reach the tree.
 
-- **Groups.** A flat group of active members (people or service accounts) belonging to one root tree. Groups never nest and never cross trees. A group can hold bindings on any node of its tree, and every member of the group inherits those bindings.
-
-- **Public principals.** On kinds and kind-scoped routes that opt in with `allow_public: true`, nodes may also hold bindings for `all_users` (anonymous and authenticated callers) or `all_authenticated_users` (any valid credential, including callers outside the tree). Public bindings grant read/access permissions without creating a member; a suspended member of that tree cannot bypass suspension through a public binding.
+- **Groups.** A flat group of active members (people or service accounts) belonging to one root tree. Groups never nest and never cross trees. In built-in RBAC mode, a group can hold bindings on any node of its tree, and every member of the group inherits those bindings.
 
 - **Closed world.** A tree's data refers only to its own nodes and members. Plat5 guarantees half of this by never sending a principal id, and sending a user id only on user routes and in user events, which carry no tree; the other half is a convention services follow. People cross trees; data doesn't. This is a data-isolation convention, not a privacy boundary: services and the team can still correlate a person across trees, and an operator plane can show which trees a user is in.
 
@@ -38,50 +36,50 @@ Who can do what, in one place: the ancestor rule, who can be in a tree, roles an
 
 | Piece | Says | Owner |
 |-------|------|-------|
-| Route `required_permissions` | Which permissions the route needs (any one of them), or `any_member` | The service's file |
-| Route / kind `authorizer` | Optional external AuthZEN PDP and composition mode (`replace`, `and`, `or`) | The service's file or kinds document |
+| Route `permissions` | Which permissions the route needs (any one of them, as a string or array), or `any_member` | The service's file |
+| Top-level `authorizer` & route `resource` | Optional external AuthZEN 1.0 PDP (replacing built-in RBAC) and per-route record-level `resource: { type, id }` template | `plat5.yml` / the service's file |
 | Role | Which permissions it grants, roles it includes, and where it can be bound | The deployment's roles document, or a root's custom roles (`custom_roles: true`) |
-| Binding | This member, group, or public principal holds this role on this node (optionally with `expires_at`) | Identity, written through the node API |
+| Binding | This member or group holds this role on this node (optionally with `expires_at`) | Identity, written through the node API |
 
-The gateway checks the caller's permissions on the route's node against the route (and consults any attached external authorizer). It never sees roles or bindings, only permissions, from admit. Services see none of it.
+The gateway checks the caller's permissions on the route's node against the route (from admit in built-in RBAC mode, or from the configured external `authorizer`). It never sees roles or bindings, only permissions, from admit. Services see none of it.
 
-To delegate authorization to an external policy engine while keeping Plat5's edge enforcement and `/access/routes`, attach an `authorizer` in `replace`, `and`, or `or` mode ([`reference/config/authorizers.md`](../reference/config/authorizers.md)). Alternatively, a deployment can grant `["*"]` on its roles if it wants services to decide access themselves.
+To delegate all authorization to an external policy engine while keeping Plat5's edge enforcement, node tree, membership, and `/access/routes`, configure top-level `authorizer` instead of `roles` ([`reference/config/authorizer.md`](../reference/config/authorizer.md)). Alternatively, in built-in RBAC mode, a deployment can grant `["*"]` on its roles if it wants services to decide access themselves.
 
 A credential may optionally be narrowed below its principal: API keys support permission `scopes`, `allowed_roots` (for personal keys), IP allowlists (`allowed_cidrs`), and `expires_at`; JWTs support optional permission scopes via `AUTH_SCOPE_CLAIM`. Effective permissions are the intersection of the member's resolved permissions and the credential's scopes.
 
-A root may also define an **org security policy** (`GET/PATCH /nodes/{root_id}/security-policy`) with `allow_personal_keys` (disable personal API keys in that tree), `allowed_cidrs` (root-wide IP allowlist enforced by the gateway), and `required_idp_claims` (JWT claim requirements checked against claims forwarded via `AUTH_POLICY_CLAIMS`).
+A root may also define an **org security policy** (`GET/PATCH /nodes/{root_id}/security-policy`) with `allow_personal_keys` (disable personal API keys in that tree), `allowed_cidrs` (root-wide IP allowlist enforced by the gateway), and `required_idp_claims` (JWT claim requirements checked against claims listed in top-level `policy_claims` in config; keys outside `policy_claims` are rejected with **422**).
 
-When `custom_roles: true` is enabled in config, each root can create its own ULID-keyed custom roles via identity's API alongside predefined roles; custom roles draw from the deployment's permission catalog and can never grant `*`.
+When `custom_roles: true` is enabled in config, each root can create its own ULID-keyed custom roles via identity's API alongside predefined roles; custom roles draw from the deployment's permission catalog, can never grant `*`, and must have a case-insensitive unique `display_name` per root (not colliding with any custom role or system role slug). Setting `custom_roles: false` immediately stops existing custom roles from granting permissions and hides them from role reads.
 
-Bindings may carry an optional `expires_at` (set via `expires_at` or `expires_in`). Expired bindings grant no permissions and are excluded from admit, evaluation, search, and lists; the member row remains so re-binding keeps the same `member_id`.
+Bindings may carry an optional `expires_at` (set via `expires_at` or `expires_in`). Expired bindings grant no permissions and are excluded from admit, evaluation, search, and lists; re-binding the same `(subject, node, role)` replaces the expired row, and the member row remains so re-binding keeps the same `member_id`.
 
 The roles document's fields: [`reference/config/roles.md`](../reference/config/roles.md). The permissions identity's and audit's routes require by default: [`reference/config/generated-routes.md`](../reference/config/generated-routes.md#the-generated-permissions).
 
 ### Resolution
 
-Identity resolves permissions at admit, for one member on one node chain ([`reference/api/internal.md`](../reference/api/internal.md#admit)).
+In built-in RBAC mode, identity resolves permissions at admit, for one member on one node chain ([`reference/api/internal.md`](../reference/api/internal.md#admit)).
 
-1. Take the member's direct bindings and the bindings of every group the member belongs to, on every node in the chain: the route's node and each ancestor. On `allow_public: true` routes, also include `all_users` bindings (and `all_authenticated_users` bindings when authenticated), unless the caller is a suspended member of that tree.
-2. Drop any binding whose role isn't in the roles document or the root's custom roles, or isn't bindable at its node's kind.
+1. Take the member's unexpired direct bindings and the unexpired bindings of every group the member belongs to, on every node in the chain: the route's node and each ancestor.
+2. Drop any binding whose role isn't in the roles document (or, when `custom_roles: true`, the root's custom roles), or isn't bindable at its node's kind.
 3. `permissions` is the union of the remaining roles' permissions, each predefined role's `includes` resolved.
 
 `*` is every permission: the gateway matches it to any route permission. A route can't require `*` itself. `GET …/membership` shows a caller the same answer for themselves.
 
 ### Assigning
 
-| Write | Role |
-|-------|------|
-| Create a node | If its kind binds its creator (`bind_creator`, on unless the kind turns it off), the creator gets `creator_role` on it. Off, the creator reaches it only through bindings above it. A node created with no member behind the request gets no binding |
-| Create a root | If its kind binds its creator, the user creating it gets a member in the new tree, with `creator_role` on the root. Off, the new tree has no member until a front door such as an operator plane adds one |
-| Add a member to a root | `role` in the body, required |
-| Redeem an invite at a root | The invite's `role` at the root, plus each of its `grants` |
-| Redeem an invite below a root | The invite's `role` at that node. For someone not in the tree, that makes them a guest |
-| Create a service account | `role` in the body, required. Bound at the node it belongs to |
-| Create or change a binding | `role` in the body, required; `member_id`, `group_id`, or `public_principal` on create; optional `expires_at` / `expires_in` |
+| Write | Built-in RBAC mode | External `authorizer` mode |
+|-------|--------------------|----------------------------|
+| Create a node | If `bind_creator` is on, creator gets `creator_role` on it | Creates the node; no role binding is created |
+| Create a root | If `bind_creator` is on, creator gets a member + `creator_role` on the root | If `bind_creator` is on, creator gets a member in the new tree (no role) |
+| Add a member to a root | `role` in the body, required | Creates the member; `role` must be omitted (**422** if passed) |
+| Redeem an invite at a root | The invite's `role` at the root, plus each of its `grants` | Creates the member; `role` and `grants` must be omitted (**422** if passed) |
+| Redeem an invite below a root | The invite's `role` at that node (makes a non-member a guest) | Creates the member if not in the tree; `role` must be omitted (**422** if passed) |
+| Create a service account | `role` in the body, required. Bound at the node it belongs to | Creates the service account + member; `role` must be omitted (**422** if passed) |
+| Bindings, groups, custom roles | `role` required on bindings (`member_id` or `group_id`); optional `expires_at` / `expires_in` | Writes rejected with **422** (policy lives in the external PDP) |
 
-A role not in the roles document or the root's custom roles, or not bindable at the node's kind, is **422**. A direct binding for someone who isn't in the tree, or for a group of another tree, is **422**: guests come through invites. A public binding (`all_users` or `all_authenticated_users`) requires `allow_public: true` on the node's kind (**422** otherwise).
+In built-in RBAC mode, a role not in the roles document or the root's custom roles, or not bindable at the node's kind, is **422**. A direct binding for someone who isn't in the tree, or for a group of another tree, is **422**: guests come through invites.
 
-A member, group, or public principal may hold multiple distinct roles on the same node; `(member_id, node_id, role)`, `(group_id, node_id, role)`, and `(public_principal, node_id, role)` are unique. Changing a binding's role or expiry is a `PATCH` of that binding.
+A member or group may hold multiple distinct roles on the same node; `(member_id, node_id, role)` and `(group_id, node_id, role)` are unique among live bindings (creating a binding when an expired one exists for the same tuple replaces it). Changing a binding's role or expiry is a `PATCH` of that binding.
 
 ### Who may assign
 
@@ -97,7 +95,7 @@ Every credential is `Authorization: Bearer`. A value of three dot-separated segm
 
 Any credential works on any route in a kind scope unless restricted: a person's JWT or personal key reaches every tree they're in (subject to key `allowed_roots` and each root's security policy), and admit picks the member for the tree in the path or root host. A service account key works only in its own tree, and never on user routes. A personal key narrowed by `scopes` or `allowed_roots` also cannot call user routes (**403**).
 
-**JWT.** A signed JWT access token from the configured issuer, verified against its JWKS ([`reference/idp.md`](../reference/idp.md)). The gateway reads the issuer, the subject claim (`AUTH_SUBJECT_CLAIM`), the first non-empty name claim of `AUTH_NAME_CLAIMS`, optional permission scopes (`AUTH_SCOPE_CLAIM`), and optional policy claims (`AUTH_POLICY_CLAIMS`), and sends them to admit as `idp`.
+**JWT.** A signed JWT access token from the configured issuer, verified against its JWKS ([`reference/idp.md`](../reference/idp.md)). The gateway reads the issuer, the subject claim (`AUTH_SUBJECT_CLAIM`), the first non-empty name claim of `AUTH_NAME_CLAIMS`, optional permission scopes (`AUTH_SCOPE_CLAIM`), and any policy claims listed in top-level `policy_claims` in config, and sends them to admit as `idp`.
 
 **Key.** Sent to admit as `credential`, as presented. A key may carry an IP allowlist (`allowed_cidrs`), permission `scopes`, `allowed_roots` (personal keys only), and `expires_at` ([`reference/api/identity.md`](../reference/api/identity.md#key)); an expired or revoked key is `valid: false` (**401**), and a client IP outside `allowed_cidrs` is refused with **401**, counted by the failed-auth IP limiter.
 
@@ -106,15 +104,15 @@ Any credential works on any route in a kind scope unless restricted: a person's 
 Every route, in order:
 
 1. **Match.** Unmatched → **404**. Take the chain params from the path (and, when the root kind sets `host`, resolve the root from the matching subdomain), root first (`{organization}`, `{project}`).
-2. **Authenticate and admit.** Verify the JWT, or take the key; on a kind route with `allow_public: true` and no `Authorization` header, run an anonymous admit. Then admit, from cache when possible ([admit](../reference/api/internal.md#what-the-gateway-answers)). A JWT refused locally → **401**. `valid: false` (the credential itself is bad) or a refused anonymous admit → **401**. On a user route, a service account or narrowed personal key → **403**. On a kind route, if the root's `allowed_cidrs` excludes the client IP, or admit grants neither a member nor public permissions (the node doesn't exist, the caller isn't admitted, or the root's security policy rejected the credential) → **403** "permission denied, or it may not exist" (or **401** for an anonymous caller).
-3. **Permissions & authorizer.** On a kind route, evaluate built-in permissions (`*` matches any permission; `any_member` requires membership) and, when the route has an attached `authorizer`, compose with the external AuthZEN PDP according to its mode (`replace`, `and`, or `or`, honoring credential scope narrowing). Denied → **403** "permission denied, or it may not exist" (or **401** for an anonymous caller), with `required_permissions` in `details`. Authorizer error/timeout → **503**.
+2. **Authenticate and admit.** Verify the JWT, or take the key, then admit from cache when possible ([admit](../reference/api/internal.md#what-the-gateway-answers)). A missing or locally refused JWT → **401**. `valid: false` (the credential itself is bad) → **401**. On a user route, a service account or narrowed personal key → **403**. On a kind route, if the root's `allowed_cidrs` excludes the client IP, or admit finds no active member (the node doesn't exist, the caller isn't in the tree, or the root's security policy rejected the credential) → **403** "permission denied, or it may not exist".
+3. **Permissions / authorizer.** On a kind route, `any_member` passes once admitted. Otherwise, narrow by credential scopes (if any), and check either built-in RBAC permissions (`*` matches any permission) or the configured top-level `authorizer` (using the route's `resource` template when set, or the route's target node). Denied → **403** "permission denied, or it may not exist", with `permissions` in `details`. Authorizer error/timeout → **503**.
 4. **Rate limit.** When rate limiting is enabled and the route has policies, every policy on the route is checked at once (using the root's `rate_limit_tier` override when present) and counted only if all pass ([rate limits](../reference/config/rate-limits.md)). Otherwise **429**.
 5. **Fill.** Substitute the placeholders in `upstream`. A param value of `.` or `..`, or one holding `/`, `?` or `#`, is **400**.
 6. **Audit intent**, on an audited route with audit on (`sync` mode waits on the write → **503** on failure; `async` mode forwards and queues one completed event after the response; [`concepts/audit.md`](audit.md#delivery)). The gateway's own **403**s, **400**s and **500**s after admit are recorded as one background event.
 7. **Forward** with the caller's headers ([`reference/headers.md`](../reference/headers.md)). Slugs never reach a service.
 8. **Outcome**, in the background, then respond.
 
-Both **403**s on a kind route, admit finding no member and no permission held, take one path: the same body, `details.required_permissions` included, both counted by the failed-auth IP limiter (when rate limiting is enabled), and over its budget the same **429**, with only `Retry-After`. So no answer says whether a node exists, not even once the limiter's bucket is full. An `any_member` route names no permissions: its only **403** is the admit one, the caller not in the tree. Both come before the rate limit, so only callers the route lets through spend its budgets: a member with no permission on a project can't drain its `count_at: project` budget. Probing permissions is bounded like probing nodes, by the failed-auth IP limiter. The intent is written after the permission check, so during an audit outage a **503** never says whether a node exists.
+Both **403**s on a kind route, admit finding no member and no permission held, take one path: the same body, `details.permissions` included, both counted by the failed-auth IP limiter (when rate limiting is enabled), and over its budget the same **429**, with only `Retry-After`. So no answer says whether a node exists, not even once the limiter's bucket is full. An `any_member` route names no permissions: its only **403** is the admit one, the caller not in the tree. Both come before the rate limit, so only callers the route lets through spend its budgets: a member with no permission on a project can't drain its `count_at: project` budget. Probing permissions is bounded like probing nodes, by the failed-auth IP limiter. The intent is written after the permission check, so during an audit outage a **503** never says whether a node exists.
 
 **The failed-auth IP limiter** (active when rate limiting is enabled) counts, per [client IP](../reference/gateway.md#client-ip), the **401** for `valid: false` and both **403**s on a kind route. Nothing else is counted: not a JWT refused locally, an unmatched route, a service account's **403** on a user route, or a route check's `false` (a guest loading a page isn't failing auth). Over its budget, a counted answer is **429** instead ([numbers and headers](../reference/gateway.md#rate-limits)).
 
@@ -136,7 +134,7 @@ A member can lose a node while staying in its tree (a binding or group membershi
 
 - the node exists, is of the kind asked about, and it and its ancestors are live;
 - M is an active, unsuspended member of the node's tree, and admit would accept its principal: a person who isn't suspended, or a service account whose node is live;
-- a binding of M's on the node or an ancestor grants P ([resolution](#resolution)), composed with the kind's external `authorizer` when one is configured (`replace`, `and`, or `or`).
+- a binding of M's on the node or an ancestor grants P ([resolution](#resolution)), or (when top-level `authorizer` is configured) the external AuthZEN PDP allows `(member:M, P, kind:N)`.
 
 Anything else is no, never an error: a deleted, purged or unknown node, a removed, suspended or unknown member, a member of another tree, a kind that isn't the node's. Identity keeps no cache for these answers, so a removed binding is no at once (an unavailable external authorizer answers **503**).
 
@@ -147,7 +145,7 @@ Checking is the service's job. Plat5 can't see what a service sends or to whom, 
 `/nodes/{node_id}/children/{kind}` and `/users/{user_id}/nodes` return only the nodes the caller can see.
 
 - **Which permission.** The kind's `list_permission`, from config.
-- **Where.** At each listed node, from the union of the caller's unexpired bindings on it and its ancestors ([resolution](#resolution)), composed with the kind's external `authorizer` when configured.
+- **Where.** At each listed node, from the union of the caller's unexpired bindings on it and its ancestors ([resolution](#resolution)), or from the external `authorizer` when configured.
 - **Who.** On a child list, the member in `X-Plat5-Member-Id`, which the gateway sends; without the header the list is the full list, so any front door can list. On `/users/{user_id}/nodes`, that user's active, unsuspended members in every tree.
 - **Deleted.** `?status=deleted` uses the same permission, counting the deleted node's own bindings too: they're kept until purge. That includes a deleted org, which has nothing above it: `GET /user/nodes?kind=organization&status=deleted` is how a person finds one. As at admit, only the deleted node's own bindings count beside live ones: a node whose ancestor is deleted too isn't listed, since it can't be restored before that ancestor. Restoring still needs the restore route's permission.
 
@@ -157,8 +155,8 @@ This is why child list routes require `any_member`: anyone in the tree may ask, 
 
 A UI hides what the caller can't use, and shows who the caller is on a node. Two answers, both for the caller only:
 
-- **Route checks**, for hiding. The UI sends `POST /access/routes` to the gateway with a batch of requests it might make, by method and public path, and the gateway answers whether each would be allowed: the route match, admit, permission check, and any attached external authorizer (batched per authorizer), the same steps as a request ([route checks](../reference/gateway.md#route-checks)). The UI asks by route, never by permission name: permissions are the deployment's, and roles can change them with an apply. A node the caller can't reach answers `false`, so a check tells no more than a **403** would.
-- **`GET …/membership`**, for who the caller is: their member id on the node, the bindings that count there, and the permissions they grant. A UI shows "Admin" or "Guest" from it, and marks "you".
+- **Route checks**, for hiding. The UI sends `POST /access/routes` to the gateway with a batch of requests it might make, by method and public path, and the gateway answers whether each would be allowed: the route match, admit, and permission check or batched external authorizer call, the same steps as a request ([route checks](../reference/gateway.md#route-checks)). The UI asks by route, never by permission name: permissions are the deployment's, and roles can change them with an apply. A node the caller can't reach answers `false`, so a check tells no more than a **403** would.
+- **`GET …/membership`**, for who the caller is: their `member_id` and `status` on the node, plus (in built-in RBAC mode) the `bindings` that count there and the `permissions` they grant. A UI shows "Admin" or "Guest" from it, and marks "you".
 
 Both are advisory. The gateway decides every request when it's made, so a page shown on a stale answer gets the usual **403**, and a check can't grant anything.
 

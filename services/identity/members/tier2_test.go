@@ -8,10 +8,11 @@ import (
 
 const tier2TestConfig = `{
 	"revision": 1, "deletion_grace": "30d", "reserved_slugs": ["new"],
+	"policy_claims": ["amr", "idp_connection"],
 	"kinds": {
-		"organization": { "path": "/orgs/{organization}", "list_permission": "organization:read", "allow_public": true },
+		"organization": { "path": "/orgs/{organization}", "list_permission": "organization:read" },
 		"folder": { "parent": "organization", "path": "/folders/{folder}", "list_permission": "folder:read" },
-		"project": { "parent": "folder", "path": "/projects/{project}", "list_permission": "project:read", "allow_public": true }
+		"project": { "parent": "folder", "path": "/projects/{project}", "list_permission": "project:read" }
 	},
 	"roles": {
 		"admin": { "permissions": ["*"], "bindable_at": ["organization", "folder", "project"] },
@@ -22,15 +23,15 @@ const tier2TestConfig = `{
 	"creator_role": "admin",
 	"custom_roles": true,
 	"permissions": {
-		"organization:read": { "description": "Read org", "bindable_at": [], "custom_role_assignable": true },
-		"project:read": { "description": "Read projects", "bindable_at": [], "custom_role_assignable": true },
-		"project:write": { "description": "Write projects", "bindable_at": [], "custom_role_assignable": true },
+		"organization:read": { "description": "Read org", "bindable_at": ["organization"], "custom_role_assignable": true },
+		"project:read": { "description": "Read projects", "bindable_at": ["organization", "folder", "project"], "custom_role_assignable": true },
+		"project:write": { "description": "Write projects", "bindable_at": ["organization", "folder", "project"], "custom_role_assignable": true },
 		"billing:read": { "description": "Read billing", "bindable_at": ["organization"], "custom_role_assignable": true },
-		"internal:root": { "description": "Internal only", "bindable_at": [], "custom_role_assignable": false }
+		"internal:root": { "description": "Internal only", "bindable_at": ["organization"], "custom_role_assignable": false }
 	}
 }`
 
-func TestTier2SecurityPoliciesCustomRolesAndPublicPrincipals(t *testing.T) {
+func TestTier2SecurityPoliciesAndCustomRoles(t *testing.T) {
 	e := setupWith(t, tier2TestConfig)
 	alice := e.person("alice")
 	org, _ := e.org(alice, "Acme")
@@ -46,6 +47,10 @@ func TestTier2SecurityPoliciesCustomRolesAndPublicPrincipals(t *testing.T) {
 	}
 	r = e.call("PATCH", "/nodes/"+p.ID+"/security-policy", "", `{"allow_personal_keys":false}`)
 	e.expect(r, 404, "security policy on non-root rejected")
+
+	// Claim not listed in policy_claims is rejected with 422.
+	r = e.call("PATCH", "/nodes/"+org.ID+"/security-policy", "", `{"required_idp_claims": {"unconfigured": ["x"]}}`)
+	e.expect(r, 422, "unconfigured policy claim rejected")
 
 	r = e.call("PATCH", "/nodes/"+org.ID+"/security-policy", "", `{
 		"allow_personal_keys": false,
@@ -92,6 +97,9 @@ func TestTier2SecurityPoliciesCustomRolesAndPublicPrincipals(t *testing.T) {
 	// Permission with bindable_at=[organization] cannot be placed on a project-bindable role.
 	r = e.call("POST", "/nodes/"+org.ID+"/roles", "", `{"display_name":"BadKind","permissions":["billing:read"],"bindable_at":["project"]}`)
 	e.expect(r, 422, "incompatible bindable_at rejected")
+	// Name colliding with a system role slug is rejected with 409.
+	r = e.call("POST", "/nodes/"+org.ID+"/roles", "", `{"display_name":"Admin","permissions":["billing:read"],"bindable_at":["organization"]}`)
+	e.expect(r, 409, "system role name collision rejected")
 
 	r = e.call("POST", "/nodes/"+org.ID+"/roles", "", `{"display_name":"Billing Viewer","description":"Can view billing","permissions":["billing:read"],"bindable_at":["organization"]}`)
 	e.expect(r, 201, "create custom role")
@@ -99,6 +107,10 @@ func TestTier2SecurityPoliciesCustomRolesAndPublicPrincipals(t *testing.T) {
 	if r.str("source") != RoleSourceCustom {
 		t.Fatalf("expected source=custom, got %v", r.body)
 	}
+	// Case-insensitive duplicate custom role name is rejected with 409.
+	r = e.call("POST", "/nodes/"+org.ID+"/roles", "", `{"display_name":"billing viewer","permissions":["billing:read"],"bindable_at":["organization"]}`)
+	e.expect(r, 409, "duplicate custom role name rejected")
+
 	// Unified roles list returns both system and custom roles.
 	r = e.call("GET", "/nodes/"+org.ID+"/roles", "", "")
 	e.expect(r, 200, "list unified roles")
@@ -111,11 +123,11 @@ func TestTier2SecurityPoliciesCustomRolesAndPublicPrincipals(t *testing.T) {
 	if !slices.Contains(permissionsOf(a), "billing:read") || !slices.Contains(permissionsOf(a), "organization:read") {
 		t.Fatalf("expected billing:read + organization:read, got %v", permissionsOf(a))
 	}
-	// Membership reflects custom role permissions.
+	// Membership reflects custom role permissions and status.
 	r = e.call("GET", "/nodes/"+org.ID+"/memberships/"+bob, "", "")
 	e.expect(r, 200, "membership with custom role")
-	if !slices.Contains(permissionsOf(r), "billing:read") {
-		t.Fatalf("membership missing billing:read: %v", permissionsOf(r))
+	if r.str("status") != StatusActive || !slices.Contains(permissionsOf(r), "billing:read") {
+		t.Fatalf("membership missing status/billing:read: %v", r.body)
 	}
 	// Update custom role permissions -> reflected at admit.
 	r = e.call("PATCH", "/nodes/"+org.ID+"/roles/"+customRoleID, "", `{"permissions":["billing:read","project:read"]}`)
@@ -130,45 +142,5 @@ func TestTier2SecurityPoliciesCustomRolesAndPublicPrincipals(t *testing.T) {
 	a = e.admit(admitBody(bobWho, false, "organization", org.ID))
 	if slices.Contains(permissionsOf(a), "billing:read") {
 		t.Fatalf("deleted custom role should no longer grant billing:read: %v", permissionsOf(a))
-	}
-
-	// 3. Public principal bindings (all_users and all_authenticated_users).
-	// Folder doesn't set allow_public -> 422.
-	r = e.call("POST", "/nodes/"+f.ID+"/bindings", "", `{"public_principal":"all_users","role":"developer"}`)
-	e.expect(r, 422, "public binding on non-allow_public kind rejected")
-
-	// Project sets allow_public -> 201.
-	r = e.call("POST", "/nodes/"+p.ID+"/bindings", "", `{"public_principal":"all_users","role":"viewer"}`)
-	e.expect(r, 201, "create all_users binding")
-	if r.str("public_principal") != PrincipalAllUsers {
-		t.Fatalf("expected public_principal=all_users, got %v", r.body)
-	}
-	// Anonymous admit with allow_public=true succeeds with project:read and no member_id.
-	anonBody := fmt.Sprintf(`{"anonymous":true,"allow_public":true,"chain":[{"kind":"organization","ref":%q},{"kind":"folder","ref":%q},{"kind":"project","ref":%q}]}`, org.ID, f.ID, p.ID)
-	a = e.admit(anonBody)
-	if a.body["valid"] != true || a.body["principal"] != "anonymous" || a.body["member_id"] != nil || !slices.Equal(permissionsOf(a), []string{"project:read"}) {
-		t.Fatalf("anonymous admit: %v", a.body)
-	}
-
-	// Non-member authenticated user (stranger) is refused when allow_public=false,
-	// and admitted without member_id when allow_public=true.
-	strangerWho := `"idp": {"issuer": "https://idp.test", "subject": "stranger"}`
-	a = e.admit(admitBody(strangerWho, false, "organization", org.ID, "folder", f.ID, "project", p.ID))
-	if a.body["member_id"] != nil || len(permissionsOf(a)) != 0 {
-		t.Fatalf("stranger should not be admitted without allow_public: %v", a.body)
-	}
-	strangerPub := fmt.Sprintf(`{%s,"allow_public":true,"chain":[{"kind":"organization","ref":%q},{"kind":"folder","ref":%q},{"kind":"project","ref":%q}]}`, strangerWho, org.ID, f.ID, p.ID)
-	a = e.admit(strangerPub)
-	if a.body["member_id"] != nil || !slices.Equal(permissionsOf(a), []string{"project:read"}) {
-		t.Fatalf("stranger should get public project:read with allow_public=true: %v", a.body)
-	}
-
-	// Suspended member of org does NOT bypass suspension via all_users / all_authenticated_users.
-	r = e.call("PATCH", "/nodes/"+org.ID+"/members/"+bob+"/status", "", `{"status":"suspended"}`)
-	e.expect(r, 200, "suspend bob")
-	bobPub := fmt.Sprintf(`{%s,"allow_public":true,"chain":[{"kind":"organization","ref":%q},{"kind":"folder","ref":%q},{"kind":"project","ref":%q}]}`, bobWho, org.ID, f.ID, p.ID)
-	a = e.admit(bobPub)
-	if a.body["member_id"] != nil || len(permissionsOf(a)) != 0 {
-		t.Fatalf("suspended member should not receive public permissions in their org: %v", a.body)
 	}
 }

@@ -36,7 +36,11 @@ impl Gateway {
 
         let presented = self
             .authenticator
-            .present(session.req_header(), &self.name_claims)
+            .present(
+                session.req_header(),
+                &self.name_claims,
+                &snapshot.policy_claims,
+            )
             .await;
         ctx.credential.auth_type = match &presented {
             Ok(p) => Some(p.auth_type()),
@@ -88,10 +92,10 @@ impl Gateway {
         let host = request_host(session.req_header()).map(str::to_string);
         let checked = self
             .pipeline
-            .check_routes_with_authorizers(
+            .check_routes_with_authorizer(
                 &snapshot.routes,
                 &snapshot.default_policies,
-                &snapshot.authorizers,
+                snapshot.authorizer.as_ref(),
                 &credential,
                 &checks,
                 &ip,
@@ -103,6 +107,9 @@ impl Gateway {
             Ok(c) => c,
             Err(rejection) => return write_check_rejection(&cors, session, ctx, rejection).await,
         };
+        if checked.key_id.is_some() {
+            ctx.credential.key_id = checked.key_id;
+        }
         let answer = serde_json::json!({
             "checks": checked
                 .allowed

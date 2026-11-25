@@ -57,7 +57,7 @@ func evalSetup(t *testing.T) (*env, evalTree) {
 	}
 	// A removed member, once developer at the org.
 	tr.removed = e.join(tr.gruow, "gil", "developer")
-	if _, err := e.members.RemoveMember(e.ctx, tr.gruow.ID, tr.removed); err != nil {
+	if _, _, err := e.members.RemoveMember(e.ctx, tr.gruow.ID, tr.removed); err != nil {
 		t.Fatal(err)
 	}
 	// A service account that belongs to web with developer there, and one
@@ -203,7 +203,7 @@ func TestEvaluationChanges(t *testing.T) {
 	if !e.decide(body) {
 		t.Fatal("dana reaches web")
 	}
-	if _, err := e.members.DeleteBinding(e.ctx, tr.web.ID, e.bindingOf(tr.dana, tr.web.ID)); err != nil {
+	if _, err := e.members.DeleteBinding(e.ctx, e.snap(), tr.web.ID, e.bindingOf(tr.dana, tr.web.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if e.decide(body) || e.removed(tr.dana) {

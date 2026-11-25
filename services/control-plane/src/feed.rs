@@ -109,7 +109,7 @@ impl Feed {
     }
 }
 
-async fn wait_shutdown(rx: &mut watch::Receiver<bool>) {
+pub(crate) async fn wait_shutdown(rx: &mut watch::Receiver<bool>) {
     loop {
         if *rx.borrow_and_update() {
             return;

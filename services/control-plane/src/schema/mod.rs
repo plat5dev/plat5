@@ -33,8 +33,8 @@ pub const FILES: &[(&str, &str)] = &[
         include_str!(concat!(env!("PLAT5_SCHEMA_DIR"), "/roles.json")),
     ),
     (
-        "authorizers.json",
-        include_str!(concat!(env!("PLAT5_SCHEMA_DIR"), "/authorizers.json")),
+        "authorizer.json",
+        include_str!(concat!(env!("PLAT5_SCHEMA_DIR"), "/authorizer.json")),
     ),
     (
         "rate_limits.json",
@@ -78,11 +78,7 @@ impl std::fmt::Display for FieldError {
 }
 
 /// Most errors one response lists.
-const MAX_ERRORS: usize = 50;
-
-struct Validators {
-    config: Validator,
-}
+pub(crate) const MAX_ERRORS: usize = 50;
 
 fn parsed(name: &str) -> Value {
     let (_, text) = FILES
@@ -108,16 +104,14 @@ fn compile(root: &Value) -> Validator {
         .expect("schema compiles")
 }
 
-fn validators() -> &'static Validators {
-    static V: OnceLock<Validators> = OnceLock::new();
-    V.get_or_init(|| Validators {
-        config: compile(&json!({ "$ref": format!("{BASE}config.json") })),
-    })
+fn config_validator() -> &'static Validator {
+    static V: OnceLock<Validator> = OnceLock::new();
+    V.get_or_init(|| compile(&json!({ "$ref": format!("{BASE}config.json") })))
 }
 
 /// Checks a flat config against `config.json`.
 pub fn check_config(config: &Value) -> Result<(), Vec<FieldError>> {
-    check(&validators().config, config)
+    check(config_validator(), config)
 }
 
 fn check(validator: &Validator, instance: &Value) -> Result<(), Vec<FieldError>> {
@@ -133,7 +127,7 @@ fn check(validator: &Validator, instance: &Value) -> Result<(), Vec<FieldError>>
     if errors.is_empty() {
         return Ok(());
     }
-    errors.sort_by(|a, b| a.path.cmp(&b.path));
+    errors.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.message.cmp(&b.message)));
     errors.dedup();
     errors.truncate(MAX_ERRORS);
     Err(errors)

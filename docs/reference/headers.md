@@ -9,9 +9,9 @@ The same values the upstream placeholders use, so a service can read them either
 | Header | On | Value |
 |--------|----|-------|
 | `X-Plat5-<Kind>-Id` (e.g. `X-Plat5-Organization-Id`, `X-Plat5-Project-Id`) | Kind routes | One per node in the chain |
-| `X-Plat5-Member-Id` | Kind routes | The caller's member id in this tree (omitted on anonymous or non-member `allow_public` requests) |
+| `X-Plat5-Member-Id` | Kind routes | The caller's member id in this tree |
 | `X-Plat5-User-Id` | User routes | The caller's user id |
-| `X-Plat5-Principal` | Kind and user routes | `person`, `service_account`, or `anonymous` (on anonymous `allow_public` kind routes; always `person` on a user route) |
+| `X-Plat5-Principal` | Kind and user routes | `person` or `service_account` (always `person` on a user route) |
 | `X-Request-ID` | Every route | Correlation id, gateway-generated; also on the response |
 | `traceparent` | Every route | W3C trace context |
 | `X-Plat5-Signature` | Every route (when enabled) | Ed25519 request signature; omitted unless `UPSTREAM_SIGNING_KEY` is set ([signing](#upstream-request-signing)) |

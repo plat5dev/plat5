@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::authorizer::{AuthorizerSpec, RouteAuthorizer, RouteAuthorizerDoc, RouteResource};
+use crate::authorizer::{AuthorizerSpec, RouteResource, RouteResourceDoc};
 use crate::duration::parse_duration;
 use crate::kinds::{resolve_host, Kinds, RootHost};
 
@@ -40,14 +40,12 @@ pub struct RouteDoc {
     pub method: String,
     pub scope: String,
     pub upstream: String,
-    pub required_permissions: Option<RequiredDoc>,
+    pub permissions: Option<RequiredDoc>,
     pub rate_limit: Vec<String>,
     pub audit: bool,
     pub allow_deleted: bool,
     #[serde(default)]
-    pub allow_public: bool,
-    #[serde(default)]
-    pub authorizer: Option<RouteAuthorizerDoc>,
+    pub resource: Option<RouteResourceDoc>,
 }
 
 /// A list of permissions, or `"any_member"`.
@@ -137,7 +135,7 @@ impl Policy {
     }
 }
 
-pub fn parse_tiers(
+fn parse_tiers(
     policy_name: &str,
     tiers: &BTreeMap<String, TierLimitDoc>,
 ) -> Result<BTreeMap<String, TierLimit>, String> {
@@ -187,8 +185,7 @@ pub struct Route {
     pub policies: Vec<Policy>,
     pub audit: bool,
     pub allow_deleted: bool,
-    pub allow_public: bool,
-    pub authorizer: Option<RouteAuthorizer>,
+    pub resource: Option<RouteResource>,
     pub timeouts: Timeouts,
     pub max_body_bytes: u64,
 }
@@ -226,29 +223,31 @@ pub struct RouteMap {
 impl RouteMap {
     /// Build from the feed. Err names the first route that can't be built: the
     /// caller refuses the whole snapshot.
+    #[cfg(test)]
     pub fn from_feed(
         services: &BTreeMap<String, ServiceDoc>,
         rate_limits: &BTreeMap<String, PolicyDoc>,
         kinds: &Kinds,
     ) -> Result<Self, String> {
-        Self::from_feed_with_authorizers(services, rate_limits, kinds, &BTreeMap::new())
+        Self::from_feed_with_authorizer(services, rate_limits, kinds, None)
     }
 
-    pub fn from_feed_with_authorizers(
+    #[cfg(test)]
+    pub fn from_feed_with_authorizer(
         services: &BTreeMap<String, ServiceDoc>,
         rate_limits: &BTreeMap<String, PolicyDoc>,
         kinds: &Kinds,
-        authorizers: &BTreeMap<String, AuthorizerSpec>,
+        authorizer: Option<&AuthorizerSpec>,
     ) -> Result<Self, String> {
         let compiled_policies = compile_policies(rate_limits)?;
-        Self::from_compiled(services, &compiled_policies, kinds, authorizers)
+        Self::from_compiled(services, &compiled_policies, kinds, authorizer)
     }
 
     pub fn from_compiled(
         services: &BTreeMap<String, ServiceDoc>,
         compiled_policies: &BTreeMap<String, CompiledPolicy>,
         kinds: &Kinds,
-        authorizers: &BTreeMap<String, AuthorizerSpec>,
+        authorizer: Option<&AuthorizerSpec>,
     ) -> Result<Self, String> {
         let mut by_method: HashMap<String, Vec<CompiledRoute>> = HashMap::new();
         for (name, service) in services {
@@ -266,7 +265,7 @@ impl RouteMap {
                     doc,
                     compiled_policies,
                     kinds,
-                    authorizers,
+                    authorizer,
                 )
                 .map_err(|e| {
                     format!(
@@ -439,7 +438,7 @@ fn build_route(
     doc: &RouteDoc,
     rate_limits: &BTreeMap<String, CompiledPolicy>,
     kinds: &Kinds,
-    authorizers: &BTreeMap<String, AuthorizerSpec>,
+    authorizer: Option<&AuthorizerSpec>,
 ) -> Result<CompiledRoute, String> {
     let scope = match doc.scope.as_str() {
         "public" => Scope::Public,
@@ -461,10 +460,10 @@ fn build_route(
         .collect();
     let upstream = Upstream::compile(&doc.upstream, &scope, &chain, &own_params)?;
 
-    let required = match (&scope, &doc.required_permissions) {
+    let required = match (&scope, &doc.permissions) {
         (Scope::Kind(_), Some(RequiredDoc::Permissions(list))) => Required::AnyOf(list.clone()),
         (Scope::Kind(_), Some(RequiredDoc::Word(w))) if w == "any_member" => Required::AnyMember,
-        (Scope::Kind(_), other) => return Err(format!("required_permissions {other:?}")),
+        (Scope::Kind(_), other) => return Err(format!("permissions {other:?}")),
         _ => Required::Nothing,
     };
 
@@ -485,30 +484,20 @@ fn build_route(
         })
         .collect::<Result<Vec<_>, String>>()?;
 
-    let authorizer = match &doc.authorizer {
+    let resource = match &doc.resource {
         None => None,
-        Some(a) => {
-            if !authorizers.contains_key(&a.name) {
-                return Err(format!("authorizer {:?} is not in authorizers", a.name));
+        Some(r) => {
+            if authorizer.is_none() {
+                return Err("resource requires top-level authorizer".to_string());
             }
-            if matches!(required, Required::AnyMember) && a.action.is_none() {
+            if !matches!(required, Required::AnyOf(_)) {
                 return Err(
-                    "authorizer.action is required when required_permissions is any_member"
-                        .to_string(),
+                    "resource requires permissions to list at least one action".to_string()
                 );
             }
-            let resource = match &a.resource {
-                None => None,
-                Some(r) => Some(RouteResource {
-                    r#type: r.r#type.clone(),
-                    id: Upstream::compile(&r.id, &scope, &chain, &own_params)?,
-                }),
-            };
-            Some(RouteAuthorizer {
-                name: a.name.clone(),
-                mode: a.mode,
-                resource,
-                action: a.action.clone(),
+            Some(RouteResource {
+                r#type: r.r#type.clone(),
+                id: Upstream::compile(&r.id, &scope, &chain, &own_params)?,
             })
         }
     };
@@ -527,8 +516,7 @@ fn build_route(
             policies,
             audit: doc.audit,
             allow_deleted: doc.allow_deleted,
-            allow_public: doc.allow_public,
-            authorizer,
+            resource,
             timeouts,
             max_body_bytes: service.max_body_bytes,
         }),
@@ -587,7 +575,7 @@ mod tests {
             _ => json!(["x:read"]),
         };
         json!({ "path": path, "method": method, "scope": scope, "upstream": upstream,
-                "required_permissions": required, "rate_limit": [], "audit": false,
+                "permissions": required, "rate_limit": [], "audit": false,
                 "allow_deleted": false })
     }
 
@@ -828,9 +816,9 @@ mod tests {
     #[test]
     fn refuses_what_it_cannot_build() {
         let mut any_member = route("/orgs/{organization}/x", "GET", "organization", "/x");
-        any_member["required_permissions"] = json!("anyone");
+        any_member["permissions"] = json!("anyone");
         let mut unset = route("/orgs/{organization}/x", "GET", "organization", "/x");
-        unset["required_permissions"] = json!(null);
+        unset["permissions"] = json!(null);
         let mut unknown_policy = route("/x", "GET", "public", "/x");
         unknown_policy["rate_limit"] = json!(["nope"]);
         let mut bad_timeout = service(vec![route("/x", "GET", "public", "/x")]);
@@ -865,8 +853,8 @@ mod tests {
                 service(vec![route("/x", "GET", "public", "/u/{user.id}")]),
                 "placeholder",
             ),
-            (service(vec![any_member]), "required_permissions"),
-            (service(vec![unset]), "required_permissions"),
+            (service(vec![any_member]), "permissions"),
+            (service(vec![unset]), "permissions"),
             (service(vec![unknown_policy]), "not a policy"),
             (bad_timeout, "timeouts.read"),
         ] {

@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/plat5dev/plat5/identity/errors"
+	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 	"github.com/plat5dev/plat5/identity/internal/id"
 	"github.com/plat5dev/plat5/identity/lifecycle"
@@ -57,11 +58,14 @@ func (s *Store) lockedGroup(ctx context.Context, w *write, rootID, groupID strin
 }
 
 // CreateGroup creates a group belonging to rootID.
-func (s *Store) CreateGroup(ctx context.Context, rootID, name string) (*Group, error) {
+func (s *Store) CreateGroup(ctx context.Context, snap *feed.Snapshot, rootID, name string) (*Group, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_group", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
+	if snap.ExternalAuthz() {
+		return nil, op.Expected("disabled", errBuiltInRBACDisabled())
+	}
 	name, err := normalizeName(name)
 	if err != nil {
 		return nil, op.Expected("invalid", err)
@@ -110,7 +114,7 @@ func (s *Store) ListGroups(ctx context.Context, rootID string, limit int, starti
 	if err != nil {
 		return nil, false, op.Fail(err)
 	}
-	out, hasMore := page(out, limit)
+	out, hasMore := dbx.Page(out, limit)
 	op.OK("ok")
 	return out, hasMore, nil
 }
@@ -133,11 +137,14 @@ func (s *Store) GetGroup(ctx context.Context, rootID, groupID string) (*Group, e
 }
 
 // RenameGroup sets a group's name. It returns the name before.
-func (s *Store) RenameGroup(ctx context.Context, rootID, groupID, name string) (string, *Group, error) {
+func (s *Store) RenameGroup(ctx context.Context, snap *feed.Snapshot, rootID, groupID, name string) (string, *Group, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "rename_group", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
+	if snap.ExternalAuthz() {
+		return "", nil, op.Expected("disabled", errBuiltInRBACDisabled())
+	}
 	name, err := normalizeName(name)
 	if err != nil {
 		return "", nil, op.Expected("invalid", err)
@@ -175,11 +182,14 @@ func (s *Store) RenameGroup(ctx context.Context, rootID, groupID, name string) (
 // DeleteGroup deletes a group, its memberships and its bindings. A person's
 // member left with no direct bindings and no group memberships is removed.
 // Deleting a group already gone is nil.
-func (s *Store) DeleteGroup(ctx context.Context, rootID, groupID string) (*Group, error) {
+func (s *Store) DeleteGroup(ctx context.Context, snap *feed.Snapshot, rootID, groupID string) (*Group, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "delete_group", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
+	if snap.ExternalAuthz() {
+		return nil, op.Expected("disabled", errBuiltInRBACDisabled())
+	}
 	w, err := s.begin(ctx)
 	if err != nil {
 		return nil, op.Fail(err)
@@ -244,17 +254,20 @@ func (s *Store) ListGroupMembers(ctx context.Context, rootID, groupID string, li
 	if err != nil {
 		return nil, false, op.Fail(err)
 	}
-	out, hasMore := page(out, limit)
+	out, hasMore := dbx.Page(out, limit)
 	op.OK("ok")
 	return out, hasMore, nil
 }
 
 // AddGroupMember adds an active member of rootID to a group of rootID.
-func (s *Store) AddGroupMember(ctx context.Context, rootID, groupID, memberID string) (*Member, error) {
+func (s *Store) AddGroupMember(ctx context.Context, snap *feed.Snapshot, rootID, groupID, memberID string) (*Member, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "add_group_member", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
+	if snap.ExternalAuthz() {
+		return nil, op.Expected("disabled", errBuiltInRBACDisabled())
+	}
 	w, err := s.begin(ctx)
 	if err != nil {
 		return nil, op.Fail(err)
@@ -297,11 +310,14 @@ func (s *Store) AddGroupMember(ctx context.Context, rootID, groupID, memberID st
 // RemoveGroupMember removes memberID from groupID. A person's member left with
 // no direct bindings and no group memberships is removed. Removing an absent
 // membership or from a group already gone is unchanged.
-func (s *Store) RemoveGroupMember(ctx context.Context, rootID, groupID, memberID string) (bool, error) {
+func (s *Store) RemoveGroupMember(ctx context.Context, snap *feed.Snapshot, rootID, groupID, memberID string) (bool, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "remove_group_member", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
+	if snap.ExternalAuthz() {
+		return false, op.Expected("disabled", errBuiltInRBACDisabled())
+	}
 	w, err := s.begin(ctx)
 	if err != nil {
 		return false, op.Fail(err)

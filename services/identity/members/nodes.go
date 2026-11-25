@@ -15,8 +15,8 @@ import (
 )
 
 // CreateChild creates a node under parentID. The caller's member, if any,
-// must be active in the parent's tree; it gets creator_role on the new node
-// when the kind binds its creator (docs/concepts/access.md#assigning).
+// must be active in the parent's tree; in built-in RBAC mode it gets
+// creator_role on the new node when the kind binds its creator.
 func (s *Store) CreateChild(ctx context.Context, snap *feed.Snapshot, parentID string, in nodes.CreateInput, callerID string) (*nodes.Node, *Binding, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_child_node", dbx.DefaultTimeout)
 	defer cancel()
@@ -43,7 +43,7 @@ func (s *Store) CreateChild(ctx context.Context, snap *feed.Snapshot, parentID s
 		if err != nil {
 			return nil, nil, op.Fail(err)
 		}
-		if k, _ := snap.Kind(n.Kind); k.BindCreator {
+		if k, _ := snap.Kind(n.Kind); k.BindCreator && !snap.ExternalAuthz() {
 			if b, err = s.insertBinding(ctx, w, m.id, n.ID, snap.CreatorRole, nil); err != nil {
 				return nil, nil, op.Fail(err)
 			}
@@ -58,8 +58,8 @@ func (s *Store) CreateChild(ctx context.Context, snap *feed.Snapshot, parentID s
 }
 
 // CreateRoot creates a root. The user, if any, must be an active person; when
-// the kind binds its creator, they get a member in the new tree with
-// creator_role at its root. It returns that member's id, or "".
+// the kind binds its creator, they get a member in the new tree (and in
+// built-in RBAC mode, creator_role at its root). It returns that member's id, or "".
 func (s *Store) CreateRoot(ctx context.Context, snap *feed.Snapshot, in nodes.CreateInput, userID string) (*nodes.Node, string, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_root_node", dbx.DefaultTimeout)
 	defer cancel()
@@ -97,8 +97,10 @@ func (s *Store) CreateRoot(ctx context.Context, snap *feed.Snapshot, in nodes.Cr
 		if err != nil {
 			return nil, "", op.Fail(err)
 		}
-		if _, err := s.insertBinding(ctx, w, memberID, n.ID, snap.CreatorRole, nil); err != nil {
-			return nil, "", op.Fail(err)
+		if !snap.ExternalAuthz() {
+			if _, err := s.insertBinding(ctx, w, memberID, n.ID, snap.CreatorRole, nil); err != nil {
+				return nil, "", op.Fail(err)
+			}
 		}
 		w.invalidate(lifecycle.InvalidateUser(u.ID))
 	}
@@ -112,18 +114,19 @@ func (s *Store) CreateRoot(ctx context.Context, snap *feed.Snapshot, in nodes.Cr
 
 // --- lists (docs/concepts/access.md#lists) ---
 
-// listed is a candidate for a filtered list, with the member whose bindings
-// decide it.
+// listed is a candidate for a filtered list, with the member whose bindings or
+// external PDP policies decide it.
 type listed struct {
 	*nodes.Node
-	memberID string
+	memberID  string
+	principal string
 }
 
 // ListChildren is the children of kind under parentID, live or, with
 // deleted, deleted ones. A kind whose parent isn't the parent's kind is a 422,
-// as on create. With a caller, only those the caller's member can
-// see; the caller must be an active member of the parent's tree. Without one,
-// the full list.
+// as on create. With a caller, only those the caller's member can see; the
+// caller must be an active, unsuspended member of the parent's tree whose
+// principal admit accepts. Without one, the full list.
 func (s *Store) ListChildren(ctx context.Context, snap *feed.Snapshot, parentID, kind, callerID string, deleted bool, limit int, startingAfter string) ([]*nodes.Node, bool, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "list_children", 4*dbx.DefaultTimeout)
 	defer cancel()
@@ -136,29 +139,37 @@ func (s *Store) ListChildren(ctx context.Context, snap *feed.Snapshot, parentID,
 	if k, ok := snap.Kind(kind); !ok || k.Parent != parent.Kind {
 		return nil, false, op.Expected("invalid", nodes.KindNotHere(kind))
 	}
+	var callerPrincipal string
 	if callerID != "" {
-		var active bool
 		if id.Valid(callerID) {
-			if err := s.pool.QueryRow(ctx, `
-				SELECT EXISTS (SELECT 1 FROM members WHERE id = $1 AND root_id = $2 AND removed_at IS NULL AND suspended_at IS NULL)
-			`, callerID, parent.RootID).Scan(&active); err != nil {
+			err := s.pool.QueryRow(ctx, `
+				SELECT m.principal
+				FROM members m
+				JOIN principals p ON p.id = m.principal_id
+				LEFT JOIN nodes sn ON sn.id = p.node_id
+				WHERE m.id = $1 AND m.root_id = $2
+				  AND m.removed_at IS NULL AND m.suspended_at IS NULL
+				  AND p.status = 'active'
+				  AND (sn.id IS NULL OR sn.status = 'active')
+			`, callerID, parent.RootID).Scan(&callerPrincipal)
+			if err != nil && !dbx.IsNoRows(err) {
 				return nil, false, op.Fail(err)
 			}
 		}
-		if !active {
+		if callerPrincipal == "" {
 			return nil, false, op.Expected("bad caller", ErrBadCaller)
 		}
 	}
 	fetch := func(after string, n int) ([]*listed, error) {
 		rows, err := s.pool.Query(ctx, `
-			SELECT `+nodes.Columns("n")+`, $6::text
+			SELECT `+nodes.Columns("n")+`, $6::text, $7::text
 			FROM nodes n
 			WHERE n.parent_id = $1 AND n.kind = $2 AND n.status = $3 AND n.id > $4
 			  AND NOT EXISTS (
 			      SELECT 1 FROM node_ancestors a JOIN nodes an ON an.id = a.ancestor_id
 			      WHERE a.node_id = n.id AND a.depth > 0 AND an.status <> 'active')
 			ORDER BY n.id LIMIT $5
-		`, parent.ID, kind, statusOf(deleted), after, n, callerID)
+		`, parent.ID, kind, statusOf(deleted), after, n, callerID, callerPrincipal)
 		if err != nil {
 			return nil, err
 		}
@@ -183,9 +194,13 @@ func (s *Store) ListUserNodes(ctx context.Context, snap *feed.Snapshot, userID, 
 	if err != nil {
 		return nil, false, op.Reject(err, ErrNotFound)
 	}
+	if u.Status != StatusActive {
+		op.OK("suspended")
+		return []*nodes.Node{}, false, nil
+	}
 	fetch := func(after string, n int) ([]*listed, error) {
 		rows, err := s.pool.Query(ctx, `
-			SELECT `+nodes.Columns("n")+`, m.id
+			SELECT `+nodes.Columns("n")+`, m.id, m.principal
 			FROM nodes n
 			JOIN members m ON m.root_id = n.root_id AND m.principal_id = $1 AND m.removed_at IS NULL AND m.suspended_at IS NULL
 			WHERE ($2 = '' OR n.kind = $2) AND n.status = $3 AND n.id > $4
@@ -214,11 +229,11 @@ func statusOf(deleted bool) string {
 	return nodes.StatusActive
 }
 
-// collectListed scans node rows followed by the member whose bindings decide.
+// collectListed scans node rows followed by the member id and principal kind.
 func collectListed(rows pgx.Rows) ([]*listed, error) {
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (*listed, error) {
 		l := &listed{}
-		n, err := nodes.ScanNode(r, &l.memberID)
+		n, err := nodes.ScanNode(r, &l.memberID, &l.principal)
 		l.Node = n
 		return l, err
 	})
@@ -258,99 +273,65 @@ func (s *Store) filterPage(ctx context.Context, snap *feed.Snapshot, filter bool
 	}
 }
 
-// visible decides each candidate from its member's bindings on it and its
-// ancestors, against its kind's list_permission. A deleted node grants
-// nothing except on itself; candidates come with live ancestors only.
+// visible decides each candidate against its kind's list_permission, using
+// either the deployment-wide external AuthZEN PDP or Plat5's built-in bindings.
 func (s *Store) visible(ctx context.Context, snap *feed.Snapshot, cands []*listed) (map[string]bool, error) {
 	out := make(map[string]bool, len(cands))
 	if len(cands) == 0 {
 		return out, nil
 	}
-	nodeIDs := make([]string, len(cands))
-	memberIDs := make([]string, len(cands))
-	for i, c := range cands {
-		nodeIDs[i], memberIDs[i] = c.ID, c.memberID
-	}
-	kinds, roles := access.BindablePairs(snap)
-	rows, err := s.pool.Query(ctx, `
-		SELECT c.node_id, b.role, COALESCE(cr.permissions, '{}')
-		FROM unnest($1::text[], $2::text[]) AS c (node_id, member_id)
-		JOIN node_ancestors a ON a.node_id = c.node_id
-		JOIN bindings b ON b.node_id = a.ancestor_id AND (
-			b.member_id = c.member_id
-			OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = b.group_id AND gm.member_id = c.member_id)
-		)
-		JOIN nodes bn ON bn.id = b.node_id
-		LEFT JOIN org_roles cr ON cr.id = b.role AND cr.root_id = bn.root_id AND bn.kind = ANY(cr.bindable_at)
-		WHERE (bn.status = 'active' OR bn.id = c.node_id)
-		  AND (b.expires_at IS NULL OR b.expires_at > $5)
-		  AND `+access.CountsWithCustomSQL("$3", "$4", "cr"),
-		nodeIDs, memberIDs, kinds, roles, s.now().UTC())
-	if err != nil {
-		return nil, err
-	}
-	held := map[string][]string{}
-	heldCustom := map[string][]string{}
-	var nodeID, role string
-	var perms []string
-	if _, err := pgx.ForEachRow(rows, []any{&nodeID, &role, &perms}, func() error {
-		held[nodeID] = append(held[nodeID], role)
-		if len(perms) > 0 {
-			heldCustom[nodeID] = append(heldCustom[nodeID], perms...)
-		}
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-	for _, c := range cands {
-		k, ok := snap.Kind(c.Kind)
-		out[c.ID] = ok && access.ResolveWithCustom(snap, held[c.ID], heldCustom[c.ID]).Has(k.ListPermission)
-	}
 
-	// Delegate candidates whose kind declares an external AuthZEN authorizer,
-	// batched per authorizer with full resolved ancestor chains.
-	type extCand struct {
-		cand   *listed
-		action string
-	}
-	pending := map[string][]extCand{}
-	var extNodeIDs []string
-	for _, c := range cands {
-		k, ok := snap.Kind(c.Kind)
-		if !ok || k.Authorizer == nil {
-			continue
+	if snap.ExternalAuthz() {
+		var extIDs []string
+		var extCands []*listed
+		var actions []string
+		for _, c := range cands {
+			k, ok := snap.Kind(c.Kind)
+			if !ok {
+				continue
+			}
+			extIDs = append(extIDs, c.ID)
+			extCands = append(extCands, c)
+			actions = append(actions, k.ListPermission)
 		}
-		if !access.NeedsExternal(k.Authorizer.Mode, out[c.ID]) {
-			continue
+		if len(extIDs) == 0 {
+			return out, nil
 		}
-		pending[k.Authorizer.Name] = append(pending[k.Authorizer.Name], extCand{cand: c, action: k.ListPermission})
-		extNodeIDs = append(extNodeIDs, c.ID)
-	}
-	if len(extNodeIDs) == 0 {
-		return out, nil
-	}
-	ancestors, err := s.nodes.Ancestors(ctx, extNodeIDs)
-	if err != nil {
-		return nil, err
-	}
-	for name, items := range pending {
-		reqs := make([]access.AuthzenRequest, len(items))
-		for i, it := range items {
-			anc := ancestors[it.cand.ID]
+		ancestors, err := s.nodes.Ancestors(ctx, extIDs)
+		if err != nil {
+			return nil, err
+		}
+		reqs := make([]access.AuthzenRequest, len(extCands))
+		for i, c := range extCands {
+			anc := ancestors[c.ID]
 			chain := make([]access.ChainNode, 0, len(anc)+1)
 			for _, a := range anc {
 				chain = append(chain, access.ChainNode{Kind: a.Kind, ID: a.ID})
 			}
-			chain = append(chain, access.ChainNode{Kind: it.cand.Kind, ID: it.cand.ID})
-			reqs[i] = access.BuildNodeAuthzenRequest(it.cand.memberID, it.cand.RootID, it.action, it.cand.Kind, it.cand.ID, chain)
+			chain = append(chain, access.ChainNode{Kind: c.Kind, ID: c.ID})
+			reqs[i] = access.BuildNodeAuthzenRequest(c.memberID, c.principal, c.RootID, actions[i], c.Kind, c.ID, chain)
 		}
-		decisions, err := access.EvaluateAuthorizerBatch(ctx, snap, s.pdp, name, reqs)
+		decisions, err := access.EvaluateAuthorizerBatch(ctx, snap, s.pdp, reqs)
 		if err != nil {
 			return nil, err
 		}
-		for i, it := range items {
-			out[it.cand.ID] = decisions[i]
+		for i, c := range extCands {
+			out[c.ID] = decisions[i]
 		}
+		return out, nil
+	}
+
+	targets := make([]access.MemberTarget, len(cands))
+	for i, c := range cands {
+		targets[i] = access.MemberTarget{MemberID: c.memberID, NodeID: c.ID}
+	}
+	held, heldCustom, err := access.HeldOnTargets(ctx, s.pool, snap, targets, true, s.now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	for i, c := range cands {
+		k, ok := snap.Kind(c.Kind)
+		out[c.ID] = ok && access.ResolveWithCustom(snap, held[i], heldCustom[i]).Has(k.ListPermission)
 	}
 	return out, nil
 }
