@@ -114,7 +114,7 @@ PATCH /orgs/acme/security-policy
   "allow_personal_keys": false,
   "allowed_cidrs": ["198.51.100.0/24", "203.0.113.10"],
   "required_idp_claims": {
-    "idp_connection": "okta-acme",
+    "idp_connection": ["okta-acme"],
     "amr": ["sso", "mfa"]
   }
 }
@@ -131,7 +131,7 @@ PATCH /orgs/acme/security-policy
    ```bash
    POST /orgs/acme/roles
    {
-     "name": "Compliance Auditor",
+     "display_name": "Compliance Auditor",
      "description": "Read-only access to projects and audit logs",
      "permissions": ["project:read", "audit:read"],
      "bindable_at": ["organization", "project"]

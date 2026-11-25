@@ -13,7 +13,9 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 
+	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/feed"
+	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/metrics"
 )
 
@@ -78,7 +80,7 @@ type authzenBatchOptions struct {
 
 type authzenBatchAnswer struct {
 	Evaluations []struct {
-		Decision bool `json:"decision"`
+		Decision *bool `json:"decision"`
 	} `json:"evaluations"`
 }
 
@@ -179,9 +181,64 @@ func (p *HTTPPDP) evalChunk(ctx context.Context, authz feed.Authorizer, reqs []A
 	}
 	decisions := make([]bool, len(reqs))
 	for i, e := range batch.Evaluations {
-		decisions[i] = e.Decision
+		if e.Decision == nil {
+			metrics.RecordAuthorizerRequest(authz.Name, op, "error", time.Since(started))
+			return nil, fmt.Errorf("%w: missing decision in evaluations response", ErrPDPUnavailable)
+		}
+		decisions[i] = *e.Decision
 	}
 	metrics.RecordAuthorizerRequest(authz.Name, op, "ok", time.Since(started))
+	return decisions, nil
+}
+
+// BuildNodeAuthzenRequest builds the OpenID AuthZEN 1.0 request for a member
+// acting on a node, populating resource.properties with root_id and the full
+// resolved chain (<kind>_id entries plus nodes) so every identity PDP call
+// matches gateway's payload shape.
+func BuildNodeAuthzenRequest(memberID, rootID, action, kind, nodeID string, chain []ChainNode) AuthzenRequest {
+	resProps := map[string]any{"root_id": rootID}
+	if len(chain) > 0 {
+		chainNodes := make([]map[string]string, 0, len(chain))
+		for _, cn := range chain {
+			resProps[cn.Kind+"_id"] = cn.ID
+			chainNodes = append(chainNodes, map[string]string{"kind": cn.Kind, "id": cn.ID})
+		}
+		resProps["nodes"] = chainNodes
+	}
+	return AuthzenRequest{
+		Subject: AuthzenSubject{
+			Type:       "member",
+			ID:         memberID,
+			Properties: map[string]any{"root_id": rootID},
+		},
+		Action: AuthzenAction{Name: action},
+		Resource: AuthzenResource{
+			Type:       kind,
+			ID:         nodeID,
+			Properties: resProps,
+		},
+	}
+}
+
+// EvaluateAuthorizerBatch looks up authorizerName in snap, evaluates reqs via
+// pdp, and maps unavailable/unconfigured authorizers to 503 SERVICE_UNAVAILABLE.
+func EvaluateAuthorizerBatch(ctx context.Context, snap *feed.Snapshot, pdp PDP, authorizerName string, reqs []AuthzenRequest) ([]bool, error) {
+	if len(reqs) == 0 {
+		return nil, nil
+	}
+	authz, ok := snap.Authorizers[authorizerName]
+	if !ok || pdp == nil {
+		httpx.LogError(ctx, "external authorizer not configured", ErrPDPUnavailable, errors.KindNetwork)
+		return nil, errors.ServiceUnavailableError()
+	}
+	decisions, err := pdp.EvaluateBatch(ctx, authz, reqs)
+	if err != nil {
+		if stderrors.Is(err, ErrPDPUnavailable) {
+			httpx.LogError(ctx, "external authorizer evaluation failed", err, errors.KindNetwork)
+			return nil, errors.ServiceUnavailableError()
+		}
+		return nil, err
+	}
 	return decisions, nil
 }
 

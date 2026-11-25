@@ -69,7 +69,7 @@ type Store struct {
 	pool         *pgxpool.Pool
 	tracer       trace.Tracer
 	now          func() time.Time
-	onInvalidate func(context.Context)
+	onInvalidate func(int64)
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {
@@ -77,8 +77,8 @@ func NewStore(pool *pgxpool.Pool) *Store {
 }
 
 // WithInvalidationNotifier registers a callback invoked after a transaction
-// commits admit invalidations.
-func (s *Store) WithInvalidationNotifier(fn func(context.Context)) {
+// commits admit invalidations with the highest committed invalidation id.
+func (s *Store) WithInvalidationNotifier(fn func(int64)) {
 	s.onInvalidate = fn
 }
 
@@ -406,16 +406,17 @@ func (s *Store) SetRateLimitTier(ctx context.Context, nodeID string, tier *strin
 		return nil, nil, op.Fail(err)
 	}
 	changed := (before == nil) != (normalized == nil) || (before != nil && normalized != nil && *before != *normalized)
+	var invHead int64
 	if changed {
-		if err := lifecycle.RecordCommit(ctx, tx, nil, []lifecycle.Invalidation{lifecycle.InvalidateRoot(n.ID)}); err != nil {
+		if invHead, err = lifecycle.RecordCommit(ctx, tx, nil, []lifecycle.Invalidation{lifecycle.InvalidateRoot(n.ID)}); err != nil {
 			return nil, nil, op.Fail(err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, nil, op.Fail(err)
 	}
-	if changed && s.onInvalidate != nil {
-		s.onInvalidate(ctx)
+	if invHead > 0 && s.onInvalidate != nil {
+		s.onInvalidate(invHead)
 	}
 	op.OK("ok")
 	return before, n, nil
@@ -460,35 +461,19 @@ func (s *Store) Delete(ctx context.Context, snap *feed.Snapshot, nodeID string) 
 	if err != nil {
 		return false, op.Fail(err)
 	}
-	deletedIDs := make([]string, len(deleted))
-	for i, d := range deleted {
-		deletedIDs[i] = d.id
-	}
-	saKeyRows, err := tx.Query(ctx, `
-		SELECT k.id FROM api_keys k
-		JOIN principals p ON p.id = k.principal_id
-		WHERE p.kind = 'service_account' AND p.node_id = ANY($1) AND k.revoked_at IS NULL
-	`, deletedIDs)
+	invs, err := nodeInvalidations(ctx, tx, n.RootID, deleted)
 	if err != nil {
 		return false, op.Fail(err)
 	}
-	saKeyIDs, err := pgx.CollectRows(saKeyRows, pgx.RowTo[string])
+	invHead, err := recordNodeCommit(ctx, tx, lifecycle.TypeNodeDeleted, deleted, invs)
 	if err != nil {
-		return false, op.Fail(err)
-	}
-	invs := make([]lifecycle.Invalidation, 0, 1+len(saKeyIDs))
-	invs = append(invs, lifecycle.InvalidateRoot(n.RootID))
-	for _, kid := range saKeyIDs {
-		invs = append(invs, lifecycle.InvalidateKey(kid))
-	}
-	if err := recordNodeCommit(ctx, tx, lifecycle.TypeNodeDeleted, deleted, invs); err != nil {
 		return false, op.Fail(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, op.Fail(err)
 	}
-	if s.onInvalidate != nil {
-		s.onInvalidate(ctx)
+	if invHead > 0 && s.onInvalidate != nil {
+		s.onInvalidate(invHead)
 	}
 	metrics.RecordNodeOps("deleted", len(deleted))
 	op.OK("deleted")
@@ -555,14 +540,19 @@ func (s *Store) Restore(ctx context.Context, nodeID string) (*Node, bool, error)
 	if err != nil {
 		return nil, false, op.Fail(err)
 	}
-	if err := recordNodeCommit(ctx, tx, lifecycle.TypeNodeRestored, restored, []lifecycle.Invalidation{lifecycle.InvalidateRoot(n.RootID)}); err != nil {
+	invs, err := nodeInvalidations(ctx, tx, n.RootID, restored)
+	if err != nil {
+		return nil, false, op.Fail(err)
+	}
+	invHead, err := recordNodeCommit(ctx, tx, lifecycle.TypeNodeRestored, restored, invs)
+	if err != nil {
 		return nil, false, op.Fail(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, false, op.Fail(err)
 	}
-	if s.onInvalidate != nil {
-		s.onInvalidate(ctx)
+	if invHead > 0 && s.onInvalidate != nil {
+		s.onInvalidate(invHead)
 	}
 	metrics.RecordNodeOps("restored", len(restored))
 	op.OK("restored")
@@ -828,14 +818,15 @@ func (s *Store) purgeTree(ctx context.Context, rootID string, now time.Time) (in
 	for _, m := range removed {
 		events = append(events, lifecycle.MemberEvent(lifecycle.TypeMemberRemoved, m.memberID, rootID, m.principal))
 	}
-	if err := lifecycle.RecordCommit(ctx, tx, events, []lifecycle.Invalidation{lifecycle.InvalidateRoot(rootID)}); err != nil {
+	invHead, err := lifecycle.RecordCommit(ctx, tx, events, []lifecycle.Invalidation{lifecycle.InvalidateRoot(rootID)})
+	if err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
-	if s.onInvalidate != nil {
-		s.onInvalidate(ctx)
+	if invHead > 0 && s.onInvalidate != nil {
+		s.onInvalidate(invHead)
 	}
 	metrics.RecordNodeOps("purged", len(purged))
 	return len(purged), nil
@@ -959,7 +950,32 @@ func sortChanged(c []changedNode) {
 	})
 }
 
-func recordNodeCommit(ctx context.Context, tx pgx.Tx, typ string, nodes []changedNode, invs []lifecycle.Invalidation) error {
+func nodeInvalidations(ctx context.Context, tx pgx.Tx, rootID string, changed []changedNode) ([]lifecycle.Invalidation, error) {
+	nodeIDs := make([]string, len(changed))
+	for i, c := range changed {
+		nodeIDs[i] = c.id
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT k.id FROM api_keys k
+		JOIN principals p ON p.id = k.principal_id
+		WHERE p.kind = 'service_account' AND p.node_id = ANY($1) AND k.revoked_at IS NULL
+	`, nodeIDs)
+	if err != nil {
+		return nil, err
+	}
+	saKeyIDs, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, err
+	}
+	invs := make([]lifecycle.Invalidation, 0, 1+len(saKeyIDs))
+	invs = append(invs, lifecycle.InvalidateRoot(rootID))
+	for _, kid := range saKeyIDs {
+		invs = append(invs, lifecycle.InvalidateKey(kid))
+	}
+	return invs, nil
+}
+
+func recordNodeCommit(ctx context.Context, tx pgx.Tx, typ string, nodes []changedNode, invs []lifecycle.Invalidation) (int64, error) {
 	events := make([]lifecycle.Event, len(nodes))
 	for i, n := range nodes {
 		events[i] = lifecycle.NodeEvent(typ, n.kind, n.id, n.rootID)

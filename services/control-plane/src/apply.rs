@@ -9,7 +9,7 @@ use serde_json::{Map, Value};
 use crate::config::{Config, APPLY_ONLY_KEYS};
 use crate::counts::Counts;
 use crate::plan::{self, Expect, Plan, Refused, Summary};
-use crate::rules;
+use crate::rules::{self, Checked};
 use crate::schema::{self, FieldError};
 use crate::served::Served;
 use crate::store::{Store, StoreError};
@@ -51,10 +51,11 @@ impl From<Refused> for Failure {
     }
 }
 
-/// An apply body, checked: the config as sent, parsed, and the precondition.
+/// An apply body, checked: the config as sent, parsed, pre-expanded, and the precondition.
 pub struct Prepared {
     pub sent: Value,
     pub config: Config,
+    pub checked: Checked,
     pub expect: Option<Expect>,
 }
 
@@ -79,15 +80,18 @@ pub fn prepare(body: Value) -> Result<Prepared, Failure> {
         ),
     };
     let sent = Value::Object(body);
-    let config = check(&sent)?;
+    let config = read(&sent)?;
+    let checked = rules::check(&config).map_err(Failure::Invalid)?;
     Ok(Prepared {
         sent,
         config,
+        checked,
         expect,
     })
 }
 
 /// The schema, then the rules.
+#[cfg(test)]
 pub fn check(sent: &Value) -> Result<Config, Failure> {
     let config = read(sent)?;
     rules::check(&config).map_err(Failure::Invalid)?;
@@ -120,7 +124,7 @@ pub async fn dry_run(
     request_id: &str,
 ) -> Result<DryRun, Failure> {
     let (revision, current) = store.served().await?;
-    let next = Served::of(&prepared.config);
+    let next = Served::of_checked(&prepared.config, &prepared.checked);
     let plan = plan::dry_run(revision, current.as_ref(), &next, counts, request_id).await?;
     Ok(DryRun {
         plan,
@@ -149,7 +153,7 @@ pub async fn apply(
         )]));
     };
     let (revision, current) = store.served().await?;
-    let next = Served::of(&prepared.config);
+    let next = Served::of_checked(&prepared.config, &prepared.checked);
     let plan = plan::apply(
         revision,
         current.as_ref(),

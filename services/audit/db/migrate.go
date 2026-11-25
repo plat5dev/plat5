@@ -13,6 +13,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// migrateLockSpace keys the per-schema session advisory lock that serializes
+// concurrent boot migrations across replicas.
+const migrateLockSpace int32 = 0x706c6d67 // "plmg"
+
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
@@ -35,14 +39,13 @@ func MigrateSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error
 	}
 	defer conn.Release()
 
-	lockKey := "plat5.migrate." + schema
-	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtext($1))`, lockKey); err != nil {
-		return fmt.Errorf("lock migrations: %w", err)
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1, hashtext($2))`, migrateLockSpace, schema); err != nil {
+		return fmt.Errorf("lock migrations for schema %s: %w", schema, err)
 	}
 	defer func() {
 		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, err := conn.Exec(unlockCtx, `SELECT pg_advisory_unlock(hashtext($1))`, lockKey); err != nil {
+		if _, err := conn.Exec(unlockCtx, `SELECT pg_advisory_unlock($1, hashtext($2))`, migrateLockSpace, schema); err != nil {
 			_ = conn.Conn().Close(unlockCtx)
 		}
 	}()

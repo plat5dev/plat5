@@ -64,7 +64,7 @@ type Store struct {
 	pdp          access.PDP
 	tracer       trace.Tracer
 	now          func() time.Time
-	onInvalidate func(context.Context)
+	onInvalidate func(int64)
 }
 
 // NewStore needs SECRET_BRAND for the keys and invite tokens it mints and reads.
@@ -87,8 +87,8 @@ func (s *Store) WithPDP(pdp access.PDP) *Store {
 }
 
 // WithInvalidationNotifier registers a callback invoked after a transaction
-// commits admit invalidations, so local long-poll readers wake immediately.
-func (s *Store) WithInvalidationNotifier(fn func(context.Context)) {
+// commits admit invalidations with the highest committed invalidation id.
+func (s *Store) WithInvalidationNotifier(fn func(int64)) {
 	s.onInvalidate = fn
 }
 
@@ -108,7 +108,7 @@ type write struct {
 	tx            pgx.Tx
 	events        []lifecycle.Event
 	invalidations []lifecycle.Invalidation
-	onInvalidate  func(context.Context)
+	onInvalidate  func(int64)
 }
 
 func (s *Store) begin(ctx context.Context) (*write, error) {
@@ -128,14 +128,15 @@ func (w *write) invalidate(invs ...lifecycle.Invalidation) {
 }
 
 func (w *write) commit(ctx context.Context) error {
-	if err := lifecycle.RecordCommit(ctx, w.tx, w.events, w.invalidations); err != nil {
+	invHead, err := lifecycle.RecordCommit(ctx, w.tx, w.events, w.invalidations)
+	if err != nil {
 		return err
 	}
 	if err := w.tx.Commit(ctx); err != nil {
 		return err
 	}
-	if w.onInvalidate != nil && len(w.invalidations) > 0 {
-		w.onInvalidate(ctx)
+	if w.onInvalidate != nil && invHead > 0 {
+		w.onInvalidate(invHead)
 	}
 	return nil
 }
@@ -268,7 +269,7 @@ func checkRoleTx(ctx context.Context, q dbx.Querier, snap *feed.Snapshot, rootID
 		}
 		return nil
 	}
-	if id.Valid(roleRef) && q != nil && rootID != "" {
+	if snap.CustomRoles && id.Valid(roleRef) && q != nil && rootID != "" {
 		var bindableAt []string
 		err := q.QueryRow(ctx, `SELECT bindable_at FROM org_roles WHERE id = $1 AND root_id = $2`, roleRef, rootID).Scan(&bindableAt)
 		if err == nil {

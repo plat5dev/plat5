@@ -50,7 +50,7 @@ Ready is **503** unless Postgres answers.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `PORT` | `3000` | Service API |
-| `INTERNAL_PORT` | `3001` | `/health/*`, `/metrics`, admit, plan counts, lifecycle log, access evaluation |
+| `INTERNAL_PORT` | `3001` | `/health/*`, `/metrics`, admit, admit invalidations, plan counts, lifecycle log, access evaluation and resource search |
 | `DATABASE_URL` | required | Postgres; schema `identity` |
 | `CONTROL_PLANE_URL` | required | Identity doesn't listen until it has its first config |
 | `SECRET_BRAND` | `plat5` | Prefix on minted API keys (`{brand}-k-2-…`) and invite tokens (`{brand}-i-1-…`); empty-but-set refuses boot |

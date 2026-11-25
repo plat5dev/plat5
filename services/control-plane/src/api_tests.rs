@@ -503,3 +503,225 @@ async fn plan_and_apply_against_postgres() {
     assert_eq!(err["error"]["code"], json!("VALIDATION_ERROR"));
     assert_eq!(api.admin("GET", "/config", None).await.0, StatusCode::OK);
 }
+
+mod unit_tests {
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use opentelemetry::global;
+    use opentelemetry::trace::TracerProvider;
+    use opentelemetry_sdk::propagation::TraceContextPropagator;
+    use opentelemetry_sdk::trace as sdktrace;
+    use serde_json::{json, Value};
+    use tokio::sync::watch;
+    use tower::ServiceExt;
+    use tracing_opentelemetry::OpenTelemetryLayer;
+    use tracing_subscriber::fmt::MakeWriter;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    use crate::api::{internal_router, public_router};
+    use crate::counts::NoCounts;
+    use crate::feed::Feed;
+    use crate::store::Store;
+    use crate::AppState;
+
+    const TOKEN: &str = "test-admin-token";
+
+    #[derive(Clone, Default)]
+    struct LogBuf(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogBuf {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for LogBuf {
+        type Writer = LogBuf;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    fn test_state(head: i64) -> (AppState, watch::Sender<bool>) {
+        let (tx, rx) = watch::channel(false);
+        let state = AppState {
+            store: Store::lazy_for_test(),
+            feed: Feed::new_for_test(head, rx),
+            counts: Arc::new(NoCounts),
+            admin_token: TOKEN.into(),
+        };
+        (state, tx)
+    }
+
+    #[tokio::test]
+    async fn single_request_id_matches_header_body_and_log() {
+        let buf = LogBuf::default();
+        let subscriber =
+            tracing_subscriber::registry().with(crate::telemetry::json_layer(buf.clone()));
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let (state, _tx) = test_state(0);
+        let router = public_router(state);
+
+        let resp = router
+            .clone()
+            .oneshot(Request::get("/config").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let header_id = resp
+            .headers()
+            .get("x-request-id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["request_id"], json!(header_id));
+
+        let log_text = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        let line: Value = serde_json::from_str(log_text.lines().last().unwrap()).unwrap();
+        assert_eq!(line["request_id"], json!(header_id));
+
+        let resp = router
+            .oneshot(Request::get("/schema").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let schema_header_id = resp
+            .headers()
+            .get("x-request-id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let log_text = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        let line: Value = serde_json::from_str(log_text.lines().last().unwrap()).unwrap();
+        assert_eq!(line["request_id"], json!(schema_header_id));
+    }
+
+    #[tokio::test]
+    async fn malformed_path_and_query_return_plat5_error_envelope() {
+        let (state, _tx) = test_state(0);
+        let router = public_router(state);
+
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::get("/revisions/not-a-number")
+                    .header("authorization", format!("Bearer {TOKEN}"))
+                    .header("x-request-id", "req-path-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.headers()
+                .get("x-request-id")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "req-path-1"
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["code"], json!("INVALID_REQUEST"));
+        assert_eq!(body["error"]["request_id"], json!("req-path-1"));
+
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::post("/apply?dry_run=notabool")
+                    .header("authorization", format!("Bearer {TOKEN}"))
+                    .header("x-request-id", "req-query-1")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.headers()
+                .get("x-request-id")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "req-query-1"
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["code"], json!("INVALID_REQUEST"));
+        assert_eq!(body["error"]["request_id"], json!("req-query-1"));
+    }
+
+    #[tokio::test]
+    async fn incoming_traceparent_sets_server_span_trace_id() {
+        global::set_text_map_propagator(TraceContextPropagator::new());
+        let provider = sdktrace::SdkTracerProvider::builder().build();
+        let buf = LogBuf::default();
+        let subscriber = tracing_subscriber::registry()
+            .with(crate::telemetry::json_layer(buf.clone()))
+            .with(OpenTelemetryLayer::new(provider.tracer("test")));
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let (state, _tx) = test_state(0);
+        let router = public_router(state);
+
+        let trace_id = "0af7651916cd43dd8448eb211c80319c";
+        let resp = router
+            .oneshot(
+                Request::get("/schema")
+                    .header("traceparent", format!("00-{trace_id}-b7ad6b7169203331-01"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let log_text = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        let line: Value = serde_json::from_str(log_text.lines().last().unwrap()).unwrap();
+        assert_eq!(line["trace_id"], json!(trace_id));
+    }
+
+    #[tokio::test]
+    async fn long_poll_returns_204_immediately_on_shutdown() {
+        let (state, shutdown_tx) = test_state(5);
+        let router = internal_router(state);
+
+        let poll = tokio::spawn(async move {
+            router
+                .oneshot(
+                    Request::get("/internal/identity?after=5")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        shutdown_tx.send(true).unwrap();
+
+        let resp = tokio::time::timeout(Duration::from_secs(1), poll)
+            .await
+            .expect("long-poll should finish promptly on shutdown")
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    }
+}

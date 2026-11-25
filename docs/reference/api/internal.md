@@ -27,6 +27,7 @@ POST /internal/admit
   "member_id": "01jby…",
   "user_id": null,
   "permissions": ["catalog:write", "project:read"],
+  "credential_scopes": null,
   "rate_limit_tier": "enterprise",
   "expires_at": "2026-12-01T00:00:00Z",
   "invalidation_seq": 42,
@@ -39,9 +40,9 @@ POST /internal/admit
 3. **Root security policy & member.** Load the resolved root's security policy (`org_allowed_cidrs`, `allow_personal_keys`, `required_idp_claims`). For a personal key when `allow_personal_keys` is `false`, or a JWT whose forwarded `idp.claims` fail `required_idp_claims`, admit refuses access in this tree (`member_id: null`, empty `nodes` and `permissions`). Otherwise find the principal's active, unsuspended member in the chain's tree (or if `allowed_roots` on a key excludes the root, `member_id: null`). A suspended member of the tree is refused and never falls back to public bindings.
 4. **Permissions.** The union of the roles (predefined and custom) of that member's unexpired direct bindings and group bindings on any node in the chain, includes resolved ([`concepts/access.md`](../../concepts/access.md#resolution)), plus matching `all_users` / `all_authenticated_users` bindings when `allow_public: true` (and the caller is not a suspended member of the tree), intersected with the key's `scopes` (when non-empty) or the JWT's `scopes` (when sent). `rate_limit_tier` is the resolved root's tier (`null` when unset or on a user route). `expires_at` is the earliest RFC 3339 UTC expiration among the key and the counting bindings (`null` when none expire), used by the gateway to cap its admit cache TTL.
 
-An empty `chain` is a user route: `nodes`, `member_id` and `permissions` are empty, and `rate_limit_tier` is `null`. For a person with an unrestricted credential, `user_id` is the person's. A valid service account, or a personal key narrowed by `scopes` or `allowed_roots`, answers `valid: true` with `user_id: null`, and the gateway refuses it with **403** on a user route. On a tree route `user_id` is `null`.
+An empty `chain` is a user route: `nodes`, `member_id` and `permissions` are empty, and `rate_limit_tier` is `null`. For a person with an unrestricted credential, `user_id` is the person's. A valid service account, or a personal key narrowed by `scopes` or `allowed_roots`, answers `valid: true` with `user_id: null`, and the gateway refuses it with **403** on a user route. On a tree route `user_id` is `null`, except on `allow_public: true` routes for an authenticated non-member where `user_id` is included solely for external AuthZEN `subject: { "type": "user", "id": … }` evaluation (never forwarded as `X-Plat5-User-Id`).
 
-Every field is in every answer, so the gateway never sees a missing one. With `valid: false`, `principal`, `key_id`, `member_id` and `user_id` are `null`, and `allowed_cidrs`, `nodes` and `permissions` are empty. A missing node and a caller outside the tree both answer `member_id: null` with empty `nodes` and `permissions`. `key_id` is the key's id for a key, `null` for a JWT. `allowed_cidrs` is the key's IP allowlist (`[]` for a JWT or an unrestricted key). `permissions` is sorted, with `*` as the role wrote it. `invalidation_seq` is the commit-ordered head of identity's invalidation log as of this read, and `config_revision` is the control-plane revision identity used to resolve permissions.
+Every field is in every answer, so the gateway never sees a missing one. With `valid: false`, `principal`, `key_id`, `member_id`, `user_id`, and `credential_scopes` are `null`, and `allowed_cidrs`, `nodes` and `permissions` are empty. A missing node and a caller outside the tree both answer `member_id: null` with empty `nodes` and `permissions`. `key_id` is the key's id for a key, `null` for a JWT. `allowed_cidrs` is the key's IP allowlist (`[]` for a JWT or an unrestricted key). `credential_scopes` is the credential's scope list when narrowed by key `scopes` or JWT `AUTH_SCOPE_CLAIM` (`null` when unscoped), used by the gateway to keep outbound authorizers within the credential's scope. `permissions` is sorted, with `*` as the role wrote it. `invalidation_seq` is the commit-ordered head of identity's invalidation log as of this read, and `config_revision` is the control-plane revision identity used to resolve permissions.
 
 Identity resolves `chain` by kind name only and doesn't check it against its kinds: a gateway a revision ahead or behind gets `member_id: null`, not an error. A body identity can't read is **422**: none or more than one of `credential`, `idp`, and `anonymous: true`, an `idp` without `issuer` or `subject`, or `anonymous: true` without `allow_public: true` and a non-empty `chain`.
 
@@ -262,8 +263,8 @@ On `INTERNAL_PORT`. Each is one read, at one head, in one Postgres snapshot. Eac
 
 | Path | Reader | `200` body |
 |------|--------|------------|
-| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "rate_limits", "defaults", "cors", "authorizers"? }`. **404** before the first apply. `defaults` is `{ "rate_limit" }` (empty array when `defaults.rate_limit` is unset), used to rate-limit `POST /access/routes`. `authorizers` is omitted when empty |
-| `GET /internal/identity` | identity | `{ "revision", "deletion_grace", "reserved_slugs", "kinds", "roles", "creator_role", "custom_roles"?, "permissions"?, "authorizers"? }`. **404** before the first apply. `custom_roles` is included when `true`; `permissions` is the derived permission catalog when `custom_roles` is `true` or `permissions` metadata is set; `authorizers` is omitted when empty |
+| `GET /internal/gateway` | gateway | `{ "revision", "kinds", "services", "rate_limits", "defaults", "cors", "authorizers"? }`. **404** before the first apply. `defaults` is `{ "rate_limit" }` (empty array when `defaults.rate_limit` is unset), used to rate-limit `POST /access/routes`. `authorizers` includes only authorizers referenced by routes (omitted when none) |
+| `GET /internal/identity` | identity | `{ "revision", "deletion_grace", "reserved_slugs", "kinds", "roles", "creator_role", "custom_roles"?, "permissions"?, "authorizers"? }`. **404** before the first apply. `custom_roles` is included when `true`; `permissions` is the derived permission catalog when `custom_roles` is `true` or `permissions` metadata is set; `authorizers` includes only authorizers referenced by kinds (omitted when none) |
 
 The gateway's `services` are expanded: each service's `url`, and its own `timeouts` and `max_body_bytes` with the config's `defaults` filled in, and its `routes` as the gateway matches them, one per method:
 
@@ -274,7 +275,7 @@ The gateway's `services` are expanded: each service's `url`, and its own `timeou
   "allow_deleted": false, "allow_public": false, "authorizer": null }
 ```
 
-`rate_limit` is resolved (`defaults.rate_limit` for a route that names none, or `[]` when `defaults.rate_limit` is unset or the route says `false`), `audit` is the method default filled in (`false` in `public`, which is never audited), `authorizer` is resolved across service → scope → route → verb inheritance (omitted when none applies), and `required_permissions` is a list or `"any_member"` (`null` outside a kind scope). Roles are served as written, with `includes`; identity resolves them. Kinds are served with `list_permission` filled in (plus `host`, `allow_public`, and `authorizer` when set). Other keys have defaults filled in: `deletion_grace` `30d`, `reserved_slugs` `[]`, `rate_limits` `{}` (each policy including `tiers` when set), and `cors` `{ "allowed_origins": [], "allowed_headers": [] }` when omitted.
+`rate_limit` is resolved (`defaults.rate_limit` for a route that names none, or `[]` when `defaults.rate_limit` is unset or the route says `false`), `audit` is the method default filled in (`false` in `public`, which is never audited), `authorizer` is resolved across kind → service → scope → route → verb inheritance (skipping `any_member` routes for implicit kind authorizers; omitted when none applies), and `required_permissions` is a list or `"any_member"` (`null` outside a kind scope). Roles are served as written, with `includes`; identity resolves them. Kinds are served with `list_permission` filled in (plus `host`, `allow_public`, and `authorizer` when set). Other keys have defaults filled in: `deletion_grace` `30d`, `reserved_slugs` `[]`, `rate_limits` `{}` (each policy including `tiers` when set), and `cors` `{ "allowed_origins": [], "allowed_headers": [] }` when omitted.
 
 Without `after`, the answer is immediate. With `?after={revision}`, the control plane waits until the head is past `after`, for up to 25 seconds. Nothing newer in that time is **204**, and the reader asks again. A cursor ahead of the head (the store was reset) is answered at once.
 
@@ -332,24 +333,3 @@ PATCH /internal/events/{request_id}
 ### Completed and rejected (single write)
 
 A gateway refusal after admit (a permission **403**, a **400** on a param, a **500**) — and any forwarded audited request when `AUDIT_MODE=async` — is sent as one background `PUT /internal/events/{request_id}` carrying the intent fields plus the final outcome fields (`outcome`, `status`, and optionally `details`, `created_id`, `named_node_ids`, `named_member_id`). Audit inserts the row already final and adds the corresponding `audit_log_keys` (`created_id`, and `named_node_ids` on user routes) in one transaction. It answers as an intent does.
-
-## Gateway
-
-### Authorizer cache invalidation
-
-Actively flushes cached external AuthZEN decisions on a gateway replica (`POST {GATEWAY_INTERNAL_URL}/internal/authorizer-cache/invalidate`), for services that write tuples or policy changes to an external PDP when `cache_ttl` or `negative_cache_ttl` is non-zero ([authorizers](../config/authorizers.md)).
-
-```
-POST /internal/authorizer-cache/invalidate
-{
-  "authorizer": "topaz",
-  "subject_id": "01jby…",
-  "resource_type": "document",
-  "resource_id": "doc-42",
-  "all": false
-}
-→ 200
-{ "invalidated": true }
-```
-
-Set `all: true` or at least one of `authorizer`, `subject_id`, `resource_type`, or `resource_id`; multiple fields intersect (narrowing which cached entries are evicted). Max body 64 KiB (**413**). Invalid JSON or an empty selector returns **400**. Each gateway replica holds its own in-process cache, so multi-replica deployments broadcast invalidations to all replicas (or keep `cache_ttl` short).

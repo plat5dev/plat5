@@ -29,7 +29,7 @@ An example role set for organization > project > environment, where an environme
 | Field | Rule |
 |-------|------|
 | `roles` | Map of slug → role. At least one role |
-| slug | `[a-z0-9:._-]+`, max 64. Opaque to Plat5 |
+| slug | `[a-z][a-z0-9:._-]*`, max 64. Starts with a letter so predefined slugs never collide with custom role ULIDs. Opaque to Plat5 |
 | `permissions` | `[a-z0-9:._-]+`, max 64 chars, unique, max 64 permissions. `["*"]` grants every permission; `*` is valid only alone |
 | `includes` | Other roles whose permissions this one grants too, transitively. Only permissions are included: `bindable_at` stays the role's own |
 | `bindable_at` | Required. The kinds this role can be bound at |

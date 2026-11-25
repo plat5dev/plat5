@@ -29,16 +29,16 @@ The dotted `control-plane → identity` edge closes a cycle with `identity → c
 ```mermaid
 flowchart TD
   main --> lib --> gw[gateway<br/>request handler]
-  gw --> pipeline & route_map & rate_limit & error & audit & control_plane & config & auth & authorizer & cors & client_ip & telemetry & internal_http
+  gw --> pipeline & route_map & rate_limit & error & audit & control_plane & config & auth & authorizer & cors & client_ip & telemetry & internal_http & net
   pipeline --> route_map & auth & authorizer & rate_limit & control_plane & error & kinds
   route_map --> kinds & duration
   error --> route_map
-  auth --> error & internal_http & client_ip
-  authorizer --> internal_http & route_map
-  audit --> auth & error & internal_http
+  auth --> error & internal_http & client_ip & time
+  authorizer --> internal_http & route_map & net
+  audit --> auth & error & internal_http & time
   control_plane --> route_map & cors & kinds & duration
   config --> auth & client_ip & duration & rate_limit & gw
-  health --> auth & authorizer & rate_limit
+  health --> auth & rate_limit
   telemetry --> metrics
 ```
 
@@ -95,19 +95,20 @@ No cycles. `events` is the only domain package.
 | Module | Responsibility | Depends on | Used by |
 |---|---|---|---|
 | **gateway** (service) | The public edge: routing, auth, outbound AuthZEN, rate limits, CORS, upstream signing, audit emission | identity, control-plane, audit, Valkey, optional AuthZEN PDP | clients, e2e |
-| gw `gateway` | Pingora request handler, upstream peer resolution/SSRF checks, Ed25519 request signing | nearly every module | `lib`, `config` (`signing`) |
+| gw `gateway` | Pingora request handler, route checks, request logging, Ed25519 request signing | nearly every module | `lib`, `config` (`signing`) |
 | gw `pipeline` | Per-request decision: admit, permissions, outbound authorizer composition, rate limits, route checks, upstream fill | route_map, auth, authorizer, rate_limit, control_plane, error, kinds, metrics | gateway |
 | gw `route_map` | Route table built from the control-plane snapshot, subdomain host matching, compiled upstream templates | kinds, duration | gateway, pipeline, control_plane, error |
-| gw `auth` | JWT validation (including scope and policy claims), admit calls and cache, admit invalidation follower/epochs, IP allowlist checks | error, internal_http, client_ip, metrics | gateway, pipeline, audit, config, health |
-| gw `authorizer` | Outbound OpenID AuthZEN 1.0 client, response caching, active cache invalidation | internal_http, route_map, metrics | gateway, pipeline, health |
+| gw `auth` | JWT validation (including scope and policy claims), admit calls and cache, admit invalidation follower/epochs, IP allowlist checks | error, internal_http, client_ip, time, metrics | gateway, pipeline, audit, config, health |
+| gw `authorizer` | Outbound OpenID AuthZEN 1.0 client and TTL response cache | internal_http, route_map, net, metrics | gateway, pipeline |
+| gw `net`, `time` | Shared SSRF-safe DNS resolver (`PeerResolver`) and RFC 3339 parsing/formatting | none | gateway, authorizer, auth, audit |
 | gw `control_plane` | Follows the control-plane feed, swaps snapshots atomically | route_map, cors, kinds, duration, metrics | gateway, pipeline |
 | gw `cors` | CORS policy compiled from the control plane's `cors` document | none | gateway, control_plane |
 | gw `client_ip` | Trusted proxies, CIDR parsing, client IP and scheme extraction | none | gateway, auth, config |
 | gw `duration` | Duration format shared by env and config documents | none | config, route_map, control_plane |
-| gw `audit` | Sends audited intent and outcome writes to audit | auth, error, internal_http, metrics | gateway |
+| gw `audit` | Sends audited intent and outcome writes to audit | auth, error, internal_http, time, metrics | gateway |
 | gw `rate_limit`, `kinds`, `config`, `error`, `health`, `internal_http`, `metrics`, `telemetry` | Leaves and infrastructure | mostly none (`config` → auth, client_ip, duration, rate_limit, gateway; `error` → route_map) | many |
 | **control-plane** (service) | Stores and validates the deployment's config, serves feeds | identity (counts), Postgres, `schema/` | gateway, identity |
-| cp `api` | HTTP API: plan, apply, revisions, status, feeds | apply, served, store, schema, error, telemetry, counts, feed, metrics | main |
+| cp `api`, `middleware` | HTTP API (plan, apply, revisions, status, feeds) and request logging/auth middleware | apply, served, store, schema, error, telemetry, counts, feed, metrics | main |
 | cp `apply` | Checks a config, plans it against the head, writes the revision | plan, store, served, rules, schema, counts, config | api |
 | cp `served` | Builds the gateway and identity feed bodies from a checked config | expand, config | api, apply, plan, store |
 | cp `plan` | Compares the head's served bodies with the new ones; checks blocked changes | served, expand, schema, counts, config | apply |

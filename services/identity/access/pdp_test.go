@@ -66,7 +66,7 @@ func TestFeedParsesAuthorizersAndTokenEnv(t *testing.T) {
 	if !ok {
 		t.Fatal("missing topaz authorizer")
 	}
-	if authz.URL != "http://topaz:8383" || authz.Timeout != 3*time.Second || authz.Token != "tok-abc" || authz.NegativeCacheTTL != 5*time.Second {
+	if authz.URL != "http://topaz:8383" || authz.Timeout != 3*time.Second || authz.Token != "tok-abc" {
 		t.Fatalf("unexpected authorizer: %+v", authz)
 	}
 	proj, _ := snap.Kind("project")
@@ -158,5 +158,20 @@ func TestHTTPPDPWireAndFailClosed(t *testing.T) {
 	}
 	if _, err := badPDP.EvaluateBatch(context.Background(), authz, []AuthzenRequest{{}}); !errors.Is(err, ErrPDPUnavailable) {
 		t.Fatalf("expected ErrPDPUnavailable, got %v", err)
+	}
+
+	// Batch evaluation with omitted decision fails closed with ErrPDPUnavailable.
+	missingDecisionPDP := &HTTPPDP{
+		client: &http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				rec := httptest.NewRecorder()
+				rec.WriteHeader(http.StatusOK)
+				_, _ = rec.WriteString(`{"evaluations":[{"decision":true},{}]}`)
+				return rec.Result(), nil
+			}),
+		},
+	}
+	if _, err := missingDecisionPDP.EvaluateBatch(context.Background(), authz, []AuthzenRequest{{}, {}}); !errors.Is(err, ErrPDPUnavailable) {
+		t.Fatalf("expected ErrPDPUnavailable on missing batch decision, got %v", err)
 	}
 }

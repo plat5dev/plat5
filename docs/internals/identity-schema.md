@@ -79,24 +79,24 @@ CREATE TABLE group_members (
 );
 
 CREATE TABLE root_security_policies (
-    root_id             TEXT PRIMARY KEY REFERENCES nodes (id) ON DELETE CASCADE,
-    allow_personal_keys BOOLEAN NOT NULL DEFAULT TRUE,
+    root_id             TEXT PRIMARY KEY REFERENCES nodes (id),
+    allow_personal_keys BOOLEAN NOT NULL DEFAULT true,
     allowed_cidrs       TEXT[] NOT NULL DEFAULT '{}',
     required_idp_claims JSONB NOT NULL DEFAULT '{}'::jsonb,
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE org_roles (
-    id          TEXT PRIMARY KEY,                      -- ULID; never collides with letter-prefixed predefined slugs
-    root_id     TEXT NOT NULL REFERENCES nodes (id) ON DELETE CASCADE,
-    name        TEXT NOT NULL,
-    description TEXT,
-    permissions TEXT[] NOT NULL,                       -- never '*'
-    bindable_at TEXT[] NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    id           TEXT PRIMARY KEY,                     -- ULID; never collides with letter-prefixed predefined slugs
+    root_id      TEXT NOT NULL REFERENCES nodes (id),
+    display_name TEXT NOT NULL,
+    description  TEXT NOT NULL DEFAULT '',
+    permissions  TEXT[] NOT NULL DEFAULT '{}',         -- never '*'
+    bindable_at  TEXT[] NOT NULL DEFAULT '{}',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE UNIQUE INDEX org_roles_root_name_uidx ON org_roles (root_id, LOWER(name));
+CREATE INDEX org_roles_root_idx ON org_roles (root_id);
 
 CREATE TABLE bindings (
     id               TEXT PRIMARY KEY,
@@ -170,7 +170,14 @@ CREATE TABLE admit_invalidations (                    -- commit-ordered cache in
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX admit_invalidations_created_idx ON admit_invalidations (created_at);
+
+CREATE TABLE admit_invalidation_watermark (           -- highest pruned id; keeps head monotonic after full prune
+    id             INT PRIMARY KEY CHECK (id = 1),
+    pruned_through BIGINT NOT NULL DEFAULT 0
+);
 ```
+
+Additional indexes include `nodes_root_id_idx` on `nodes (root_id, id)` for root-scoped listings and custom-role cleanup.
 
 Ids are lowercase ULIDs with no prefix ([ids](../concepts/model.md#ids-and-slugs)). Principal ids never leave identity; a person's `user_id` is a separate id, sent only on user routes and in `user.*` events.
 

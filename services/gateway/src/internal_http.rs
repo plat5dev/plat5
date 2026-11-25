@@ -120,7 +120,7 @@ fn client_span(method: &reqwest::Method, url: &str) -> Span {
 }
 
 /// `req` with `span`'s trace context (`traceparent`).
-fn traced(mut req: reqwest::RequestBuilder, span: &Span) -> reqwest::RequestBuilder {
+pub(crate) fn traced(mut req: reqwest::RequestBuilder, span: &Span) -> reqwest::RequestBuilder {
     let mut headers = HashMap::new();
     let cx = span.context();
     global::get_text_map_propagator(|p| p.inject_context(&cx, &mut headers));

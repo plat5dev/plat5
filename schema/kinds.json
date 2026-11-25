@@ -64,7 +64,7 @@
         },
         "authorizer": {
           "title": "authorizer",
-          "description": "Optional. External AuthZEN authorizer used for `list_permission` filtering and identity `/access/v1/*` evaluation on nodes of this kind ([authorizers](authorizers.md)).",
+          "description": "Optional. External AuthZEN authorizer for `list_permission` filtering, identity `/access/v1/*` evaluation, and routes in this kind's scope unless overridden or opted out with `authorizer: false` ([authorizers](authorizers.md)).",
           "$ref": "authorizers.json#/$defs/kind_authorizer"
         }
       }

@@ -81,10 +81,9 @@ pub struct FilledTimeouts {
 }
 
 /// `defaults:` with Plat5's own defaults under it, filled into each service
-/// and route at expansion.
+/// at expansion.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FilledDefaults {
-    pub rate_limit: Vec<String>,
     pub timeouts: FilledTimeouts,
     pub max_body_bytes: u64,
 }
@@ -93,7 +92,6 @@ impl Defaults {
     /// `defaults:` with Plat5's own defaults under it.
     pub fn filled(&self) -> FilledDefaults {
         FilledDefaults {
-            rate_limit: self.rate_limit.clone(),
             timeouts: FilledTimeouts {
                 connect: self
                     .timeouts
@@ -199,14 +197,14 @@ pub struct Role {
     pub bindable_at: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PermissionMeta {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[serde(default)]
     pub description: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub bindable_at: Vec<String>,
-    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    #[serde(default = "yes")]
     pub custom_role_assignable: bool,
 }
 
@@ -296,30 +294,31 @@ pub struct AuthorizerResource {
 pub enum RouteAuthorizerConfig {
     Off(bool),
     Name(String),
-    Full(RouteAuthorizerObj),
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct RouteAuthorizerObj {
-    pub name: String,
-    #[serde(default)]
-    pub mode: AuthorizerMode,
-    #[serde(default)]
-    pub resource: Option<AuthorizerResource>,
-    #[serde(default)]
-    pub action: Option<String>,
+    Full(ResolvedRouteAuthorizer),
 }
 
 /// Canonical expanded authorizer served to the gateway per route.
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ResolvedRouteAuthorizer {
     pub name: String,
+    #[serde(default)]
     pub mode: AuthorizerMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource: Option<AuthorizerResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
+}
+
+impl From<&KindAuthorizer> for ResolvedRouteAuthorizer {
+    fn from(ka: &KindAuthorizer) -> Self {
+        Self {
+            name: ka.name.clone(),
+            mode: ka.mode,
+            resource: None,
+            action: None,
+        }
+    }
 }
 
 impl RouteAuthorizerConfig {
@@ -333,12 +332,7 @@ impl RouteAuthorizerConfig {
                 resource: None,
                 action: None,
             }),
-            RouteAuthorizerConfig::Full(obj) => Some(ResolvedRouteAuthorizer {
-                name: obj.name.clone(),
-                mode: obj.mode,
-                resource: obj.resource.clone(),
-                action: obj.action.clone(),
-            }),
+            RouteAuthorizerConfig::Full(obj) => Some(obj.clone()),
         }
     }
 }

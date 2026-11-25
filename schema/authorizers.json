@@ -70,7 +70,7 @@
     },
     "kind_authorizer": {
       "title": "kind authorizer",
-      "description": "External authorizer for this kind's `list_permission` filtering and identity `/access/v1/*` evaluation. Either an authorizer name (implies `mode: replace`) or `{ name, mode }`.",
+      "description": "External authorizer for this kind's `list_permission` filtering, identity `/access/v1/*` evaluation, and kind-scoped routes (unless overridden or opted out with `false`). Either an authorizer name (implies `mode: replace`) or `{ name, mode }`.",
       "oneOf": [
         { "$ref": "#/$defs/authorizer_name" },
         {

@@ -19,10 +19,9 @@ use tracing::{error, info, warn};
 
 use crate::authorizer::{parse_authorizers, AuthorizerDoc, AuthorizerSpec};
 use crate::cors::CorsPolicy;
-use crate::duration::parse_duration;
 use crate::kinds::{KindDoc, Kinds};
 use crate::metrics;
-use crate::route_map::{parse_tiers, Policy, PolicyDoc, RouteMap, ServiceDoc};
+use crate::route_map::{Policy, PolicyDoc, RouteMap, ServiceDoc};
 
 /// Longer than the control plane's long-poll wait, so an idle poll ends with 204.
 const POLL_TIMEOUT: Duration = Duration::from_secs(40);
@@ -260,40 +259,18 @@ pub fn build(feed: Value) -> Result<Snapshot, String> {
     let feed: GatewayFeed = serde_json::from_value(feed).map_err(|e| e.to_string())?;
     let kinds = Kinds::from_feed(&feed.kinds);
     let authorizers = parse_authorizers(&feed.authorizers)?;
-    let routes = RouteMap::from_feed_with_authorizers(
-        &feed.services,
-        &feed.rate_limits,
-        &kinds,
-        &authorizers,
-    )?;
+    let compiled_policies = crate::route_map::compile_policies(&feed.rate_limits)?;
+    let routes = RouteMap::from_compiled(&feed.services, &compiled_policies, &kinds, &authorizers)?;
     let default_policies = feed
         .defaults
         .rate_limit
         .iter()
-        .map(|name| match feed.rate_limits.get(name) {
+        .map(|name| match compiled_policies.get(name) {
             None => Err(format!("defaults.rate_limit: no policy {name:?}")),
             Some(p) if p.count_at.is_some() => {
                 Err(format!("defaults.rate_limit: {name:?} counts at a kind"))
             }
-            Some(p) => {
-                let window_seconds = parse_duration(&p.window)
-                    .filter(|d| *d >= Duration::from_secs(1))
-                    .ok_or_else(|| {
-                        format!(
-                            "defaults.rate_limit: {name:?} has invalid window {:?} (must be at least 1s)",
-                            p.window
-                        )
-                    })?
-                    .as_secs();
-                let tiers = parse_tiers(name, &p.tiers)?;
-                Ok(Policy {
-                    name: name.clone(),
-                    requests: p.requests,
-                    window_seconds,
-                    count_at: None,
-                    tiers,
-                })
-            }
+            Some(p) => Ok(p.into_policy(None)),
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Snapshot {

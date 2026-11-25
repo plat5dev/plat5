@@ -15,6 +15,7 @@ import (
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 	"github.com/plat5dev/plat5/identity/internal/id"
 	"github.com/plat5dev/plat5/identity/internal/secret"
+	"github.com/plat5dev/plat5/identity/lifecycle"
 	"github.com/plat5dev/plat5/identity/nodes"
 )
 
@@ -327,7 +328,7 @@ func (s *Store) keyPrincipalFor(ctx context.Context, key string) (*admitPrincipa
 	err := s.pool.QueryRow(ctx, `
 		SELECT p.id, p.kind, p.user_id, k.id, k.allowed_cidrs, k.scopes, k.allowed_roots, k.expires_at,
 		       p.status, k.revoked_at IS NOT NULL, bn.status,
-		       COALESCE((SELECT MAX(id) FROM admit_invalidations), 0)
+		       `+lifecycle.InvalidationHeadSQL+`
 		FROM api_keys k
 		JOIN principals p ON p.id = k.principal_id
 		LEFT JOIN nodes bn ON bn.id = p.node_id
@@ -362,7 +363,7 @@ func (s *Store) idpPrincipal(ctx context.Context, c IdPClaims) (*admitPrincipal,
 	var seq int64
 	err := s.pool.QueryRow(ctx, `
 		SELECT p.id, p.user_id, p.status, p.name,
-		       COALESCE((SELECT MAX(id) FROM admit_invalidations), 0)
+		       `+lifecycle.InvalidationHeadSQL+`
 		FROM idp_links l JOIN principals p ON p.id = l.principal_id
 		WHERE l.issuer = $1 AND l.subject = $2
 	`, issuer, subject).Scan(&principalID, &userID, &status, &current, &seq)
@@ -372,6 +373,9 @@ func (s *Store) idpPrincipal(ctx context.Context, c IdPClaims) (*admitPrincipal,
 			return nil, 0, errNoRegistrar
 		}
 		if principalID, userID, status, err = s.registrar.FirstSignIn(ctx, issuer, subject, name); err != nil {
+			return nil, 0, err
+		}
+		if err := s.pool.QueryRow(ctx, `SELECT `+lifecycle.InvalidationHeadSQL).Scan(&seq); err != nil {
 			return nil, 0, err
 		}
 	case err != nil:
@@ -513,19 +517,17 @@ func (s *Store) resolveAdmitChain(
 				FROM chain c
 				WHERE (SELECT count(*) FROM chain) = $5
 			),
-			member AS (
-				SELECT m.id
+			member_row AS (
+				SELECT m.id, (m.suspended_at IS NOT NULL) AS is_suspended
 				FROM members m
 				JOIN resolved r ON r.pos = 1 AND m.root_id = r.id
-				WHERE NOT $11 AND m.principal_id = $7 AND m.removed_at IS NULL AND m.suspended_at IS NULL
+				WHERE NOT $11 AND m.principal_id = $7 AND m.removed_at IS NULL
 			),
-			suspended_here AS (
-				SELECT EXISTS (
-					SELECT 1
-					FROM members m
-					JOIN resolved r ON r.pos = 1 AND m.root_id = r.id
-					WHERE NOT $11 AND m.principal_id = $7 AND m.removed_at IS NULL AND m.suspended_at IS NOT NULL
-				) AS is_suspended
+			policy AS (
+				SELECT rsp.allow_personal_keys, rsp.allowed_cidrs, rsp.required_idp_claims
+				FROM resolved r
+				JOIN root_security_policies rsp ON rsp.root_id = r.id
+				WHERE r.pos = 1
 			),
 			roles AS (
 				SELECT b.role, b.expires_at, cr.permissions AS custom_perms
@@ -533,16 +535,16 @@ func (s *Store) resolveAdmitChain(
 				JOIN bindings b ON b.node_id = bn.id
 				LEFT JOIN org_roles cr ON cr.id = b.role AND cr.root_id = bn.root_id AND bn.kind = ANY(cr.bindable_at)
 				WHERE (b.expires_at IS NULL OR b.expires_at > $10)
-				  AND `+CountsSQL("$8", "$9")+`
+				  AND `+CountsWithCustomSQL("$8", "$9", "cr")+`
 				  AND (
 					(NOT $11 AND (
-						b.member_id = (SELECT id FROM member)
+						b.member_id = (SELECT id FROM member_row WHERE NOT is_suspended)
 						OR EXISTS (
 							SELECT 1 FROM group_members gm
-							WHERE gm.group_id = b.group_id AND gm.member_id = (SELECT id FROM member)
+							WHERE gm.group_id = b.group_id AND gm.member_id = (SELECT id FROM member_row WHERE NOT is_suspended)
 						)
 					))
-					OR ($12 AND NOT (SELECT is_suspended FROM suspended_here) AND (
+					OR ($12 AND NOT COALESCE((SELECT is_suspended FROM member_row), false) AND (
 						b.public_principal = 'all_users'
 						OR (NOT $11 AND b.public_principal = 'all_authenticated_users')
 					))
@@ -550,15 +552,15 @@ func (s *Store) resolveAdmitChain(
 			)
 		SELECT
 			(SELECT array_agg(id ORDER BY pos) FROM resolved),
-			(SELECT id FROM member),
+			(SELECT id FROM member_row WHERE NOT is_suspended),
 			(SELECT array_agg(DISTINCT role) FROM roles),
 			(SELECT array_agg(DISTINCT p) FROM roles, unnest(COALESCE(custom_perms, '{}')) AS p),
 			(SELECT n.rate_limit_tier FROM resolved r JOIN nodes n ON n.id = r.id WHERE r.pos = 1),
 			(SELECT MIN(expires_at) FROM roles WHERE expires_at IS NOT NULL),
-			(SELECT rsp.allow_personal_keys FROM resolved r JOIN root_security_policies rsp ON rsp.root_id = r.id WHERE r.pos = 1),
-			(SELECT rsp.allowed_cidrs FROM resolved r JOIN root_security_policies rsp ON rsp.root_id = r.id WHERE r.pos = 1),
-			(SELECT rsp.required_idp_claims FROM resolved r JOIN root_security_policies rsp ON rsp.root_id = r.id WHERE r.pos = 1),
-			COALESCE((SELECT MAX(id) FROM admit_invalidations), 0)
+			(SELECT allow_personal_keys FROM policy),
+			(SELECT allowed_cidrs FROM policy),
+			(SELECT required_idp_claims FROM policy),
+			`+lifecycle.InvalidationHeadSQL+`
 	`, pos, kinds, refVals, isIDs, n, allowDeleted, principalID, bindKinds, bindRoles, now, anonymous, allowPublic).Scan(
 		&nodeIDs, &memberID, &roles, &customPerms, &rootTier, &minExpiresAt,
 		&allowPersonalKeys, &orgAllowedCIDRs, &requiredClaimsRaw, &invSeq,
@@ -582,7 +584,10 @@ func (s *Store) resolveAdmitChain(
 	}
 	if len(requiredClaimsRaw) > 0 {
 		var req map[string][]string
-		if err := json.Unmarshal(requiredClaimsRaw, &req); err == nil && len(req) > 0 {
+		if err := json.Unmarshal(requiredClaimsRaw, &req); err != nil {
+			return nil, "", nil, nil, nil, nil, defaultPolicy, 0, err
+		}
+		if len(req) > 0 {
 			policy.requiredIdPClaims = req
 		}
 	}
@@ -640,7 +645,7 @@ func heldOnChains(ctx context.Context, q queryer, snap *feed.Snapshot, pairs []m
 		JOIN nodes bn ON bn.id = b.node_id
 		LEFT JOIN org_roles cr ON cr.id = b.role AND cr.root_id = bn.root_id AND bn.kind = ANY(cr.bindable_at)
 		WHERE (b.expires_at IS NULL OR b.expires_at > $6)
-		  AND `+CountsSQL("$4", "$5"),
+		  AND `+CountsWithCustomSQL("$4", "$5", "cr"),
 		idx, memberIDs, nodeIDs, kinds, roles, now)
 	if err != nil {
 		return nil, nil, err

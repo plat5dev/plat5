@@ -50,15 +50,41 @@ pub struct InvalidationTracker {
     inner: Arc<Inner>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum EpochScope {
+    Key,
+    User,
+    Member,
+    Root,
+}
+
+impl EpochScope {
+    fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "key" => Some(Self::Key),
+            "user" => Some(Self::User),
+            "member" => Some(Self::Member),
+            "root" => Some(Self::Root),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Key => "key",
+            Self::User => "user",
+            Self::Member => "member",
+            Self::Root => "root",
+        }
+    }
+}
+
 struct Inner {
     global_gen: AtomicU64,
     cursor: AtomicI64,
     synced: AtomicBool,
     min_config_revision: AtomicI64,
-    key_epoch: Cache<String, i64>,
-    user_epoch: Cache<String, i64>,
-    member_epoch: Cache<String, i64>,
-    root_epoch: Cache<String, i64>,
+    epochs: Cache<(EpochScope, String), i64>,
 }
 
 /// Snapshot taken right before calling `/internal/admit` so an invalidation
@@ -73,22 +99,17 @@ pub struct AdmitStamp {
 impl InvalidationTracker {
     pub fn new(ttl: Duration) -> Self {
         let cap_ttl = ttl.max(Duration::from_secs(1));
-        let make = || {
-            Cache::builder()
-                .max_capacity(EPOCH_CACHE_CAPACITY)
-                .time_to_live(cap_ttl)
-                .build()
-        };
+        let epochs = Cache::builder()
+            .max_capacity(EPOCH_CACHE_CAPACITY)
+            .time_to_live(cap_ttl)
+            .build();
         Self {
             inner: Arc::new(Inner {
                 global_gen: AtomicU64::new(0),
                 cursor: AtomicI64::new(0),
                 synced: AtomicBool::new(false),
                 min_config_revision: AtomicI64::new(0),
-                key_epoch: make(),
-                user_epoch: make(),
-                member_epoch: make(),
-                root_epoch: make(),
+                epochs,
             }),
         }
     }
@@ -146,44 +167,20 @@ impl InvalidationTracker {
         if config_revision < self.inner.min_config_revision.load(Ordering::Acquire) {
             return false;
         }
-        if let Some(key_id) = answer.key_id.as_deref() {
+        let targets = [
+            answer.key_id.as_deref().map(|t| (EpochScope::Key, t)),
+            answer.user_id.as_deref().map(|t| (EpochScope::User, t)),
+            answer.member_id.as_deref().map(|t| (EpochScope::Member, t)),
+            answer
+                .nodes
+                .first()
+                .map(|r| (EpochScope::Root, r.id.as_str())),
+        ];
+        for (scope, target) in targets.into_iter().flatten() {
             if self
                 .inner
-                .key_epoch
-                .get(key_id)
-                .await
-                .is_some_and(|e| e > seq)
-            {
-                return false;
-            }
-        }
-        if let Some(user_id) = answer.user_id.as_deref() {
-            if self
-                .inner
-                .user_epoch
-                .get(user_id)
-                .await
-                .is_some_and(|e| e > seq)
-            {
-                return false;
-            }
-        }
-        if let Some(member_id) = answer.member_id.as_deref() {
-            if self
-                .inner
-                .member_epoch
-                .get(member_id)
-                .await
-                .is_some_and(|e| e > seq)
-            {
-                return false;
-            }
-        }
-        if let Some(root) = answer.nodes.first() {
-            if self
-                .inner
-                .root_epoch
-                .get(&root.id)
+                .epochs
+                .get(&(scope, target.to_string()))
                 .await
                 .is_some_and(|e| e > seq)
             {
@@ -223,26 +220,14 @@ impl InvalidationTracker {
             if ev.id > max_seen {
                 max_seen = ev.id;
             }
-            match ev.scope.as_str() {
-                "key" => {
-                    bump_epoch(&self.inner.key_epoch, ev.target, ev.id).await;
-                    metrics::record_admit_invalidation("key");
+            match EpochScope::from_wire(&ev.scope) {
+                Some(scope) => {
+                    bump_epoch(&self.inner.epochs, (scope, ev.target), ev.id).await;
+                    metrics::record_admit_invalidation(scope.as_str());
                 }
-                "user" => {
-                    bump_epoch(&self.inner.user_epoch, ev.target, ev.id).await;
-                    metrics::record_admit_invalidation("user");
-                }
-                "member" => {
-                    bump_epoch(&self.inner.member_epoch, ev.target, ev.id).await;
-                    metrics::record_admit_invalidation("member");
-                }
-                "root" => {
-                    bump_epoch(&self.inner.root_epoch, ev.target, ev.id).await;
-                    metrics::record_admit_invalidation("root");
-                }
-                other => {
+                None => {
                     warn!(
-                        scope = other,
+                        scope = %ev.scope,
                         id = ev.id,
                         "ignoring unknown admit invalidation scope"
                     );
@@ -269,9 +254,9 @@ impl InvalidationTracker {
     }
 }
 
-async fn bump_epoch(cache: &Cache<String, i64>, target: String, seq: i64) {
+async fn bump_epoch(cache: &Cache<(EpochScope, String), i64>, key: (EpochScope, String), seq: i64) {
     cache
-        .entry(target)
+        .entry(key)
         .and_compute_with(|existing| async move {
             match existing {
                 Some(entry) if *entry.value() >= seq => Op::Nop,

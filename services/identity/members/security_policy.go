@@ -133,6 +133,19 @@ func (s *Store) GetSecurityPolicy(ctx context.Context, rootID string) (*RootSecu
 	return pol, nil
 }
 
+func claimMapsEqual(a, b map[string][]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, av := range a {
+		bv, ok := b[k]
+		if !ok || !slices.Equal(av, bv) {
+			return false
+		}
+	}
+	return true
+}
+
 // PatchSecurityPolicy updates a root node's security policy and emits a root
 // admit invalidation when changed.
 func (s *Store) PatchSecurityPolicy(ctx context.Context, rootID string, patch SecurityPolicyPatch) (*RootSecurityPolicy, *RootSecurityPolicy, error) {
@@ -209,7 +222,12 @@ func (s *Store) PatchSecurityPolicy(ctx context.Context, rootID string, patch Se
 		return nil, nil, op.Fail(err)
 	}
 	next.UpdatedAt = &now
-	w.invalidate(lifecycle.InvalidateRoot(root.ID))
+	changed := before.AllowPersonalKeys != next.AllowPersonalKeys ||
+		!slices.Equal(before.AllowedCIDRs, next.AllowedCIDRs) ||
+		!claimMapsEqual(before.RequiredIdPClaims, next.RequiredIdPClaims)
+	if changed {
+		w.invalidate(lifecycle.InvalidateRoot(root.ID))
+	}
 	if err := w.commit(ctx); err != nil {
 		return nil, nil, op.Fail(err)
 	}

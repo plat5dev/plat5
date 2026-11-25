@@ -17,8 +17,8 @@ use crate::auth::admit::{
 };
 use crate::auth::{AuthError, AuthType, Presented};
 use crate::authorizer::{
-    Authorizer, AuthorizerCache, AuthorizerInvalidator, AuthorizerMode, AuthorizerSpec,
-    AuthzenAction, AuthzenRequest, AuthzenResource, AuthzenSubject, NoAuthorizer,
+    Authorizer, AuthorizerCache, AuthorizerMode, AuthorizerSpec, AuthzenAction, AuthzenRequest,
+    AuthzenResource, AuthzenSubject, NoAuthorizer,
 };
 use crate::error::{ApiError, ErrorKind};
 use crate::kinds::id_header;
@@ -69,14 +69,18 @@ pub struct Caller {
     pub key_id: Option<String>,
     /// A JWT's key id, for the request span.
     pub kid: Option<String>,
-    /// `person` or `service_account`.
+    /// `person`, `service_account`, or `anonymous`.
     pub principal: String,
     /// The route's chain, root first. Empty on a user route.
     pub nodes: Vec<NodeRef>,
     /// The caller in this tree, on a kind route.
     pub member_id: Option<String>,
-    /// The person, on a user route.
+    /// The person, strictly on a user route (`X-Plat5-User-Id` & user audit events).
     pub user_id: Option<String>,
+    /// Authenticated non-member's user id on an `allow_public` tree route: used
+    /// only for outbound AuthZEN `subject: { type: "user", id }`, never forwarded
+    /// upstream in headers or audit.
+    pub authzen_user_id: Option<String>,
     /// The caller's permissions on the route's node. Log only: never sent on.
     pub permissions: Vec<String>,
     /// Optional explicit credential scopes when a key or JWT is scope-narrowed.
@@ -199,6 +203,42 @@ pub struct Forward {
     pub headers: Vec<(String, String)>,
 }
 
+/// Outcome of the shared admit step before request-level vs route-check handling.
+pub(super) enum AdmitOutcome {
+    Admitted(Box<Caller>),
+    /// Credential itself was invalid or rejected by key IP allowlist (**401**).
+    InvalidCredential {
+        auth_type: Option<AuthType>,
+        key_id: Option<String>,
+        ip_rejected: bool,
+    },
+    /// Valid service account on a user route (**403**, not counted by auth-failure limiter).
+    ServiceAccount {
+        principal: Option<String>,
+    },
+    /// Valid narrowed personal key on a user route (**403**, not counted by auth-failure limiter).
+    ScopedCredential {
+        principal: Option<String>,
+    },
+    /// Org IP allowlist, missing node, or caller not admitted to this tree (**403** / **401** anon).
+    NotAdmitted {
+        anonymous: bool,
+        org_ip_rejected: bool,
+    },
+    /// Identity didn't answer (**503**).
+    Unavailable,
+}
+
+/// Outcome of pre-PDP authorization shared between `decide` and `POST /access/routes`.
+pub(super) enum AuthzDecision {
+    Allow,
+    Deny,
+    External {
+        authorizer: String,
+        requests: Vec<AuthzenRequest>,
+    },
+}
+
 pub struct Pipeline<A, C, P = NoAuthorizer> {
     admit: AdmitCache<A>,
     counter: C,
@@ -212,7 +252,7 @@ impl<A: Admit, C: Counter> Pipeline<A, C, NoAuthorizer> {
             admit,
             counter,
             auth_failure,
-            authorizer: AuthorizerCache::new(NoAuthorizer, AuthorizerInvalidator::new()),
+            authorizer: AuthorizerCache::new(NoAuthorizer),
         }
     }
 }
@@ -315,47 +355,109 @@ impl<A: Admit, C: Counter, P: Authorizer> Pipeline<A, C, P> {
         ip: &str,
         request_id: &str,
     ) -> Result<(), Rejection> {
-        let route = &matched.route;
         let Admitted::Caller(caller) = admitted else {
             return Ok(());
         };
-        let Some(ra) = route.authorizer.as_ref() else {
-            return authorize(route, admitted);
+        match prepare_authorization(matched, caller, ip, request_id)? {
+            AuthzDecision::Allow => Ok(()),
+            AuthzDecision::Deny => Err(Rejection::Denied),
+            AuthzDecision::External {
+                authorizer,
+                requests,
+            } => {
+                let spec = authorizers.get(&authorizer).ok_or(Rejection::Unavailable)?;
+                let allowed = self
+                    .authorizer
+                    .evaluate_any(spec, &requests, request_id)
+                    .await
+                    .map_err(|_| Rejection::Unavailable)?;
+                if allowed {
+                    Ok(())
+                } else {
+                    Err(Rejection::Denied)
+                }
+            }
+        }
+    }
+
+    /// Shared admit evaluation for both normal requests and `POST /access/routes`.
+    /// Also returns `key_id` whenever identity recognized an API key, for request logs.
+    pub(super) async fn admit_credential(
+        &self,
+        matched: &Matched,
+        credential: AdmitCredential,
+        kid: Option<String>,
+        ip: &str,
+    ) -> (Option<String>, AdmitOutcome) {
+        let route = &matched.route;
+        let auth_type = credential.auth_type();
+        let anonymous = matches!(credential, AdmitCredential::Anonymous(_));
+        let external_can_grant = route
+            .authorizer
+            .as_ref()
+            .is_some_and(|a| matches!(a.mode, AuthorizerMode::Replace | AuthorizerMode::Or));
+        let req = admit_request(matched, credential);
+        let Ok(answer) = self.admit.get(&req).await else {
+            return (None, AdmitOutcome::Unavailable);
         };
-        let builtin_ok = permitted(&route.required, &caller.permissions);
-        let actions = effective_actions(
-            route,
-            ra.action.as_deref(),
-            caller.credential_scopes.as_deref(),
-        );
-        if actions.is_empty() {
-            return Err(Rejection::Denied);
+        let key_id = answer.key_id.clone();
+        if !anonymous && (!answer.valid || !answer.allows_ip(ip)) {
+            return (
+                key_id.clone(),
+                AdmitOutcome::InvalidCredential {
+                    auth_type,
+                    key_id,
+                    ip_rejected: answer.valid,
+                },
+            );
         }
-        match ra.mode {
-            AuthorizerMode::And if !builtin_ok => return Err(Rejection::Denied),
-            AuthorizerMode::Or if builtin_ok => return Ok(()),
-            _ => {}
+        if !anonymous && service_account_on_user_route(&req, &answer) {
+            return (
+                key_id,
+                AdmitOutcome::ServiceAccount {
+                    principal: answer.principal.clone(),
+                },
+            );
         }
-        let spec = authorizers.get(&ra.name).ok_or(Rejection::Unavailable)?;
-        let reqs = build_authzen_requests(matched, caller, ra, &actions, ip, request_id)?;
-        let allowed = if reqs.len() == 1 {
-            self.authorizer
-                .evaluate(spec, &reqs[0], request_id)
-                .await
-                .map_err(|_| Rejection::Unavailable)?
-        } else {
-            let decisions = self
-                .authorizer
-                .evaluate_batch(spec, &reqs, "permit_on_first_permit", request_id)
-                .await
-                .map_err(|_| Rejection::Unavailable)?;
-            decisions.into_iter().any(|d| d)
-        };
-        if allowed {
-            Ok(())
-        } else {
-            Err(Rejection::Denied)
+        if !anonymous && scoped_key_on_user_route(&req, &answer) {
+            return (
+                key_id,
+                AdmitOutcome::ScopedCredential {
+                    principal: answer.principal.clone(),
+                },
+            );
         }
+        if !answer.valid {
+            return (
+                key_id,
+                AdmitOutcome::NotAdmitted {
+                    anonymous,
+                    org_ip_rejected: false,
+                },
+            );
+        }
+        if !answer.allows_org_ip(ip) {
+            return (
+                key_id,
+                AdmitOutcome::NotAdmitted {
+                    anonymous,
+                    org_ip_rejected: true,
+                },
+            );
+        }
+        if answer.refused_with_external(&req, external_can_grant) {
+            return (
+                key_id,
+                AdmitOutcome::NotAdmitted {
+                    anonymous,
+                    org_ip_rejected: false,
+                },
+            );
+        }
+        (
+            key_id,
+            AdmitOutcome::Admitted(Box::new(caller_from_answer(&req, &answer, auth_type, kid))),
+        )
     }
 
     async fn admit(
@@ -366,116 +468,78 @@ impl<A: Admit, C: Counter, P: Authorizer> Pipeline<A, C, P> {
         cred: &mut RequestCredential,
     ) -> Result<Caller, Rejection> {
         let route = &matched.route;
-        let external_can_grant = route
-            .authorizer
-            .as_ref()
-            .is_some_and(|a| matches!(a.mode, AuthorizerMode::Replace | AuthorizerMode::Or));
-        if matches!(presented, Err(AuthError::MissingAuthorization)) && route.allow_public {
-            let req = admit_request(matched, AdmitCredential::Anonymous(true));
-            let answer = self
-                .admit
-                .get(&req)
-                .await
-                .map_err(|_| Rejection::Unavailable)?;
-            if !answer.valid
-                || !answer.allows_org_ip(ip)
-                || answer.refused_with_external(&req, external_can_grant)
-            {
-                let rejection =
-                    unauthorized(AuthError::MissingAuthorization, None, route.scope.name());
-                return Err(self.count_refusal(ip).await.unwrap_or(rejection));
+        let (credential, kid) = match presented {
+            Err(AuthError::MissingAuthorization) if route.allow_public => {
+                (AdmitCredential::Anonymous(true), None)
             }
-            let caller = Caller {
-                auth_type: None,
-                key_id: None,
-                kid: None,
-                principal: answer
-                    .principal
-                    .clone()
-                    .unwrap_or_else(|| "anonymous".to_string()),
-                nodes: answer.nodes.clone(),
-                member_id: None,
-                user_id: None,
-                permissions: answer.permissions.clone(),
-                credential_scopes: answer.credential_scopes.clone(),
-                rate_limit_tier: answer.rate_limit_tier.clone(),
-            };
-            cred.principal = Some(caller.principal.clone());
-            cred.root_id = caller.root_id().map(str::to_string);
-            cred.node_id = caller.node_id().map(str::to_string);
-            return Ok(caller);
-        }
-        let presented = match presented {
-            Ok(p) => p,
             // Refused here, without identity: not counted.
             Err(err) => {
                 let auth_type = err.auth_type();
                 cred.auth_type = auth_type;
                 return Err(unauthorized(err, auth_type, route.scope.name()));
             }
-        };
-        let auth_type = presented.auth_type();
-        cred.auth_type = Some(auth_type);
-        let (credential, kid) = presented.into_admit();
-        let req = admit_request(matched, credential);
-        let answer = self
-            .admit
-            .get(&req)
-            .await
-            .map_err(|_| Rejection::Unavailable)?;
-        cred.key_id = answer.key_id.clone();
-
-        if !answer.valid || !answer.allows_ip(ip) {
-            if answer.valid {
-                info!(
-                    key_id = answer.key_id.as_deref().unwrap_or(""),
-                    client_ip = ip,
-                    "api key rejected by ip allowlist"
-                );
+            Ok(p) => {
+                cred.auth_type = Some(p.auth_type());
+                p.into_admit()
             }
-            let rejection = unauthorized(
-                AuthError::InvalidCredential,
-                Some(auth_type),
-                route.scope.name(),
-            );
-            return Err(self.count_refusal(ip).await.unwrap_or(rejection));
-        }
-        if service_account_on_user_route(&req, &answer) {
-            cred.principal = answer.principal.clone();
-            return Err(Rejection::ServiceAccount);
-        }
-        if scoped_key_on_user_route(&req, &answer) {
-            cred.principal = answer.principal.clone();
-            return Err(Rejection::ScopedCredential);
-        }
-        if !answer.allows_org_ip(ip) {
-            info!(
-                client_ip = ip,
-                "caller rejected by root security policy ip allowlist"
-            );
-            return Err(self.count_refusal(ip).await.unwrap_or(Rejection::NotFound));
-        }
-        if answer.refused_with_external(&req, external_can_grant) {
-            return Err(self.count_refusal(ip).await.unwrap_or(Rejection::NotFound));
-        }
-        let caller = Caller {
-            auth_type: Some(auth_type),
-            key_id: answer.key_id.clone(),
-            kid,
-            principal: answer.principal.clone().unwrap_or_default(),
-            nodes: answer.nodes.clone(),
-            member_id: answer.member_id.clone().filter(|_| !req.chain.is_empty()),
-            user_id: answer.user_id.clone().filter(|_| req.chain.is_empty()),
-            permissions: answer.permissions.clone(),
-            credential_scopes: answer.credential_scopes.clone(),
-            rate_limit_tier: answer.rate_limit_tier.clone(),
         };
-        cred.principal = Some(caller.principal.clone());
-        cred.member_id = caller.member_id.clone();
-        cred.user_id = caller.user_id.clone();
-        cred.root_id = caller.root_id().map(str::to_string);
-        cred.node_id = caller.node_id().map(str::to_string);
-        Ok(caller)
+        let (key_id, outcome) = self.admit_credential(matched, credential, kid, ip).await;
+        if key_id.is_some() {
+            cred.key_id = key_id;
+        }
+        match outcome {
+            AdmitOutcome::Admitted(caller) => {
+                let caller = *caller;
+                cred.principal = Some(caller.principal.clone());
+                cred.member_id = caller.member_id.clone();
+                cred.user_id = caller.user_id.clone();
+                cred.root_id = caller.root_id().map(str::to_string);
+                cred.node_id = caller.node_id().map(str::to_string);
+                Ok(caller)
+            }
+            AdmitOutcome::InvalidCredential {
+                auth_type,
+                key_id,
+                ip_rejected,
+            } => {
+                if ip_rejected {
+                    info!(
+                        key_id = key_id.as_deref().unwrap_or(""),
+                        client_ip = ip,
+                        "api key rejected by ip allowlist"
+                    );
+                }
+                let rejection =
+                    unauthorized(AuthError::InvalidCredential, auth_type, route.scope.name());
+                Err(self.count_refusal(ip).await.unwrap_or(rejection))
+            }
+            AdmitOutcome::ServiceAccount { principal } => {
+                cred.principal = principal;
+                Err(Rejection::ServiceAccount)
+            }
+            AdmitOutcome::ScopedCredential { principal } => {
+                cred.principal = principal;
+                Err(Rejection::ScopedCredential)
+            }
+            AdmitOutcome::NotAdmitted {
+                anonymous,
+                org_ip_rejected,
+            } => {
+                if org_ip_rejected {
+                    info!(
+                        client_ip = ip,
+                        "caller rejected by root security policy ip allowlist"
+                    );
+                }
+                let rejection = if anonymous {
+                    unauthorized(AuthError::MissingAuthorization, None, route.scope.name())
+                } else {
+                    Rejection::NotFound
+                };
+                Err(self.count_refusal(ip).await.unwrap_or(rejection))
+            }
+            AdmitOutcome::Unavailable => Err(Rejection::Unavailable),
+        }
     }
 
     /// The failed-auth IP limiter, on what admit refused and on the permission
@@ -512,18 +576,103 @@ impl<A: Admit, C: Counter, P: Authorizer> Pipeline<A, C, P> {
         admitted: &Admitted,
     ) -> Result<Option<RateLimitInfo>, Rejection> {
         let buckets = buckets(route, ip, admitted);
-        match self.counter.check(&buckets).await {
+        self.check_buckets(&buckets, "route").await
+    }
+
+    pub(super) async fn check_buckets(
+        &self,
+        buckets: &[Bucket],
+        fail_open_label: &str,
+    ) -> Result<Option<RateLimitInfo>, Rejection> {
+        match self.counter.check(buckets).await {
             Ok(Verdict::Allowed(infos)) => Ok(tightest(infos)),
             Ok(Verdict::Exceeded { retry_after, infos }) => Err(Rejection::RateLimited {
                 retry_after,
                 info: tightest(infos),
             }),
             Err(Unavailable) => {
-                metrics::record_rate_limit_fail_open("route");
+                metrics::record_rate_limit_fail_open(fail_open_label);
                 Ok(None)
             }
         }
     }
+}
+
+fn caller_from_answer(
+    req: &AdmitRequest,
+    answer: &AdmitAnswer,
+    auth_type: Option<AuthType>,
+    kid: Option<String>,
+) -> Caller {
+    let is_tree = !req.chain.is_empty();
+    let member_id = answer.member_id.clone().filter(|_| is_tree);
+    let user_id = answer.user_id.clone().filter(|_| !is_tree);
+    let authzen_user_id = if is_tree && member_id.is_none() {
+        answer.user_id.clone()
+    } else {
+        None
+    };
+    let principal = answer.principal.clone().unwrap_or_else(|| {
+        if auth_type.is_none() {
+            "anonymous".to_string()
+        } else {
+            String::new()
+        }
+    });
+    Caller {
+        auth_type,
+        key_id: answer.key_id.clone(),
+        kid,
+        principal,
+        nodes: answer.nodes.clone(),
+        member_id,
+        user_id,
+        authzen_user_id,
+        permissions: answer.permissions.clone(),
+        credential_scopes: answer.credential_scopes.clone(),
+        rate_limit_tier: answer.rate_limit_tier.clone(),
+    }
+}
+
+/// Evaluates built-in RBAC and prepares any required outbound AuthZEN requests,
+/// shared by both request execution and `POST /access/routes`.
+pub(super) fn prepare_authorization(
+    matched: &Matched,
+    caller: &Caller,
+    ip: &str,
+    request_id: &str,
+) -> Result<AuthzDecision, Rejection> {
+    let route = &matched.route;
+    let builtin_ok = permitted(
+        &route.required,
+        &caller.permissions,
+        caller.member_id.is_some(),
+    );
+    let Some(ra) = route.authorizer.as_ref() else {
+        return Ok(if builtin_ok {
+            AuthzDecision::Allow
+        } else {
+            AuthzDecision::Deny
+        });
+    };
+    match ra.mode {
+        AuthorizerMode::And if !builtin_ok => return Ok(AuthzDecision::Deny),
+        AuthorizerMode::Or if builtin_ok => return Ok(AuthzDecision::Allow),
+        _ => {}
+    }
+    let actions = effective_actions(
+        route,
+        ra.action.as_deref(),
+        caller.credential_scopes.as_deref(),
+    );
+    if actions.is_empty() {
+        return Ok(AuthzDecision::Deny);
+    }
+    let requests = build_authzen_requests(matched, caller, ra, &actions, ip, request_id)?;
+    Ok(AuthzDecision::External {
+        authorizer: ra.name.clone(),
+        requests,
+    })
 }
 
 /// A valid service account's answer on a user route (an empty chain): user
@@ -542,7 +691,7 @@ fn scoped_key_on_user_route(req: &AdmitRequest, answer: &AdmitAnswer) -> bool {
 }
 
 /// Admit's request for a matched route: the credential, the chain refs as
-/// written in the path, and the route's `allow_deleted`.
+/// written in the path, and the route's `allow_deleted` / `allow_public`.
 fn admit_request(matched: &Matched, credential: AdmitCredential) -> AdmitRequest {
     let route = &matched.route;
     AdmitRequest {
@@ -650,10 +799,12 @@ pub fn buckets(route: &Route, ip: &str, admitted: &Admitted) -> Vec<Bucket> {
         .collect()
 }
 
-/// The permission check, on a kind route.
+/// The permission check, on a kind route (without external authorizers).
 pub fn authorize(route: &Route, admitted: &Admitted) -> Result<(), Rejection> {
     match admitted {
-        Admitted::Caller(c) if !permitted(&route.required, &c.permissions) => {
+        Admitted::Caller(c)
+            if !permitted(&route.required, &c.permissions, c.member_id.is_some()) =>
+        {
             Err(Rejection::Denied)
         }
         _ => Ok(()),
@@ -697,7 +848,7 @@ pub fn forward(matched: &Matched, admitted: &Admitted) -> Result<Forward, Reject
 
 /// Actions to evaluate against an external authorizer, intersected with any
 /// explicit credential scopes so a narrowed key or JWT can never be widened.
-pub(super) fn effective_actions(
+fn effective_actions(
     route: &Route,
     override_action: Option<&str>,
     credential_scopes: Option<&[String]>,
@@ -721,7 +872,7 @@ pub(super) fn effective_actions(
         .collect()
 }
 
-pub(super) fn build_authzen_requests(
+fn build_authzen_requests(
     matched: &Matched,
     caller: &Caller,
     ra: &crate::authorizer::RouteAuthorizer,
@@ -752,7 +903,7 @@ pub(super) fn build_authzen_requests(
 
     let (subj_type, subj_id) = if let Some(member_id) = &caller.member_id {
         ("member".to_string(), member_id.clone())
-    } else if let Some(user_id) = &caller.user_id {
+    } else if let Some(user_id) = caller.authzen_user_id.as_ref().or(caller.user_id.as_ref()) {
         ("user".to_string(), user_id.clone())
     } else {
         ("anonymous".to_string(), String::new())

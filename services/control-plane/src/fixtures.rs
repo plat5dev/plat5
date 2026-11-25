@@ -81,12 +81,13 @@ fn catalog_feeds_are_fresh() {
         Ok(c) => c,
         Err(f) => panic!("catalog/plat5.yml: {f:?}"),
     };
+    let s = served::Served::of(&config);
     check_json(
         &dir.join("gateway-feed.json"),
-        &served::feed_body(1, &served::gateway_body(&config)),
+        &served::feed_body(1, &s.gateway),
     );
     check_json(
         &dir.join("identity-feed.json"),
-        &served::feed_body(1, &served::identity_body(&config)),
+        &served::feed_body(1, &s.identity),
     );
 }

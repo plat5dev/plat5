@@ -32,7 +32,7 @@ An authorizer attaches to a kind, service, scope, route, or verb with one of thr
 | Field | Rule |
 |-------|------|
 | mode | How the external authorizer combines with Plat5's built-in RBAC: `replace` (default: PDP decides alone), `and` (Plat5 RBAC and PDP must both allow), or `or` (either Plat5 RBAC or PDP allows) |
-| kind authorizer | External authorizer for this kind's `list_permission` filtering and identity `/access/v1/*` evaluation. Either an authorizer name (implies `mode: replace`) or `{ name, mode }` |
+| kind authorizer | External authorizer for this kind's `list_permission` filtering, identity `/access/v1/*` evaluation, and kind-scoped routes (unless overridden or opted out with `false`). Either an authorizer name (implies `mode: replace`) or `{ name, mode }` |
 | route authorizer | External AuthZEN authorizer for a service, scope, route or verb (kind scopes only). Either an authorizer name (implies `mode: replace`), `false` to opt out of an inherited authorizer, or `{ name, mode?, resource?, action? }` |
 | `type` | AuthZEN `resource.type` name (e.g. `document`) |
 | `id` | AuthZEN `resource.id` template (e.g. `{doc_id}` or `{project.id}:{doc_id}`) |
@@ -44,7 +44,7 @@ An authorizer attaches to a kind, service, scope, route, or verb with one of thr
 
 ## Inheritance on routes
 
-On services, `authorizer` inherits from **service → kind scope → route → verb**. Setting `authorizer: false` at a lower level opts that scope, route, or verb back out to Plat5's built-in RBAC. A service-level `authorizer` applies only to kind scopes (never `user` or `public`).
+On services, `authorizer` inherits from **kind → service → kind scope → route → verb**. A kind-level `authorizer` applies to that kind's routes that declare explicit `required_permissions` (never `any_member` routes such as child lists or `/membership`). Setting `authorizer: false` at a lower level opts that scope, route, or verb back out to Plat5's built-in RBAC. A service-level `authorizer` applies only to kind scopes (never `user` or `public`).
 
 ## Wire contract
 
@@ -56,4 +56,4 @@ Plat5 calls `POST {url}/access/v1/evaluation` for a single action and `POST {url
 - **Context:** Includes `client_ip`, `request_id`, and matched route `params`.
 - **Fail closed:** Timeouts, transport errors, non-2xx responses, or invalid JSON return **503** `SERVICE_UNAVAILABLE`. A `decision: false` takes the same uniform **403** path (and failed-auth IP limiter) as built-in RBAC.
 - **Credential scopes:** If a key or JWT is scope-narrowed, only actions permitted by the credential's scopes can succeed; an external PDP can never widen a narrowed credential.
-- **Cache invalidation:** When `cache_ttl` or `negative_cache_ttl` is non-zero, call `POST /internal/authorizer-cache/invalidate` on the gateway's `INTERNAL_PORT` with `{ "authorizer"?, "subject_id"?, "resource_type"?, "resource_id"?, "all"? }` to flush cached decisions immediately.
+- **Caching:** Per-authorizer `cache_ttl` and `negative_cache_ttl` default to `0s` (immediate consistency, no cache). Set short TTLs (for example `2s`–`5s`) on high-traffic read endpoints when a few seconds of staleness is acceptable.

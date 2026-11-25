@@ -9,6 +9,7 @@ import (
 
 	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/internal/auditx"
+	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/internal/id"
 )
 
@@ -100,33 +101,35 @@ func TestNormalizeScopesAndAllowedRootsAndExpiry(t *testing.T) {
 	}
 
 	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
-	set, val, err := parseExpiry(nil, nil, now)
+	pf := func(raw string) httpx.PatchField { return httpx.PatchField{Set: true, Raw: json.RawMessage(raw)} }
+	var unset httpx.PatchField
+	set, val, err := parseExpiry(unset, unset, now)
 	if err != nil || set || val != nil {
 		t.Fatalf("none: set=%v val=%v err=%v", set, val, err)
 	}
-	set, val, err = parseExpiry(json.RawMessage(`"2026-11-25T12:00:00Z"`), nil, now)
+	set, val, err = parseExpiry(pf(`"2026-11-25T12:00:00Z"`), unset, now)
 	if err != nil || !set || val == nil || !val.Equal(now.Add(24*time.Hour)) {
 		t.Fatalf("expires_at: set=%v val=%v err=%v", set, val, err)
 	}
-	set, val, err = parseExpiry(nil, json.RawMessage(`"2h"`), now)
+	set, val, err = parseExpiry(unset, pf(`"2h"`), now)
 	if err != nil || !set || val == nil || !val.Equal(now.Add(2*time.Hour)) {
 		t.Fatalf("expires_in: set=%v val=%v err=%v", set, val, err)
 	}
-	set, val, err = parseExpiry(json.RawMessage(`null`), nil, now)
+	set, val, err = parseExpiry(pf(`null`), unset, now)
 	if err != nil || !set || val != nil {
 		t.Fatalf("clear: set=%v val=%v err=%v", set, val, err)
 	}
 	// Mutually exclusive, past timestamp, and invalid duration fail.
-	if _, _, err := parseExpiry(json.RawMessage(`"2026-11-25T12:00:00Z"`), json.RawMessage(`"1h"`), now); err == nil {
+	if _, _, err := parseExpiry(pf(`"2026-11-25T12:00:00Z"`), pf(`"1h"`), now); err == nil {
 		t.Fatal("both expires_at and expires_in must fail")
 	}
-	if _, _, err := parseExpiry(json.RawMessage(`"2026-11-24T11:00:00Z"`), nil, now); err == nil {
+	if _, _, err := parseExpiry(pf(`"2026-11-24T11:00:00Z"`), unset, now); err == nil {
 		t.Fatal("past expires_at must fail")
 	}
-	if _, _, err := parseExpiry(nil, json.RawMessage(`"bad"`), now); err == nil {
+	if _, _, err := parseExpiry(unset, pf(`"bad"`), now); err == nil {
 		t.Fatal("invalid expires_in must fail")
 	}
-	if _, _, err := parseExpiry(nil, json.RawMessage(`null`), now); err == nil {
+	if _, _, err := parseExpiry(unset, pf(`null`), now); err == nil {
 		t.Fatal("null expires_in must fail")
 	}
 }

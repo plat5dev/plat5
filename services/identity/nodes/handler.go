@@ -2,7 +2,6 @@ package nodes
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/gofiber/fiber/v3"
 
@@ -172,17 +171,17 @@ func (h *Handler) SetRateLimitTier(c fiber.Ctx) error {
 	ctx := c.Context()
 	nodeID := httpx.PathParam(c, "node_id")
 	var req struct {
-		RateLimitTier json.RawMessage `json:"rate_limit_tier"`
+		RateLimitTier httpx.PatchField `json:"rate_limit_tier"`
 	}
 	if err := httpx.Body(c, &req); err != nil {
 		return err
 	}
-	if req.RateLimitTier == nil {
+	if !req.RateLimitTier.Set {
 		return errors.FieldError("rate_limit_tier", "Nothing to update.")
 	}
-	var tier *string
-	if err := json.Unmarshal(req.RateLimitTier, &tier); err != nil {
-		return errors.FieldError("rate_limit_tier", errors.FallbackValidation)
+	tier, err := httpx.DecodePatch[string](req.RateLimitTier, "rate_limit_tier")
+	if err != nil {
+		return err
 	}
 	before, n, err := h.store.SetRateLimitTier(ctx, nodeID, tier)
 	if err != nil {

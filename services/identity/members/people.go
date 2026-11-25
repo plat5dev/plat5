@@ -42,19 +42,21 @@ func (m *Member) Status() string {
 
 // guestSQL is whether member m is a guest: a person's non-removed member with no
 // unexpired effective binding at its root (directly or through a group).
-const guestSQL = `(m.principal = 'person' AND m.removed_at IS NULL AND NOT EXISTS (
+func guestSQL(nowParam string) string {
+	return `(m.principal = 'person' AND m.removed_at IS NULL AND NOT EXISTS (
 	SELECT 1 FROM bindings gb
 	WHERE gb.node_id = m.root_id
-	  AND (gb.expires_at IS NULL OR gb.expires_at > CURRENT_TIMESTAMP)
+	  AND (gb.expires_at IS NULL OR gb.expires_at > ` + nowParam + `)
 	  AND (
 		gb.member_id = m.id
 		OR EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = gb.group_id AND gm.member_id = m.id)
 	)))`
+}
 
-// memberSelect reads Members; where uses $1 on.
-func memberSelect(where string) string {
+// memberSelect reads Members; nowParam names the timestamp placeholder and where uses $1 on.
+func memberSelect(nowParam, where string) string {
 	return `
-		SELECT m.id, m.root_id, m.principal, p.name, m.suspended_at IS NOT NULL, m.removed_at IS NOT NULL, ` + guestSQL + `, m.created_at
+		SELECT m.id, m.root_id, m.principal, p.name, m.suspended_at IS NOT NULL, m.removed_at IS NOT NULL, ` + guestSQL(nowParam) + `, m.created_at
 		FROM members m LEFT JOIN principals p ON p.id = m.principal_id
 		WHERE ` + where
 }
@@ -72,7 +74,7 @@ func (s *Store) getMember(ctx context.Context, q dbx.Querier, memberID string) (
 	if !id.Valid(memberID) {
 		return nil, ErrNotFound
 	}
-	m, err := scanMember(q.QueryRow(ctx, memberSelect(`m.id = $1`), memberID))
+	m, err := scanMember(q.QueryRow(ctx, memberSelect("$2", `m.id = $1`), memberID, s.now().UTC()))
 	if dbx.IsNoRows(err) {
 		return nil, ErrNotFound
 	}
@@ -82,32 +84,34 @@ func (s *Store) getMember(ctx context.Context, q dbx.Querier, memberID string) (
 // ensurePerson finds the person behind an IdP subject, or creates them with
 // a user id and user.created. It holds that subject's lock, so two first
 // sign-ins make one person.
-func (s *Store) ensurePerson(ctx context.Context, w *write, issuer, subject string) (string, error) {
+func (s *Store) ensurePerson(ctx context.Context, w *write, issuer, subject string) (principalID, userID string, err error) {
 	if _, err := w.tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2 || ' ' || $3))`, personLockSpace, issuer, subject); err != nil {
-		return "", err
+		return "", "", err
 	}
-	var principalID string
-	err := w.tx.QueryRow(ctx, `SELECT principal_id FROM idp_links WHERE issuer = $1 AND subject = $2`, issuer, subject).Scan(&principalID)
+	err = w.tx.QueryRow(ctx, `
+		SELECT p.id, p.user_id FROM idp_links l JOIN principals p ON p.id = l.principal_id
+		WHERE l.issuer = $1 AND l.subject = $2
+	`, issuer, subject).Scan(&principalID, &userID)
 	if err == nil {
-		return principalID, nil
+		return principalID, userID, nil
 	}
 	if !dbx.IsNoRows(err) {
-		return "", err
+		return "", "", err
 	}
 	now := s.now().UTC()
-	principalID, userID := id.New(), id.New()
+	principalID, userID = id.New(), id.New()
 	if _, err := w.tx.Exec(ctx, `
 		INSERT INTO principals (id, kind, user_id, created_at, updated_at) VALUES ($1, 'person', $2, $3, $3)
 	`, principalID, userID, now); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if _, err := w.tx.Exec(ctx, `
 		INSERT INTO idp_links (issuer, subject, principal_id, created_at) VALUES ($1, $2, $3, $4)
 	`, issuer, subject, principalID, now); err != nil {
-		return "", err
+		return "", "", err
 	}
 	w.event(lifecycle.UserCreated(userID))
-	return principalID, nil
+	return principalID, userID, nil
 }
 
 // FirstSignIn creates the person behind a new IdP subject, seeding their name
@@ -119,7 +123,7 @@ func (s *Store) FirstSignIn(ctx context.Context, issuer, subject, name string) (
 		return "", "", "", err
 	}
 	defer w.rollback(ctx)
-	principalID, err = s.ensurePerson(ctx, w, issuer, subject)
+	principalID, _, err = s.ensurePerson(ctx, w, issuer, subject)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -201,7 +205,7 @@ func (s *Store) addMember(ctx context.Context, snap *feed.Snapshot, rootID strin
 	if err := checkRoleTx(ctx, w.tx, snap, root.ID, in.Role, root.Kind, "role"); err != nil {
 		return nil, nil, op.Expected("invalid", err)
 	}
-	principalID, err := s.ensurePerson(ctx, w, issuer, subject)
+	principalID, userID, err := s.ensurePerson(ctx, w, issuer, subject)
 	if err != nil {
 		return nil, nil, op.Fail(err)
 	}
@@ -223,6 +227,7 @@ func (s *Store) addMember(ctx context.Context, snap *feed.Snapshot, rootID strin
 	if err != nil {
 		return nil, nil, op.Reject(err)
 	}
+	w.invalidate(lifecycle.InvalidateUser(userID))
 	m, err := s.getMember(ctx, w.tx, memberID)
 	if err != nil {
 		return nil, nil, op.Fail(err)
@@ -242,8 +247,8 @@ func (s *Store) ListMembers(ctx context.Context, rootID string, limit int, start
 	if err := s.checkRoot(ctx, rootID); err != nil {
 		return nil, false, op.Reject(err, nodes.ErrNotFound)
 	}
-	rows, err := s.pool.Query(ctx, memberSelect(`m.root_id = $1 AND m.removed_at IS NULL AND m.id > $2 ORDER BY m.id LIMIT $3`),
-		rootID, startingAfter, limit+1)
+	rows, err := s.pool.Query(ctx, memberSelect("$4", `m.root_id = $1 AND m.removed_at IS NULL AND m.id > $2 ORDER BY m.id LIMIT $3`),
+		rootID, startingAfter, limit+1, s.now().UTC())
 	if err != nil {
 		return nil, false, op.Fail(err)
 	}
@@ -363,6 +368,12 @@ func (s *Store) SetMemberStatus(ctx context.Context, rootID, memberID, status st
 			return "", nil, op.Fail(err)
 		}
 		w.invalidate(lifecycle.InvalidateMember(m.id))
+		if m.principal == PrincipalPerson && m.principalID != nil {
+			var userID string
+			if err := w.tx.QueryRow(ctx, `SELECT user_id FROM principals WHERE id = $1`, *m.principalID).Scan(&userID); err == nil && userID != "" {
+				w.invalidate(lifecycle.InvalidateUser(userID))
+			}
+		}
 	}
 	after, err := s.getMember(ctx, w.tx, m.id)
 	if err != nil {

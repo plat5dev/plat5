@@ -39,7 +39,7 @@
         },
         "authorizer": {
           "title": "authorizer",
-          "description": "Optional default external AuthZEN authorizer inherited by kind-scoped routes in this service ([authorizers](authorizers.md)).",
+          "description": "Optional default external AuthZEN authorizer inherited by kind-scoped routes in this service, overriding a kind's authorizer, or `false` to opt out ([authorizers](authorizers.md)).",
           "$ref": "authorizers.json#/$defs/route_authorizer"
         },
         "scopes": {
@@ -101,7 +101,7 @@
         },
         "methods": {
           "title": "methods",
-          "description": "The verbs: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`. A list is a map with no overrides. In a map, each verb's `required_permissions`, `rate_limit` and `audit` override the route's.",
+          "description": "The verbs: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`. A list is a map with no overrides. In a map, each verb's `required_permissions`, `rate_limit`, `audit`, `allow_public` and `authorizer` override the route's.",
           "oneOf": [
             { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/verb" } },
             {
@@ -141,7 +141,7 @@
         },
         "authorizer": {
           "title": "authorizer",
-          "description": "Optional external AuthZEN authorizer for this route, or `false` to opt out of a service/scope default (kind scopes only, [authorizers](authorizers.md)).",
+          "description": "Optional external AuthZEN authorizer for this route, or `false` to opt out of a kind/service/scope default (kind scopes only, [authorizers](authorizers.md)).",
           "$ref": "authorizers.json#/$defs/route_authorizer"
         }
       }

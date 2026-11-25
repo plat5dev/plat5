@@ -8,35 +8,26 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::auth::jwt::JwtValidatorState;
-use crate::authorizer::{AuthorizerInvalidator, InvalidateRequest};
 use crate::rate_limit::RateLimiter;
 
-const MAX_INVALIDATE_BODY: usize = 64 * 1024;
-
-/// Shared state for health checks and internal endpoints.
+/// Shared state for health checks and metrics endpoints.
 pub struct HealthState {
     start_time: Instant,
     jwt_validator: JwtValidatorState,
     limiter: RateLimiter,
-    authorizer_invalidator: AuthorizerInvalidator,
 }
 
 impl HealthState {
-    pub fn new(
-        jwt_validator: JwtValidatorState,
-        limiter: RateLimiter,
-        authorizer_invalidator: AuthorizerInvalidator,
-    ) -> Self {
+    pub fn new(jwt_validator: JwtValidatorState, limiter: RateLimiter) -> Self {
         Self {
             start_time: Instant::now(),
             jwt_validator,
             limiter,
-            authorizer_invalidator,
         }
     }
 }
 
-/// HTTP app that serves /health/live, /health/ready, and /metrics endpoints
+/// HTTP app that serves /health/live, /health/ready, and /metrics endpoints.
 pub struct HealthHttpApp {
     state: Arc<HealthState>,
 }
@@ -57,9 +48,6 @@ impl ServeHttp for HealthHttpApp {
             ("GET", "/health/live") => self.live_response(),
             ("GET", "/health/ready") => self.ready_response().await,
             ("GET", "/metrics") => self.metrics_response(),
-            ("POST", "/internal/authorizer-cache/invalidate") => {
-                self.invalidate_authorizer_cache(http_session).await
-            }
             _ => Response::builder()
                 .status(404)
                 .header(http::header::CONTENT_TYPE, "text/plain")
@@ -72,11 +60,7 @@ impl ServeHttp for HealthHttpApp {
 
 impl HealthHttpApp {
     fn live_response(&self) -> Response<Vec<u8>> {
-        let body = serde_json::json!({
-            "status": "healthy"
-        });
-        let body_str = body.to_string();
-
+        let body_str = serde_json::json!({ "status": "healthy" }).to_string();
         Response::builder()
             .status(200)
             .header(http::header::CONTENT_TYPE, "application/json")
@@ -98,15 +82,15 @@ impl HealthHttpApp {
             ("unhealthy", 503)
         };
 
-        let body = serde_json::json!({
+        let body_str = serde_json::json!({
             "status": status,
             "uptime_ms": uptime_ms,
             "checks": {
                 "jwks_ready": jwks_ready,
                 "valkey_ready": valkey_ready
             }
-        });
-        let body_str = body.to_string();
+        })
+        .to_string();
 
         Response::builder()
             .status(http_status)
@@ -129,63 +113,9 @@ impl HealthHttpApp {
             .body(buffer)
             .unwrap()
     }
-
-    async fn invalidate_authorizer_cache(
-        &self,
-        http_session: &mut ServerSession,
-    ) -> Response<Vec<u8>> {
-        let mut body = Vec::new();
-        loop {
-            match http_session.read_request_body().await {
-                Ok(Some(chunk)) => {
-                    if body.len() + chunk.len() > MAX_INVALIDATE_BODY {
-                        return json_response(
-                            413,
-                            serde_json::json!({"error": "request body too large"}),
-                        );
-                    }
-                    body.extend_from_slice(&chunk);
-                }
-                Ok(None) => break,
-                Err(_) => {
-                    return json_response(
-                        400,
-                        serde_json::json!({"error": "failed to read request body"}),
-                    );
-                }
-            }
-        }
-        let req: InvalidateRequest = match serde_json::from_slice(&body) {
-            Ok(r) => r,
-            Err(_) => {
-                return json_response(
-                    400,
-                    serde_json::json!({"error": "body must be a JSON object"}),
-                );
-            }
-        };
-        if req.is_empty() {
-            return json_response(
-                400,
-                serde_json::json!({"error": "set all: true or at least one of authorizer, subject_id, resource_type, resource_id"}),
-            );
-        }
-        self.state.authorizer_invalidator.invalidate(&req);
-        json_response(200, serde_json::json!({"invalidated": true}))
-    }
 }
 
-fn json_response(status: u16, body: serde_json::Value) -> Response<Vec<u8>> {
-    let s = body.to_string();
-    Response::builder()
-        .status(status)
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .header(http::header::CONTENT_LENGTH, s.len())
-        .body(s.into_bytes())
-        .unwrap()
-}
-
-/// The HttpServer for HealthHttpApp with compression enabled
+/// The HttpServer for HealthHttpApp with compression enabled.
 pub type HealthServer = HttpServer<HealthHttpApp>;
 
 pub fn new_health_server(state: Arc<HealthState>) -> HealthServer {

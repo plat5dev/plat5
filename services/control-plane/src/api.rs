@@ -1,30 +1,24 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::extract::rejection::{PathRejection, QueryRejection};
-use axum::extract::{Extension, MatchedPath, Path, Query, Request, State};
-use axum::http::{header, HeaderValue, StatusCode};
-use axum::middleware::{self, Next};
+use axum::extract::{Extension, Path, Query, State};
+use axum::http::{header, StatusCode};
+use axum::middleware as axum_mw;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use opentelemetry::global;
-use opentelemetry::propagation::Extractor;
-use opentelemetry::trace::{Status, TraceContextExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tracing::Instrument;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
-use uuid::Uuid;
-
-use subtle::ConstantTimeEq;
 
 use crate::apply::{self, Failure};
 use crate::error::AppError;
 use crate::metrics;
+use crate::middleware::{
+    admin_auth_middleware, feed_observability, http_observability, with_request_id, RequestId,
+};
 use crate::schema;
 use crate::served;
 use crate::store::{Reader, Report};
-use crate::telemetry::redact_query;
 use crate::AppState;
 
 /// How long an internal read with `after` waits for a newer revision.
@@ -33,21 +27,6 @@ const LONG_POLL_WAIT: Duration = Duration::from_secs(25);
 /// How long a gateway replica stays in `GET /status` after its last poll.
 const REPLICA_SEEN_SECS: i64 = 60;
 
-#[derive(Clone)]
-struct RequestId(String);
-
-struct HeaderExtractor<'a>(&'a axum::http::HeaderMap);
-
-impl Extractor for HeaderExtractor<'_> {
-    fn get(&self, key: &str) -> Option<&str> {
-        self.0.get(key).and_then(|v| v.to_str().ok())
-    }
-
-    fn keys(&self) -> Vec<&str> {
-        self.0.keys().map(|k| k.as_str()).collect()
-    }
-}
-
 pub fn public_router(state: AppState) -> Router {
     let authed = Router::new()
         .route("/apply", post(apply_config))
@@ -55,7 +34,7 @@ pub fn public_router(state: AppState) -> Router {
         .route("/revisions", get(list_revisions))
         .route("/revisions/{rev}", get(get_revision))
         .route("/status", get(get_status))
-        .layer(middleware::from_fn_with_state(
+        .layer(axum_mw::from_fn_with_state(
             state.clone(),
             admin_auth_middleware,
         ));
@@ -63,7 +42,7 @@ pub fn public_router(state: AppState) -> Router {
     Router::new()
         .merge(authed)
         .route("/schema", get(get_schema))
-        .route_layer(middleware::from_fn(http_observability))
+        .route_layer(axum_mw::from_fn(http_observability))
         .with_state(state)
 }
 
@@ -73,7 +52,7 @@ pub fn internal_router(state: AppState) -> Router {
     let feeds = Router::new()
         .route("/internal/gateway", get(gateway_feed))
         .route("/internal/identity", get(identity_feed))
-        .route_layer(middleware::from_fn(feed_observability));
+        .route_layer(axum_mw::from_fn(feed_observability));
 
     Router::new()
         .route("/health/live", get(health_live))
@@ -81,184 +60,6 @@ pub fn internal_router(state: AppState) -> Router {
         .route("/metrics", get(metrics_scrape))
         .merge(feeds)
         .with_state(state)
-}
-
-async fn http_observability(mut request: Request, next: Next) -> Response {
-    let start = Instant::now();
-    let method = request.method().as_str().to_string();
-    let path = request.uri().path().to_string();
-    // The scheme of the request this service received: plain HTTP from the
-    // gateway, unless the URI says otherwise.
-    let scheme = request.uri().scheme_str().unwrap_or("http").to_string();
-    let query = request
-        .uri()
-        .query()
-        .filter(|q| !q.is_empty())
-        .map(redact_query);
-    let route = request
-        .extensions()
-        .get::<MatchedPath>()
-        .map(|m| m.as_str().to_string());
-    let span_name = match route.as_deref() {
-        Some(r) => format!("{method} {r}"),
-        None => method.clone(),
-    };
-    let request_id = request_id_from_headers(request.headers());
-    request
-        .extensions_mut()
-        .insert(RequestId(request_id.clone()));
-    let parent_cx = global::get_text_map_propagator(|propagator| {
-        propagator.extract(&HeaderExtractor(request.headers()))
-    });
-
-    let span = tracing::info_span!(
-        "http",
-        otel.kind = "server",
-        otel.name = %span_name,
-        http.request.method = %method,
-        url.scheme = %scheme,
-        url.path = %path,
-        url.query = tracing::field::Empty,
-        http.route = tracing::field::Empty,
-        request_id = %request_id,
-        http.response.status_code = tracing::field::Empty,
-        error.type = tracing::field::Empty,
-    );
-    let _ = span.set_parent(parent_cx);
-    if let Some(ref r) = route {
-        span.record("http.route", r.as_str());
-    }
-    if let Some(ref q) = query {
-        span.record("url.query", q.as_str());
-    }
-
-    async move {
-        let response = next.run(request).await;
-        let status = response.status().as_u16();
-        let duration_secs = start.elapsed().as_secs_f64();
-        let duration_ms = duration_secs * 1000.0;
-        let route_label = route.as_deref().unwrap_or("unmatched");
-
-        metrics::record_request(route_label, &method, status, duration_secs);
-
-        tracing::Span::current().record("http.response.status_code", status);
-        let (trace_id, span_id) = trace_ids();
-
-        if status >= 500 {
-            let error_type = if status == 503 { "network" } else { "internal" };
-            tracing::Span::current().record("error.type", error_type);
-            tracing::Span::current().set_status(Status::error(""));
-            tracing::error!(
-                trace_id = trace_id.as_deref(),
-                span_id = span_id.as_deref(),
-                route = %route_label,
-                method = %method,
-                status = status,
-                duration_ms = duration_ms,
-                request_id = %request_id,
-                error_type = error_type,
-                error_message = "request failed",
-                "request completed"
-            );
-        } else {
-            tracing::info!(
-                trace_id = trace_id.as_deref(),
-                span_id = span_id.as_deref(),
-                route = %route_label,
-                method = %method,
-                status = status,
-                duration_ms = duration_ms,
-                request_id = %request_id,
-                "request completed"
-            );
-        }
-
-        response
-    }
-    .instrument(span)
-    .await
-}
-
-/// The current span's `trace_id` and `span_id`, when it's in a trace
-/// (docs/reference/telemetry.md#common-fields).
-fn trace_ids() -> (Option<String>, Option<String>) {
-    let cx = tracing::Span::current().context();
-    let sc = cx.span().span_context().clone();
-    if !sc.is_valid() {
-        return (None, None);
-    }
-    (
-        Some(sc.trace_id().to_string()),
-        Some(sc.span_id().to_string()),
-    )
-}
-
-/// A feed read is a long-poll: up to 25 seconds, over and over, per reader. As a
-/// trace or a request metric it would be one long span every cycle and a latency
-/// that measures nothing. Only failures are logged.
-async fn feed_observability(mut request: Request, next: Next) -> Response {
-    let route = request
-        .extensions()
-        .get::<MatchedPath>()
-        .map(|m| m.as_str().to_string());
-    let request_id = request_id_from_headers(request.headers());
-    request
-        .extensions_mut()
-        .insert(RequestId(request_id.clone()));
-    let response = next.run(request).await;
-    let status = response.status().as_u16();
-    if status >= 500 {
-        let error_type = if status == 503 { "network" } else { "internal" };
-        tracing::error!(
-            route = %route.as_deref().unwrap_or("unmatched"),
-            method = "GET",
-            status = status,
-            request_id = %request_id,
-            error_type = error_type,
-            error_message = "request failed",
-            "request completed"
-        );
-    }
-    response
-}
-
-async fn admin_auth_middleware(
-    State(state): State<AppState>,
-    request: Request,
-    next: Next,
-) -> Result<Response, AppError> {
-    let request_id = request
-        .extensions()
-        .get::<RequestId>()
-        .map(|id| id.0.clone())
-        .unwrap_or_else(|| request_id_from_headers(request.headers()));
-    let authorized = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .is_some_and(|t| bool::from(t.as_bytes().ct_eq(state.admin_token.as_bytes())));
-
-    if !authorized {
-        return Err(AppError::unauthorized(request_id));
-    }
-
-    Ok(next.run(request).await)
-}
-
-fn request_id_from_headers(headers: &axum::http::HeaderMap) -> String {
-    headers
-        .get("x-request-id")
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| Uuid::new_v4().to_string())
-}
-
-fn with_request_id(request_id: String) -> [(header::HeaderName, HeaderValue); 1] {
-    let val =
-        HeaderValue::from_str(&request_id).unwrap_or_else(|_| HeaderValue::from_static("invalid"));
-    [(header::HeaderName::from_static("x-request-id"), val)]
 }
 
 async fn metrics_scrape() -> impl IntoResponse {
@@ -564,227 +365,4 @@ async fn identity_feed(
     Query(query): Query<FeedQuery>,
 ) -> Result<Response, AppError> {
     feed(state, query.after, request_id, Reader::Identity).await
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::{Arc, Mutex};
-
-    use axum::body::Body;
-    use axum::http::Request;
-    use opentelemetry::trace::TracerProvider;
-    use opentelemetry_sdk::propagation::TraceContextPropagator;
-    use opentelemetry_sdk::trace as sdktrace;
-    use tokio::sync::watch;
-    use tower::ServiceExt;
-    use tracing_opentelemetry::OpenTelemetryLayer;
-    use tracing_subscriber::fmt::MakeWriter;
-    use tracing_subscriber::layer::SubscriberExt;
-
-    use super::*;
-    use crate::counts::NoCounts;
-    use crate::feed::Feed;
-    use crate::store::Store;
-
-    const TOKEN: &str = "test-admin-token";
-
-    #[derive(Clone, Default)]
-    struct LogBuf(Arc<Mutex<Vec<u8>>>);
-
-    impl std::io::Write for LogBuf {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> MakeWriter<'a> for LogBuf {
-        type Writer = LogBuf;
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
-
-    fn test_state(head: i64) -> (AppState, watch::Sender<bool>) {
-        let (tx, rx) = watch::channel(false);
-        let state = AppState {
-            store: Store::lazy_for_test(),
-            feed: Feed::new_for_test(head, rx),
-            counts: Arc::new(NoCounts),
-            admin_token: TOKEN.into(),
-        };
-        (state, tx)
-    }
-
-    #[tokio::test]
-    async fn single_request_id_matches_header_body_and_log() {
-        let buf = LogBuf::default();
-        let subscriber =
-            tracing_subscriber::registry().with(crate::telemetry::json_layer(buf.clone()));
-        let _guard = tracing::subscriber::set_default(subscriber);
-
-        let (state, _tx) = test_state(0);
-        let router = public_router(state);
-
-        // Unauthorized request without X-Request-ID mints one ID shared everywhere.
-        let resp = router
-            .clone()
-            .oneshot(Request::get("/config").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-        let header_id = resp
-            .headers()
-            .get("x-request-id")
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string();
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
-            .await
-            .unwrap();
-        let body: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(body["error"]["request_id"], json!(header_id));
-
-        let log_text = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
-        let line: Value = serde_json::from_str(log_text.lines().last().unwrap()).unwrap();
-        assert_eq!(line["request_id"], json!(header_id));
-
-        // 200 response without X-Request-ID also shares one minted ID across header and log.
-        let resp = router
-            .oneshot(Request::get("/schema").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let schema_header_id = resp
-            .headers()
-            .get("x-request-id")
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string();
-        let log_text = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
-        let line: Value = serde_json::from_str(log_text.lines().last().unwrap()).unwrap();
-        assert_eq!(line["request_id"], json!(schema_header_id));
-    }
-
-    #[tokio::test]
-    async fn malformed_path_and_query_return_plat5_error_envelope() {
-        let (state, _tx) = test_state(0);
-        let router = public_router(state);
-
-        // Malformed path param on GET /revisions/{rev}
-        let resp = router
-            .clone()
-            .oneshot(
-                Request::get("/revisions/not-a-number")
-                    .header("authorization", format!("Bearer {TOKEN}"))
-                    .header("x-request-id", "req-path-1")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            resp.headers()
-                .get("x-request-id")
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            "req-path-1"
-        );
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
-            .await
-            .unwrap();
-        let body: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(body["error"]["code"], json!("INVALID_REQUEST"));
-        assert_eq!(body["error"]["request_id"], json!("req-path-1"));
-
-        // Malformed query param on POST /apply
-        let resp = router
-            .clone()
-            .oneshot(
-                Request::post("/apply?dry_run=notabool")
-                    .header("authorization", format!("Bearer {TOKEN}"))
-                    .header("x-request-id", "req-query-1")
-                    .body(Body::from("{}"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            resp.headers()
-                .get("x-request-id")
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            "req-query-1"
-        );
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
-            .await
-            .unwrap();
-        let body: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(body["error"]["code"], json!("INVALID_REQUEST"));
-        assert_eq!(body["error"]["request_id"], json!("req-query-1"));
-    }
-
-    #[tokio::test]
-    async fn incoming_traceparent_sets_server_span_trace_id() {
-        global::set_text_map_propagator(TraceContextPropagator::new());
-        let provider = sdktrace::SdkTracerProvider::builder().build();
-        let buf = LogBuf::default();
-        let subscriber = tracing_subscriber::registry()
-            .with(crate::telemetry::json_layer(buf.clone()))
-            .with(OpenTelemetryLayer::new(provider.tracer("test")));
-        let _guard = tracing::subscriber::set_default(subscriber);
-
-        let (state, _tx) = test_state(0);
-        let router = public_router(state);
-
-        let trace_id = "0af7651916cd43dd8448eb211c80319c";
-        let resp = router
-            .oneshot(
-                Request::get("/schema")
-                    .header("traceparent", format!("00-{trace_id}-b7ad6b7169203331-01"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let log_text = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
-        let line: Value = serde_json::from_str(log_text.lines().last().unwrap()).unwrap();
-        assert_eq!(line["trace_id"], json!(trace_id));
-    }
-
-    #[tokio::test]
-    async fn long_poll_returns_204_immediately_on_shutdown() {
-        let (state, shutdown_tx) = test_state(5);
-        let router = internal_router(state);
-
-        let poll = tokio::spawn(async move {
-            router
-                .oneshot(
-                    Request::get("/internal/identity?after=5")
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap()
-        });
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        shutdown_tx.send(true).unwrap();
-
-        let resp = tokio::time::timeout(Duration::from_secs(1), poll)
-            .await
-            .expect("long-poll should finish promptly on shutdown")
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-    }
 }

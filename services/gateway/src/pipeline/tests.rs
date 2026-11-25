@@ -1889,7 +1889,7 @@ impl crate::authorizer::Authorizer for FakePdp {
         &self,
         _spec: &crate::authorizer::AuthorizerSpec,
         reqs: &[crate::authorizer::AuthzenRequest],
-        _semantic: &str,
+        _semantic: crate::authorizer::BatchSemantic,
         _request_id: &str,
     ) -> Result<Vec<bool>, crate::authorizer::AuthorizerUnavailable> {
         self.batch_calls.fetch_add(1, Ordering::SeqCst);
@@ -2003,10 +2003,7 @@ async fn outbound_authzen_modes_record_resources_scopes_and_fail_closed() {
         ),
         counter.clone(),
         AUTH_FAILURE,
-        crate::authorizer::AuthorizerCache::new(
-            pdp.clone(),
-            crate::authorizer::AuthorizerInvalidator::new(),
-        ),
+        crate::authorizer::AuthorizerCache::new(pdp.clone()),
     );
     let mut cred = RequestCredential::default();
     p.decide_with_authorizers(
@@ -2032,10 +2029,7 @@ async fn outbound_authzen_modes_record_resources_scopes_and_fail_closed() {
         ),
         Arc::new(MemCounter::default()),
         AUTH_FAILURE,
-        crate::authorizer::AuthorizerCache::new(
-            pdp.clone(),
-            crate::authorizer::AuthorizerInvalidator::new(),
-        ),
+        crate::authorizer::AuthorizerCache::new(pdp.clone()),
     );
     let mut cred = RequestCredential::default();
     p.decide_with_authorizers(
@@ -2067,10 +2061,7 @@ async fn outbound_authzen_modes_record_resources_scopes_and_fail_closed() {
         ),
         Arc::new(MemCounter::default()),
         AUTH_FAILURE,
-        crate::authorizer::AuthorizerCache::new(
-            pdp.clone(),
-            crate::authorizer::AuthorizerInvalidator::new(),
-        ),
+        crate::authorizer::AuthorizerCache::new(pdp.clone()),
     );
     let err = p_no_builtin
         .decide_with_authorizers(
@@ -2098,10 +2089,7 @@ async fn outbound_authzen_modes_record_resources_scopes_and_fail_closed() {
         ),
         Arc::new(MemCounter::default()),
         AUTH_FAILURE,
-        crate::authorizer::AuthorizerCache::new(
-            pdp.clone(),
-            crate::authorizer::AuthorizerInvalidator::new(),
-        ),
+        crate::authorizer::AuthorizerCache::new(pdp.clone()),
     );
     pdp.grant("docs:delete", "document", "doc-42");
     let err = p_replace
@@ -2130,10 +2118,7 @@ async fn outbound_authzen_modes_record_resources_scopes_and_fail_closed() {
         ),
         counter.clone(),
         AUTH_FAILURE,
-        crate::authorizer::AuthorizerCache::new(
-            pdp.clone(),
-            crate::authorizer::AuthorizerInvalidator::new(),
-        ),
+        crate::authorizer::AuthorizerCache::new(pdp.clone()),
     );
     let err = p_down
         .decide_with_authorizers(
@@ -2161,10 +2146,7 @@ async fn outbound_authzen_modes_record_resources_scopes_and_fail_closed() {
         ),
         Arc::new(MemCounter::default()),
         AUTH_FAILURE,
-        crate::authorizer::AuthorizerCache::new(
-            pdp.clone(),
-            crate::authorizer::AuthorizerInvalidator::new(),
-        ),
+        crate::authorizer::AuthorizerCache::new(pdp.clone()),
     );
     let checked = p_checks
         .check_routes_with_authorizers(
@@ -2186,4 +2168,157 @@ async fn outbound_authzen_modes_record_resources_scopes_and_fail_closed() {
         .unwrap();
     assert_eq!(checked.allowed, vec![true, false, true, false]);
     assert_eq!(pdp.batch_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn any_member_requires_membership_even_with_allow_public_and_or_authorizer() {
+    let mut feed = fixture("catalog/gateway-feed.json");
+    feed["authorizers"] = json!({
+        "topaz": {
+            "url": "http://topaz:8383",
+            "timeout": "2s",
+            "cache_ttl": "0s",
+            "negative_cache_ttl": "0s"
+        }
+    });
+    feed["services"]["docs"] = json!({
+        "url": "http://docs:3000",
+        "timeouts": { "connect": "2s", "read": "30s" },
+        "max_body_bytes": 1048576,
+        "routes": [{
+            "path": "/orgs/{organization}/projects/{project}/docs/{doc_id}",
+            "method": "GET",
+            "scope": "project",
+            "upstream": "/projects/{project.id}/docs/{doc_id}",
+            "required_permissions": "any_member",
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false,
+            "allow_public": true,
+            "authorizer": {
+                "name": "topaz",
+                "mode": "or",
+                "action": "docs:read",
+                "resource": { "type": "document", "id": "{doc_id}" }
+            }
+        }]
+    });
+    let snapshot = build(feed).unwrap();
+    let route = snapshot
+        .routes
+        .find_route("/orgs/acme/projects/web/docs/doc-42", "GET")
+        .unwrap();
+
+    // Authenticated non-member on allow_public route: must NOT bypass via any_member;
+    // falls through to PDP with subject.type == "user", and must NOT forward X-Plat5-User-Id.
+    let pdp = Arc::new(FakePdp::default());
+    let mut non_member = project(&[]);
+    non_member.member_id = None;
+    non_member.user_id = Some(USER.to_string());
+    let p = Pipeline::with_authorizer(
+        AdmitCache::new(
+            Arc::new(FakeAdmit::new(Ok(non_member.clone()))),
+            Duration::from_secs(60),
+            Duration::from_secs(10),
+        ),
+        Arc::new(MemCounter::default()),
+        AUTH_FAILURE,
+        crate::authorizer::AuthorizerCache::new(pdp.clone()),
+    );
+    let err = p
+        .decide_with_authorizers(
+            &route,
+            IP,
+            Ok(jwt()),
+            &mut RequestCredential::default(),
+            &snapshot.authorizers,
+            "r-nonmember-deny",
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.rejection, Rejection::Denied);
+    assert_eq!(pdp.calls(), 1);
+    let sent = pdp.seen.lock().unwrap()[0].clone();
+    assert_eq!(sent.subject.r#type, "user");
+    assert_eq!(sent.subject.id, USER);
+
+    // Once PDP permits, request passes and still never forwards X-Plat5-User-Id upstream.
+    pdp.grant("docs:read", "document", "doc-42");
+    let passed = p
+        .decide_with_authorizers(
+            &route,
+            IP,
+            Ok(jwt()),
+            &mut RequestCredential::default(),
+            &snapshot.authorizers,
+            "r-nonmember-allow",
+        )
+        .await
+        .unwrap();
+    let fwd = forward(&route, &passed.admitted).unwrap();
+    assert!(fwd.headers.iter().all(|(k, _)| k != USER_ID_HEADER));
+}
+
+#[tokio::test]
+async fn or_mode_builtin_allow_succeeds_even_when_override_action_outside_credential_scopes() {
+    let mut feed = fixture("catalog/gateway-feed.json");
+    feed["authorizers"] = json!({
+        "topaz": {
+            "url": "http://topaz:8383",
+            "timeout": "2s",
+            "cache_ttl": "0s",
+            "negative_cache_ttl": "0s"
+        }
+    });
+    feed["services"]["docs"] = json!({
+        "url": "http://docs:3000",
+        "timeouts": { "connect": "2s", "read": "30s" },
+        "max_body_bytes": 1048576,
+        "routes": [{
+            "path": "/orgs/{organization}/projects/{project}/docs/{doc_id}",
+            "method": "GET",
+            "scope": "project",
+            "upstream": "/projects/{project.id}/docs/{doc_id}",
+            "required_permissions": ["docs:read"],
+            "rate_limit": [],
+            "audit": false,
+            "allow_deleted": false,
+            "authorizer": {
+                "name": "topaz",
+                "mode": "or",
+                "action": "pdp:custom_read",
+                "resource": { "type": "document", "id": "{doc_id}" }
+            }
+        }]
+    });
+    let snapshot = build(feed).unwrap();
+    let route = snapshot
+        .routes
+        .find_route("/orgs/acme/projects/web/docs/doc-42", "GET")
+        .unwrap();
+
+    let pdp = Arc::new(FakePdp::default());
+    let mut scoped = project(&["docs:read"]);
+    scoped.credential_scopes = Some(vec!["docs:read".into()]);
+    let p = Pipeline::with_authorizer(
+        AdmitCache::new(
+            Arc::new(FakeAdmit::new(Ok(scoped))),
+            Duration::from_secs(60),
+            Duration::from_secs(10),
+        ),
+        Arc::new(MemCounter::default()),
+        AUTH_FAILURE,
+        crate::authorizer::AuthorizerCache::new(pdp.clone()),
+    );
+    p.decide_with_authorizers(
+        &route,
+        IP,
+        Ok(jwt()),
+        &mut RequestCredential::default(),
+        &snapshot.authorizers,
+        "r-or-scoped",
+    )
+    .await
+    .unwrap();
+    assert_eq!(pdp.calls(), 0);
 }

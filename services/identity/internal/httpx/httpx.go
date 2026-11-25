@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"context"
+	"encoding/json"
 	stderrors "errors"
 	"mime"
 	"strconv"
@@ -48,6 +49,49 @@ func OptionalBody(c fiber.Ctx, out any) error {
 		return nil
 	}
 	return Body(c, out)
+}
+
+// PatchField captures a JSON field that distinguishes omitted, null, and a value.
+// UnmarshalJSON never fails so invalid types are reported as 422 field errors.
+type PatchField struct {
+	Set bool
+	Raw json.RawMessage
+}
+
+func (f *PatchField) UnmarshalJSON(data []byte) error {
+	f.Set = true
+	f.Raw = append(f.Raw[:0], data...)
+	return nil
+}
+
+// IsNull reports whether the field was explicitly sent as JSON null.
+func (f PatchField) IsNull() bool {
+	return f.Set && strings.TrimSpace(string(f.Raw)) == "null"
+}
+
+// DecodePatch decodes f into *T (nil when JSON null), returning a 422 field error on mismatch.
+func DecodePatch[T any](f PatchField, field string) (*T, error) {
+	if f.IsNull() {
+		return nil, nil
+	}
+	var v T
+	if err := json.Unmarshal(f.Raw, &v); err != nil {
+		return nil, errors.FieldError(field, errors.FallbackValidation)
+	}
+	return &v, nil
+}
+
+// DecodeRequiredPatch decodes a non-nullable patch field into T, rejecting null or type mismatch with 422.
+func DecodeRequiredPatch[T any](f PatchField, field string) (T, error) {
+	var zero T
+	if f.IsNull() {
+		return zero, errors.FieldError(field, errors.FallbackValidation)
+	}
+	var v T
+	if err := json.Unmarshal(f.Raw, &v); err != nil {
+		return zero, errors.FieldError(field, errors.FallbackValidation)
+	}
+	return v, nil
 }
 
 // PathParam copies a route parameter. Fiber's param strings alias the request

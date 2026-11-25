@@ -6,7 +6,7 @@ Who can do what, in one place: the ancestor rule, who can be in a tree, roles an
 
 - **Ancestor rule.** Built-in RBAC allows a request when the caller holds one of the route's permissions through an unexpired binding on the route's node or an ancestor. Built-in access is the union of those bindings; there are no built-in deny rules.
 
-- **External AuthZEN authorizers.** Any kind, service, scope, route, or verb can attach an external OpenID AuthZEN 1.0 PDP ([`reference/config/authorizers.md`](../reference/config/authorizers.md)) in `replace`, `and`, or `or` mode — including record-level `resource: { type, id }` templates (for example, ReBAC, ABAC, or explicit deny rules in Topaz, Cerbos, or OpenFGA). Plat5 still enforces authentication, org security policies, suspension, credential scope narrowing, rate limits, and audit.
+- **External AuthZEN authorizers.** Any kind, service, scope, route, or verb can attach an external OpenID AuthZEN 1.0 PDP ([`reference/config/authorizers.md`](../reference/config/authorizers.md)) in `replace`, `and`, or `or` mode — including record-level `resource: { type, id }` templates (for example, ReBAC, ABAC, or explicit deny rules in Topaz, Cerbos, or OpenFGA). A kind-level `authorizer` covers that kind's list filtering, identity `/access/v1/*` evaluation, and kind-scoped routes with explicit `required_permissions` (unless overridden or opted out with `authorizer: false`). Plat5 still enforces authentication, org security policies, suspension, credential scope narrowing, rate limits, and audit.
 
 - **Default-deny below the root.** Joining a root grants the role stated on the add or the invite. With a role that holds no permissions for child kinds, members see no projects until a role is bound at a project, or at the org for all of them. A deployment that wants default-allow gives new members a role with those permissions.
 
@@ -79,7 +79,7 @@ Identity resolves permissions at admit, for one member on one node chain ([`refe
 | Create a service account | `role` in the body, required. Bound at the node it belongs to |
 | Create or change a binding | `role` in the body, required; `member_id`, `group_id`, or `public_principal` on create; optional `expires_at` / `expires_in` |
 
-A role not in the roles document or the root's custom roles, or not bindable at the node's kind, is **422**. A direct binding for someone who isn't in the tree, or for a group of another tree, is **422**: guests come through invites. A public binding (`all_users` or `all_authenticated_users`) requires `allow_public: true` on the node's kind or an ancestor (**422** otherwise).
+A role not in the roles document or the root's custom roles, or not bindable at the node's kind, is **422**. A direct binding for someone who isn't in the tree, or for a group of another tree, is **422**: guests come through invites. A public binding (`all_users` or `all_authenticated_users`) requires `allow_public: true` on the node's kind (**422** otherwise).
 
 A member, group, or public principal may hold multiple distinct roles on the same node; `(member_id, node_id, role)`, `(group_id, node_id, role)`, and `(public_principal, node_id, role)` are unique. Changing a binding's role or expiry is a `PATCH` of that binding.
 

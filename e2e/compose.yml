@@ -9,14 +9,11 @@ services:
     ports:
       - "127.0.0.1:5404:3001"
       - "127.0.0.1:5405:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
   gateway:
-    ports:
-      - "127.0.0.1:5406:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       RATE_LIMIT_AUTH_FAILURE_REQUESTS: "20"
       RATE_LIMIT_AUTH_FAILURE_WINDOW: "5s"
-  identity:
-    extra_hosts:
-      - "host.docker.internal:host-gateway"

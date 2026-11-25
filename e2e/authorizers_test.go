@@ -185,18 +185,17 @@ func configWithDocsAuthorizer(base map[string]any, authzURL, upstreamURL, cacheT
 
 // TestOutboundAuthZEN exercises replace/and/or composition modes, record-level
 // resource templates, POST /access/routes batching, identity list_permission
-// filtering, active cache invalidation, and fail-closed 503 end to end.
+// filtering, and fail-closed 503 end to end.
 func TestOutboundAuthZEN(t *testing.T) {
 	s := newStack(t)
 	dockerHost := env("E2E_DOCKER_HOST", "host.docker.internal")
-	gwInternal := strings.TrimRight(env("GATEWAY_INTERNAL_URL", "http://localhost:5406"), "/")
 
 	pdp := startMockPDP(t, dockerHost)
 	upstream := startEchoUpstream(t, dockerHost)
 
 	base := s.config()
 	t.Cleanup(func() { s.apply(s.config()) })
-	s.apply(configWithDocsAuthorizer(base, pdp.url, upstream, "60s"))
+	s.apply(configWithDocsAuthorizer(base, pdp.url, upstream, "0s"))
 
 	run := fmt.Sprintf("%d", time.Now().UnixNano())
 	owner := s.person("e2e-authz-owner-" + run)
@@ -228,22 +227,16 @@ func TestOutboundAuthZEN(t *testing.T) {
 	s.call(bob, "GET", docPath, nil, 403, nil)
 
 	pdp.grant(bobM, "docs:read", "document", "doc-42", true)
-	invalidateAuthorizerCache(t, s.http, gwInternal, map[string]any{
-		"resource_type": "document",
-		"resource_id":   "doc-42",
-	})
 	s.call(bob, "GET", docPath, nil, 200, nil)
 
 	// 2. `and` mode: owner has `*`, still denied until PDP also grants docs:write.
 	s.call(owner, "PATCH", docPath, map[string]any{}, 403, nil)
 	pdp.grant(ownerM.MemberID, "docs:write", "document", "doc-42", true)
-	invalidateAuthorizerCache(t, s.http, gwInternal, map[string]any{"subject_id": ownerM.MemberID})
 	s.call(owner, "PATCH", docPath, map[string]any{}, 200, nil)
 
 	// 3. `replace` mode: even owner (`*`) needs PDP grant for DELETE.
 	s.call(owner, "DELETE", docPath, nil, 403, nil)
 	pdp.grant(ownerM.MemberID, "docs:delete", "document", "doc-42", true)
-	invalidateAuthorizerCache(t, s.http, gwInternal, map[string]any{"all": true})
 	s.call(owner, "DELETE", docPath, nil, 200, nil)
 
 	// 4. `POST /access/routes` reflects external record-level decisions for bob.
@@ -275,24 +268,9 @@ func TestOutboundAuthZEN(t *testing.T) {
 	}
 
 	// 6. Fail closed 503 when PDP is down.
-	invalidateAuthorizerCache(t, s.http, gwInternal, map[string]any{"all": true})
 	pdp.down.Store(true)
 	s.call(bob, "GET", docPath, nil, 503, nil)
 	pdp.down.Store(false)
-}
-
-func invalidateAuthorizerCache(t *testing.T, client *http.Client, gwInternal string, payload map[string]any) {
-	t.Helper()
-	b, _ := json.Marshal(payload)
-	resp, err := client.Post(gwInternal+"/internal/authorizer-cache/invalidate", "application/json", bytes.NewReader(b))
-	if err != nil {
-		t.Fatalf("invalidate authorizer cache: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		out, _ := io.ReadAll(resp.Body)
-		t.Fatalf("invalidate cache: %d %s", resp.StatusCode, out)
-	}
 }
 
 // TestOutboundAuthZENTopaz verifies real OpenID AuthZEN 1.0 interoperability

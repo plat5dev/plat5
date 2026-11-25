@@ -18,9 +18,11 @@ const (
 const (
 	PrincipalPerson         = "person"
 	PrincipalServiceAccount = "service_account"
+	PrincipalAnonymous      = "anonymous"
 
 	AuthJWT    = "jwt"
 	AuthAPIKey = "apikey"
+	AuthNone   = "none"
 )
 
 // Actor is who the gateway admitted. On a kind route MemberID is set; on a

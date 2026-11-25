@@ -140,30 +140,37 @@ impl Store {
 
     /// The head and its config, read in one snapshot. `None` before the first apply.
     pub async fn current(&self) -> Result<Option<Revision>, StoreError> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            .execute(&mut *tx)
-            .await?;
-        let (head,): (i64,) = sqlx::query_as("SELECT revision FROM config_head")
-            .fetch_one(&mut *tx)
-            .await?;
-        let rev = revision_in(&mut tx, head).await?;
-        tx.commit().await?;
-        Ok(rev)
+        let row: Option<(i64, Value, Value, String, DateTime<Utc>)> = sqlx::query_as(
+            "SELECT r.revision, r.config, r.summary, r.request_id, r.created_at
+             FROM config_head h
+             JOIN config_revisions r ON r.revision = h.revision",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(
+            |(revision, config, summary, request_id, created_at)| Revision {
+                revision,
+                config,
+                summary,
+                request_id,
+                created_at,
+            },
+        ))
     }
 
     /// The bodies the head serves, read in one snapshot. `None` before the
     /// first apply.
     pub async fn served(&self) -> Result<(i64, Option<Served>), StoreError> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            .execute(&mut *tx)
-            .await?;
-        let (head,): (i64,) = sqlx::query_as("SELECT revision FROM config_head")
-            .fetch_one(&mut *tx)
-            .await?;
-        let served = served_in(&mut tx, head).await?;
-        tx.commit().await?;
+        let (head, gateway, identity): (i64, Option<Value>, Option<Value>) = sqlx::query_as(
+            "SELECT h.revision, r.gateway, r.identity
+             FROM config_head h
+             LEFT JOIN config_revisions r ON r.revision = h.revision",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        let served = gateway
+            .zip(identity)
+            .map(|(gateway, identity)| Served { gateway, identity });
         Ok((head, served))
     }
 
@@ -321,18 +328,6 @@ pub struct Report {
 pub struct Replica {
     pub report: Report,
     pub seen_at: DateTime<Utc>,
-}
-
-async fn served_in(
-    conn: &mut sqlx::PgConnection,
-    revision: i64,
-) -> Result<Option<Served>, StoreError> {
-    let row: Option<(Value, Value)> =
-        sqlx::query_as("SELECT gateway, identity FROM config_revisions WHERE revision = $1")
-            .bind(revision)
-            .fetch_optional(conn)
-            .await?;
-    Ok(row.map(|(gateway, identity)| Served { gateway, identity }))
 }
 
 async fn revision_in(

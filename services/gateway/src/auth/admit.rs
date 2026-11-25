@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime};
 
 use moka::future::Cache;
 use moka::ops::compute::{CompResult, Op};
@@ -14,9 +14,11 @@ use tracing::{info, warn};
 
 use crate::auth::call::AuthCallTimer;
 use crate::auth::invalidations::InvalidationTracker;
+use crate::auth::AuthType;
 use crate::client_ip::Cidr;
 use crate::internal_http::InternalHttpClient;
 use crate::metrics;
+use crate::time::parse_rfc3339_utc;
 
 const CACHE_CAPACITY: u64 = 50_000;
 
@@ -54,6 +56,16 @@ pub enum AdmitCredential {
     },
     /// Unauthenticated caller on an `allow_public: true` kind route.
     Anonymous(bool),
+}
+
+impl AdmitCredential {
+    pub fn auth_type(&self) -> Option<AuthType> {
+        match self {
+            AdmitCredential::Credential(_) => Some(AuthType::ApiKey),
+            AdmitCredential::Idp { .. } => Some(AuthType::Jwt),
+            AdmitCredential::Anonymous(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -300,7 +312,10 @@ impl<A: Admit> AdmitCache<A> {
                         "allowed_cidrs".to_string(),
                     )));
                 }
-                let is_negative = answer.refused(req);
+                // On `allow_public` routes, a valid answer with a resolved node chain may
+                // still be permitted by an external authorizer even if built-in public
+                // bindings are empty, so validate its chain and subject it to invalidation.
+                let is_negative = answer.refused_with_external(req, req.allow_public);
                 if !is_negative {
                     check_admitted(&answer, req).map_err(|e| {
                         warn!(error_message = e, "admit answered without a field it needs");
@@ -360,8 +375,13 @@ impl<A: Admit> AdmitCache<A> {
 /// ref, by kind; on a user route, a person's user. A service account has no
 /// user, and the gateway refuses it there.
 fn check_admitted(answer: &AdmitAnswer, req: &AdmitRequest) -> Result<(), &'static str> {
-    let Some(principal) = answer.principal.as_deref().filter(|p| !p.is_empty()) else {
-        return Err("principal");
+    let principal = match (
+        &req.credential,
+        answer.principal.as_deref().filter(|p| !p.is_empty()),
+    ) {
+        (_, Some(p)) => p,
+        (AdmitCredential::Anonymous(_), None) => "anonymous",
+        (_, None) => return Err("principal"),
     };
     if req.chain.is_empty() {
         return match answer.user_id.as_deref() {
@@ -389,7 +409,7 @@ fn check_admitted(answer: &AdmitAnswer, req: &AdmitRequest) -> Result<(), &'stat
 }
 
 /// Each part is length-prefixed so no two inputs share a hash by concatenation.
-fn hash_part(h: &mut blake3::Hasher, s: &str) {
+pub(crate) fn hash_part(h: &mut blake3::Hasher, s: &str) {
     h.update(&(s.len() as u64).to_le_bytes());
     h.update(s.as_bytes());
 }
@@ -437,121 +457,8 @@ fn hash_credential(h: &mut blake3::Hasher, credential: &AdmitCredential) {
     }
 }
 
-/// Parse an RFC 3339 timestamp (`YYYY-MM-DDTHH:MM:SS[.frac](Z|±HH:MM)`) into [`SystemTime`].
-fn parse_rfc3339_utc(s: &str) -> Option<SystemTime> {
-    let bytes = s.as_bytes();
-    if bytes.len() < 20 {
-        return None;
-    }
-    if bytes[4] != b'-'
-        || bytes[7] != b'-'
-        || !(bytes[10] == b'T' || bytes[10] == b't' || bytes[10] == b' ')
-        || bytes[13] != b':'
-        || bytes[16] != b':'
-    {
-        return None;
-    }
-    let year: i64 = s[0..4].parse().ok()?;
-    let month: u32 = s[5..7].parse().ok()?;
-    let day: u32 = s[8..10].parse().ok()?;
-    let hour: u32 = s[11..13].parse().ok()?;
-    let minute: u32 = s[14..16].parse().ok()?;
-    let second: u32 = s[17..19].parse().ok()?;
-    if !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
-        || hour > 23
-        || minute > 59
-        || second > 59
-    {
-        return None;
-    }
-    if day > days_in_month(year, month) {
-        return None;
-    }
-
-    let mut rest = &s[19..];
-    let mut nanos: u32 = 0;
-    if let Some(after_dot) = rest.strip_prefix('.') {
-        let frac_len = after_dot.bytes().take_while(|b| b.is_ascii_digit()).count();
-        if frac_len == 0 {
-            return None;
-        }
-        let frac_str = &after_dot[..frac_len.min(9)];
-        let mut scale = 1_000_000_000u32;
-        for b in frac_str.bytes() {
-            scale /= 10;
-            nanos += u32::from(b - b'0') * scale;
-        }
-        rest = &after_dot[frac_len..];
-    }
-
-    let offset_secs: i64 = if rest == "Z" || rest == "z" {
-        0
-    } else if rest.len() == 6
-        && (rest.starts_with('+') || rest.starts_with('-'))
-        && rest.as_bytes()[3] == b':'
-    {
-        let sign: i64 = if rest.starts_with('+') { 1 } else { -1 };
-        let oh: i64 = rest[1..3].parse().ok()?;
-        let om: i64 = rest[4..6].parse().ok()?;
-        if oh > 23 || om > 59 {
-            return None;
-        }
-        sign * (oh * 3600 + om * 60)
-    } else {
-        return None;
-    };
-
-    let days = days_from_civil(year, month, day);
-    let unix_secs = days
-        .checked_mul(86_400)?
-        .checked_add(i64::from(hour) * 3600 + i64::from(minute) * 60 + i64::from(second))?
-        .checked_sub(offset_secs)?;
-    if unix_secs >= 0 {
-        UNIX_EPOCH.checked_add(Duration::new(unix_secs as u64, nanos))
-    } else {
-        let abs = unix_secs.checked_neg()? as u64;
-        if nanos == 0 {
-            UNIX_EPOCH.checked_sub(Duration::from_secs(abs))
-        } else {
-            UNIX_EPOCH.checked_sub(Duration::new(abs - 1, 1_000_000_000 - nanos))
-        }
-    }
-}
-
-fn is_leap_year(year: i64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
-}
-
-fn days_in_month(year: i64, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 => {
-            if is_leap_year(year) {
-                29
-            } else {
-                28
-            }
-        }
-        _ => 0,
-    }
-}
-
-/// Howard Hinnant's civil-to-days algorithm (days since 1970-01-01).
-fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
-    let y = year - i64::from(month <= 2);
-    let era = y.div_euclid(400);
-    let yoe = (y - era * 400) as u64;
-    let m = u64::from(month);
-    let d = u64::from(day);
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe as i64 - 719_468
-}
-
-/// A hash of the credential alone, as the cache keys it: one per key, one per
-/// JWT issuer and subject. Never the secret itself.
+/// A hash of the credential alone, as the cache keys it: one per API key, or
+/// one per JWT issuer, subject, scopes, and policy claims. Never the secret itself.
 pub fn credential_hash(credential: &AdmitCredential) -> String {
     let mut h = blake3::Hasher::new();
     hash_credential(&mut h, credential);
@@ -582,6 +489,16 @@ impl moka::Expiry<String, Entry> for EntryExpiry {
     ) -> Option<Duration> {
         Some(value.ttl)
     }
+
+    fn expire_after_update(
+        &self,
+        _key: &String,
+        value: &Entry,
+        _updated_at: Instant,
+        _duration_until_expiry: Option<Duration>,
+    ) -> Option<Duration> {
+        Some(value.ttl)
+    }
 }
 
 #[cfg(test)]
@@ -589,6 +506,7 @@ pub mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
+    use std::time::UNIX_EPOCH;
 
     /// A fake identity: answers from `answer`, counting calls and keeping the last request.
     pub struct FakeAdmit {

@@ -64,6 +64,12 @@ func (h *Head) Sync(id int64) {
 // WaitPast waits until the head is past after (or resets below it), ctx ends,
 // or Follow stops. True if the caller should re-read the log.
 func (h *Head) WaitPast(ctx context.Context, after int64) bool {
+	return h.WaitPastWith(ctx, after, nil)
+}
+
+// WaitPastWith is WaitPast that also wakes and returns true when extraWake
+// closes (a nil channel is ignored).
+func (h *Head) WaitPastWith(ctx context.Context, after int64, extraWake <-chan struct{}) bool {
 	h.mu.Lock()
 	startGen := h.gen
 	h.mu.Unlock()
@@ -74,6 +80,8 @@ func (h *Head) WaitPast(ctx context.Context, after int64) bool {
 		select {
 		case <-h.stopped:
 			return false
+		case <-extraWake:
+			return true
 		default:
 		}
 		h.mu.Lock()
@@ -84,6 +92,8 @@ func (h *Head) WaitPast(ctx context.Context, after int64) bool {
 		}
 		select {
 		case <-changed:
+		case <-extraWake:
+			return true
 		case <-ctx.Done():
 			return false
 		case <-h.stopped:

@@ -25,7 +25,7 @@ kinds:
 | `bind_creator` | Whether creating a node of this kind gives its creator `creator_role` on it ([assigning](../../concepts/access.md#assigning)). Default `true`. Off, the creator reaches the node through bindings above it; on a root kind, a new root has no member until a front door such as an operator plane adds one |
 | `host` | Optional, root kinds only. Hostname template resolving the leading subdomain label as this kind's slug or id: `{<kind name>}.<domain>`, such as `{organization}.api.example.com`. Requests to matching hosts resolve routes relative to the root alongside the path form |
 | `allow_public` | Optional. Allows public principal bindings (`all_users`, `all_authenticated_users`) on nodes of this kind and `allow_public: true` routes in or below its scope. Default `false` |
-| `authorizer` | Optional. External AuthZEN authorizer used for `list_permission` filtering and identity `/access/v1/*` evaluation on nodes of this kind ([authorizers](authorizers.md)) |
+| `authorizer` | Optional. External AuthZEN authorizer for `list_permission` filtering, identity `/access/v1/*` evaluation, and routes in this kind's scope unless overridden or opted out with `authorizer: false` ([authorizers](authorizers.md)) |
 <!-- end generated -->
 
 Plat5 derives no permission names from a kind: routes name theirs literally. A kind reached through another kind's permissions says so in its routes and its `list_permission`, as `environment` does above with `project:*`.

@@ -56,7 +56,7 @@ authorizers:
     # token_env: TOPAZ_API_KEY   # optional bearer token read from gateway/identity env
 ```
 
-Attach it to routes in `services/docs.yml`. Notice how `authorizer` inherits from service → scope → route → verb, and how record routes use `resource: { type, id }`:
+Attach it to routes in `services/docs.yml`. Notice how `authorizer` inherits from kind → service → scope → route → verb, and how record routes use `resource: { type, id }`:
 
 ```yaml
 docs:
@@ -115,7 +115,7 @@ kinds:
       mode: or
 ```
 
-Identity will batch-evaluate projects against Topaz on child lists and `/access/v1/*` calls, short-circuiting when built-in RBAC already decides the answer.
+Identity will batch-evaluate projects against Topaz on child lists and `/access/v1/*` calls, short-circuiting when built-in RBAC already decides the answer, and any `project`-scoped route with explicit `required_permissions` inherits this authorizer unless it overrides it or sets `authorizer: false`.
 
 ## 3. What your service does
 
@@ -124,15 +124,7 @@ Your `docs` service still does **no auth checks** on individual document endpoin
 1. **Writes relations to Topaz on create/share/unshare** using `X-Plat5-Member-Id` and the document ID:
    - On `POST /projects/{project_id}/documents`: create the document in your DB and write `(subject: member:<X-Plat5-Member-Id>, relation: owner, object: document:<project_id>:<doc_id>)` to Topaz's directory.
    - On `POST /projects/{project_id}/documents/{doc_id}/shares`: write/delete the `viewer`/`editor` relation in Topaz.
-2. **Invalidates the gateway cache immediately on permission changes** when `cache_ttl` or `negative_cache_ttl` > `0s` ([gateway internal API](../reference/api/internal.md#authorizer-cache-invalidation)):
-   ```bash
-   POST {GATEWAY_INTERNAL_URL}/internal/authorizer-cache/invalidate
-   {
-     "authorizer": "topaz",
-     "resource_type": "document",
-     "resource_id": "01jbx…:doc-42"
-   }
-   ```
+2. **Tunes cache TTLs for freshness vs latency:** keep `cache_ttl: 0s` and `negative_cache_ttl: 0s` (the default) when share/unshare changes must take effect immediately, or set short TTLs (`2s`–`5s`) for high-traffic read paths.
 3. **Cleans up tuples on lifecycle events:** when consuming `node.purged` (`kind: project`) or `member.removed` from identity's lifecycle log, delete the corresponding objects/relations in Topaz.
 
 ## 4. UI button visibility (`POST /access/routes`)

@@ -9,8 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 
-use crate::config::{Config, Required};
-use crate::expand;
+use crate::config::{Authorizer, Config};
+use crate::expand::ExpandedService;
+use crate::rules::Checked;
 
 /// A revision's two feed bodies, without their revision.
 #[derive(Clone, Debug, PartialEq)]
@@ -20,12 +21,18 @@ pub struct Served {
 }
 
 impl Served {
-    /// The bodies the running version serves for `config`.
-    pub fn of(config: &Config) -> Self {
+    /// The bodies the running version serves for a checked config (single expansion pass).
+    pub fn of_checked(config: &Config, checked: &Checked) -> Self {
         Self {
-            gateway: gateway_body(config),
-            identity: identity_body(config),
+            gateway: gateway_body_with(config, &checked.services),
+            identity: identity_body_with(config, &checked.route_permissions),
         }
+    }
+
+    #[cfg(test)]
+    pub fn of(config: &Config) -> Self {
+        let checked = crate::rules::check(config).expect("checked config");
+        Self::of_checked(config, &checked)
     }
 }
 
@@ -45,20 +52,30 @@ pub fn feed_body(revision: i64, body: &Value) -> Value {
 }
 
 /// The body of `GET /internal/gateway`: kinds, every service's routes
-/// expanded, rate limits, `defaults.rate_limit`, CORS, and optional
-/// `authorizers`, with defaults filled in.
-pub fn gateway_body(c: &Config) -> Value {
+/// expanded, rate limits, `defaults.rate_limit`, CORS, and only the
+/// `authorizers` referenced by at least one expanded route.
+pub fn gateway_body_with(c: &Config, services: &BTreeMap<String, ExpandedService>) -> Value {
     let mut out = Map::new();
     out.insert("kinds".into(), json!(c.kinds));
-    out.insert("services".into(), json!(expand::expand(c)));
+    out.insert("services".into(), json!(services));
     out.insert("rate_limits".into(), json!(c.rate_limits));
     out.insert(
         "defaults".into(),
         json!({ "rate_limit": c.defaults.rate_limit }),
     );
     out.insert("cors".into(), json!(c.cors));
-    if !c.authorizers.is_empty() {
-        out.insert("authorizers".into(), json!(c.authorizers));
+    let used: BTreeSet<&str> = services
+        .values()
+        .flat_map(|s| &s.routes)
+        .filter_map(|r| r.authorizer.as_ref().map(|a| a.name.as_str()))
+        .collect();
+    let gw_authorizers: BTreeMap<&String, &Authorizer> = c
+        .authorizers
+        .iter()
+        .filter(|(name, _)| used.contains(name.as_str()))
+        .collect();
+    if !gw_authorizers.is_empty() {
+        out.insert("authorizers".into(), json!(gw_authorizers));
     }
     Value::Object(out)
 }
@@ -75,29 +92,17 @@ struct ServedPermission {
 /// Derives the deployment's permission catalog from kinds (`list_permission`),
 /// service routes (`required_permissions`), predefined roles (excluding `*`),
 /// and explicit `permissions:` metadata.
-fn permission_catalog(c: &Config) -> BTreeMap<String, ServedPermission> {
+fn permission_catalog(
+    c: &Config,
+    route_permissions: &BTreeSet<String>,
+) -> BTreeMap<String, ServedPermission> {
     let mut all_keys: BTreeSet<String> = c.permissions.keys().cloned().collect();
     for kind in c.kinds.values() {
         if kind.list_permission != "*" {
             all_keys.insert(kind.list_permission.clone());
         }
     }
-    for spec in expand::specs(c) {
-        if !c.kinds.contains_key(&spec.scope) {
-            continue;
-        }
-        for verb in &spec.verbs {
-            if let Some(req) = &verb.required {
-                if let Required::Permissions(perms) = &req.value {
-                    for p in perms {
-                        if p != "*" {
-                            all_keys.insert(p.clone());
-                        }
-                    }
-                }
-            }
-        }
-    }
+    all_keys.extend(route_permissions.iter().cloned());
     for role in c.roles.values() {
         for p in &role.permissions {
             if p != "*" {
@@ -132,9 +137,9 @@ fn permission_catalog(c: &Config) -> BTreeMap<String, ServedPermission> {
     out
 }
 
-/// The body of `GET /internal/identity`: settings, kinds and roles, with
-/// defaults filled in. Roles as written, with their includes.
-pub fn identity_body(c: &Config) -> Value {
+/// The body of `GET /internal/identity`: settings, kinds, roles, optional
+/// custom-role catalog, and only the `authorizers` referenced by kinds.
+pub fn identity_body_with(c: &Config, route_permissions: &BTreeSet<String>) -> Value {
     let mut out = Map::new();
     out.insert("deletion_grace".into(), json!(c.deletion_grace));
     out.insert("reserved_slugs".into(), json!(c.reserved_slugs));
@@ -145,10 +150,23 @@ pub fn identity_body(c: &Config) -> Value {
         out.insert("custom_roles".into(), json!(true));
     }
     if c.custom_roles || !c.permissions.is_empty() {
-        out.insert("permissions".into(), json!(permission_catalog(c)));
+        out.insert(
+            "permissions".into(),
+            json!(permission_catalog(c, route_permissions)),
+        );
     }
-    if !c.authorizers.is_empty() {
-        out.insert("authorizers".into(), json!(c.authorizers));
+    let used: BTreeSet<&str> = c
+        .kinds
+        .values()
+        .filter_map(|k| k.authorizer.as_ref().map(|a| a.name.as_str()))
+        .collect();
+    let id_authorizers: BTreeMap<&String, &Authorizer> = c
+        .authorizers
+        .iter()
+        .filter(|(name, _)| used.contains(name.as_str()))
+        .collect();
+    if !id_authorizers.is_empty() {
+        out.insert("authorizers".into(), json!(id_authorizers));
     }
     Value::Object(out)
 }
@@ -162,12 +180,16 @@ mod tests {
         fixtures::yaml(&fixtures::dir().join("plans/first-apply/after.yml"))
     }
 
+    fn served(config: &Value) -> Served {
+        Served::of(&apply::check(config).unwrap())
+    }
+
     fn gateway_feed(revision: i64, config: &Value) -> Value {
-        feed_body(revision, &gateway_body(&apply::check(config).unwrap()))
+        feed_body(revision, &served(config).gateway)
     }
 
     fn identity_feed(revision: i64, config: &Value) -> Value {
-        feed_body(revision, &identity_body(&apply::check(config).unwrap()))
+        feed_body(revision, &served(config).identity)
     }
 
     #[test]
@@ -222,28 +244,32 @@ mod tests {
         assert!(identity["permissions"].get("organization:read").is_some());
         assert!(identity["permissions"].get("*").is_none());
 
-        // Authorizers expand into both feeds with defaults, and inherit service -> route -> verb (with false opt-out).
+        // Authorizers expand into each feed filtered by what that service uses,
+        // and inherit kind -> service -> scope -> route -> verb (with false opt-out).
         let mut authz = base();
         authz["authorizers"] = json!({
-            "topaz": { "url": "http://topaz:8383", "token_env": "TOPAZ_API_KEY" }
+            "topaz": { "url": "http://topaz:8383", "token_env": "TOPAZ_API_KEY" },
+            "gw_only": { "url": "http://cerbos:3592", "token_env": "CERBOS_API_KEY" }
         });
         authz["kinds"]["project"]["authorizer"] = json!("topaz");
-        authz["services"]["e10s"]["authorizer"] = json!({ "name": "topaz", "mode": "or" });
+        authz["services"]["e10s"]["authorizer"] = json!({ "name": "gw_only", "mode": "or" });
         authz["services"]["e10s"]["scopes"]["project"]["routes"][0]["methods"]["POST"]
             ["authorizer"] = json!(false);
         let gw = gateway_feed(6, &authz);
         assert_eq!(
-            gw["authorizers"]["topaz"],
+            gw["authorizers"]["gw_only"],
             json!({
-                "url": "http://topaz:8383",
+                "url": "http://cerbos:3592",
                 "timeout": "2s",
                 "cache_ttl": "0s",
                 "negative_cache_ttl": "0s",
-                "token_env": "TOPAZ_API_KEY"
+                "token_env": "CERBOS_API_KEY"
             })
         );
+        assert!(gw["authorizers"].get("topaz").is_none());
         let id = identity_feed(6, &authz);
-        assert_eq!(id["authorizers"], gw["authorizers"]);
+        assert!(id["authorizers"].get("topaz").is_some());
+        assert!(id["authorizers"].get("gw_only").is_none());
         assert_eq!(
             id["kinds"]["project"]["authorizer"],
             json!({ "name": "topaz", "mode": "replace" })
@@ -255,7 +281,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             get_plans["authorizer"],
-            json!({ "name": "topaz", "mode": "or" })
+            json!({ "name": "gw_only", "mode": "or" })
         );
         let post_plans = routes
             .iter()

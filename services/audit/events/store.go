@@ -188,37 +188,32 @@ func (s *Store) ApplyOutcome(ctx context.Context, requestID string, out *Outcome
 	var eventID string
 	var at time.Time
 	var stored []string
+	updateArgs := []any{requestID, out.Outcome, out.Status, details, out.CreatedID, named, out.NamedMemberID}
+	occurredCond := ""
 	if out.EventOccurredAt != nil {
-		err = tx.QueryRow(ctx, `
-			UPDATE audit_events
-			SET outcome = $2, status = $3, details = $4::jsonb, created_id = $5,
-				named_node_ids = CASE WHEN root_id IS NULL THEN $6::text[] ELSE '{}' END,
-				named_member_id = CASE WHEN root_id IS NULL THEN $7::text END
-			WHERE request_id = $1 AND occurred_at = $8 AND outcome = 'pending'
-			RETURNING id, occurred_at, named_node_ids
-		`, requestID, out.Outcome, out.Status, details, out.CreatedID, named, out.NamedMemberID, *out.EventOccurredAt).Scan(&eventID, &at, &stored)
-	} else {
-		err = tx.QueryRow(ctx, `
-			UPDATE audit_events
-			SET outcome = $2, status = $3, details = $4::jsonb, created_id = $5,
-				named_node_ids = CASE WHEN root_id IS NULL THEN $6::text[] ELSE '{}' END,
-				named_member_id = CASE WHEN root_id IS NULL THEN $7::text END
-			WHERE request_id = $1 AND outcome = 'pending'
-			RETURNING id, occurred_at, named_node_ids
-		`, requestID, out.Outcome, out.Status, details, out.CreatedID, named, out.NamedMemberID).Scan(&eventID, &at, &stored)
+		occurredCond = " AND occurred_at = $8"
+		updateArgs = append(updateArgs, *out.EventOccurredAt)
 	}
+	err = tx.QueryRow(ctx, `
+		UPDATE audit_events
+		SET outcome = $2, status = $3, details = $4::jsonb, created_id = $5,
+			named_node_ids = CASE WHEN root_id IS NULL THEN $6::text[] ELSE '{}' END,
+			named_member_id = CASE WHEN root_id IS NULL THEN $7::text END
+		WHERE request_id = $1`+occurredCond+` AND outcome = 'pending'
+		RETURNING id, occurred_at, named_node_ids
+	`, updateArgs...).Scan(&eventID, &at, &stored)
 	if dbx.IsNoRows(err) {
 		var exists bool
+		existsArgs := []any{requestID}
+		existsCond := ""
 		if out.EventOccurredAt != nil {
-			err = tx.QueryRow(ctx,
-				`SELECT EXISTS (SELECT 1 FROM audit_events WHERE request_id = $1 AND occurred_at = $2)`,
-				requestID, *out.EventOccurredAt,
-			).Scan(&exists)
-		} else {
-			err = tx.QueryRow(ctx,
-				`SELECT EXISTS (SELECT 1 FROM audit_events WHERE request_id = $1)`, requestID,
-			).Scan(&exists)
+			existsCond = " AND occurred_at = $2"
+			existsArgs = append(existsArgs, *out.EventOccurredAt)
 		}
+		err = tx.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM audit_events WHERE request_id = $1`+existsCond+`)`,
+			existsArgs...,
+		).Scan(&exists)
 		if err != nil {
 			return "", op.Fail(err)
 		}
@@ -367,7 +362,10 @@ func scanEvent(row dbx.Scannable) (*Event, error) {
 	return &e, nil
 }
 
-const partitionTimeout = 30 * time.Second
+const (
+	partitionTimeout         = 30 * time.Second
+	partitionLockSpace int32 = 0x706c6175 // "plau"
+)
 
 // EnsurePartitions creates the monthly partitions of the events and their log
 // keys covering from..to (inclusive months). Replicas serialize on an advisory lock; existing partitions are kept.
@@ -382,7 +380,7 @@ func (s *Store) EnsurePartitions(ctx context.Context, from, to time.Time) error 
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('audit.audit_events.partitions'))`); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext('audit.audit_events.partitions'))`, partitionLockSpace); err != nil {
 		return op.Fail(err)
 	}
 	for m := monthStart(from); !m.After(monthStart(to)); m = m.AddDate(0, 1, 0) {

@@ -107,7 +107,7 @@ A service account is a principal like a person: its bindings can sit anywhere in
 
 `expires_in` is how long the token works, a duration (`7d`, `8h`: a whole number and `s`, `m`, `h` or `d`), default `7d`, from `60s` to `30d`. `max_uses` omitted is 1, a number is that many, and `null` is unlimited. `grants` are `[{ node_id, role }]`: live nodes below the root, each once, each role bindable at that node's kind.
 
-A redeem binds what the person doesn't hold yet, for a new member and an existing one alike: `role` on the invite's node and, at a root, each grant on a node still live. Someone not already in the tree becomes a member; redeemed below a root, a guest there. Where the member already has a binding, it stays as it is. A redeem that binds anything is a use; one that binds nothing answers **200** and isn't a use. Unknown token: **404**. Redeemed, revoked or expired, or an invite whose node is deleted: **409** `INVITE_NOT_REDEEMABLE`, with `details.reason` (`redeemed`, `revoked`, `expired`, or `node_deleted`). A deleted node's invite works again if the node is restored before the invite expires.
+A redeem binds what the person doesn't hold yet, for a new member and an existing one alike: `role` on the invite's node and, at a root, each grant on a node still live. Someone not already in the tree becomes a member; redeemed below a root, a guest there. Where the member already has an unexpired binding, it stays as it is. A redeem that binds anything is a use; one that binds nothing answers **200** and isn't a use. Unknown token: **404**. Redeemed, revoked or expired, an invite whose node is deleted, or a suspended user or member: **409** `INVITE_NOT_REDEEMABLE`, with `details.reason` (`redeemed`, `revoked`, `expired`, `node_deleted`, `user_suspended`, or `member_suspended`). A deleted node's invite works again if the node is restored before the invite expires.
 
 Tokens are `{brand}-i-1-{secret}` ([secrets](#secrets)), hashed at rest and shown once, like keys. Lists carry `token_prefix` (the wire prefix plus 4 characters). A token that isn't of the deployment's brand and shape is unknown: **404**. When `use_count` reaches `max_uses` the invite is `redeemed`. The host sends any email; identity never mails.
 
@@ -116,23 +116,23 @@ Tokens are `{brand}-i-1-{secret}` ([secrets](#secrets)), hashed at rest and show
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/nodes/{node_id}/roles` | Roles bindable at this node's kind (predefined `system` roles and this root's `custom` roles), for role pickers. On a root, `?all=true` returns every role in the root regardless of `bindable_at` |
-| `POST` | `/nodes/{root_id}/roles` | Create a custom role in this root (requires `custom_roles: true` in config; root only, **404** otherwise): `{ name, description?, permissions, bindable_at }`. Permissions must be in the assignable catalog (never `*`). **409** if `name` (case-insensitive) already exists in this root. Returns the role, **201** |
+| `POST` | `/nodes/{root_id}/roles` | Create a custom role in this root (requires `custom_roles: true` in config; root only, **404** otherwise): `{ display_name, description?, permissions, bindable_at }`. Permissions must be in the assignable catalog (never `*`). Returns the role, **201** |
 | `GET` | `/nodes/{root_id}/roles/{role_id}` | Get a predefined role (by slug) or custom role (by id) in this root |
-| `PATCH` | `/nodes/{root_id}/roles/{role_id}` | Update a custom role (`{ name?, description?, permissions?, bindable_at? }`). **422** on a predefined system role |
-| `DELETE` | `/nodes/{root_id}/roles/{role_id}` | Delete a custom role (**204**; already deleted **204**). **422** on a predefined system role. Existing bindings keep the role id and grant nothing |
-| `GET` | `/nodes/{root_id}/permissions` | The deployment's permission catalog (`{ permissions: [{ name, description, bindable_at, custom_role_assignable }] }`), for custom role editors. Root only |
+| `PATCH` | `/nodes/{root_id}/roles/{role_id}` | Update a custom role (`{ display_name?, description?, permissions?, bindable_at? }`; requires `custom_roles: true`). **422** on a predefined system role |
+| `DELETE` | `/nodes/{root_id}/roles/{role_id}` | Delete a custom role (**204**; already deleted **204**). **422** on a predefined system role. Removes any bindings referencing the role in this root (a person left with no bindings or groups is removed) |
+| `GET` | `/nodes/{root_id}/permissions` | The deployment's permission catalog (`{ permissions: [{ name, description, bindable_at, custom_role_assignable }], custom_roles }`), for custom role editors. Root only |
 
 ```json
 {
   "roles": [
-    { "id": "admin", "slug": "admin", "source": "system", "name": "admin", "description": null, "bindable_at": ["organization", "project"], "permissions": ["*"] },
-    { "id": "01jby…", "slug": "01jby…", "source": "custom", "name": "Billing Auditor", "description": "Read-only billing access", "bindable_at": ["organization"], "permissions": ["billing:read"] }
+    { "id": "admin", "slug": "admin", "display_name": "admin", "source": "system", "bindable_at": ["organization", "project"], "permissions": ["*"] },
+    { "id": "01jby…", "slug": "01jby…", "display_name": "Billing Auditor", "description": "Read-only billing access", "source": "custom", "bindable_at": ["organization"], "permissions": ["billing:read"], "created_at": "2026-10-08T18:30:00Z", "updated_at": "2026-10-08T18:30:00Z" }
   ],
   "creator_role": "admin"
 }
 ```
 
-System roles appear first (sorted by slug), followed by custom roles (sorted by name). `permissions` are what each role grants, with `includes` resolved for system roles, sorted, with `*` as written. Not paginated.
+System roles appear first (sorted by slug), followed by custom roles (sorted by id). `permissions` are what each role grants, with `includes` resolved for system roles, sorted, with `*` as written. Not paginated.
 
 ## Security policy
 
@@ -141,7 +141,7 @@ System roles appear first (sorted by slug), followed by custom roles (sorted by 
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/nodes/{root_id}/security-policy` | The root's [security policy](#security-policy-shape) (defaults when no row exists yet) |
-| `PATCH` | `/nodes/{root_id}/security-policy` | `{ allow_personal_keys?, allowed_cidrs?, required_idp_claims? }`, at least one required. `allowed_cidrs` accepts up to 50 IPv4/IPv6 addresses or CIDRs (`[]` or `null` clears). `required_idp_claims` is a map of up to 16 dotted claim paths to required string/bool/number values or non-empty arrays of allowed values (`{}` or `null` clears). Returns the updated policy |
+| `PATCH` | `/nodes/{root_id}/security-policy` | `{ allow_personal_keys?, allowed_cidrs?, required_idp_claims? }`, at least one required. `allowed_cidrs` accepts up to 50 IPv4/IPv6 addresses or CIDRs (`[]` or `null` clears). `required_idp_claims` is a map of up to 16 claim paths to non-empty arrays of allowed string values (`{}` or `null` clears). Returns the updated policy |
 
 ## Shapes
 
@@ -153,7 +153,7 @@ Lists are [paginated](../lists.md) under the plural key. Times are RFC 3339, UTC
 
 #### Binding
 
-`{ id, member_id, group_id, public_principal, node_id, role, inherited, guest, principal, name, expires_at, created_at, updated_at }`. Exactly one of `member_id`, `group_id`, or `public_principal` (`all_users` or `all_authenticated_users`) is set; the others are `null`. `node_id` is where the binding sits; `inherited` is true when that's an ancestor of the node listed. `expires_at` is RFC 3339 UTC or `null`. For a member binding, `guest`, `principal` (`person` or `service_account`) and `name` are the member's; for a group binding, `guest` is `false`, `principal` is `group`, and `name` is the group's name; for a public binding, `guest` is `false`, `principal` is `public`, and `name` is the `public_principal` value.
+`{ id, member_id, group_id, public_principal, node_id, role, inherited, guest, principal, name, expires_at, created_at, updated_at }`. Exactly one of `member_id`, `group_id`, or `public_principal` (`all_users` or `all_authenticated_users`) is set; the others are `null`. `node_id` is where the binding sits; `inherited` is true when that's an ancestor of the node listed. `expires_at` is RFC 3339 UTC or `null`. For a member binding, `guest`, `principal` (`person` or `service_account`) and `name` are the member's; for a group binding, `guest` is `false`, `principal` is `group`, and `name` is the group's name; for a public binding, `guest` is `false`, `principal` is the `public_principal` value (`all_users` or `all_authenticated_users`), and `name` is `null`.
 
 #### Security policy shape
 

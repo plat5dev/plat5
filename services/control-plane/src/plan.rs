@@ -198,6 +198,13 @@ fn named(body: &Value, key: &str) -> BTreeMap<String, Value> {
         .unwrap_or_default()
 }
 
+/// Union of authorizers served to either gateway or identity.
+fn all_authorizers(s: &Served) -> BTreeMap<String, Value> {
+    let mut out = named(&s.identity, "authorizers");
+    out.extend(named(&s.gateway, "authorizers"));
+    out
+}
+
 async fn make_plan(
     revision: i64,
     current: Option<&Served>,
@@ -279,10 +286,8 @@ async fn make_plan(
     ));
     changes.extend(diff_map(
         What::Authorizer,
-        &current
-            .map(|c| named(&c.gateway, "authorizers"))
-            .unwrap_or_default(),
-        &named(&next.gateway, "authorizers"),
+        &current.map(all_authorizers).unwrap_or_default(),
+        &all_authorizers(next),
     ));
     changes.extend(diff_map(
         What::RateLimit,

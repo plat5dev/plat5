@@ -107,7 +107,6 @@ services:
       AUTH_SUBJECT_CLAIM: ${AUTH_SUBJECT_CLAIM:-properties.user_id}
       AUTH_NAME_CLAIMS: ${AUTH_NAME_CLAIMS:-name,preferred_username}
       IDENTITY_INTERNAL_URL: http://identity:3001
-      # Short in the e2e, so a delete reaches the edge at once (e2e/README.md).
       ADMIT_CACHE_TTL: ${ADMIT_CACHE_TTL:-5m}
       ADMIT_NEGATIVE_CACHE_TTL: ${ADMIT_NEGATIVE_CACHE_TTL:-10s}
       # Audit is on unless AUDIT_ENABLED=false (then audit need not run).

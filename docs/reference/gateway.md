@@ -133,9 +133,7 @@ TLS terminates at the edge or load balancer, not the gateway. Services behind th
 
 ## Outbound authorizers
 
-Routes in a kind scope may attach an external OpenID AuthZEN 1.0 PDP ([`reference/config/authorizers.md`](config/authorizers.md)) in `replace`, `and`, or `or` mode, with optional record-level `resource: { type, id }` templates. Decisions fail closed (**503** on timeout/error), respect credential scope narrowing, and batch per authorizer during `POST /access/routes`.
-
-When `cache_ttl` or `negative_cache_ttl` is non-zero, active invalidation is served on `INTERNAL_PORT` at `POST /internal/authorizer-cache/invalidate` with `{ "authorizer"?, "subject_id"?, "resource_type"?, "resource_id"?, "all"? }`.
+Routes in a kind scope may attach (or inherit from their kind) an external OpenID AuthZEN 1.0 PDP ([`reference/config/authorizers.md`](config/authorizers.md)) in `replace`, `and`, or `or` mode, with optional record-level `resource: { type, id }` templates. Decisions fail closed (**503** on timeout/error), respect credential scope narrowing, and batch per authorizer during `POST /access/routes`. Per-authorizer `cache_ttl` and `negative_cache_ttl` control response caching (`0s` by default for immediate consistency).
 
 ## CORS
 

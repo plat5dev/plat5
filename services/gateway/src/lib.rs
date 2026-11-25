@@ -12,9 +12,11 @@ pub mod health;
 pub mod internal_http;
 pub mod kinds;
 pub mod metrics;
+pub mod net;
 pub mod pipeline;
 pub mod rate_limit;
 pub mod route_map;
 pub mod telemetry;
+pub mod time;
 
 pub use crate::gateway::Gateway;

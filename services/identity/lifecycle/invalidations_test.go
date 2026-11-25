@@ -62,7 +62,7 @@ func TestInvalidationsStoreAndWatermark(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := RecordCommit(ctx, tx, nil, []Invalidation{
+	if _, err := RecordCommit(ctx, tx, nil, []Invalidation{
 		InvalidateKey("01k1"),
 		InvalidateMember("01m1"),
 		InvalidateRoot("01r1"),
@@ -83,7 +83,7 @@ func TestInvalidationsStoreAndWatermark(t *testing.T) {
 		t.Fatalf("list after 1: %+v %v", list, err)
 	}
 
-	// Prune everything and verify watermark advances to 3.
+	// Prune everything and verify watermark advances to 3 and effective head stays 3.
 	if _, err := pool.Exec(ctx, `UPDATE admit_invalidations SET created_at = now() - interval '2 hours'`); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestInvalidationsStoreAndWatermark(t *testing.T) {
 		t.Fatalf("prune: removed=%d err=%v", removed, err)
 	}
 	head, pruned, err = store.State(ctx)
-	if err != nil || head != 0 || pruned != 3 {
+	if err != nil || head != 3 || pruned != 3 {
 		t.Fatalf("after prune: head=%d pruned=%d err=%v", head, pruned, err)
 	}
 }
@@ -174,16 +174,40 @@ func TestInvalidationHandlerLongPollAndReset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := RecordCommit(ctx, tx, nil, []Invalidation{InvalidateUser("01u1")}); err != nil {
+	invHead, err := RecordCommit(ctx, tx, nil, []Invalidation{InvalidateUser("01u1")})
+	if err != nil {
 		_ = tx.Rollback(ctx)
 		t.Fatal(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	h.Notify(ctx)
+	h.Notify(invHead)
 	got = <-done
 	if got.Reset || got.Head != 1 || len(got.Events) != 1 || got.Events[0].Scope != ScopeUser || got.Events[0].Target != "01u1" {
 		t.Fatalf("event wake: %+v", got)
+	}
+
+	// 6. After pruning all rows, polling at the watermark (after=1) stays idle (204)
+	// instead of looping reset: true, while stale cursors (after=0) reset cleanly to head=1.
+	if _, err := pool.Exec(ctx, `UPDATE admit_invalidations SET created_at = now() - interval '2 hours'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PruneOlderThan(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	resp = get(InvalidationsPath + "?after=1&config_revision=6")
+	if resp.StatusCode != 204 {
+		t.Fatalf("post-prune idle poll status=%d, want 204", resp.StatusCode)
+	}
+	resp = get(InvalidationsPath + "?after=0&config_revision=6")
+	if resp.StatusCode != 200 {
+		t.Fatalf("post-prune stale cursor status=%d, want 200", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Reset || body.Head != 1 {
+		t.Fatalf("post-prune stale cursor body=%+v, want reset=true head=1", body)
 	}
 }

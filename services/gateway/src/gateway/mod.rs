@@ -1,5 +1,7 @@
 mod context;
+mod logging;
 mod response;
+mod route_checks;
 pub mod signing;
 mod upstream;
 
@@ -14,7 +16,7 @@ use pingora::http::ResponseHeader;
 use pingora::proxy::{FailToProxy, ProxyHttp, Session};
 use pingora::upstreams::peer::HttpPeer;
 use pingora::{Error, ErrorSource, ErrorType, Result};
-use tracing::{debug, info, warn, Instrument};
+use tracing::{debug, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
@@ -23,7 +25,7 @@ use crate::auth::admit::{AdmitCache, HttpAdmit};
 use crate::auth::invalidations::InvalidationTracker;
 use crate::auth::jwt::JwtValidatorState;
 use crate::auth::{AuthError, Authenticator, NameClaims};
-use crate::authorizer::{AuthorizerCache, AuthorizerInvalidator, HttpAuthorizer};
+use crate::authorizer::{AuthorizerCache, HttpAuthorizer};
 use crate::client_ip::TrustedProxies;
 use crate::config::GatewayConfig;
 use crate::control_plane::Snapshot;
@@ -32,11 +34,10 @@ use crate::error::{ApiError, ErrorKind};
 use crate::internal_http::InternalHttpClient;
 use crate::metrics;
 use crate::pipeline::{
-    forward, parse_checks, Admitted, Caller, GatewayPipeline, Limit, Pipeline, Refused, Rejection,
-    RequestCredential, MAX_CHECKS_BODY,
+    forward, Admitted, Caller, GatewayPipeline, Limit, Pipeline, Refused, Rejection,
 };
 use crate::rate_limit::RateLimiter;
-use crate::route_map::{Matched, Required, Route, Scope};
+use crate::route_map::{Matched, Scope};
 
 pub use context::GatewayContext;
 
@@ -62,13 +63,10 @@ impl Gateway {
         limiter: RateLimiter,
         audit: Audit,
         invalidations: InvalidationTracker,
-        authorizer_invalidator: AuthorizerInvalidator,
     ) -> Self {
         let admit = HttpAdmit::new(&cfg.identity_internal_url, InternalHttpClient::new());
-        let authorizer = AuthorizerCache::new(
-            HttpAuthorizer::new(cfg.upstream_block_private_ips),
-            authorizer_invalidator,
-        );
+        let upstream_resolver = upstream::PeerResolver::new(cfg.upstream_block_private_ips);
+        let authorizer = AuthorizerCache::new(HttpAuthorizer::new(upstream_resolver.clone()));
         Self {
             authenticator: Authenticator::new(
                 jwt_validator,
@@ -95,7 +93,7 @@ impl Gateway {
             audit,
             trusted_proxies: cfg.trusted_proxies.clone(),
             upstream_signer: cfg.upstream_signer.clone(),
-            upstream_resolver: upstream::PeerResolver::new(cfg.upstream_block_private_ips),
+            upstream_resolver,
         }
     }
 
@@ -160,6 +158,7 @@ impl Gateway {
         request_id: &str,
     ) -> Result<bool> {
         let route = &matched.route;
+        let cors = &snapshot.cors;
         if let Err(err) = session
             .req_header_mut()
             .insert_header("X-Request-ID", request_id)
@@ -169,14 +168,8 @@ impl Gateway {
                 error_message = %err,
                 "failed to inject X-Request-ID header"
             );
-            return response::write_json_error(
-                &self.cors(),
-                session,
-                ctx,
-                500,
-                ApiError::internal_error(),
-            )
-            .await;
+            return response::write_json_error(cors, session, ctx, 500, ApiError::internal_error())
+                .await;
         }
 
         let ip = client_ip(session, &self.trusted_proxies);
@@ -208,7 +201,7 @@ impl Gateway {
                     upstream::record_admission_span(ctx, caller);
                 }
                 if let (Rejection::Denied, Some(caller)) = (&rejection, &caller) {
-                    log_permission_denied(ctx, route, caller);
+                    logging::log_permission_denied(ctx, route, caller);
                     // A refusal after admit is one background event.
                     if audited {
                         let intent = audit_intent(session, ctx, matched, caller, request_id, &ip);
@@ -216,8 +209,7 @@ impl Gateway {
                             .send_rejected(intent, rejection.status(), request_context(ctx));
                     }
                 }
-                return response::write_rejection(&self.cors(), session, ctx, route, rejection)
-                    .await;
+                return response::write_rejection(cors, session, ctx, route, rejection).await;
             }
         };
         ctx.rate_limit = passed.rate_limit;
@@ -239,8 +231,7 @@ impl Gateway {
                     self.audit
                         .send_rejected(intent, rejection.status(), request_context(ctx));
                 }
-                return response::write_rejection(&self.cors(), session, ctx, route, rejection)
-                    .await;
+                return response::write_rejection(cors, session, ctx, route, rejection).await;
             }
         };
 
@@ -257,13 +248,9 @@ impl Gateway {
                     ..AuditState::default()
                 });
             } else {
-                ctx.audit = Some(AuditState {
-                    occurred_at: Some(intent.occurred_at.clone()),
-                    ..AuditState::default()
-                });
                 if self.audit.write_intent(&intent).await.is_err() {
                     return response::write_rejection(
-                        &self.cors(),
+                        cors,
                         session,
                         ctx,
                         route,
@@ -271,6 +258,10 @@ impl Gateway {
                     )
                     .await;
                 }
+                ctx.audit = Some(AuditState {
+                    occurred_at: Some(intent.occurred_at.clone()),
+                    ..AuditState::default()
+                });
             }
         }
 
@@ -289,159 +280,9 @@ impl Gateway {
                 upstream::UpstreamError::Internal => (500, ApiError::internal_error()),
                 upstream::UpstreamError::BadUpstream => (502, ApiError::service_unavailable()),
             };
-            return response::write_json_error(&self.cors(), session, ctx, status, error).await;
+            return response::write_json_error(cors, session, ctx, status, error).await;
         }
         Ok(false)
-    }
-}
-
-impl Gateway {
-    /// Route checks (docs/reference/gateway.md#route-checks): the credential as
-    /// a route takes it, the body, one count of each policy `defaults.rate_limit`
-    /// names, then each check
-    /// through the pipeline's own match, admit and permission steps. Never
-    /// forwarded, never audited.
-    async fn handle_route_checks(
-        &self,
-        session: &mut Session,
-        ctx: &mut GatewayContext,
-        snapshot: &Snapshot,
-    ) -> Result<bool> {
-        let route = ROUTE_CHECKS_PATH.to_string();
-        if let Some(ref span) = ctx.root_span {
-            span.record("http.route", route.as_str());
-            span.context().span().update_name(format!("POST {route}"));
-        }
-        ctx.route = Some(route);
-        ctx.max_body_bytes = MAX_CHECKS_BODY;
-        let cors = snapshot.cors.clone();
-
-        let presented = self
-            .authenticator
-            .present(session.req_header(), &self.name_claims)
-            .await;
-        ctx.credential.auth_type = match &presented {
-            Ok(p) => Some(p.auth_type()),
-            Err(err) => err.auth_type(),
-        };
-        let credential = match GatewayPipeline::check_credential(presented) {
-            Ok(c) => c,
-            Err(rejection) => return write_check_rejection(&cors, session, ctx, rejection).await,
-        };
-
-        if let Some(done) = self.reject_oversized_content_length(session, ctx).await? {
-            return Ok(done);
-        }
-        let mut body = Vec::new();
-        while let Some(chunk) = session.read_request_body().await? {
-            if body.len() as u64 + chunk.len() as u64 > MAX_CHECKS_BODY {
-                warn!(
-                    max_body_size = MAX_CHECKS_BODY,
-                    "route checks body too large"
-                );
-                return response::write_json_error(
-                    &cors,
-                    session,
-                    ctx,
-                    413,
-                    ApiError::payload_too_large(MAX_CHECKS_BODY),
-                )
-                .await;
-            }
-            body.extend_from_slice(&chunk);
-        }
-        let checks = match parse_checks(&body) {
-            Ok(checks) => checks,
-            Err(fields) => {
-                let fields: Vec<(String, String)> =
-                    fields.into_iter().map(|f| (f.path, f.message)).collect();
-                return response::write_json_error(
-                    &cors,
-                    session,
-                    ctx,
-                    422,
-                    ApiError::validation(&fields),
-                )
-                .await;
-            }
-        };
-
-        let ip = client_ip(session, &self.trusted_proxies);
-        let host = request_host(session.req_header()).map(str::to_string);
-        let checked = self
-            .pipeline
-            .check_routes_with_authorizers(
-                &snapshot.routes,
-                &snapshot.default_policies,
-                &snapshot.authorizers,
-                &credential,
-                &checks,
-                &ip,
-                host.as_deref(),
-                ctx.request_id.as_deref().unwrap_or(""),
-            )
-            .await;
-        let checked = match checked {
-            Ok(c) => c,
-            Err(rejection) => return write_check_rejection(&cors, session, ctx, rejection).await,
-        };
-        let answer = serde_json::json!({
-            "checks": checked
-                .allowed
-                .iter()
-                .map(|allowed| serde_json::json!({ "allowed": allowed }))
-                .collect::<Vec<_>>()
-        });
-        let mut extras = Vec::new();
-        if let Some(info) = &checked.rate_limit {
-            extras.push(("X-RateLimit-Limit", info.limit.to_string()));
-            extras.push(("X-RateLimit-Remaining", info.remaining.to_string()));
-            extras.push(("X-RateLimit-Reset", info.reset_epoch.to_string()));
-        }
-        response::send_json(
-            &cors,
-            session,
-            ctx,
-            200,
-            answer.to_string().into_bytes(),
-            &extras,
-        )
-        .await?;
-        Ok(true)
-    }
-}
-
-/// A route checks call refused whole: its 401, 429 or 503.
-async fn write_check_rejection(
-    cors: &CorsPolicy,
-    session: &mut Session,
-    ctx: &GatewayContext,
-    rejection: Rejection,
-) -> Result<bool> {
-    match rejection {
-        Rejection::RateLimited { retry_after, info } => {
-            response::write_rate_limited(cors, session, ctx, retry_after, info.as_ref()).await
-        }
-        Rejection::Unauthorized(err) => {
-            response::write_json_error(
-                cors,
-                session,
-                ctx,
-                401,
-                ApiError::unauthorized_any(err.details()),
-            )
-            .await
-        }
-        other => {
-            response::write_json_error(
-                cors,
-                session,
-                ctx,
-                other.status(),
-                ApiError::service_unavailable(),
-            )
-            .await
-        }
     }
 }
 
@@ -453,7 +294,7 @@ fn request_context(ctx: &GatewayContext) -> opentelemetry::Context {
 }
 
 /// The request's `Host` header (or HTTP/2 `:authority` URI host), for root host routing.
-fn request_host(req: &pingora::http::RequestHeader) -> Option<&str> {
+pub(super) fn request_host(req: &pingora::http::RequestHeader) -> Option<&str> {
     req.headers
         .get("host")
         .and_then(|v| v.to_str().ok())
@@ -462,7 +303,7 @@ fn request_host(req: &pingora::http::RequestHeader) -> Option<&str> {
 
 /// The client IP for audit and the IP limits ([`client_ip`]). A peer that is
 /// not an inet socket is used as is.
-fn client_ip(session: &Session, trusted: &TrustedProxies) -> String {
+pub(super) fn client_ip(session: &Session, trusted: &TrustedProxies) -> String {
     let Some(addr) = session.client_addr() else {
         return "unknown".to_string();
     };
@@ -534,148 +375,6 @@ fn audit_intent(
     }
 }
 
-fn otel_trace_ids(span: Option<&tracing::Span>) -> (Option<String>, Option<String>) {
-    let Some(span) = span else {
-        return (None, None);
-    };
-    let cx = span.context();
-    let sc = cx.span().span_context().clone();
-    if !sc.is_valid() {
-        return (None, None);
-    }
-    (
-        Some(sc.trace_id().to_string()),
-        Some(sc.span_id().to_string()),
-    )
-}
-
-struct RequestLog<'a> {
-    request_id: &'a str,
-    route: &'a str,
-    method: &'a str,
-    status: u16,
-    duration_ms: f64,
-    trace_id: Option<&'a str>,
-    span_id: Option<&'a str>,
-    credential: &'a RequestCredential,
-    /// Set on a 5xx only ([`request_error_type`]).
-    error_type: Option<&'static str>,
-}
-
-/// `error_type` for a request that ended with `status`: on a 5xx only
-/// (docs/reference/telemetry.md#error-fields-5xx-only), for the root span's
-/// `error.type` and the request line. `network` when the proxy failed or on a 503,
-/// `internal` on any other 5xx.
-fn request_error_type(status: u16, failed: bool) -> Option<&'static str> {
-    match status {
-        500..=599 if failed || status == 503 => Some("network"),
-        500..=599 => Some("internal"),
-        _ => None,
-    }
-}
-
-/// `[a,b]`: a permission list as one log field.
-fn permission_list(permissions: &[String]) -> String {
-    format!("[{}]", permissions.join(","))
-}
-
-/// The why of a permission-denied 403, next to the request line
-/// (docs/reference/telemetry.md#gateway-permission-denied-line). Any one of
-/// `required_permissions` would have admitted. `permissions` is the caller's on the
-/// node; the gateway never sees roles or bindings. Log only: services and the 403
-/// body never get the caller's permissions.
-fn log_permission_denied(ctx: &GatewayContext, route: &Route, caller: &Caller) {
-    let required = match &route.required {
-        Required::AnyOf(list) => permission_list(list),
-        Required::AnyMember => "any_member".to_string(),
-        Required::Nothing => "[]".to_string(),
-    };
-    let cred = &ctx.credential;
-    warn!(
-        request_id = ctx.request_id.as_deref(),
-        route = %route.path,
-        method = %ctx.method_label(),
-        status = 403u16,
-        auth_type = cred.auth_type.map(|t| t.as_str()),
-        key_id = cred.key_id.as_deref(),
-        principal = cred.principal.as_deref(),
-        root_id = cred.root_id.as_deref(),
-        node_id = cred.node_id.as_deref(),
-        member_id = cred.member_id.as_deref(),
-        required_permissions = %required,
-        permissions = %permission_list(&caller.permissions),
-        "required_permissions denied"
-    );
-}
-
-/// One line per request (docs/reference/telemetry.md#gateway-request-line). Credential
-/// fields are present only when known: `key_id` once admit recognized a key, the ids
-/// once admitted. Never the key or token itself, never a principal id.
-fn log_request_outcome(log: RequestLog<'_>, error: Option<&pingora::Error>) {
-    let RequestLog {
-        request_id,
-        route,
-        method,
-        status,
-        duration_ms,
-        trace_id,
-        span_id,
-        credential,
-        error_type,
-    } = log;
-    let auth_type = credential.auth_type.map(|t| t.as_str());
-    let key_id = credential.key_id.as_deref();
-    let principal = credential.principal.as_deref();
-    let root_id = credential.root_id.as_deref();
-    let node_id = credential.node_id.as_deref();
-    let member_id = credential.member_id.as_deref();
-    let user_id = credential.user_id.as_deref();
-
-    match error {
-        Some(err) => {
-            warn!(
-                trace_id,
-                span_id,
-                request_id,
-                route = %route,
-                method = %method,
-                status,
-                duration_ms,
-                auth_type,
-                key_id,
-                principal,
-                root_id,
-                node_id,
-                member_id,
-                user_id,
-                error_type,
-                error_message = error_type.map(|_| tracing::field::display(err)),
-                "request failed"
-            );
-        }
-        None => {
-            info!(
-                trace_id,
-                span_id,
-                request_id,
-                route = %route,
-                method = %method,
-                status,
-                duration_ms,
-                auth_type,
-                key_id,
-                principal,
-                root_id,
-                node_id,
-                member_id,
-                user_id,
-                error_type,
-                "request completed"
-            );
-        }
-    }
-}
-
 #[async_trait]
 impl ProxyHttp for Gateway {
     type CTX = GatewayContext;
@@ -721,7 +420,7 @@ impl ProxyHttp for Gateway {
             let Some(matched) = snapshot.routes.find_route_with_host(&path, &method, host) else {
                 warn!("no matching route");
                 return response::write_json_error(
-                    &self.cors(),
+                    &snapshot.cors,
                     session,
                     ctx,
                     404,
@@ -928,7 +627,7 @@ impl ProxyHttp for Gateway {
         let route = ctx.route_label().to_string();
         let method = ctx.method_label().to_string();
 
-        let error_type = request_error_type(status, e.is_some());
+        let error_type = logging::request_error_type(status, e.is_some());
         if let Some(ref span) = ctx.root_span {
             span.record("http.response.status_code", status);
             if let Some(kind) = error_type {
@@ -943,9 +642,9 @@ impl ProxyHttp for Gateway {
         metrics::record_request(&route, &method, status, duration);
 
         let request_id = ctx.request_id.as_deref().unwrap_or("");
-        let (trace_id, span_id) = otel_trace_ids(root_span.as_ref());
-        log_request_outcome(
-            RequestLog {
+        let (trace_id, span_id) = logging::otel_trace_ids(root_span.as_ref());
+        logging::log_request_outcome(
+            logging::RequestLog {
                 request_id,
                 route: &route,
                 method: &method,
@@ -973,71 +672,5 @@ impl ProxyHttp for Gateway {
         }
 
         ctx.finish_root_span();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn request_line(status: u16, error: Option<&pingora::Error>) -> serde_json::Value {
-        let credential = RequestCredential::default();
-        let mut lines = crate::telemetry::logged(|| {
-            log_request_outcome(
-                RequestLog {
-                    request_id: "req-1",
-                    route: "/orgs/{organization}",
-                    method: "GET",
-                    status,
-                    duration_ms: 2.5,
-                    trace_id: None,
-                    span_id: None,
-                    credential: &credential,
-                    error_type: request_error_type(status, error.is_some()),
-                },
-                error,
-            )
-        });
-        assert_eq!(lines.len(), 1, "{lines:?}");
-        lines.remove(0)
-    }
-
-    /// The request line carries `error_type`, and `error_message` when the proxy
-    /// failed, on a 5xx only (docs/reference/telemetry.md#error-fields-5xx-only).
-    #[test]
-    fn request_line_error_fields_on_5xx_only() {
-        let refused = pingora::Error::new(ErrorType::ConnectRefused);
-        let line = request_line(502, Some(&refused));
-        assert_eq!(line["message"], "request failed");
-        assert_eq!(line["level"], "warn");
-        assert_eq!(line["error_type"], "network");
-        assert!(
-            line["error_message"]
-                .as_str()
-                .unwrap()
-                .contains("ConnectRefused"),
-            "{line}"
-        );
-
-        let line = request_line(500, None);
-        assert_eq!(line["message"], "request completed");
-        assert_eq!(line["level"], "info");
-        assert_eq!(line["error_type"], "internal");
-        assert!(line.get("error_message").is_none(), "{line}");
-        assert_eq!(request_line(503, None)["error_type"], "network");
-
-        let closed = pingora::Error::new(ErrorType::ReadError);
-        for (status, error) in [
-            (400, Some(&*closed)),
-            (413, Some(&*closed)),
-            (0, Some(&*closed)),
-            (401, None),
-            (200, None),
-        ] {
-            let line = request_line(status, error);
-            assert!(line.get("error_type").is_none(), "{status}: {line}");
-            assert!(line.get("error_message").is_none(), "{status}: {line}");
-            assert!(line.get("error").is_none(), "{status}: {line}");
-        }
     }
 }

@@ -45,7 +45,7 @@ func TestTier2SecurityPoliciesCustomRolesAndPublicPrincipals(t *testing.T) {
 		t.Fatalf("default allow_personal_keys = %v", r.body["allow_personal_keys"])
 	}
 	r = e.call("PATCH", "/nodes/"+p.ID+"/security-policy", "", `{"allow_personal_keys":false}`)
-	e.expect(r, 422, "security policy on non-root rejected")
+	e.expect(r, 404, "security policy on non-root rejected")
 
 	r = e.call("PATCH", "/nodes/"+org.ID+"/security-policy", "", `{
 		"allow_personal_keys": false,

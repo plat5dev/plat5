@@ -97,6 +97,14 @@ pub async fn write_json_error(
     Ok(true)
 }
 
+pub fn rate_limit_headers(info: &RateLimitInfo) -> [(&'static str, String); 3] {
+    [
+        ("X-RateLimit-Limit", info.limit.to_string()),
+        ("X-RateLimit-Remaining", info.remaining.to_string()),
+        ("X-RateLimit-Reset", info.reset_epoch.to_string()),
+    ]
+}
+
 pub async fn write_rate_limited(
     cors: &CorsPolicy,
     session: &mut Session,
@@ -106,9 +114,7 @@ pub async fn write_rate_limited(
 ) -> Result<bool> {
     let mut extras = vec![("Retry-After", retry_after_seconds.to_string())];
     if let Some(info) = admitted {
-        extras.push(("X-RateLimit-Limit", info.limit.to_string()));
-        extras.push(("X-RateLimit-Remaining", info.remaining.to_string()));
-        extras.push(("X-RateLimit-Reset", info.reset_epoch.to_string()));
+        extras.extend(rate_limit_headers(info));
     }
     send_json_error_headers(
         cors,
@@ -139,9 +145,9 @@ pub fn apply_security_headers(header: &mut ResponseHeader) -> Result<()> {
 }
 
 pub fn apply_rate_limit_headers(header: &mut ResponseHeader, info: &RateLimitInfo) -> Result<()> {
-    header.insert_header("X-RateLimit-Limit", info.limit.to_string())?;
-    header.insert_header("X-RateLimit-Remaining", info.remaining.to_string())?;
-    header.insert_header("X-RateLimit-Reset", info.reset_epoch.to_string())?;
+    for (name, value) in rate_limit_headers(info) {
+        header.insert_header(name, value)?;
+    }
     Ok(())
 }
 

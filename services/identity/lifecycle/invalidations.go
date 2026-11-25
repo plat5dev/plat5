@@ -51,25 +51,41 @@ func InvalidateRoot(rootID string) Invalidation {
 	return Invalidation{Scope: ScopeRoot, Target: rootID}
 }
 
+// InvalidationHeadSQL evaluates the effective admit invalidations head: the
+// greater of the newest retained row id and the pruned watermark, so pruning
+// all rows never moves head backwards below pruned_through.
+const InvalidationHeadSQL = `GREATEST(COALESCE((SELECT MAX(id) FROM admit_invalidations), 0), COALESCE((SELECT pruned_through FROM admit_invalidation_watermark WHERE id = 1), 0))`
+
 func queueInvalidations(batch *pgx.Batch, invs []Invalidation) bool {
 	if len(invs) == 0 {
 		return false
 	}
 	if len(invs) == 1 {
-		batch.Queue(`INSERT INTO admit_invalidations (scope, target) VALUES ($1, $2)`, invs[0].Scope, invs[0].Target)
+		batch.Queue(`INSERT INTO admit_invalidations (scope, target) VALUES ($1, $2) RETURNING id`, invs[0].Scope, invs[0].Target)
 		return true
 	}
-	scopes := make([]string, len(invs))
-	targets := make([]string, len(invs))
-	for i, inv := range invs {
-		scopes[i] = inv.Scope
-		targets[i] = inv.Target
+	type pair struct{ scope, target string }
+	seen := make(map[pair]struct{}, len(invs))
+	scopes := make([]string, 0, len(invs))
+	targets := make([]string, 0, len(invs))
+	for _, inv := range invs {
+		k := pair{inv.Scope, inv.Target}
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		scopes = append(scopes, inv.Scope)
+		targets = append(targets, inv.Target)
 	}
 	batch.Queue(`
-		INSERT INTO admit_invalidations (scope, target)
-		SELECT u.scope, u.target
-		FROM unnest($1::text[], $2::text[]) WITH ORDINALITY AS u(scope, target, ord)
-		ORDER BY u.ord
+		WITH ins AS (
+			INSERT INTO admit_invalidations (scope, target)
+			SELECT u.scope, u.target
+			FROM unnest($1::text[], $2::text[]) WITH ORDINALITY AS u(scope, target, ord)
+			ORDER BY u.ord
+			RETURNING id
+		)
+		SELECT MAX(id) FROM ins
 	`, scopes, targets)
 	return true
 }
@@ -83,22 +99,25 @@ func NewInvalidationStore(pool *pgxpool.Pool) *InvalidationStore {
 	return &InvalidationStore{pool: pool}
 }
 
-// Head returns the newest committed invalidation id (0 when empty).
+// Head returns the effective newest committed invalidation id (never below the
+// pruned watermark, 0 when nothing has ever been written).
 func (s *InvalidationStore) Head(ctx context.Context) (int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, dbx.DefaultTimeout)
 	defer cancel()
 	var head int64
-	err := s.pool.QueryRow(ctx, `SELECT COALESCE(MAX(id), 0) FROM admit_invalidations`).Scan(&head)
+	err := s.pool.QueryRow(ctx, `SELECT `+InvalidationHeadSQL).Scan(&head)
 	return head, err
 }
 
-// State returns (head, prunedThrough) from one Postgres query.
+// State returns (head, prunedThrough) from one Postgres query. Head is always
+// at least prunedThrough so full retention pruning never causes a reset loop.
 func (s *InvalidationStore) State(ctx context.Context) (head, prunedThrough int64, err error) {
 	ctx, cancel := context.WithTimeout(ctx, dbx.DefaultTimeout)
 	defer cancel()
 	err = s.pool.QueryRow(ctx, `
-		SELECT COALESCE((SELECT MAX(id) FROM admit_invalidations), 0),
-		       COALESCE((SELECT pruned_through FROM admit_invalidation_watermark WHERE id = 1), 0)
+		WITH w AS (SELECT COALESCE((SELECT pruned_through FROM admit_invalidation_watermark WHERE id = 1), 0) AS pruned)
+		SELECT GREATEST(COALESCE((SELECT MAX(id) FROM admit_invalidations), 0), w.pruned), w.pruned
+		FROM w
 	`).Scan(&head, &prunedThrough)
 	return head, prunedThrough, err
 }
@@ -196,10 +215,11 @@ func (h *InvalidationHandler) Follow(ctx context.Context, interval time.Duration
 	h.head.Follow(ctx, h.store.Head, interval, log)
 }
 
-// Notify wakes local long-poll readers immediately after a local write commits.
-func (h *InvalidationHandler) Notify(ctx context.Context) {
-	if head, err := h.store.Head(ctx); err == nil {
-		h.head.Sync(head)
+// Notify wakes local long-poll readers immediately after a local write commits
+// invalidations up to head, without issuing an extra database query.
+func (h *InvalidationHandler) Notify(head int64) {
+	if head > 0 {
+		h.head.Advance(head)
 	}
 }
 
@@ -301,41 +321,8 @@ func (h *InvalidationHandler) List(c fiber.Ctx) error {
 				Events:         events,
 			})
 		}
-		if !waitHeadOrRev(wait, h.head, head, revChanged) {
+		if !h.head.WaitPastWith(wait, head, revChanged) {
 			return c.SendStatus(fiber.StatusNoContent)
-		}
-	}
-}
-
-func waitHeadOrRev(ctx context.Context, h *Head, after int64, revChanged <-chan struct{}) bool {
-	h.mu.Lock()
-	startGen := h.gen
-	h.mu.Unlock()
-	for {
-		if ctx.Err() != nil {
-			return false
-		}
-		select {
-		case <-h.stopped:
-			return false
-		case <-revChanged:
-			return true
-		default:
-		}
-		h.mu.Lock()
-		id, gen, changed := h.id, h.gen, h.changed
-		h.mu.Unlock()
-		if id > after || gen != startGen || (gen > 0 && id < after) {
-			return true
-		}
-		select {
-		case <-changed:
-		case <-revChanged:
-			return true
-		case <-ctx.Done():
-			return false
-		case <-h.stopped:
-			return false
 		}
 	}
 }

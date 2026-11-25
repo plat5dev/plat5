@@ -85,29 +85,31 @@ func Record(ctx context.Context, tx pgx.Tx, e Event) error {
 // pipelining the lock and insert in a single round-trip. Call it right before
 // commit so the global lock is held for as little time as possible.
 func RecordBatch(ctx context.Context, tx pgx.Tx, events []Event) error {
-	return RecordCommit(ctx, tx, events, nil)
+	_, err := RecordCommit(ctx, tx, events, nil)
+	return err
 }
 
 // RecordCommit writes lifecycle events and admit invalidations in one
 // pipelined batch under the single commit-ordering advisory lock. Taking one
 // lock in one place keeps both sequences commit-ordered and prevents lock-order
-// deadlocks between the two logs.
-func RecordCommit(ctx context.Context, tx pgx.Tx, events []Event, invalidations []Invalidation) error {
+// deadlocks between the two logs. Returns the highest inserted invalidation id
+// (0 when no invalidations were written).
+func RecordCommit(ctx context.Context, tx pgx.Tx, events []Event, invalidations []Invalidation) (int64, error) {
 	if len(events) == 0 && len(invalidations) == 0 {
-		return nil
+		return 0, nil
 	}
 	batch := &pgx.Batch{}
-	queued := 1
+	execs := 1
 	batch.Queue(`SELECT pg_advisory_xact_lock($1)`, lockKey)
 	if len(events) == 1 {
-		queued++
+		execs++
 		e := events[0]
 		batch.Queue(`
 			INSERT INTO events (type, kind, node_id, member_id, root_id, principal, user_id)
 			VALUES ($1, $2, $3, $4, $5, $6, $7)
 		`, e.Type, e.Kind, e.NodeID, e.MemberID, e.RootID, e.Principal, e.UserID)
 	} else if len(events) > 1 {
-		queued++
+		execs++
 		n := len(events)
 		types := make([]string, n)
 		kinds := make([]*string, n)
@@ -133,17 +135,22 @@ func RecordCommit(ctx context.Context, tx pgx.Tx, events []Event, invalidations 
 			ORDER BY u.ord
 		`, types, kinds, nodeIDs, memberIDs, rootIDs, principals, userIDs)
 	}
-	if queueInvalidations(batch, invalidations) {
-		queued++
-	}
+	hasInvs := queueInvalidations(batch, invalidations)
 	br := tx.SendBatch(ctx, batch)
-	for range queued {
+	for range execs {
 		if _, err := br.Exec(); err != nil {
 			_ = br.Close()
-			return err
+			return 0, err
 		}
 	}
-	return br.Close()
+	var maxInvID int64
+	if hasInvs {
+		if err := br.QueryRow().Scan(&maxInvID); err != nil {
+			_ = br.Close()
+			return 0, err
+		}
+	}
+	return maxInvID, br.Close()
 }
 
 // Store reads the log. Its reads are long-polled, over and over, per reader,

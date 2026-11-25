@@ -66,9 +66,10 @@ func main() {
 		baseLogger.Info().Err(err).Msg("stopped before config loaded")
 		return
 	}
+	pdp := access.NewHTTPPDP()
 	nodeStore := nodes.NewStore(pool)
-	memberStore := members.NewStore(pool, nodeStore, cfg.SecretBrand)
-	accessStore := access.NewStore(pool, cfg.SecretBrand, memberStore)
+	memberStore := members.NewStore(pool, nodeStore, cfg.SecretBrand).WithPDP(pdp)
+	accessStore := access.NewStore(pool, cfg.SecretBrand, memberStore).WithPDP(pdp)
 	invalidationStore := lifecycle.NewInvalidationStore(pool)
 	invalidationHandler := lifecycle.NewInvalidationHandler(invalidationStore, src, lifecycle.LongPollWait)
 	nodeStore.WithInvalidationNotifier(invalidationHandler.Notify)

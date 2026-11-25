@@ -84,12 +84,11 @@ func BindablePairs(snap *feed.Snapshot) (kinds, roles []string) {
 	return kinds, roles
 }
 
-// CountsSQL is the SQL condition for a binding b on node bn that counts: its
-// role is in the document and bindable at bn's kind, or is an org custom role
-// of bn's root bindable at bn's kind. kinds and roles are the parameter
-// placeholders for BindablePairs's slices.
-func CountsSQL(kinds, roles string) string {
-	return `((bn.kind, b.role) IN (SELECT * FROM unnest(` + kinds + `::text[], ` + roles + `::text[])) OR EXISTS (SELECT 1 FROM org_roles cr WHERE cr.id = b.role AND cr.root_id = bn.root_id AND bn.kind = ANY(cr.bindable_at)))`
+// CountsWithCustomSQL is the SQL condition for a binding b on node bn that
+// counts when the caller has already LEFT JOINed org_roles as crAlias:
+// its role is in the document and bindable at bn's kind, or matched crAlias.
+func CountsWithCustomSQL(kinds, roles, crAlias string) string {
+	return `((bn.kind, b.role) IN (SELECT * FROM unnest(` + kinds + `::text[], ` + roles + `::text[])) OR ` + crAlias + `.id IS NOT NULL)`
 }
 
 // Permissions is the union of the permissions of roles a member holds at a

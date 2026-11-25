@@ -37,8 +37,8 @@ The event and the read API. Concept: [audit](../../concepts/audit.md).
 | `named_node_ids`, `named_member_id` | On a user route, the chain and member the service named. `[]` and `null` otherwise |
 | `actor.member_id` | The caller's member in this tree. `null` on a user route, except in a named node's read ([reading](#reading)) |
 | `actor.user_id` | The caller's user id on a user route, in the person's own log only. `null` otherwise |
-| `actor.principal` | `person` or `service_account` |
-| `actor.auth_type` | `jwt` or `apikey` |
+| `actor.principal` | `person`, `service_account`, or `anonymous` |
+| `actor.auth_type` | `jwt`, `apikey`, or `none` |
 | `actor.key_id` | The key's id. `null` for a JWT |
 | `service`, `method` | From the route |
 | `route` | The matched public path template. Kind params stay as `{organization}`; their values are in `nodes`, never as slugs |

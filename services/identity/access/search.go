@@ -2,14 +2,11 @@ package access
 
 import (
 	"context"
-	stderrors "errors"
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
-	"github.com/plat5dev/plat5/identity/internal/httpx"
 )
 
 const (
@@ -41,9 +38,14 @@ type ResourceSearchResult struct {
 
 // SearchResources answers which live nodes of in.Kind at or below in.ScopeNodeID
 // (or the member's root when omitted) in.MemberID holds in.Permission on, using
-// admit's exact resolution inside one repeatable-read snapshot.
+// admit's exact resolution inside one repeatable-read snapshot (releasing the
+// transaction before calling any external AuthZEN PDP).
 func (s *Store) SearchResources(ctx context.Context, snap *feed.Snapshot, in ResourceSearch) (*ResourceSearchResult, error) {
-	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "search_resources", dbx.DefaultTimeout)
+	timeout := dbx.DefaultTimeout
+	if k, ok := snap.Kind(in.Kind); ok && k.Authorizer != nil {
+		timeout = 4 * dbx.DefaultTimeout
+	}
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "search_resources", timeout)
 	defer cancel()
 	defer op.End()
 
@@ -106,13 +108,11 @@ func (s *Store) SearchResources(ctx context.Context, snap *feed.Snapshot, in Res
 			op.OK("all")
 			return &ResourceSearchResult{All: true}, nil
 		}
-		res, err := s.searchWithAuthorizer(ctx, tx, snap, in, scopeID, memberRoot, limit, targetKind.Authorizer, scopeBuiltinAll)
+		// Release the repeatable-read transaction before making outbound PDP calls.
+		_ = tx.Rollback(ctx)
+		res, err := s.searchWithAuthorizer(ctx, snap, in, scopeID, memberRoot, limit, targetKind.Authorizer, scopeBuiltinAll)
 		if err != nil {
-			if stderrors.Is(err, ErrPDPUnavailable) {
-				httpx.LogError(ctx, "external authorizer resource search failed", err, errors.KindNetwork)
-				return nil, errors.ServiceUnavailableError()
-			}
-			return nil, op.Fail(err)
+			return nil, op.Reject(err)
 		}
 		op.OK("ok")
 		return res, nil
@@ -186,10 +186,10 @@ func (s *Store) SearchResources(ctx context.Context, snap *feed.Snapshot, in Res
 
 // searchWithAuthorizer walks live candidate nodes of in.Kind under scopeID in
 // id order, combining built-in RBAC with the kind's external AuthZEN PDP in
-// batches of up to MaxPDPBatch.
+// batches of up to MaxPDPBatch. Queries run against s.pool per batch so no
+// Postgres transaction is ever held open across external HTTP calls.
 func (s *Store) searchWithAuthorizer(
 	ctx context.Context,
-	tx pgx.Tx,
 	snap *feed.Snapshot,
 	in ResourceSearch,
 	scopeID, rootID string,
@@ -197,15 +197,11 @@ func (s *Store) searchWithAuthorizer(
 	ka *feed.KindAuthorizer,
 	scopeBuiltinAll bool,
 ) (*ResourceSearchResult, error) {
-	authz, ok := snap.Authorizers[ka.Name]
-	if !ok || s.pdp == nil {
-		return nil, ErrPDPUnavailable
-	}
-	batchSize := min(max(limit+1, 100), MaxPDPBatch)
+	batchSize := min(limit+1, MaxPDPBatch)
 	after := in.After
 	var out []string
 	for {
-		rows, err := tx.Query(ctx, `
+		rows, err := s.pool.Query(ctx, `
 			SELECT n.id
 			FROM node_ancestors a
 			JOIN nodes n ON n.id = a.node_id
@@ -232,13 +228,14 @@ func (s *Store) searchWithAuthorizer(
 		}
 
 		builtin := make([]bool, len(cands))
+		var chains map[string][]ChainNode
 		if ka.Mode != feed.AuthorizerModeReplace {
 			if scopeBuiltinAll {
 				for i := range builtin {
 					builtin[i] = true
 				}
 			} else {
-				chains, err := liveChains(ctx, tx, cands)
+				chains, err = liveChains(ctx, s.pool, cands)
 				if err != nil {
 					return nil, err
 				}
@@ -246,7 +243,7 @@ func (s *Store) searchWithAuthorizer(
 				for i, cid := range cands {
 					pairs[i] = memberChain{memberID: in.MemberID, nodes: chains[cid]}
 				}
-				held, heldCustom, err := heldOnChains(ctx, tx, snap, pairs, s.now().UTC())
+				held, heldCustom, err := heldOnChains(ctx, s.pool, snap, pairs, s.now().UTC())
 				if err != nil {
 					return nil, err
 				}
@@ -258,28 +255,26 @@ func (s *Store) searchWithAuthorizer(
 
 		decisions := append([]bool(nil), builtin...)
 		var extIdx []int
-		var reqs []AuthzenRequest
+		var extNodeIDs []string
 		for i, cid := range cands {
 			if !NeedsExternal(ka.Mode, builtin[i]) {
 				continue
 			}
 			extIdx = append(extIdx, i)
-			reqs = append(reqs, AuthzenRequest{
-				Subject: AuthzenSubject{
-					Type:       "member",
-					ID:         in.MemberID,
-					Properties: map[string]any{"root_id": rootID},
-				},
-				Action: AuthzenAction{Name: in.Permission},
-				Resource: AuthzenResource{
-					Type:       in.Kind,
-					ID:         cid,
-					Properties: map[string]any{"root_id": rootID},
-				},
-			})
+			extNodeIDs = append(extNodeIDs, cid)
 		}
-		if len(reqs) > 0 {
-			extRes, err := s.pdp.EvaluateBatch(ctx, authz, reqs)
+		if len(extNodeIDs) > 0 {
+			if chains == nil {
+				chains, err = liveChains(ctx, s.pool, extNodeIDs)
+				if err != nil {
+					return nil, err
+				}
+			}
+			reqs := make([]AuthzenRequest, len(extNodeIDs))
+			for j, cid := range extNodeIDs {
+				reqs[j] = BuildNodeAuthzenRequest(in.MemberID, rootID, in.Permission, in.Kind, cid, chains[cid])
+			}
+			extRes, err := EvaluateAuthorizerBatch(ctx, snap, s.pdp, ka.Name, reqs)
 			if err != nil {
 				return nil, err
 			}

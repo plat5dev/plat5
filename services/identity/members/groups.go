@@ -231,12 +231,12 @@ func (s *Store) ListGroupMembers(ctx context.Context, rootID, groupID string, li
 	if _, err := s.getGroup(ctx, s.pool, rootID, groupID); err != nil {
 		return nil, false, op.Reject(err, ErrNotFound)
 	}
-	rows, err := s.pool.Query(ctx, memberSelect(`
+	rows, err := s.pool.Query(ctx, memberSelect("$4", `
 		m.removed_at IS NULL
 		AND EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = $1 AND gm.member_id = m.id)
 		AND m.id > $2
 		ORDER BY m.id LIMIT $3
-	`), groupID, startingAfter, limit+1)
+	`), groupID, startingAfter, limit+1, s.now().UTC())
 	if err != nil {
 		return nil, false, op.Fail(err)
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/plat5dev/plat5/identity/internal/dbx"
 	"github.com/plat5dev/plat5/identity/internal/id"
 	"github.com/plat5dev/plat5/identity/internal/secret"
+	"github.com/plat5dev/plat5/identity/lifecycle"
 	"github.com/plat5dev/plat5/identity/nodes"
 )
 
@@ -290,6 +291,9 @@ func (s *Store) Redeem(ctx context.Context, userID, token string) (*Redeemed, er
 	if err != nil {
 		return nil, op.Reject(err, ErrNotFound)
 	}
+	if u.Status != StatusActive {
+		return nil, op.Expected("suspended user", errors.InviteNotRedeemableError("This account is suspended.", "user_suspended"))
+	}
 	if !secret.Parse(secret.InvitePrefix(s.brand), token) {
 		return nil, op.Expected("unknown token", errors.NotFoundError("invite", nil))
 	}
@@ -328,8 +332,15 @@ func (s *Store) Redeem(ctx context.Context, userID, token string) (*Redeemed, er
 	}
 
 	out := &Redeemed{Node: n}
-	if out.MemberID, err = activeMemberID(ctx, w.tx, u.principalID, n.RootID); err != nil {
+	var memberSuspended bool
+	err = w.tx.QueryRow(ctx, `
+		SELECT id, suspended_at IS NOT NULL FROM members WHERE principal_id = $1 AND root_id = $2 AND removed_at IS NULL
+	`, u.principalID, n.RootID).Scan(&out.MemberID, &memberSuspended)
+	if err != nil && !dbx.IsNoRows(err) {
 		return nil, op.Fail(err)
+	}
+	if memberSuspended {
+		return nil, op.Expected("suspended member", errors.InviteNotRedeemableError("This member is suspended.", "member_suspended"))
 	}
 	if out.MemberID == "" {
 		out.MemberID, err = s.insertMember(ctx, w, u.principalID, PrincipalPerson, n.RootID)
@@ -342,6 +353,7 @@ func (s *Store) Redeem(ctx context.Context, userID, token string) (*Redeemed, er
 			return nil, op.Fail(err)
 		}
 		out.MemberCreated = true
+		w.invalidate(lifecycle.InvalidateUser(u.ID))
 	}
 	if out.Binding, err = s.bindIfNotHeld(ctx, w, out.MemberID, n.ID, inv.Role); err != nil {
 		return nil, op.Fail(err)
@@ -372,36 +384,52 @@ func (s *Store) Redeem(ctx context.Context, userID, token string) (*Redeemed, er
 }
 
 // bindIfNotHeld binds role for the member on the node, unless the member
-// already has a binding there: then it returns nil and changes nothing.
+// already has an unexpired binding there: then it returns nil and changes
+// nothing. Any expired binding for the same (member, node, role) is replaced.
 func (s *Store) bindIfNotHeld(ctx context.Context, w *write, memberID, nodeID, role string) (*Binding, error) {
+	now := s.now().UTC()
 	var held bool
 	if err := w.tx.QueryRow(ctx, `
-		SELECT EXISTS (SELECT 1 FROM bindings WHERE member_id = $1 AND node_id = $2)
-	`, memberID, nodeID).Scan(&held); err != nil {
+		SELECT EXISTS (
+			SELECT 1 FROM bindings
+			WHERE member_id = $1 AND node_id = $2 AND (expires_at IS NULL OR expires_at > $3)
+		)
+	`, memberID, nodeID, now).Scan(&held); err != nil {
 		return nil, err
 	}
 	if held {
 		return nil, nil
 	}
+	if _, err := w.tx.Exec(ctx, `
+		DELETE FROM bindings WHERE member_id = $1 AND node_id = $2 AND role = $3 AND expires_at IS NOT NULL AND expires_at <= $4
+	`, memberID, nodeID, role, now); err != nil {
+		return nil, err
+	}
 	return s.insertBinding(ctx, w, memberID, nodeID, role, nil)
 }
 
 // applyGrants binds each grant on a node still live where the member has no
-// binding yet, and reports whether it bound any. Roles were checked when the
-// invite was made; one removed since binds and grants nothing, like any
-// binding whose role is gone.
+// unexpired binding yet, and reports whether it bound any. Roles were checked
+// when the invite was made; one removed since binds and grants nothing, like
+// any binding whose role is gone.
 func (s *Store) applyGrants(ctx context.Context, w *write, memberID string, grants []Grant) (bool, error) {
+	now := s.now().UTC()
 	bound := false
 	for _, g := range grants {
 		var live, held bool
 		if err := w.tx.QueryRow(ctx, `
 			SELECT EXISTS (SELECT 1 FROM nodes WHERE id = $1 AND status = 'active'),
-			       EXISTS (SELECT 1 FROM bindings WHERE member_id = $2 AND node_id = $1)
-		`, g.NodeID, memberID).Scan(&live, &held); err != nil {
+			       EXISTS (SELECT 1 FROM bindings WHERE member_id = $2 AND node_id = $1 AND (expires_at IS NULL OR expires_at > $3))
+		`, g.NodeID, memberID, now).Scan(&live, &held); err != nil {
 			return false, err
 		}
 		if !live || held {
 			continue
+		}
+		if _, err := w.tx.Exec(ctx, `
+			DELETE FROM bindings WHERE member_id = $1 AND node_id = $2 AND role = $3 AND expires_at IS NOT NULL AND expires_at <= $4
+		`, memberID, g.NodeID, g.Role, now); err != nil {
+			return false, err
 		}
 		if _, err := s.insertBinding(ctx, w, memberID, g.NodeID, g.Role, nil); err != nil {
 			return false, err

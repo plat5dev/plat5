@@ -291,12 +291,16 @@ func (s *Store) CreateCustomRole(ctx context.Context, snap *feed.Snapshot, rootI
 	return &r, nil
 }
 
-// PatchCustomRole updates a root's custom role and emits a root invalidation.
+// PatchCustomRole updates a root's custom role and emits a root invalidation
+// when authz-relevant fields (permissions or bindable_at) change.
 func (s *Store) PatchCustomRole(ctx context.Context, snap *feed.Snapshot, rootID, roleID string, patch CustomRolePatch) (*RoleView, *RoleView, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "patch_custom_role", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
 
+	if !snap.CustomRoles {
+		return nil, nil, op.Expected("disabled", errors.FieldError("custom_roles", "Custom roles are not enabled for this deployment."))
+	}
 	if patch.DisplayName == nil && patch.Description == nil && patch.Permissions == nil && patch.BindableAt == nil {
 		return nil, nil, op.Expected("invalid", errors.FieldError("", "Nothing to update."))
 	}
@@ -365,7 +369,9 @@ func (s *Store) PatchCustomRole(ctx context.Context, snap *feed.Snapshot, rootID
 	if err != nil {
 		return nil, nil, op.Fail(err)
 	}
-	w.invalidate(lifecycle.InvalidateRoot(root.ID))
+	if !slices.Equal(before.Permissions, after.Permissions) || !slices.Equal(before.BindableAt, after.BindableAt) {
+		w.invalidate(lifecycle.InvalidateRoot(root.ID))
+	}
 	if err := w.commit(ctx); err != nil {
 		return nil, nil, op.Fail(err)
 	}

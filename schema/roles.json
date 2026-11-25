@@ -61,9 +61,9 @@
     },
     "role_slug": {
       "title": "slug",
-      "description": "`[a-z0-9:._-]+`, max 64. Opaque to Plat5.",
+      "description": "`[a-z][a-z0-9:._-]*`, max 64. Starts with a letter so predefined slugs never collide with custom role ULIDs. Opaque to Plat5.",
       "type": "string",
-      "pattern": "^[a-z0-9:._-]{1,64}$"
+      "pattern": "^[a-z][a-z0-9:._-]{0,63}$"
     },
     "permission": {
       "title": "permission",

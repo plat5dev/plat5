@@ -25,13 +25,11 @@ const (
 
 // Authorizer is an external OpenID AuthZEN 1.0 PDP configured in authorizers.
 type Authorizer struct {
-	Name             string
-	URL              string
-	Timeout          time.Duration
-	CacheTTL         time.Duration
-	NegativeCacheTTL time.Duration
-	TokenEnv         string
-	Token            string
+	Name     string
+	URL      string
+	Timeout  time.Duration
+	TokenEnv string
+	Token    string
 }
 
 // KindAuthorizer attaches a named external authorizer to a kind.
@@ -160,9 +158,8 @@ func (s *Snapshot) Names() []string {
 }
 
 var (
-	kindNameRe            = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
-	durationRe            = regexp.MustCompile(`^([1-9][0-9]{0,8})([smhd])$`)
-	nonNegativeDurationRe = regexp.MustCompile(`^(0|[1-9][0-9]{0,8})([smhd])$`)
+	kindNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+	durationRe = regexp.MustCompile(`^([1-9][0-9]{0,8})([smhd])$`)
 )
 
 type wireKindAuthorizer struct {
@@ -171,11 +168,9 @@ type wireKindAuthorizer struct {
 }
 
 type wireAuthorizer struct {
-	URL              string `json:"url"`
-	Timeout          string `json:"timeout"`
-	CacheTTL         string `json:"cache_ttl"`
-	NegativeCacheTTL string `json:"negative_cache_ttl"`
-	TokenEnv         string `json:"token_env"`
+	URL      string `json:"url"`
+	Timeout  string `json:"timeout"`
+	TokenEnv string `json:"token_env"`
 }
 
 type wireKind struct {
@@ -246,14 +241,6 @@ func Parse(body []byte) (*Snapshot, error) {
 				return nil, fmt.Errorf("authorizers.%s.timeout: %w", name, err)
 			}
 		}
-		cacheTTL, err := parseNonNegativeDuration(wa.CacheTTL)
-		if err != nil {
-			return nil, fmt.Errorf("authorizers.%s.cache_ttl: %w", name, err)
-		}
-		negTTL, err := parseNonNegativeDuration(wa.NegativeCacheTTL)
-		if err != nil {
-			return nil, fmt.Errorf("authorizers.%s.negative_cache_ttl: %w", name, err)
-		}
 		var token string
 		if wa.TokenEnv != "" {
 			token = strings.TrimSpace(os.Getenv(wa.TokenEnv))
@@ -262,13 +249,11 @@ func Parse(body []byte) (*Snapshot, error) {
 			}
 		}
 		s.Authorizers[name] = Authorizer{
-			Name:             name,
-			URL:              u,
-			Timeout:          timeout,
-			CacheTTL:         cacheTTL,
-			NegativeCacheTTL: negTTL,
-			TokenEnv:         wa.TokenEnv,
-			Token:            token,
+			Name:     name,
+			URL:      u,
+			Timeout:  timeout,
+			TokenEnv: wa.TokenEnv,
+			Token:    token,
 		}
 	}
 	for perm, wm := range w.Permissions {
@@ -379,19 +364,6 @@ func ParseDuration(v string) (time.Duration, error) {
 		return 30 * 24 * time.Hour, nil
 	}
 	m := durationRe.FindStringSubmatch(v)
-	if m == nil {
-		return 0, fmt.Errorf("%q is not a duration", v)
-	}
-	n, _ := strconv.ParseInt(m[1], 10, 64)
-	unit := map[string]time.Duration{"s": time.Second, "m": time.Minute, "h": time.Hour, "d": 24 * time.Hour}[m[2]]
-	return time.Duration(n) * unit, nil
-}
-
-func parseNonNegativeDuration(v string) (time.Duration, error) {
-	if v == "" {
-		return 0, nil
-	}
-	m := nonNegativeDurationRe.FindStringSubmatch(v)
 	if m == nil {
 		return 0, fmt.Errorf("%q is not a duration", v)
 	}

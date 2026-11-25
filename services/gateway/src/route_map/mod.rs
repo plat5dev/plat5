@@ -240,6 +240,16 @@ impl RouteMap {
         kinds: &Kinds,
         authorizers: &BTreeMap<String, AuthorizerSpec>,
     ) -> Result<Self, String> {
+        let compiled_policies = compile_policies(rate_limits)?;
+        Self::from_compiled(services, &compiled_policies, kinds, authorizers)
+    }
+
+    pub fn from_compiled(
+        services: &BTreeMap<String, ServiceDoc>,
+        compiled_policies: &BTreeMap<String, CompiledPolicy>,
+        kinds: &Kinds,
+        authorizers: &BTreeMap<String, AuthorizerSpec>,
+    ) -> Result<Self, String> {
         let mut by_method: HashMap<String, Vec<CompiledRoute>> = HashMap::new();
         for (name, service) in services {
             let timeouts = Timeouts {
@@ -254,7 +264,7 @@ impl RouteMap {
                     service,
                     timeouts,
                     doc,
-                    rate_limits,
+                    compiled_policies,
                     kinds,
                     authorizers,
                 )
@@ -342,21 +352,77 @@ fn shape(segments: &[Segment]) -> Vec<bool> {
         .collect()
 }
 
+/// Pre-parsed rate-limit policy (window and tiers parsed once per snapshot).
+pub struct CompiledPolicy {
+    pub name: String,
+    pub requests: u64,
+    pub window_seconds: u64,
+    pub count_at: Option<String>,
+    pub tiers: BTreeMap<String, TierLimit>,
+}
+
+impl CompiledPolicy {
+    pub fn compile(name: &str, doc: &PolicyDoc) -> Result<Self, String> {
+        let window_seconds = parse_duration(&doc.window)
+            .filter(|d| *d >= Duration::from_secs(1))
+            .ok_or_else(|| {
+                format!(
+                    "rate_limit {name} has invalid window {:?} (must be at least 1s)",
+                    doc.window
+                )
+            })?
+            .as_secs();
+        let tiers = parse_tiers(name, &doc.tiers)?;
+        Ok(Self {
+            name: name.to_string(),
+            requests: doc.requests,
+            window_seconds,
+            count_at: doc.count_at.clone(),
+            tiers,
+        })
+    }
+
+    pub fn into_policy(&self, count_at: Option<usize>) -> Policy {
+        Policy {
+            name: self.name.clone(),
+            requests: self.requests,
+            window_seconds: self.window_seconds,
+            count_at,
+            tiers: self.tiers.clone(),
+        }
+    }
+}
+
+pub fn compile_policies(
+    docs: &BTreeMap<String, PolicyDoc>,
+) -> Result<BTreeMap<String, CompiledPolicy>, String> {
+    docs.iter()
+        .map(|(name, doc)| Ok((name.clone(), CompiledPolicy::compile(name, doc)?)))
+        .collect()
+}
+
 fn match_segments(compiled: &CompiledRoute, request: &[&str]) -> Option<Matched> {
     if compiled.segments.len() != request.len() {
         return None;
     }
-    let mut refs = vec![String::new(); compiled.route.chain.len()];
-    let mut params = BTreeMap::new();
+    // Check literals and non-empty param values before allocating.
     for (segment, value) in compiled.segments.iter().zip(request) {
         match segment {
             Segment::Literal(text) if text == value => {}
             Segment::Literal(_) => return None,
             _ if value.is_empty() => return None,
-            Segment::Chain(i) => refs[*i] = value.to_string(),
+            _ => {}
+        }
+    }
+    let mut refs = vec![String::new(); compiled.route.chain.len()];
+    let mut params = BTreeMap::new();
+    for (segment, value) in compiled.segments.iter().zip(request) {
+        match segment {
+            Segment::Chain(i) => refs[*i] = (*value).to_string(),
             Segment::Param(name) => {
-                params.insert(name.clone(), value.to_string());
+                params.insert(name.clone(), (*value).to_string());
             }
+            Segment::Literal(_) => {}
         }
     }
     Some(Matched {
@@ -371,7 +437,7 @@ fn build_route(
     service: &ServiceDoc,
     timeouts: Timeouts,
     doc: &RouteDoc,
-    rate_limits: &BTreeMap<String, PolicyDoc>,
+    rate_limits: &BTreeMap<String, CompiledPolicy>,
     kinds: &Kinds,
     authorizers: &BTreeMap<String, AuthorizerSpec>,
 ) -> Result<CompiledRoute, String> {
@@ -415,23 +481,7 @@ fn build_route(
                     format!("rate_limit {name} counts at {kind}, outside the chain")
                 })?),
             };
-            let window_seconds = parse_duration(&policy.window)
-                .filter(|d| *d >= Duration::from_secs(1))
-                .ok_or_else(|| {
-                    format!(
-                        "rate_limit {name} has invalid window {:?} (must be at least 1s)",
-                        policy.window
-                    )
-                })?
-                .as_secs();
-            let tiers = parse_tiers(name, &policy.tiers)?;
-            Ok(Policy {
-                name: name.clone(),
-                requests: policy.requests,
-                window_seconds,
-                count_at,
-                tiers,
-            })
+            Ok(policy.into_policy(count_at))
         })
         .collect::<Result<Vec<_>, String>>()?;
 

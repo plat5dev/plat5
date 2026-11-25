@@ -92,8 +92,8 @@ POST {IDENTITY_INTERNAL_URL}/access/v1/search/resource
 
 When `all` is `true`, the member holds the permission on every live node of that kind under `scope`; otherwise filter by the returned `results` ids.
 
-### Record-level auth & external PDP cache invalidation
-If your routes attach an external AuthZEN 1.0 authorizer with `resource: { type, id }` ([authorizers](../reference/config/authorizers.md)), the gateway enforces record-level decisions before requests reach your handler. When your service writes a relation or policy change to the external PDP (for example, creating or unsharing a document) and the authorizer sets a non-zero `cache_ttl` or `negative_cache_ttl`, call `POST {GATEWAY_INTERNAL_URL}/internal/authorizer-cache/invalidate` ([gateway internal API](../reference/api/internal.md#authorizer-cache-invalidation)) so cached decisions evict immediately. See the [Topaz playbook](../playbooks/record-level-auth-topaz.md).
+### Record-level auth with an external PDP
+If your routes attach an external AuthZEN 1.0 authorizer with `resource: { type, id }` ([authorizers](../reference/config/authorizers.md)), the gateway enforces record-level decisions before requests reach your handler. Leave `cache_ttl` and `negative_cache_ttl` at `0s` (the default) when share/unshare writes must take effect immediately, or use short TTLs (`2s`–`5s`) for high-traffic read routes. See the [Topaz playbook](../playbooks/record-level-auth-topaz.md).
 
 ## Nodes with service fields
 

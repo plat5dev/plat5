@@ -114,15 +114,11 @@ func (e *env) person(subject string) string {
 		e.t.Fatal(err)
 	}
 	defer w.rollback(e.ctx)
-	principalID, err := e.store.ensurePerson(e.ctx, w, "https://idp.test", subject)
+	_, userID, err := e.store.ensurePerson(e.ctx, w, "https://idp.test", subject)
 	if err != nil {
 		e.t.Fatal(err)
 	}
 	if err := w.commit(e.ctx); err != nil {
-		e.t.Fatal(err)
-	}
-	var userID string
-	if err := e.pool.QueryRow(e.ctx, `SELECT user_id FROM principals WHERE id = $1`, principalID).Scan(&userID); err != nil {
 		e.t.Fatal(err)
 	}
 	return userID

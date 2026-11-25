@@ -12,6 +12,7 @@ mod feed;
 #[cfg(test)]
 mod fixtures;
 mod metrics;
+mod middleware;
 mod plan;
 mod rules;
 mod schema;

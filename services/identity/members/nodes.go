@@ -2,15 +2,12 @@ package members
 
 import (
 	"context"
-	stderrors "errors"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/plat5dev/plat5/identity/access"
-	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
-	"github.com/plat5dev/plat5/identity/internal/httpx"
 	"github.com/plat5dev/plat5/identity/internal/id"
 	"github.com/plat5dev/plat5/identity/lifecycle"
 	"github.com/plat5dev/plat5/identity/metrics"
@@ -103,6 +100,7 @@ func (s *Store) CreateRoot(ctx context.Context, snap *feed.Snapshot, in nodes.Cr
 		if _, err := s.insertBinding(ctx, w, memberID, n.ID, snap.CreatorRole, nil); err != nil {
 			return nil, "", op.Fail(err)
 		}
+		w.invalidate(lifecycle.InvalidateUser(u.ID))
 	}
 	if err := w.commit(ctx); err != nil {
 		return nil, "", op.Fail(err)
@@ -168,7 +166,7 @@ func (s *Store) ListChildren(ctx context.Context, snap *feed.Snapshot, parentID,
 	}
 	out, hasMore, err := s.filterPage(ctx, snap, callerID != "", limit, startingAfter, fetch)
 	if err != nil {
-		return nil, false, op.Fail(err)
+		return nil, false, op.Reject(err)
 	}
 	op.OK("ok")
 	return out, hasMore, nil
@@ -203,7 +201,7 @@ func (s *Store) ListUserNodes(ctx context.Context, snap *feed.Snapshot, userID, 
 	}
 	out, hasMore, err := s.filterPage(ctx, snap, true, limit, startingAfter, fetch)
 	if err != nil {
-		return nil, false, op.Fail(err)
+		return nil, false, op.Reject(err)
 	}
 	op.OK("ok")
 	return out, hasMore, nil
@@ -286,7 +284,7 @@ func (s *Store) visible(ctx context.Context, snap *feed.Snapshot, cands []*liste
 		LEFT JOIN org_roles cr ON cr.id = b.role AND cr.root_id = bn.root_id AND bn.kind = ANY(cr.bindable_at)
 		WHERE (bn.status = 'active' OR bn.id = c.node_id)
 		  AND (b.expires_at IS NULL OR b.expires_at > $5)
-		  AND `+access.CountsSQL("$3", "$4"),
+		  AND `+access.CountsWithCustomSQL("$3", "$4", "cr"),
 		nodeIDs, memberIDs, kinds, roles, s.now().UTC())
 	if err != nil {
 		return nil, err
@@ -310,12 +308,13 @@ func (s *Store) visible(ctx context.Context, snap *feed.Snapshot, cands []*liste
 	}
 
 	// Delegate candidates whose kind declares an external AuthZEN authorizer,
-	// batched per authorizer.
+	// batched per authorizer with full resolved ancestor chains.
 	type extCand struct {
-		nodeID string
-		req    access.AuthzenRequest
+		cand   *listed
+		action string
 	}
 	pending := map[string][]extCand{}
+	var extNodeIDs []string
 	for _, c := range cands {
 		k, ok := snap.Kind(c.Kind)
 		if !ok || k.Authorizer == nil {
@@ -324,61 +323,33 @@ func (s *Store) visible(ctx context.Context, snap *feed.Snapshot, cands []*liste
 		if !access.NeedsExternal(k.Authorizer.Mode, out[c.ID]) {
 			continue
 		}
-		pending[k.Authorizer.Name] = append(pending[k.Authorizer.Name], extCand{
-			nodeID: c.ID,
-			req: access.AuthzenRequest{
-				Subject: access.AuthzenSubject{
-					Type:       "member",
-					ID:         c.memberID,
-					Properties: map[string]any{"root_id": c.RootID},
-				},
-				Action: access.AuthzenAction{Name: k.ListPermission},
-				Resource: access.AuthzenResource{
-					Type:       c.Kind,
-					ID:         c.ID,
-					Properties: map[string]any{"root_id": c.RootID},
-				},
-			},
-		})
+		pending[k.Authorizer.Name] = append(pending[k.Authorizer.Name], extCand{cand: c, action: k.ListPermission})
+		extNodeIDs = append(extNodeIDs, c.ID)
 	}
-	for name, items := range pending {
-		authz, ok := snap.Authorizers[name]
-		if !ok || s.pdp == nil {
-			httpx.LogError(ctx, "external authorizer not configured", access.ErrPDPUnavailable, errors.KindNetwork)
-			return nil, errors.ServiceUnavailableError()
-		}
-		reqs := make([]access.AuthzenRequest, len(items))
-		for i, it := range items {
-			reqs[i] = it.req
-		}
-		decisions, err := s.pdp.EvaluateBatch(ctx, authz, reqs)
-		if err != nil {
-			if stderrors.Is(err, access.ErrPDPUnavailable) {
-				httpx.LogError(ctx, "external authorizer list filtering failed", err, errors.KindNetwork)
-				return nil, errors.ServiceUnavailableError()
-			}
-			return nil, err
-		}
-		for i, it := range items {
-			out[it.nodeID] = decisions[i]
-		}
+	if len(extNodeIDs) == 0 {
+		return out, nil
 	}
-	return out, nil
-}
-
-// --- roles ---
-
-// Roles is GET /nodes/{node_id}/roles: the roles bindable at the node's kind,
-// by slug.
-func (s *Store) Roles(ctx context.Context, snap *feed.Snapshot, nodeID string) ([]feed.Role, error) {
-	n, err := s.nodes.Get(ctx, nodeID)
+	ancestors, err := s.nodes.Ancestors(ctx, extNodeIDs)
 	if err != nil {
 		return nil, err
 	}
-	out := []feed.Role{}
-	for _, slug := range snap.RoleSlugs() {
-		if r := snap.Roles[slug]; r.BindableAtKind(n.Kind) {
-			out = append(out, r)
+	for name, items := range pending {
+		reqs := make([]access.AuthzenRequest, len(items))
+		for i, it := range items {
+			anc := ancestors[it.cand.ID]
+			chain := make([]access.ChainNode, 0, len(anc)+1)
+			for _, a := range anc {
+				chain = append(chain, access.ChainNode{Kind: a.Kind, ID: a.ID})
+			}
+			chain = append(chain, access.ChainNode{Kind: it.cand.Kind, ID: it.cand.ID})
+			reqs[i] = access.BuildNodeAuthzenRequest(it.cand.memberID, it.cand.RootID, it.action, it.cand.Kind, it.cand.ID, chain)
+		}
+		decisions, err := access.EvaluateAuthorizerBatch(ctx, snap, s.pdp, name, reqs)
+		if err != nil {
+			return nil, err
+		}
+		for i, it := range items {
+			out[it.cand.ID] = decisions[i]
 		}
 	}
 	return out, nil

@@ -12,8 +12,9 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::config::{
-    audited_by_default, is_false, Config, FilledTimeouts, MethodConfig, RateLimit, Required,
-    ResolvedRouteAuthorizer, RouteAuthorizerConfig, Service, PUBLIC_SCOPE, USER_SCOPE, VERBS,
+    audited_by_default, is_false, Config, FilledTimeouts, Keyword, MethodConfig, RateLimit,
+    Required, ResolvedRouteAuthorizer, RouteAuthorizerConfig, Service, PUBLIC_SCOPE, USER_SCOPE,
+    VERBS,
 };
 
 /// One route as the gateway matches it.
@@ -99,11 +100,11 @@ pub fn specs(config: &Config) -> Vec<Spec> {
     config
         .services
         .iter()
-        .flat_map(|(name, service)| route_specs(name, service))
+        .flat_map(|(name, service)| route_specs(config, name, service))
         .collect()
 }
 
-fn route_specs(name: &str, service: &Service) -> Vec<Spec> {
+fn route_specs(config: &Config, name: &str, service: &Service) -> Vec<Spec> {
     let mut out = Vec::new();
     let service_authorizer = service
         .authorizer
@@ -116,7 +117,7 @@ fn route_specs(name: &str, service: &Service) -> Vec<Spec> {
             .clone()
             .map(|p| at(p, format!("{scope_at}.upstream_prefix")));
         // A service-level authorizer only inherits into kind scopes (not user/public),
-        // whereas an explicit authorizer on a user/public scope is kept so rules.rs rejects it.
+        // whereas an explicit authorizer on a user/public scope is kept so rules rejects it.
         let inherited_service_authz = if scope_name == USER_SCOPE || scope_name == PUBLIC_SCOPE {
             None
         } else {
@@ -127,6 +128,16 @@ fn route_specs(name: &str, service: &Service) -> Vec<Spec> {
             .as_ref()
             .map(|a| at(a.clone(), format!("{scope_at}.authorizer")))
             .or(inherited_service_authz);
+        let kind_authorizer = config
+            .kinds
+            .get(scope_name)
+            .and_then(|k| k.authorizer.as_ref())
+            .map(|ka| {
+                at(
+                    ResolvedRouteAuthorizer::from(ka),
+                    format!("kinds.{scope_name}.authorizer"),
+                )
+            });
         for (i, route) in scope.routes.iter().enumerate() {
             let route_at = format!("{scope_at}.routes[{i}]");
             let route_level = MethodConfig {
@@ -147,6 +158,7 @@ fn route_specs(name: &str, service: &Service) -> Vec<Spec> {
                             None,
                             &route_at,
                             scope_authorizer.as_ref(),
+                            kind_authorizer.as_ref(),
                         )
                     })
                     .collect(),
@@ -161,6 +173,7 @@ fn route_specs(name: &str, service: &Service) -> Vec<Spec> {
                             cfg.as_ref(),
                             &verb_at,
                             scope_authorizer.as_ref(),
+                            kind_authorizer.as_ref(),
                         )
                     })
                     .collect(),
@@ -194,10 +207,20 @@ fn verb_spec(
     verb: Option<&MethodConfig>,
     verb_at: &str,
     scope_authorizer: Option<&At<RouteAuthorizerConfig>>,
+    kind_authorizer: Option<&At<ResolvedRouteAuthorizer>>,
 ) -> VerbSpec {
     let field = |f: &str, own: bool| format!("{}.{f}", if own { verb_at } else { route_at });
     let own = verb.cloned().unwrap_or_default();
-    let raw_authorizer = own
+    let required = own
+        .required_permissions
+        .map(|r| at(r, field("required_permissions", true)))
+        .or_else(|| {
+            route
+                .required_permissions
+                .clone()
+                .map(|r| at(r, field("required_permissions", false)))
+        });
+    let explicit_authorizer = own
         .authorizer
         .map(|a| at(a, field("authorizer", true)))
         .or_else(|| {
@@ -207,19 +230,22 @@ fn verb_spec(
                 .map(|a| at(a, field("authorizer", false)))
         })
         .or_else(|| scope_authorizer.cloned());
-    let authorizer = raw_authorizer.and_then(|a| a.value.resolve().map(|r| at(r, a.at)));
+    // Precedence: verb -> route -> scope -> service -> kind (with `false` opting out).
+    // Kind authorizers have no action override, so they inherit only onto routes with
+    // explicit permissions (not `any_member`, such as child-list or `/membership` routes).
+    let is_any_member = matches!(
+        required.as_ref().map(|r| &r.value),
+        Some(Required::Keyword(Keyword::AnyMember))
+    );
+    let authorizer = match explicit_authorizer {
+        Some(raw) => raw.value.resolve().map(|r| at(r, raw.at)),
+        None if !is_any_member => kind_authorizer.cloned(),
+        None => None,
+    };
     VerbSpec {
         method: method.to_string(),
         missing_at: format!("{verb_at}.required_permissions"),
-        required: own
-            .required_permissions
-            .map(|r| at(r, field("required_permissions", true)))
-            .or_else(|| {
-                route
-                    .required_permissions
-                    .clone()
-                    .map(|r| at(r, field("required_permissions", false)))
-            }),
+        required,
         rate_limit: own
             .rate_limit
             .map(|r| at(r, field("rate_limit", true)))
@@ -322,15 +348,11 @@ pub fn expand_spec(config: &Config, spec: &Spec) -> Vec<ExpandedRoute> {
         .collect()
 }
 
-/// Every service, expanded. The config passed the rules.
-pub fn expand(config: &Config) -> BTreeMap<String, ExpandedService> {
-    let mut routes: BTreeMap<String, Vec<ExpandedRoute>> = BTreeMap::new();
-    for spec in specs(config) {
-        routes
-            .entry(spec.service.clone())
-            .or_default()
-            .extend(expand_spec(config, &spec));
-    }
+/// Builds the sorted service map from routes already expanded during rule validation.
+pub fn assemble_services(
+    config: &Config,
+    mut routes: BTreeMap<String, Vec<ExpandedRoute>>,
+) -> BTreeMap<String, ExpandedService> {
     let defaults = config.defaults.filled();
     let timeouts = defaults.timeouts;
     config

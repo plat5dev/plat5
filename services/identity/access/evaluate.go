@@ -2,14 +2,11 @@ package access
 
 import (
 	"context"
-	stderrors "errors"
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/plat5dev/plat5/identity/errors"
 	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/dbx"
-	"github.com/plat5dev/plat5/identity/internal/httpx"
 )
 
 // Evaluation is one access question: does the member hold the permission on
@@ -109,48 +106,19 @@ func (s *Store) Evaluate(ctx context.Context, snap *feed.Snapshot, evals []Evalu
 			continue
 		}
 		chain := pairs[pairIdx[i]].nodes
-		rootID := chain[0].ID
-		resProps := map[string]any{"root_id": rootID}
-		chainNodes := make([]map[string]string, 0, len(chain))
-		for _, cn := range chain {
-			resProps[cn.Kind+"_id"] = cn.ID
-			chainNodes = append(chainNodes, map[string]string{"kind": cn.Kind, "id": cn.ID})
-		}
-		resProps["nodes"] = chainNodes
 		pending[k.Authorizer.Name] = append(pending[k.Authorizer.Name], extItem{
 			idx: i,
-			req: AuthzenRequest{
-				Subject: AuthzenSubject{
-					Type:       "member",
-					ID:         e.MemberID,
-					Properties: map[string]any{"root_id": rootID},
-				},
-				Action: AuthzenAction{Name: e.Permission},
-				Resource: AuthzenResource{
-					Type:       e.Kind,
-					ID:         e.NodeID,
-					Properties: resProps,
-				},
-			},
+			req: BuildNodeAuthzenRequest(e.MemberID, chain[0].ID, e.Permission, e.Kind, e.NodeID, chain),
 		})
 	}
 	for name, items := range pending {
-		authz, ok := snap.Authorizers[name]
-		if !ok || s.pdp == nil {
-			httpx.LogError(ctx, "external authorizer not configured", ErrPDPUnavailable, errors.KindNetwork)
-			return nil, errors.ServiceUnavailableError()
-		}
 		reqs := make([]AuthzenRequest, len(items))
 		for j, it := range items {
 			reqs[j] = it.req
 		}
-		decisions, err := s.pdp.EvaluateBatch(ctx, authz, reqs)
+		decisions, err := EvaluateAuthorizerBatch(ctx, snap, s.pdp, name, reqs)
 		if err != nil {
-			if stderrors.Is(err, ErrPDPUnavailable) {
-				httpx.LogError(ctx, "external authorizer evaluation failed", err, errors.KindNetwork)
-				return nil, errors.ServiceUnavailableError()
-			}
-			return nil, op.Fail(err)
+			return nil, op.Reject(err)
 		}
 		for j, it := range items {
 			out[it.idx] = decisions[j]
