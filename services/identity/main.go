@@ -68,7 +68,7 @@ func main() {
 	}
 	pdp := access.NewHTTPPDPWithOptions(cfg.UpstreamBlockPrivateIPs)
 	nodeStore := nodes.NewStore(pool)
-	memberStore := members.NewStore(pool, nodeStore, cfg.SecretBrand).WithPDP(pdp)
+	memberStore := members.NewStore(pool, nodeStore, cfg.SecretBrand).WithPDP(pdp).WithFeed(src)
 	accessStore := access.NewStore(pool, cfg.SecretBrand, memberStore).WithPDP(pdp)
 	invalidationStore := lifecycle.NewInvalidationStore(pool)
 	invalidationHandler := lifecycle.NewInvalidationHandler(invalidationStore, src, lifecycle.LongPollWait)

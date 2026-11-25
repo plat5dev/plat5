@@ -279,6 +279,7 @@ pub fn build(feed: Value) -> Result<Snapshot, String> {
             Some(p) => Ok(p.into_policy(None)),
         })
         .collect::<Result<Vec<_>, _>>()?;
+    const MAX_POLICY_CLAIMS: usize = 32;
     let mut policy_claims = Vec::new();
     for item in &feed.policy_claims {
         let parts = parse_claim_path(item);
@@ -287,6 +288,11 @@ pub fn build(feed: Value) -> Result<Snapshot, String> {
         }
         let canonical = parts.join(".");
         if !policy_claims.iter().any(|(name, _)| name == &canonical) {
+            if policy_claims.len() >= MAX_POLICY_CLAIMS {
+                return Err(format!(
+                    "policy_claims: at most {MAX_POLICY_CLAIMS} claims allowed"
+                ));
+            }
             policy_claims.push((canonical, parts));
         }
     }

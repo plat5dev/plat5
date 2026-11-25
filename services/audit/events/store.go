@@ -42,8 +42,8 @@ const eventColumns = `e.id, e.occurred_at, e.request_id, e.root_id, e.nodes, e.a
 // CreateIntent writes the event unless one exists for the request id: pending,
 // or final with a gateway refusal's outcome. It joins the chain's logs and,
 // on a user route, the person's. created is false for a retry.
-func (s *Store) CreateIntent(ctx context.Context, in *Intent, final *Outcome) (created bool, err error) {
-	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "create_intent", dbx.DefaultTimeout,
+func (s *Store) CreateIntent(parentCtx context.Context, in *Intent, final *Outcome) (created bool, err error) {
+	ctx, cancel, op := dbx.BeginTimeout(parentCtx, s.tracer, "create_intent", dbx.DefaultTimeout,
 		attribute.String("request_id", in.RequestID),
 	)
 	defer cancel()
@@ -91,17 +91,17 @@ func (s *Store) CreateIntent(ctx context.Context, in *Intent, final *Outcome) (c
 	}
 	eventID := id.NewAt(in.OccurredAt)
 
-	insert := func() (bool, error) {
-		tx, err := s.pool.Begin(ctx)
+	insert := func(insertCtx context.Context) (bool, error) {
+		tx, err := s.pool.Begin(insertCtx)
 		if err != nil {
 			return false, err
 		}
-		defer tx.Rollback(ctx)
+		defer tx.Rollback(insertCtx)
 		// request_id alone is the dedupe. The unique index has occurred_at
 		// too (the partition key), so check request_id within a 1-day window
 		// (pruning to 1-2 monthly partitions) and let the index catch two
 		// identical intents racing.
-		tag, err := tx.Exec(ctx, `
+		tag, err := tx.Exec(insertCtx, `
 			INSERT INTO audit_events (id, occurred_at, request_id, root_id, nodes, actor_member_id, actor_user_id,
 				actor_principal, actor_auth_type, actor_key_id, service, method, route, params, ip, user_agent,
 				outcome, status, details, created_id, named_node_ids, named_member_id)
@@ -122,20 +122,23 @@ func (s *Store) CreateIntent(ctx context.Context, in *Intent, final *Outcome) (c
 		if err != nil || tag.RowsAffected() == 0 {
 			return false, err
 		}
-		if err := addLogs(ctx, tx, logs, eventID, in.OccurredAt); err != nil {
+		if err := addLogs(insertCtx, tx, logs, eventID, in.OccurredAt); err != nil {
 			return false, err
 		}
-		return true, tx.Commit(ctx)
+		return true, tx.Commit(insertCtx)
 	}
 
-	created, err = insert()
+	created, err = insert(ctx)
 	if isNoPartition(err) {
 		// Maintenance runs ahead of the clock; this is a boot or skew race.
-		// Detach from CreateIntent's 5s deadline so EnsurePartitions gets its full partitionTimeout.
+		// Detach from CreateIntent's 5s deadline so EnsurePartitions gets its full partitionTimeout,
+		// then retry the insert with a fresh timeout so DDL duration doesn't starve the retry.
 		if err := s.EnsurePartitions(context.WithoutCancel(ctx), in.OccurredAt, in.OccurredAt); err != nil {
 			return false, op.Fail(err)
 		}
-		created, err = insert()
+		retryCtx, retryCancel := context.WithTimeout(parentCtx, dbx.DefaultTimeout)
+		defer retryCancel()
+		created, err = insert(retryCtx)
 	}
 	if err != nil {
 		return false, op.Fail(err)

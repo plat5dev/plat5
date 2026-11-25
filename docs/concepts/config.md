@@ -122,10 +122,10 @@ A dry run ignores `expect`. The apply recomputes the plan and fails with **409**
 }
 ```
 
-Changes are ordered kinds, settings, roles, permissions, authorizer, rate limits, CORS, services, then by name.
+Changes are ordered kinds, settings, roles, authorizer, rate limits, CORS, services, then by name.
 
 - `revision` is the config revision the plan was made against, `0` before the first apply. The apply sends it back as `expect.revision`.
-- `what` is `kind`, `setting` (`deletion_grace`, `reserved_slugs`, `policy_claims`, `defaults`, `creator_role`, or `custom_roles`), `role`, `permission`, `authorizer`, `rate_limit`, `cors`, or `service`. `op` is `add`, `change` or `remove`.
+- `what` is `kind`, `setting` (`deletion_grace`, `reserved_slugs`, `policy_claims`, `defaults`, `creator_role`, `custom_roles`, or `permissions`), `role`, `authorizer`, `rate_limit`, `cors`, or `service`. `op` is `add`, `change` or `remove`.
 - `before` and `after` show what changed, field by field: `before` comes from what readers are served now (the head's stored bodies); `after` is the new config expanded by the running control plane. After an upgrade, a plan of unchanged config shows exactly what the new version would serve differently ([upgrading](#upgrading)).
 - A service line lists its `routes`, expanded as the gateway will match them, each with its own `op`, `before` and `after`.
 - `summary` counts lines. A `blocked` line counts only in `blocked`, and any `blocked` line stops the whole apply.

@@ -245,6 +245,10 @@ func collectListed(rows pgx.Rows) ([]*listed, error) {
 // are left.
 func (s *Store) filterPage(ctx context.Context, snap *feed.Snapshot, filter bool, limit int, after string, fetch func(after string, n int) ([]*listed, error)) ([]*nodes.Node, bool, error) {
 	batch := max(limit+1, 100)
+	if filter && snap.ExternalAuthz() {
+		// Cap at MaxPDPBatch (100) so limit=100 doesn't split into a 100+1 double PDP round-trip.
+		batch = access.MaxPDPBatch
+	}
 	var out []*nodes.Node
 	for {
 		cands, err := fetch(after, batch)

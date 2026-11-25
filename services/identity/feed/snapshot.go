@@ -43,7 +43,8 @@ type Snapshot struct {
 	Permissions   map[string]PermissionMeta
 	Authorizer    *Authorizer
 
-	// Precomputed role-binding indices built once at Parse().
+	// Precomputed role-binding indices built once via ensureRoleIndices().
+	roleIdxOnce   sync.Once
 	bindableKinds []string
 	bindableRoles []string
 	wildcardKinds []string
@@ -54,6 +55,10 @@ type Snapshot struct {
 type kindRolePairs struct {
 	kinds []string
 	roles []string
+}
+
+func (s *Snapshot) ensureRoleIndices() {
+	s.roleIdxOnce.Do(s.rebuildRoleIndices)
 }
 
 // ExternalAuthz reports whether the deployment delegates all authorization
@@ -68,9 +73,7 @@ func (s *Snapshot) BindablePairs() (kinds, roles []string) {
 	if s == nil {
 		return []string{}, []string{}
 	}
-	if len(s.bindableKinds) == 0 && len(s.Roles) > 0 {
-		s.rebuildRoleIndices()
-	}
+	s.ensureRoleIndices()
 	if len(s.bindableKinds) == 0 {
 		return []string{}, []string{}
 	}
@@ -83,9 +86,7 @@ func (s *Snapshot) GrantingPairs(permission string) (kinds, roles []string) {
 	if s == nil {
 		return []string{}, []string{}
 	}
-	if len(s.bindableKinds) == 0 && len(s.Roles) > 0 {
-		s.rebuildRoleIndices()
-	}
+	s.ensureRoleIndices()
 	p, ok := s.grantByPerm[permission]
 	if !ok {
 		if len(s.wildcardKinds) == 0 {
@@ -369,15 +370,15 @@ func Parse(body []byte) (*Snapshot, error) {
 			return nil, fmt.Errorf("kinds.%s.parent: no kind %q", name, k.Parent)
 		}
 	}
-	if s.Authorizer != nil && (len(w.Roles) > 0 || w.CreatorRole != "" || w.CustomRoles) {
-		return nil, fmt.Errorf("authorizer: cannot be combined with roles, creator_role, or custom_roles")
+	if s.Authorizer != nil && (len(w.Roles) > 0 || w.CreatorRole != "" || w.CustomRoles || len(w.Permissions) > 0) {
+		return nil, fmt.Errorf("authorizer: cannot be combined with roles, creator_role, custom_roles, or permissions")
 	}
 	roles, err := resolveRoles(w.Roles)
 	if err != nil {
 		return nil, err
 	}
 	s.Roles = roles
-	s.rebuildRoleIndices()
+	s.ensureRoleIndices()
 	return s, nil
 }
 

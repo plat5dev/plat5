@@ -2044,6 +2044,7 @@ async fn outbound_authzen_all_or_nothing_record_resources_scopes_and_fail_closed
         AUTH_FAILURE,
         crate::authorizer::AuthorizerCache::new(pdp.clone()),
     );
+    let mut key_id = None;
     let checked = p_checks
         .check_routes_with_authorizer(
             &snapshot.routes,
@@ -2059,11 +2060,13 @@ async fn outbound_authzen_all_or_nothing_record_resources_scopes_and_fail_closed
             IP,
             None,
             "r6",
+            &mut key_id,
         )
         .await
         .unwrap();
     assert_eq!(checked.allowed, vec![true, false, true, false]);
     assert_eq!(checked.key_id.as_deref(), Some(KEY_ID));
+    assert_eq!(key_id.as_deref(), Some(KEY_ID));
     assert_eq!(pdp.batch_calls.load(Ordering::SeqCst), 1);
 
     // 6. Invalid API key on POST /access/routes does NOT write a credential rate-limit bucket.
@@ -2078,6 +2081,7 @@ async fn outbound_authzen_all_or_nothing_record_resources_scopes_and_fail_closed
         AUTH_FAILURE,
         crate::authorizer::AuthorizerCache::new(pdp.clone()),
     );
+    let mut invalid_key_id = None;
     let err = p_invalid
         .check_routes_with_authorizer(
             &snapshot.routes,
@@ -2088,6 +2092,7 @@ async fn outbound_authzen_all_or_nothing_record_resources_scopes_and_fail_closed
             IP,
             None,
             "r7",
+            &mut invalid_key_id,
         )
         .await
         .unwrap_err();
@@ -2096,4 +2101,116 @@ async fn outbound_authzen_all_or_nothing_record_resources_scopes_and_fail_closed
         Rejection::Unauthorized(AuthError::InvalidCredential)
     ));
     assert_eq!(counter.buckets(), vec![IP_BUCKET]);
+
+    // 7. Rate-limited JWT is rejected BEFORE calling admit; rate-limited API key
+    // is rejected immediately after the first verified admit (not after all checks)
+    // and still records key_id for error logging.
+    let tight = vec![crate::route_map::Policy {
+        name: "tight".into(),
+        requests: 1,
+        window_seconds: 60,
+        count_at: None,
+        tiers: Default::default(),
+    }];
+    let jwt_counter = Arc::new(MemCounter::default());
+    let jwt_admit = ByChain::with(&[("acme/web", project(&[]))]);
+    let p_jwt = Pipeline::with_authorizer(
+        AdmitCache::new(
+            jwt_admit.clone(),
+            Duration::from_secs(60),
+            Duration::from_secs(10),
+        ),
+        jwt_counter,
+        AUTH_FAILURE,
+        crate::authorizer::AuthorizerCache::new(pdp.clone()),
+    );
+    let mut jwt_kid = None;
+    let _ = p_jwt
+        .check_routes_with_authorizer(
+            &snapshot.routes,
+            &tight,
+            snapshot.authorizer.as_ref(),
+            &jwt_credential(),
+            &checks(&[("GET", "/orgs/acme/projects/web/docs/doc-1")]),
+            IP,
+            None,
+            "r8a",
+            &mut jwt_kid,
+        )
+        .await
+        .unwrap();
+    let calls_before = jwt_admit.calls.load(Ordering::SeqCst);
+    let err = p_jwt
+        .check_routes_with_authorizer(
+            &snapshot.routes,
+            &tight,
+            snapshot.authorizer.as_ref(),
+            &jwt_credential(),
+            &checks(&[
+                ("GET", "/orgs/other/projects/p1/docs/doc-1"),
+                ("GET", "/orgs/other/projects/p2/docs/doc-2"),
+            ]),
+            IP,
+            None,
+            "r8b",
+            &mut jwt_kid,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Rejection::RateLimited { .. }));
+    assert_eq!(jwt_admit.calls.load(Ordering::SeqCst), calls_before);
+
+    let key_counter = Arc::new(MemCounter::default());
+    let key_admit = ByChain::with(&[
+        ("acme/web", project(&[])),
+        ("other/p1", project(&[])),
+        ("other/p2", project(&[])),
+    ]);
+    let p_key = Pipeline::with_authorizer(
+        AdmitCache::new(
+            key_admit.clone(),
+            Duration::from_secs(60),
+            Duration::from_secs(10),
+        ),
+        key_counter,
+        AUTH_FAILURE,
+        crate::authorizer::AuthorizerCache::new(pdp.clone()),
+    );
+    let mut k1 = None;
+    let _ = p_key
+        .check_routes_with_authorizer(
+            &snapshot.routes,
+            &tight,
+            snapshot.authorizer.as_ref(),
+            &key_credential(),
+            &checks(&[("GET", "/orgs/acme/projects/web/docs/doc-1")]),
+            IP,
+            None,
+            "r9a",
+            &mut k1,
+        )
+        .await
+        .unwrap();
+    let calls_before = key_admit.calls.load(Ordering::SeqCst);
+    let mut k2 = None;
+    let err = p_key
+        .check_routes_with_authorizer(
+            &snapshot.routes,
+            &tight,
+            snapshot.authorizer.as_ref(),
+            &key_credential(),
+            &checks(&[
+                ("GET", "/orgs/other/projects/p1/docs/doc-1"),
+                ("GET", "/orgs/other/projects/p2/docs/doc-2"),
+            ]),
+            IP,
+            None,
+            "r9b",
+            &mut k2,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Rejection::RateLimited { .. }));
+    assert_eq!(key_admit.calls.load(Ordering::SeqCst), calls_before + 1);
+    assert_eq!(k2.as_deref(), Some(KEY_ID));
 }

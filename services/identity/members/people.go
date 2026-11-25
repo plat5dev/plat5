@@ -61,6 +61,15 @@ func memberSelect(nowParam, where string) string {
 		WHERE ` + where
 }
 
+// memberSelectNoGuest reads Members in external authorizer mode, where bindings
+// are unused and no member is a guest.
+func memberSelectNoGuest(where string) string {
+	return `
+		SELECT m.id, m.root_id, m.principal, p.name, m.suspended_at IS NOT NULL, m.removed_at IS NOT NULL, false, m.created_at
+		FROM members m LEFT JOIN principals p ON p.id = m.principal_id
+		WHERE ` + where
+}
+
 func scanMember(row dbx.Scannable) (*Member, error) {
 	var m Member
 	err := row.Scan(&m.ID, &m.RootID, &m.Principal, &m.Name, &m.Suspended, &m.Removed, &m.Guest, &m.CreatedAt)
@@ -70,11 +79,17 @@ func scanMember(row dbx.Scannable) (*Member, error) {
 	return &m, nil
 }
 
-func (s *Store) getMember(ctx context.Context, q dbx.Querier, memberID string) (*Member, error) {
+func (s *Store) getMember(ctx context.Context, q dbx.Querier, memberID string, externalAuthz bool) (*Member, error) {
 	if !id.Valid(memberID) {
 		return nil, ErrNotFound
 	}
-	m, err := scanMember(q.QueryRow(ctx, memberSelect("$2", `m.id = $1`), memberID, s.now().UTC()))
+	var m *Member
+	var err error
+	if externalAuthz {
+		m, err = scanMember(q.QueryRow(ctx, memberSelectNoGuest(`m.id = $1`), memberID))
+	} else {
+		m, err = scanMember(q.QueryRow(ctx, memberSelect("$2", `m.id = $1`), memberID, s.now().UTC()))
+	}
 	if dbx.IsNoRows(err) {
 		return nil, ErrNotFound
 	}
@@ -242,7 +257,7 @@ func (s *Store) addMember(ctx context.Context, snap *feed.Snapshot, rootID strin
 		}
 	}
 	w.invalidate(lifecycle.InvalidateUser(userID))
-	m, err := s.getMember(ctx, w.tx, memberID)
+	m, err := s.getMember(ctx, w.tx, memberID, snap.ExternalAuthz())
 	if err != nil {
 		return nil, nil, op.Fail(err)
 	}
@@ -261,8 +276,15 @@ func (s *Store) ListMembers(ctx context.Context, rootID string, limit int, start
 	if err := s.checkRoot(ctx, rootID); err != nil {
 		return nil, false, op.Reject(err, nodes.ErrNotFound)
 	}
-	rows, err := s.pool.Query(ctx, memberSelect("$4", `m.root_id = $1 AND m.removed_at IS NULL AND m.id > $2 ORDER BY m.id LIMIT $3`),
-		rootID, startingAfter, limit+1, s.now().UTC())
+	var rows pgx.Rows
+	var err error
+	if s.externalAuthz() {
+		rows, err = s.pool.Query(ctx, memberSelectNoGuest(`m.root_id = $1 AND m.removed_at IS NULL AND m.id > $2 ORDER BY m.id LIMIT $3`),
+			rootID, startingAfter, limit+1)
+	} else {
+		rows, err = s.pool.Query(ctx, memberSelect("$4", `m.root_id = $1 AND m.removed_at IS NULL AND m.id > $2 ORDER BY m.id LIMIT $3`),
+			rootID, startingAfter, limit+1, s.now().UTC())
+	}
 	if err != nil {
 		return nil, false, op.Fail(err)
 	}
@@ -283,7 +305,7 @@ func (s *Store) GetMember(ctx context.Context, rootID, memberID string) (*Member
 	if err := s.checkRoot(ctx, rootID); err != nil {
 		return nil, op.Reject(err, nodes.ErrNotFound)
 	}
-	m, err := s.getMember(ctx, s.pool, memberID)
+	m, err := s.getMember(ctx, s.pool, memberID, s.externalAuthz())
 	if err == nil && m.RootID != rootID {
 		err = ErrNotFound
 	}
@@ -394,7 +416,7 @@ func (s *Store) SetMemberStatus(ctx context.Context, rootID, memberID, status st
 			}
 		}
 	}
-	after, err := s.getMember(ctx, w.tx, m.id)
+	after, err := s.getMember(ctx, w.tx, m.id, s.externalAuthz())
 	if err != nil {
 		return "", nil, op.Fail(err)
 	}

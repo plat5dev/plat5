@@ -25,7 +25,7 @@
       "uniqueItems": true,
       "items": {
         "type": "string",
-        "maxLength": 128,
+        "maxLength": 64,
         "pattern": "^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)*$"
       }
     },

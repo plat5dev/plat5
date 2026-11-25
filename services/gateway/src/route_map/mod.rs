@@ -490,7 +490,7 @@ fn build_route(
             if authorizer.is_none() {
                 return Err("resource requires top-level authorizer".to_string());
             }
-            if !matches!(required, Required::AnyOf(_)) {
+            if !matches!(&required, Required::AnyOf(list) if !list.is_empty()) {
                 return Err(
                     "resource requires permissions to list at least one action".to_string()
                 );

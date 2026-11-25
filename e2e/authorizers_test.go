@@ -175,12 +175,39 @@ func configWithDocsAuthorizer(base map[string]any, authzURL, upstreamURL, cacheT
 	return base
 }
 
-func waitForPublicRoute(t *testing.T, s *stack, c caller, path string, want bool) {
+func waitForConfigSync(t *testing.T, s *stack, c caller, path string, want bool) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for s.routeChecks(c, check{"GET", path})[0] != want {
 		if time.Now().After(deadline) {
 			t.Fatalf("gateway never reflected %s (want %v)", path, want)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	status, body, err := s.admin(http.MethodGet, "/status", nil)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("control-plane /status: %v %d %s", err, status, body)
+	}
+	var cpStatus struct {
+		Revision int64 `json:"revision"`
+	}
+	if err := json.Unmarshal(body, &cpStatus); err != nil {
+		t.Fatalf("decode /status: %v: %s", err, body)
+	}
+	for {
+		resp, err := s.http.Get(s.identity + "/internal/admit-invalidations")
+		if err == nil {
+			var inv struct {
+				ConfigRevision int64 `json:"config_revision"`
+			}
+			decErr := json.NewDecoder(resp.Body).Decode(&inv)
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK && decErr == nil && inv.ConfigRevision >= cpStatus.Revision {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("identity never loaded config revision %d", cpStatus.Revision)
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
@@ -203,10 +230,10 @@ func TestOutboundAuthZEN(t *testing.T) {
 	base := s.config()
 	t.Cleanup(func() {
 		s.apply(s.config())
-		waitForPublicRoute(t, s, owner, "/pdp-ready", false)
+		waitForConfigSync(t, s, owner, "/pdp-ready", false)
 	})
 	s.apply(configWithDocsAuthorizer(base, pdp.url, upstream, "0s"))
-	waitForPublicRoute(t, s, owner, "/pdp-ready", true)
+	waitForConfigSync(t, s, owner, "/pdp-ready", true)
 
 	var org, proj1, proj2 node
 	s.call(owner, "POST", "/orgs", map[string]string{"display_name": "AuthZEN " + run}, 201, &org)
@@ -313,10 +340,10 @@ func TestOutboundAuthZENTopaz(t *testing.T) {
 	base := s.config()
 	t.Cleanup(func() {
 		s.apply(s.config())
-		waitForPublicRoute(t, s, owner, "/pdp-ready", false)
+		waitForConfigSync(t, s, owner, "/pdp-ready", false)
 	})
 	s.apply(configWithDocsAuthorizer(base, topazInternal, upstream, "0s"))
-	waitForPublicRoute(t, s, owner, "/pdp-ready", true)
+	waitForConfigSync(t, s, owner, "/pdp-ready", true)
 
 	var org, proj node
 	s.call(owner, "POST", "/orgs", map[string]string{"display_name": "Topaz " + run}, 201, &org)

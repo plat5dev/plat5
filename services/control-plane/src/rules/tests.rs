@@ -656,3 +656,14 @@ fn bind_creator_defaults_on() {
     assert_eq!(sent["organization"].get("bind_creator"), None);
     assert_eq!(sent["project"]["bind_creator"], json!(false));
 }
+
+#[test]
+fn invalid_duration_does_not_suppress_other_rule_errors() {
+    let mut c = base();
+    c["deletion_grace"] = json!("99999d");
+    c["creator_role"] = json!("missing");
+    let errs = run(c).unwrap_err();
+    let paths: Vec<&str> = errs.iter().map(|e| e.path.as_str()).collect();
+    assert!(paths.contains(&"deletion_grace"), "got {paths:?}");
+    assert!(paths.contains(&"creator_role"), "got {paths:?}");
+}

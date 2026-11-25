@@ -101,15 +101,13 @@ impl Gateway {
                 &ip,
                 host.as_deref(),
                 ctx.request_id.as_deref().unwrap_or(""),
+                &mut ctx.credential.key_id,
             )
             .await;
         let checked = match checked {
             Ok(c) => c,
             Err(rejection) => return write_check_rejection(&cors, session, ctx, rejection).await,
         };
-        if checked.key_id.is_some() {
-            ctx.credential.key_id = checked.key_id;
-        }
         let answer = serde_json::json!({
             "checks": checked
                 .allowed

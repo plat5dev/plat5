@@ -384,7 +384,7 @@ func (s *Store) Redeem(ctx context.Context, userID, token string) (*Redeemed, er
 		w.invalidate(lifecycle.InvalidateUser(u.ID))
 	}
 	var granted bool
-	if inv.Role != "" {
+	if inv.Role != "" && !s.externalAuthz() {
 		if out.Binding, err = s.bindIfNotHeld(ctx, w, out.MemberID, n.ID, inv.Role); err != nil {
 			return nil, op.Fail(err)
 		}

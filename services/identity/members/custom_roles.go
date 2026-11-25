@@ -498,6 +498,10 @@ func (s *Store) ListPermissions(ctx context.Context, snap *feed.Snapshot, rootID
 	if err := s.checkRoot(ctx, rootID); err != nil {
 		return nil, op.Reject(err, nodes.ErrNotFound)
 	}
+	if snap.ExternalAuthz() {
+		op.OK("ok")
+		return []PermissionView{}, nil
+	}
 	catalog := snap.PermissionCatalog()
 	names := make([]string, 0, len(catalog))
 	for name := range catalog {

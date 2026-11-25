@@ -166,16 +166,30 @@ impl<A: Admit, C: Counter, P: Authorizer> Pipeline<A, C, P> {
         ip: &str,
         host: Option<&str>,
     ) -> Result<Checked, Rejection> {
+        let mut key_id = None;
         self.check_routes_with_authorizer(
-            routes, defaults, None, credential, checks, ip, host, "",
+            routes,
+            defaults,
+            None,
+            credential,
+            checks,
+            ip,
+            host,
+            "",
+            &mut key_id,
         )
         .await
     }
 
-    /// The whole call, once its credential and body are read: each check in
-    /// order, one count of each policy `defaults.rate_limit` names once the
-    /// credential is recognized (preventing unauthenticated key flooding in
-    /// Valkey), then one batched PDP evaluation if an external authorizer is configured.
+    /// The whole call, once its credential and body are read: for a verified JWT
+    /// count `defaults.rate_limit` up front; for an API key count it immediately
+    /// after the first verified admit (preventing both unauthenticated Valkey key
+    /// flooding and 100x admit amplification by a rate-limited caller), falling
+    /// back to IP limiting if every check was public/unmatched; then run one
+    /// batched PDP evaluation if an external authorizer is configured.
+    ///
+    /// Writes `key_id_out` as soon as admit recognizes an API key so error logs
+    /// (429/503/IP-refused 401) still carry `key_id`.
     #[allow(clippy::too_many_arguments)]
     pub async fn check_routes_with_authorizer(
         &self,
@@ -187,11 +201,20 @@ impl<A: Admit, C: Counter, P: Authorizer> Pipeline<A, C, P> {
         ip: &str,
         host: Option<&str>,
         request_id: &str,
+        key_id_out: &mut Option<String>,
     ) -> Result<Checked, Rejection> {
         let mut allowed = vec![false; checks.len()];
         let mut pending: Vec<(usize, AuthzenRequest)> = Vec::new();
-        let mut key_id: Option<String> = None;
         let mut credential_verified = matches!(credential, AdmitCredential::Idp { .. });
+        let mut rate_limit = None;
+        let mut rate_limited = false;
+
+        // A JWT is already cryptographically verified, so rate-limit it before
+        // touching identity at all.
+        if credential_verified {
+            rate_limit = self.limit_credential(defaults, credential).await?;
+            rate_limited = true;
+        }
 
         for (idx, check) in checks.iter().enumerate() {
             match self
@@ -203,7 +226,7 @@ impl<A: Admit, C: Counter, P: Authorizer> Pipeline<A, C, P> {
                     ip,
                     host,
                     request_id,
-                    &mut key_id,
+                    key_id_out,
                     &mut credential_verified,
                 )
                 .await
@@ -224,16 +247,20 @@ impl<A: Admit, C: Counter, P: Authorizer> Pipeline<A, C, P> {
                     return Err(self.count_refusal(ip).await.unwrap_or(rejection));
                 }
             }
+            // For API keys, enforce the per-credential rate limit immediately on
+            // the first verified admit so a rate-limited key cannot amplify into
+            // 100 admit calls per request.
+            if !rate_limited && credential_verified {
+                rate_limit = self.limit_credential(defaults, credential).await?;
+                rate_limited = true;
+            }
         }
 
-        // Count default rate limits only after the credential is verified (or by IP
-        // if every check was public/unmatched and never hit admit), so arbitrary
-        // unauthenticated Bearer tokens cannot flood Valkey keys.
-        let rate_limit = if credential_verified {
-            self.limit_credential(defaults, credential).await?
-        } else {
-            self.limit_ip(defaults, ip).await?
-        };
+        // Every check was public or unmatched with an unverified API key: fall
+        // back to IP limiting without allocating a per-credential Valkey key.
+        if !rate_limited {
+            rate_limit = self.limit_ip(defaults, ip).await?;
+        }
 
         if !pending.is_empty() {
             let spec = authorizer.ok_or(Rejection::Unavailable)?;
@@ -253,7 +280,7 @@ impl<A: Admit, C: Counter, P: Authorizer> Pipeline<A, C, P> {
         Ok(Checked {
             allowed,
             rate_limit,
-            key_id,
+            key_id: key_id_out.clone(),
         })
     }
 

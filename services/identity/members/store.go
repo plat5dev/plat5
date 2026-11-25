@@ -64,6 +64,7 @@ type Store struct {
 	nodes        *nodes.Store
 	brand        string
 	pdp          access.PDP
+	src          *feed.Source
 	tracer       trace.Tracer
 	now          func() time.Time
 	onInvalidate func(int64)
@@ -90,7 +91,25 @@ func NewStore(pool *pgxpool.Pool, nodeStore *nodes.Store, brand string) *Store {
 func (s *Store) WithPDP(pdp access.PDP) *Store {
 	c := *s
 	c.pdp = pdp
+	if c.nodes != nil {
+		c.nodes.WithPurgeHook(c.PurgeNodes)
+	}
 	return &c
+}
+
+// WithFeed returns a copy of the store reading the live config snapshot source
+// (used by read paths and purge hooks that don't receive an explicit snapshot).
+func (s *Store) WithFeed(src *feed.Source) *Store {
+	c := *s
+	c.src = src
+	if c.nodes != nil {
+		c.nodes.WithPurgeHook(c.PurgeNodes)
+	}
+	return &c
+}
+
+func (s *Store) externalAuthz() bool {
+	return s.src != nil && s.src.Current().ExternalAuthz()
 }
 
 // WithInvalidationNotifier registers a callback invoked after a transaction
@@ -183,15 +202,20 @@ func (s *Store) PurgeNodes(ctx context.Context, tx pgx.Tx, rootID string, purged
 	if err != nil {
 		return nil, err
 	}
-	// A person's member left with no direct bindings and no group memberships is removed.
-	if err := removeMembers(`
-		UPDATE members m SET removed_at = $2
-		WHERE m.principal = 'person' AND m.id = ANY($1) AND m.removed_at IS NULL
-		  AND NOT EXISTS (SELECT 1 FROM bindings b WHERE b.member_id = m.id)
-		  AND NOT EXISTS (SELECT 1 FROM group_members gm WHERE gm.member_id = m.id)
-		RETURNING m.id, m.principal
-	`, touched, now); err != nil {
-		return nil, err
+	// In built-in RBAC mode, a person's member left with no direct bindings and
+	// no group memberships is removed. In external authorizer mode bindings are
+	// not used, so purging a child node with legacy bindings must not remove an
+	// active member.
+	if !s.externalAuthz() {
+		if err := removeMembers(`
+			UPDATE members m SET removed_at = $2
+			WHERE m.principal = 'person' AND m.id = ANY($1) AND m.removed_at IS NULL
+			  AND NOT EXISTS (SELECT 1 FROM bindings b WHERE b.member_id = m.id)
+			  AND NOT EXISTS (SELECT 1 FROM group_members gm WHERE gm.member_id = m.id)
+			RETURNING m.id, m.principal
+		`, touched, now); err != nil {
+			return nil, err
+		}
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM invites WHERE node_id = ANY($1)`, purgedIDs); err != nil {
 		return nil, err

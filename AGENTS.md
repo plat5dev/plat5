@@ -16,4 +16,3 @@ Plat5 is a standalone, thin platform runtime for multi-tenant APIs: gateway, ide
 3. One place per rule or shape; link instead of restating. Describe the current contract, not past shapes or migrations.
 4. Keep `plat5` self-contained: don't couple runtime docs or code to optional siblings (`cli`, `operator`, `auth`, `template-*`).
 5. Keep each service standalone (own Go module / Cargo crate and `Dockerfile` build context, no shared runtime library across services or repos; see [`docs/internals/module-map.md`](docs/internals/module-map.md#deliberate-boundaries)).
-6. Don't commit unless asked.

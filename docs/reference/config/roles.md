@@ -29,7 +29,7 @@ An example role set for organization > project > environment, where an environme
 | Field | Rule |
 |-------|------|
 | `roles` | Map of slug → role. At least one role |
-| `creator_role` | Required. What the creator of a node gets on it, where its kind binds its creator (`bind_creator`). Bindable at every kind |
+| `creator_role` | Required in built-in RBAC mode (forbidden with `authorizer`). What the creator of a node gets on it, where its kind binds its creator (`bind_creator`). Bindable at every kind |
 | `custom_roles` | Optional. Enables root-scoped custom roles managed through identity's API alongside predefined roles. Default `false` |
 | `permissions` | Optional map of permission → metadata (`description`, `bindable_at`, `custom_role_assignable`) augmenting the permission catalog derived from routes and kinds for custom roles |
 <!-- end generated -->

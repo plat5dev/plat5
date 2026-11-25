@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -257,5 +258,47 @@ func TestFollowerBackoffOnMalformed200PreservesRevision(t *testing.T) {
 	}
 	if f.revision != 3 {
 		t.Fatalf("f.revision = %d, want 3", f.revision)
+	}
+}
+
+func TestSnapshotRoleIndicesConcurrentWithEmptyBindableAt(t *testing.T) {
+	s, err := Parse([]byte(`{
+		"revision": 1, "deletion_grace": "30d",
+		"kinds": { "organization": { "list_permission": "organization:read" } },
+		"roles": { "empty": { "permissions": ["organization:read"], "bindable_at": [] } },
+		"creator_role": "empty"
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 100 {
+				k, r := s.BindablePairs()
+				if len(k) != 0 || len(r) != 0 {
+					t.Errorf("expected empty bindable pairs, got %v %v", k, r)
+				}
+				gk, gr := s.GrantingPairs("organization:read")
+				if len(gk) != 0 || len(gr) != 0 {
+					t.Errorf("expected empty granting pairs, got %v %v", gk, gr)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestParseRejectsAuthorizerWithPermissions(t *testing.T) {
+	_, err := Parse([]byte(`{
+		"revision": 1, "deletion_grace": "30d",
+		"kinds": { "organization": { "list_permission": "organization:read" } },
+		"authorizer": { "url": "http://topaz:8383", "timeout": "2s" },
+		"permissions": { "organization:read": { "description": "Read org" } }
+	}`))
+	if err == nil {
+		t.Fatal("expected error when authorizer is combined with permissions")
 	}
 }

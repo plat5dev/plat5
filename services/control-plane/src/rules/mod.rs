@@ -29,12 +29,13 @@ pub struct Checked {
 /// a field path.
 pub fn check(config: &Config) -> Result<Checked, Vec<FieldError>> {
     let mut errs = Vec::new();
-    check_durations(config, &mut errs);
     check_kinds_tree(config, &mut errs);
+    let tree_ok = errs.is_empty();
+    check_durations(config, &mut errs);
     let mut routes_by_service: BTreeMap<String, Vec<ExpandedRoute>> = BTreeMap::new();
     let mut route_permissions = BTreeSet::new();
     // The rest reads the tree; with a broken tree its errors are noise.
-    if errs.is_empty() {
+    if tree_ok {
         check_kinds_extras(config, &mut errs);
         check_policies(config, &mut errs);
         let mut valid = Vec::new();

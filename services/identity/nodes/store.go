@@ -293,18 +293,25 @@ func (s *Store) Get(ctx context.Context, nodeID string) (*Node, error) {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "get_node", dbx.DefaultTimeout)
 	defer cancel()
 	defer op.End()
-	if !id.Valid(nodeID) {
-		return nil, op.Expected("not found", ErrNotFound)
-	}
-	n, err := scanNode(s.pool.QueryRow(ctx, `SELECT `+nodeColumns+` FROM nodes WHERE id = $1`, nodeID))
-	if dbx.IsNoRows(err) {
-		return nil, op.Expected("not found", ErrNotFound)
-	}
+	n, err := s.GetTx(ctx, s.pool, nodeID)
 	if err != nil {
-		return nil, op.Fail(err)
+		return nil, op.Reject(err, ErrNotFound)
 	}
 	op.OK("ok")
 	return n, nil
+}
+
+// GetTx reads one node on an existing transaction or pool so callers running in
+// a RepeatableRead snapshot read the node from the same snapshot.
+func (s *Store) GetTx(ctx context.Context, q dbx.Querier, nodeID string) (*Node, error) {
+	if !id.Valid(nodeID) {
+		return nil, ErrNotFound
+	}
+	n, err := scanNode(q.QueryRow(ctx, `SELECT `+nodeColumns+` FROM nodes WHERE id = $1`, nodeID))
+	if dbx.IsNoRows(err) {
+		return nil, ErrNotFound
+	}
+	return n, err
 }
 
 // ListFilter narrows GET /nodes. Empty fields don't filter.

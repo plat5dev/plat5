@@ -105,6 +105,10 @@ func (s *Store) ListGroups(ctx context.Context, rootID string, limit int, starti
 	if err := s.checkRoot(ctx, rootID); err != nil {
 		return nil, false, op.Reject(err, nodes.ErrNotFound)
 	}
+	if s.externalAuthz() {
+		op.OK("ok")
+		return []*Group{}, false, nil
+	}
 	rows, err := s.pool.Query(ctx, groupSelect+`root_id = $1 AND id > $2 ORDER BY id LIMIT $3`,
 		rootID, startingAfter, limit+1)
 	if err != nil {
@@ -127,6 +131,9 @@ func (s *Store) GetGroup(ctx context.Context, rootID, groupID string) (*Group, e
 
 	if err := s.checkRoot(ctx, rootID); err != nil {
 		return nil, op.Reject(err, nodes.ErrNotFound)
+	}
+	if s.externalAuthz() {
+		return nil, op.Expected("not found", ErrNotFound)
 	}
 	g, err := s.getGroup(ctx, s.pool, rootID, groupID)
 	if err != nil {
@@ -238,6 +245,9 @@ func (s *Store) ListGroupMembers(ctx context.Context, rootID, groupID string, li
 	if err := s.checkRoot(ctx, rootID); err != nil {
 		return nil, false, op.Reject(err, nodes.ErrNotFound)
 	}
+	if s.externalAuthz() {
+		return nil, false, op.Expected("not found", ErrNotFound)
+	}
 	if _, err := s.getGroup(ctx, s.pool, rootID, groupID); err != nil {
 		return nil, false, op.Reject(err, ErrNotFound)
 	}
@@ -295,7 +305,7 @@ func (s *Store) AddGroupMember(ctx context.Context, snap *feed.Snapshot, rootID,
 		}
 		return nil, op.Fail(err)
 	}
-	m, err := s.getMember(ctx, w.tx, memberID)
+	m, err := s.getMember(ctx, w.tx, memberID, false)
 	if err != nil {
 		return nil, op.Fail(err)
 	}

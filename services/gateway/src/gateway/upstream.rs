@@ -252,6 +252,10 @@ pub fn parse_upstream(base_url: &str) -> Option<ParsedUpstream> {
     } else {
         match authority.rsplit_once(':') {
             Some((h, p)) => {
+                // Reject unbracketed IPv6 literals (e.g. http://2001:db8::1).
+                if h.contains(':') {
+                    return None;
+                }
                 let port = p.parse::<u16>().ok()?;
                 if port == 0 {
                     return None;
@@ -574,6 +578,7 @@ mod tests {
         assert_eq!(v6_tls.addr(), "[::1]:8443");
         assert_eq!(v6_tls.host_header(), "[::1]:8443");
         assert!(parse_upstream("http://[not-ipv6]:8080").is_none());
+        assert!(parse_upstream("http://2001:db8::1").is_none());
         assert!(parse_upstream("[::1]").is_none());
     }
 

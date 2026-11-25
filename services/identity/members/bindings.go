@@ -31,9 +31,6 @@ type Binding struct {
 	ExpiresAt *time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time
-	// nodeKind is the kind of the node it sits on, which decides whether its
-	// role counts.
-	nodeKind string
 }
 
 // BindingPatch is what PATCH /nodes/{node_id}/bindings/{binding_id} changes.
@@ -57,9 +54,8 @@ func bindingSelect(nowParam, where string) string {
 		           WHEN b.group_id IS NOT NULL THEN g.name
 		           ELSE p.name
 		       END,
-		       b.expires_at, b.created_at, b.updated_at, bn.kind
+		       b.expires_at, b.created_at, b.updated_at
 		FROM bindings b
-		JOIN nodes bn ON bn.id = b.node_id
 		LEFT JOIN members m ON m.id = b.member_id
 		LEFT JOIN principals p ON p.id = m.principal_id
 		LEFT JOIN groups g ON g.id = b.group_id
@@ -69,7 +65,7 @@ func bindingSelect(nowParam, where string) string {
 func scanBinding(row dbx.Scannable) (*Binding, error) {
 	var b Binding
 	if err := row.Scan(&b.ID, &b.MemberID, &b.GroupID, &b.NodeID, &b.Role, &b.Inherited, &b.Guest, &b.Principal, &b.Name,
-		&b.ExpiresAt, &b.CreatedAt, &b.UpdatedAt, &b.nodeKind); err != nil {
+		&b.ExpiresAt, &b.CreatedAt, &b.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &b, nil
@@ -203,6 +199,10 @@ func (s *Store) ListBindings(ctx context.Context, nodeID string, inherited bool,
 	if _, err := s.nodes.Get(ctx, nodeID); err != nil {
 		return nil, false, op.Reject(err, nodes.ErrNotFound)
 	}
+	if s.externalAuthz() {
+		op.OK("ok")
+		return []*Binding{}, false, nil
+	}
 	rows, err := s.pool.Query(ctx, bindingSelect("$5", `($2 OR b.node_id = $1) AND (b.expires_at IS NULL OR b.expires_at > $5) AND b.id > $3 ORDER BY b.id LIMIT $4`),
 		nodeID, inherited, startingAfter, limit+1, s.now().UTC())
 	if err != nil {
@@ -258,10 +258,30 @@ func (s *Store) PatchBinding(ctx context.Context, snap *feed.Snapshot, nodeID, b
 	if patch.ExpiresAtSet {
 		expiresAt = patch.ExpiresAt
 	}
+	now := s.now().UTC()
 	changed := before.Role != role || !timesEqual(before.ExpiresAt, expiresAt)
+	if before.Role != role {
+		// Replace any expired binding for the target (subject, node, role) so
+		// patching onto a previously expired role succeeds, matching POST.
+		var col, subject string
+		if before.MemberID != nil {
+			col, subject = "member_id", *before.MemberID
+		} else if before.GroupID != nil {
+			col, subject = "group_id", *before.GroupID
+		}
+		if col != "" {
+			if _, err := w.tx.Exec(ctx, `
+				DELETE FROM bindings
+				WHERE `+col+` = $1 AND node_id = $2 AND role = $3 AND id <> $4
+				  AND expires_at IS NOT NULL AND expires_at <= $5
+			`, subject, n.ID, role, before.ID, now); err != nil {
+				return nil, nil, op.Fail(err)
+			}
+		}
+	}
 	if _, err := w.tx.Exec(ctx, `
 		UPDATE bindings SET role = $2, expires_at = $3, updated_at = CASE WHEN $4 THEN $5 ELSE updated_at END WHERE id = $1
-	`, before.ID, role, expiresAt, changed, s.now().UTC()); err != nil {
+	`, before.ID, role, expiresAt, changed, now); err != nil {
 		if dbx.IsUniqueViolation(err) {
 			msg := "This member already has that role here."
 			if before.GroupID != nil {
@@ -382,11 +402,11 @@ func (s *Store) Membership(ctx context.Context, snap *feed.Snapshot, nodeID, mem
 	}
 	defer tx.Rollback(ctx)
 
-	n, err := s.nodes.Get(ctx, nodeID)
+	n, err := s.nodes.GetTx(ctx, tx, nodeID)
 	if err != nil {
 		return nil, op.Reject(err, nodes.ErrNotFound)
 	}
-	m, err := s.getMember(ctx, tx, memberID)
+	m, err := s.getMember(ctx, tx, memberID, snap.ExternalAuthz())
 	if err == nil && m.RootID != n.RootID {
 		err = ErrNotFound
 	}
