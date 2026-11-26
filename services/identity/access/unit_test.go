@@ -1,6 +1,7 @@
 package access
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -215,5 +216,38 @@ func TestReadResourceSearchValidation(t *testing.T) {
 				t.Fatalf("err = %v, want substring %q", err, tc.wantSubstr)
 			}
 		})
+	}
+}
+
+func TestAdmitResponseAlwaysIncludesEveryField(t *testing.T) {
+	// The gateway requires every AdmitResponse field to be present on the wire,
+	// even when nil (it treats a missing key as identity failing with 503).
+	raw, err := json.Marshal(admitResponse(&Admitted{Valid: true, Principal: "person", UserID: "01u"}))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, key := range []string{
+		"valid",
+		"principal",
+		"key_id",
+		"allowed_cidrs",
+		"org_allowed_cidrs",
+		"nodes",
+		"member_id",
+		"user_id",
+		"permissions",
+		"credential_scopes",
+		"rate_limit_tier",
+		"expires_at",
+		"invalidation_seq",
+		"config_revision",
+	} {
+		if _, ok := m[key]; !ok {
+			t.Errorf("AdmitResponse JSON missing required key %q: %s", key, string(raw))
+		}
 	}
 }

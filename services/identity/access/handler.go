@@ -83,7 +83,7 @@ type AdmitResponse struct {
 	MemberID         *string     `json:"member_id"`
 	UserID           *string     `json:"user_id"`
 	Permissions      []string    `json:"permissions"`
-	CredentialScopes *[]string   `json:"credential_scopes,omitempty"`
+	CredentialScopes *[]string   `json:"credential_scopes"`
 	RateLimitTier    *string     `json:"rate_limit_tier"`
 	ExpiresAt        *string     `json:"expires_at"`
 	InvalidationSeq  int64       `json:"invalidation_seq"`
