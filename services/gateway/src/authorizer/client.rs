@@ -262,11 +262,7 @@ impl HttpAuthorizer {
                 "error",
                 start.elapsed().as_secs_f64(),
             );
-            warn!(
-                op,
-                status = status.as_u16(),
-                "authorizer returned non-2xx"
-            );
+            warn!(op, status = status.as_u16(), "authorizer returned non-2xx");
             return Err(AuthorizerUnavailable(format!("status {}", status.as_u16())));
         }
         response.json::<R>().await.map_err(|e| {

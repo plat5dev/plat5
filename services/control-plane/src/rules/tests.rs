@@ -197,9 +197,14 @@ fn authorizer_all_or_nothing() {
         .unwrap();
     assert_eq!(
         get_doc.permissions,
-        Some(crate::config::Required::Permissions(vec!["docs:read".into()]))
+        Some(crate::config::Required::Permissions(vec![
+            "docs:read".into()
+        ]))
     );
-    assert_eq!(get_doc.resource.as_ref().unwrap().id, "{project.id}:{doc_id}");
+    assert_eq!(
+        get_doc.resource.as_ref().unwrap().id,
+        "{project.id}:{doc_id}"
+    );
     let del_doc = routes
         .iter()
         .find(|r| r.method == "DELETE" && r.path.ends_with("/docs/{doc_id}"))

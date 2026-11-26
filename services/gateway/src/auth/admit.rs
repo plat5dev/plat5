@@ -304,10 +304,7 @@ impl<A: Admit> AdmitCache<A> {
                     .await
                     .map_err(ComputeErr::Unavailable)?;
                 let cached = CachedAdmit::from_answer(answer).map_err(|e| {
-                    warn!(
-                        error_message = e,
-                        "admit answered with an invalid CIDR"
-                    );
+                    warn!(error_message = e, "admit answered with an invalid CIDR");
                     ComputeErr::Unavailable(AdmitUnavailable(e.to_string()))
                 })?;
                 let is_negative = cached.refused(req);
@@ -317,9 +314,7 @@ impl<A: Admit> AdmitCache<A> {
                         ComputeErr::Unavailable(AdmitUnavailable(e.to_string()))
                     })?;
                 }
-                let min_rev = self
-                    .tracker
-                    .observe_config_revision(cached.config_revision);
+                let min_rev = self.tracker.observe_config_revision(cached.config_revision);
                 if !is_negative && cached.config_revision < min_rev {
                     return Err(ComputeErr::Uncached(Arc::new(cached)));
                 }

@@ -87,10 +87,12 @@ func setupWith(t *testing.T, config string) *env {
 	c := &clock{t: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)}
 	nodeStore := nodes.NewStore(pool).WithClock(c.now)
 	src := feed.Static(parseConfig(t, config))
+	memberStore := NewStore(pool, nodeStore, "plat5").WithClock(c.now).WithFeed(src)
+	nodeStore = memberStore.nodes
 	e := &env{
 		t: t, ctx: context.Background(), pool: pool, nodes: nodeStore, clock: c,
 		src:   src,
-		store: NewStore(pool, nodeStore, "plat5").WithClock(c.now).WithFeed(src),
+		store: memberStore,
 	}
 	e.app = fiber.New(fiber.Config{ErrorHandler: apierrors.FiberErrorHandler})
 	nodes.NewHandler(nodeStore, e.src).Mount(e.app)

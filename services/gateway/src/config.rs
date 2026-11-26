@@ -533,10 +533,7 @@ mod tests {
             parse_audit_config(Some("async"), Some("http://audit:3003")).unwrap(),
             (AuditMode::Async, Some("http://audit:3003".into()))
         );
-        assert_eq!(
-            parse_audit_config(Some("off"), None).unwrap().1,
-            None
-        );
+        assert_eq!(parse_audit_config(Some("off"), None).unwrap().1, None);
         assert!(matches!(
             parse_audit_config(None, None),
             Err(GatewayConfigError::Missing("AUDIT_URL"))

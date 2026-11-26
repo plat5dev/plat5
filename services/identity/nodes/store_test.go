@@ -14,6 +14,7 @@ import (
 	"github.com/plat5dev/plat5/identity/feed"
 	"github.com/plat5dev/plat5/identity/internal/id"
 	"github.com/plat5dev/plat5/identity/internal/testdb"
+	"github.com/plat5dev/plat5/identity/lifecycle"
 )
 
 // The invariants of docs/internals/identity-schema.md for nodes, against
@@ -552,19 +553,30 @@ func TestPurgeAfterTheGrace(t *testing.T) {
 	e := setup(t)
 	org := e.create(nil, "organization", "Gruow")
 	folder := e.create(org, "folder", "Web")
-	other := e.create(org, "folder", "Other")
-	_, onlyHere := e.principal("person", nil, org, folder)
-	_, alsoOrg := e.principal("person", nil, org, folder, org)
-	sa, saMember := e.principal("service_account", folder, org, folder, other)
-	e.key(sa)
-	e.exec(`INSERT INTO invites (id, node_id, role, token_hash, token_prefix, status, max_uses, expires_at)
-		VALUES ($1, $2, 'admin', $1, 'plat5-i-1-AAAA', 'active', 1, $3)`, id.New(), folder.ID, e.clock.t.Add(24*time.Hour))
 	e.delete(folder)
+
+	var hookCalls int
+	var gotRoot string
+	var gotIDs []string
+	var gotRootPurged bool
+	var gotNow time.Time
+	extraMember := id.New()
+	e.store.WithPurgeHook(func(_ context.Context, _ pgx.Tx, rootID string, purgedIDs []string, rootPurged bool, now time.Time) ([]lifecycle.Event, error) {
+		hookCalls++
+		gotRoot = rootID
+		gotIDs = append([]string(nil), purgedIDs...)
+		gotRootPurged = rootPurged
+		gotNow = now
+		return []lifecycle.Event{lifecycle.MemberEvent(lifecycle.TypeMemberRemoved, extraMember, rootID, "person")}, nil
+	})
 
 	// Not yet: the grace hasn't passed.
 	e.clock.advance(30*24*time.Hour - time.Second)
 	if n, err := e.store.PurgeDue(e.ctx); err != nil || n != 0 {
 		t.Fatalf("early purge: %d %v", n, err)
+	}
+	if hookCalls != 0 {
+		t.Fatalf("purge hook called before grace: %d", hookCalls)
 	}
 
 	e.clock.advance(time.Second)
@@ -575,71 +587,58 @@ func TestPurgeAfterTheGrace(t *testing.T) {
 	if p := e.get(folder); p.Status != StatusPurged || p.Slug != nil {
 		t.Fatalf("purged: %+v", p)
 	}
-	if e.count(`SELECT count(*) FROM bindings WHERE node_id = $1`, folder.ID) != 0 {
-		t.Fatal("bindings on the purged node remain")
+	if hookCalls != 1 || gotRoot != org.ID || gotRootPurged || !gotNow.Equal(e.clock.t) {
+		t.Fatalf("purge hook args: calls=%d root=%s rootPurged=%v now=%v", hookCalls, gotRoot, gotRootPurged, gotNow)
 	}
-	if e.count(`SELECT count(*) FROM invites WHERE node_id = $1`, folder.ID) != 0 {
-		t.Fatal("invites on the purged node remain")
-	}
-	if e.count(`SELECT count(*) FROM principals WHERE id = $1`, sa) != 0 || e.count(`SELECT count(*) FROM api_keys WHERE principal_id = $1`, sa) != 0 {
-		t.Fatal("the service account that belongs there remains")
-	}
-	if e.count(`SELECT count(*) FROM bindings WHERE member_id = $1`, saMember) != 0 {
-		t.Fatal("the service account's other bindings remain")
-	}
-	removed := func(memberID string) bool {
-		return e.count(`SELECT count(*) FROM members WHERE id = $1 AND removed_at IS NOT NULL`, memberID) == 1
-	}
-	if !removed(onlyHere) || removed(alsoOrg) || !removed(saMember) {
-		t.Fatalf("removed: onlyHere %v alsoOrg %v sa %v", removed(onlyHere), removed(alsoOrg), removed(saMember))
-	}
-	want := []string{"member.removed " + saMember + " service_account", "member.removed " + onlyHere + " person"}
-	if onlyHere < saMember {
-		want[0], want[1] = want[1], want[0]
-	}
-	equal(t, "events", e.events(mark), append([]string{"node.purged folder " + folder.ID}, want...))
+	equal(t, "purged ids", gotIDs, []string{folder.ID})
+	equal(t, "events", e.events(mark), []string{
+		"node.purged folder " + folder.ID,
+		"member.removed " + extraMember + " person",
+	})
 
 	// Purged is final: nothing more on the next sweep.
 	mark = e.lastEventID()
 	if n, err := e.store.PurgeDue(e.ctx); err != nil || n != 0 {
 		t.Fatalf("second sweep: %d %v", n, err)
 	}
+	if hookCalls != 1 {
+		t.Fatalf("purge hook called on second sweep: %d", hookCalls)
+	}
 	equal(t, "events", e.events(mark), nil)
 }
 
-func TestPurgingARootRemovesItsMembers(t *testing.T) {
+func TestPurgingARootKeepsItsSlugAndNotifiesHook(t *testing.T) {
 	e := setup(t)
 	org := e.create(nil, "organization", "Gruow")
 	folder := e.create(org, "folder", "Web")
-	other := e.create(nil, "organization", "Other")
-	person, member := e.principal("person", nil, org, org)
-	elsewhere := id.New()
-	e.exec(`INSERT INTO members (id, principal_id, principal, root_id) VALUES ($1, $2, 'person', $3)`, elsewhere, person, other.ID)
-	_, saMember := e.principal("service_account", org, org, folder)
 	e.delete(org)
 	e.clock.advance(31 * 24 * time.Hour)
+
+	var gotRoot string
+	var gotIDs []string
+	var gotRootPurged bool
+	e.store.WithPurgeHook(func(_ context.Context, _ pgx.Tx, rootID string, purgedIDs []string, rootPurged bool, _ time.Time) ([]lifecycle.Event, error) {
+		gotRoot = rootID
+		gotIDs = append([]string(nil), purgedIDs...)
+		gotRootPurged = rootPurged
+		return nil, nil
+	})
 
 	mark := e.lastEventID()
 	if n, err := e.store.PurgeDue(e.ctx); err != nil || n != 2 {
 		t.Fatalf("purge: %d %v", n, err)
 	}
-	if e.count(`SELECT count(*) FROM members WHERE root_id = $1 AND removed_at IS NULL`, org.ID) != 0 {
-		t.Fatal("members of the purged root remain")
-	}
-	if e.count(`SELECT count(*) FROM members WHERE id = $1 AND removed_at IS NULL`, elsewhere) != 1 {
-		t.Fatal("the person's member in another tree was removed")
-	}
 	if *e.get(org).Slug != "gruow" {
 		t.Fatal("a purged root keeps its slug")
 	}
-	removedEvents := []string{"member.removed " + saMember + " service_account", "member.removed " + member + " person"}
-	if member < saMember {
-		removedEvents[0], removedEvents[1] = removedEvents[1], removedEvents[0]
+	if gotRoot != org.ID || !gotRootPurged {
+		t.Fatalf("purge hook args: root=%s rootPurged=%v", gotRoot, gotRootPurged)
 	}
-	equal(t, "events", e.events(mark), append([]string{
+	equal(t, "purged ids", gotIDs, []string{org.ID, folder.ID})
+	equal(t, "events", e.events(mark), []string{
 		"node.purged organization " + org.ID,
 		"node.purged folder " + folder.ID,
-	}, removedEvents...))
+	})
 }
 
 func TestPurgeTakesTheDeletedNodesBelow(t *testing.T) {

@@ -491,9 +491,7 @@ fn build_route(
                 return Err("resource requires top-level authorizer".to_string());
             }
             if !matches!(&required, Required::AnyOf(list) if !list.is_empty()) {
-                return Err(
-                    "resource requires permissions to list at least one action".to_string()
-                );
+                return Err("resource requires permissions to list at least one action".to_string());
             }
             Some(RouteResource {
                 r#type: r.r#type.clone(),

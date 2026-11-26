@@ -284,11 +284,17 @@ pub(super) enum AdmitOutcome {
         ip_rejected: bool,
     },
     /// Valid service account on a user route (**403**, not counted by auth-failure limiter).
-    ServiceAccount { principal: Option<String> },
+    ServiceAccount {
+        principal: Option<String>,
+    },
     /// Valid narrowed personal key on a user route (**403**, not counted by auth-failure limiter).
-    ScopedCredential { principal: Option<String> },
+    ScopedCredential {
+        principal: Option<String>,
+    },
     /// Org IP allowlist, missing node, or caller not admitted to this tree (**403**).
-    NotAdmitted { org_ip_rejected: bool },
+    NotAdmitted {
+        org_ip_rejected: bool,
+    },
     /// Identity didn't answer (**503**).
     Unavailable,
 }

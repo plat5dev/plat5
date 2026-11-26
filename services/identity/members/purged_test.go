@@ -2,6 +2,7 @@ package members
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -161,4 +162,117 @@ func (e *env) nodeName(nodeID string) string {
 		e.t.Fatal(err)
 	}
 	return name
+}
+
+func TestPurgeAfterTheGraceCleansMembersAndBindings(t *testing.T) {
+	e := setup(t)
+	org, _ := e.org(e.person("alice"), "Gruow")
+	folder := e.child(org, "folder", "Web")
+	other := e.child(org, "folder", "Other")
+
+	// onlyHere has a binding only on folder; alsoOrg has bindings on folder and org.
+	onlyHere := e.join(org, "only-here", "member")
+	e.bind(folder, onlyHere, "browser")
+	e.expect(e.call("DELETE", "/nodes/"+org.ID+"/bindings/"+e.bindingOf(onlyHere, org.ID), "", ""), 204, "drop org binding")
+	alsoOrg := e.join(org, "also-org", "member")
+	e.bind(folder, alsoOrg, "browser")
+
+	saMember, _ := e.serviceAccount(folder, "browser")
+	e.bind(other, saMember, "browser")
+	var saPrincipal string
+	if err := e.pool.QueryRow(e.ctx, `SELECT principal_id FROM members WHERE id = $1`, saMember).Scan(&saPrincipal); err != nil {
+		t.Fatal(err)
+	}
+	e.invite(folder, "browser")
+
+	if _, err := e.nodes.Delete(e.ctx, e.snap(), folder.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Not yet: the grace hasn't passed.
+	e.clock.advance(30*24*time.Hour - time.Second)
+	if n, err := e.nodes.PurgeDue(e.ctx); err != nil || n != 0 {
+		t.Fatalf("early purge: %d %v", n, err)
+	}
+
+	e.clock.advance(time.Second)
+	mark := e.lastEvent()
+	if n, err := e.nodes.PurgeDue(e.ctx); err != nil || n != 1 {
+		t.Fatalf("purge: %d %v", n, err)
+	}
+	if e.count(`SELECT count(*) FROM bindings WHERE node_id = $1`, folder.ID) != 0 {
+		t.Fatal("bindings on the purged node remain")
+	}
+	if e.count(`SELECT count(*) FROM invites WHERE node_id = $1`, folder.ID) != 0 {
+		t.Fatal("invites on the purged node remain")
+	}
+	if e.count(`SELECT count(*) FROM principals WHERE id = $1`, saPrincipal) != 0 || e.count(`SELECT count(*) FROM api_keys WHERE principal_id = $1`, saPrincipal) != 0 {
+		t.Fatal("the service account that belongs there remains")
+	}
+	if e.count(`SELECT count(*) FROM bindings WHERE member_id = $1`, saMember) != 0 {
+		t.Fatal("the service account's other bindings remain")
+	}
+	if !e.removed(onlyHere) || e.removed(alsoOrg) || !e.removed(saMember) {
+		t.Fatalf("removed: onlyHere %v alsoOrg %v sa %v", e.removed(onlyHere), e.removed(alsoOrg), e.removed(saMember))
+	}
+	wantRemoved := []string{
+		"member.removed " + saMember + " " + org.ID + " service_account",
+		"member.removed " + onlyHere + " " + org.ID + " person",
+	}
+	if onlyHere < saMember {
+		wantRemoved[0], wantRemoved[1] = wantRemoved[1], wantRemoved[0]
+	}
+	want := append([]string{"node.purged folder " + folder.ID + " " + org.ID}, wantRemoved...)
+	if got := e.eventsAfter(mark); !slices.Equal(got, want) {
+		t.Fatalf("events:\n got  %v\n want %v", got, want)
+	}
+
+	// Purged is final: nothing more on the next sweep.
+	mark = e.lastEvent()
+	if n, err := e.nodes.PurgeDue(e.ctx); err != nil || n != 0 {
+		t.Fatalf("second sweep: %d %v", n, err)
+	}
+	if got := e.eventsAfter(mark); len(got) != 0 {
+		t.Fatalf("second sweep events: %v", got)
+	}
+}
+
+func TestPurgingARootRemovesItsMembers(t *testing.T) {
+	e := setup(t)
+	alice := e.person("alice")
+	org, member := e.org(alice, "Gruow")
+	folder := e.child(org, "folder", "Web")
+	_, elsewhere := e.org(alice, "Other")
+	saMember, _ := e.serviceAccount(org, "browser")
+	e.bind(folder, saMember, "browser")
+
+	if _, err := e.nodes.Delete(e.ctx, e.snap(), org.ID); err != nil {
+		t.Fatal(err)
+	}
+	e.clock.advance(31 * 24 * time.Hour)
+
+	mark := e.lastEvent()
+	if n, err := e.nodes.PurgeDue(e.ctx); err != nil || n != 2 {
+		t.Fatalf("purge: %d %v", n, err)
+	}
+	if e.count(`SELECT count(*) FROM members WHERE root_id = $1 AND removed_at IS NULL`, org.ID) != 0 {
+		t.Fatal("members of the purged root remain")
+	}
+	if e.count(`SELECT count(*) FROM members WHERE id = $1 AND removed_at IS NULL`, elsewhere) != 1 {
+		t.Fatal("the person's member in another tree was removed")
+	}
+	removedEvents := []string{
+		"member.removed " + saMember + " " + org.ID + " service_account",
+		"member.removed " + member + " " + org.ID + " person",
+	}
+	if member < saMember {
+		removedEvents[0], removedEvents[1] = removedEvents[1], removedEvents[0]
+	}
+	want := append([]string{
+		"node.purged organization " + org.ID + " " + org.ID,
+		"node.purged folder " + folder.ID + " " + org.ID,
+	}, removedEvents...)
+	if got := e.eventsAfter(mark); !slices.Equal(got, want) {
+		t.Fatalf("events:\n got  %v\n want %v", got, want)
+	}
 }

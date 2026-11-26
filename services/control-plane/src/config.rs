@@ -339,7 +339,9 @@ enum RequiredRaw {
 impl<'de> serde::Deserialize<'de> for Required {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         match RequiredRaw::deserialize(d)? {
-            RequiredRaw::Single(s) if s == "any_member" => Ok(Required::Keyword(Keyword::AnyMember)),
+            RequiredRaw::Single(s) if s == "any_member" => {
+                Ok(Required::Keyword(Keyword::AnyMember))
+            }
             RequiredRaw::Single(s) => Ok(Required::Permissions(vec![s])),
             RequiredRaw::List(list) => Ok(Required::Permissions(list)),
         }

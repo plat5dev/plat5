@@ -265,8 +265,12 @@ pub fn build(feed: Value) -> Result<Snapshot, String> {
     let kinds = Kinds::from_feed(&feed.kinds);
     let authorizer = parse_authorizer(feed.authorizer.as_ref())?;
     let compiled_policies = crate::route_map::compile_policies(&feed.rate_limits)?;
-    let routes =
-        RouteMap::from_compiled(&feed.services, &compiled_policies, &kinds, authorizer.as_ref())?;
+    let routes = RouteMap::from_compiled(
+        &feed.services,
+        &compiled_policies,
+        &kinds,
+        authorizer.as_ref(),
+    )?;
     let default_policies = feed
         .defaults
         .rate_limit

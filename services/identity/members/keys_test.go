@@ -155,14 +155,14 @@ func TestKeyIPAllowlist(t *testing.T) {
 			}
 			keyID := r.str("id")
 			secret := r.str("key")
-			assertCIDRs(t, r.body["allowed_cidrs"], []string{"203.0.113.7/32", "198.51.100.0/24"})
+			assertCIDRs(t, r.body["allowed_cidrs"], []string{"198.51.100.0/24", "203.0.113.7/32"})
 
 			// Admit returns the key's allowed_cidrs.
 			adm := e.callInternal("POST", "/internal/admit", fmt.Sprintf(`{"credential":%q,"chain":[{"kind":"organization","ref":%q}]}`, secret, *org.Slug))
 			if adm.status != 200 || adm.body["valid"] != true {
 				t.Fatalf("admit: %d %v", adm.status, adm.body)
 			}
-			assertCIDRs(t, adm.body["allowed_cidrs"], []string{"203.0.113.7/32", "198.51.100.0/24"})
+			assertCIDRs(t, adm.body["allowed_cidrs"], []string{"198.51.100.0/24", "203.0.113.7/32"})
 
 			// PATCH name and allowed_cidrs.
 			r = e.call("PATCH", tc.basePath+"/"+keyID, "", `{"name":"ci-prod","allowed_cidrs":["2001:db8::1"]}`)

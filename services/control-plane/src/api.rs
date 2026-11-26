@@ -13,9 +13,7 @@ use serde_json::{json, Value};
 use crate::apply::{self, Failure};
 use crate::error::AppError;
 use crate::metrics;
-use crate::middleware::{
-    admin_auth_middleware, feed_observability, http_observability, RequestId,
-};
+use crate::middleware::{admin_auth_middleware, feed_observability, http_observability, RequestId};
 use crate::schema;
 use crate::served;
 use crate::store::{Reader, Report};
