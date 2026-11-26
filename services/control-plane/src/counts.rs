@@ -158,11 +158,13 @@ mod tests {
 
     #[tokio::test]
     async fn propagates_traceparent_and_request_id() {
+        let _ = tracing::subscriber::set_global_default(tracing_subscriber::registry());
         global::set_text_map_propagator(TraceContextPropagator::new());
         let provider = sdktrace::SdkTracerProvider::builder().build();
         let subscriber =
             tracing_subscriber::registry().with(OpenTelemetryLayer::new(provider.tracer("test")));
         let _guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
 
         let seen: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
         let seen_handler = seen.clone();

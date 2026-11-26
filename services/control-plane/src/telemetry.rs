@@ -633,9 +633,11 @@ pub(crate) mod tests {
     /// A failed export is one JSON line on the service's log.
     #[tokio::test]
     async fn failed_export_is_a_json_line() {
+        let _ = tracing::subscriber::set_global_default(tracing_subscriber::registry());
         let buf = Buffer::default();
         let subscriber = tracing_subscriber::registry().with(json_layer(buf.clone()));
         let _guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
 
         let exporter = LoggedExporter::new("traces", Unreachable);
         assert!(exporter.export(vec![]).await.is_err());

@@ -99,6 +99,7 @@ fn folder_counts(nodes: u64) -> CountsResponse {
 
 #[tokio::test]
 async fn plan_and_apply_against_postgres() {
+    let _ = tracing::subscriber::set_global_default(tracing_subscriber::registry());
     let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
         eprintln!("skipped: set TEST_DATABASE_URL to run against Postgres");
         return;
@@ -550,6 +551,10 @@ mod unit_tests {
     }
 
     fn test_state(head: i64) -> (AppState, watch::Sender<bool>) {
+        // Keep a silent global Registry installed so tests without `set_default`
+        // never race with `set_default` tests and poison shared callsites with
+        // `Interest::never()` (tracing-core callsite interest cache race).
+        let _ = tracing::subscriber::set_global_default(tracing_subscriber::registry());
         let (tx, rx) = watch::channel(false);
         let state = AppState {
             store: Store::lazy_for_test(),
@@ -562,10 +567,12 @@ mod unit_tests {
 
     #[tokio::test]
     async fn single_request_id_matches_header_body_and_log() {
+        let _ = tracing::subscriber::set_global_default(tracing_subscriber::registry());
         let buf = LogBuf::default();
         let subscriber =
             tracing_subscriber::registry().with(crate::telemetry::json_layer(buf.clone()));
         let _guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
 
         let (state, _tx) = test_state(0);
         let router = public_router(state);
@@ -672,6 +679,7 @@ mod unit_tests {
 
     #[tokio::test]
     async fn incoming_traceparent_sets_server_span_trace_id() {
+        let _ = tracing::subscriber::set_global_default(tracing_subscriber::registry());
         global::set_text_map_propagator(TraceContextPropagator::new());
         let provider = sdktrace::SdkTracerProvider::builder().build();
         let buf = LogBuf::default();
@@ -679,6 +687,7 @@ mod unit_tests {
             .with(crate::telemetry::json_layer(buf.clone()))
             .with(OpenTelemetryLayer::new(provider.tracer("test")));
         let _guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
 
         let (state, _tx) = test_state(0);
         let router = public_router(state);
