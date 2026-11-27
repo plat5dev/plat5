@@ -19,7 +19,7 @@ Internal ports (`INTERNAL_PORT`) take no token. Keep them inside the deployment'
 | `ADMIT_CACHE_TTL` | Duration. Default `5m` ([cache](gateway.md#cache)) |
 | `ADMIT_NEGATIVE_CACHE_TTL` | Duration. Default `10s` |
 | `RATE_LIMIT_ENABLED` | Default `true`. Set `false` to run without Valkey or rate limiting ([rate limits](gateway.md#rate-limits)) |
-| `VALKEY_URL` | Required unless `RATE_LIMIT_ENABLED=false` |
+| `VALKEY_URL` | Required unless `RATE_LIMIT_ENABLED=false`. Supports `redis://` and TLS `rediss://` |
 | `VALKEY_KEY_PREFIX` | Prefix for Valkey rate-limit keys. Default `plat5:rl:` (non-empty visible ASCII, no whitespace) |
 | `RATE_LIMIT_AUTH_FAILURE_REQUESTS`, `RATE_LIMIT_AUTH_FAILURE_WINDOW` | Failed-auth IP limiter (active when `RATE_LIMIT_ENABLED=true`). Default `60` and `60s`; `0` requests = off |
 | `AUDIT_MODE` | `sync` (default), `async`, or `off`. In `sync`, audited writes wait on an intent write before forwarding (**503** on failure). In `async`, writes forward immediately and queue one completed event in the background. `off` disables audit writes and ignores `AUDIT_URL` ([audit](../concepts/audit.md#on-and-off)) |

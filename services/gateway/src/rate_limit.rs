@@ -11,6 +11,14 @@ use tracing::{info, warn};
 
 use crate::metrics;
 
+/// Install a process-wide rustls CryptoProvider if none is set yet. Both
+/// `ring` (via `redis`) and `aws-lc-rs` (via `pingora`) are present in the
+/// dependency graph, so rustls 0.23 requires an explicit default before opening
+/// `rediss://` TLS connections.
+fn ensure_rustls_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 /// Default counter key prefix (`VALKEY_KEY_PREFIX`), so a Valkey shared with other software is safe.
 pub const DEFAULT_KEY_PREFIX: &str = "plat5:rl:";
 
@@ -83,6 +91,7 @@ impl RateLimiter {
     /// Connect eagerly, failing if `url` is invalid or Valkey does not answer.
     #[cfg(test)]
     pub async fn connect(url: &str, key_prefix: String) -> Result<Self, RedisError> {
+        ensure_rustls_provider();
         let client = Client::open(url)?;
         let conn = open_manager(client.clone()).await?;
         metrics::record_valkey_up(true);
@@ -105,6 +114,7 @@ impl RateLimiter {
         key_prefix: String,
         runtime: &tokio::runtime::Handle,
     ) -> Result<Self, RedisError> {
+        ensure_rustls_provider();
         let client = Client::open(url)?;
         let (conn, up) = match open_manager(client.clone()).await {
             Ok(conn) => {
@@ -441,6 +451,24 @@ mod tests {
             "connect hung for {:?}",
             started.elapsed()
         );
+    }
+
+    #[tokio::test]
+    async fn rediss_url_is_accepted_with_tls_enabled() {
+        // Without `tokio-rustls-comp`, Client::open rejects `rediss://` URLs with
+        // an InvalidClientConfig error before attempting to connect.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let limiter = RateLimiter::connect_or_start(
+            &format!("rediss://{addr}"),
+            DEFAULT_KEY_PREFIX.to_string(),
+            &tokio::runtime::Handle::current(),
+        )
+        .await
+        .expect("rediss:// URL should be accepted by redis client");
+        assert!(limiter.is_enabled());
     }
 
     #[tokio::test]

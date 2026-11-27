@@ -54,6 +54,7 @@ End-to-end recipes combining Plat5 features for common SaaS architectures:
 | Playbook | Setup |
 |----------|-------|
 | [Enterprise B2B SaaS](playbooks/enterprise-b2b.md) | Custom roles, per-org SSO/MFA & IP policies, scoped keys, reversible suspension, JIT bindings, tiered rate limits |
+| [SOC 2, ISO 27001 & GDPR](playbooks/compliance-soc2-gdpr.md) | Shared responsibility matrix, compliance-ready baseline, SOC 2 / ISO 27001 control mapping, GDPR erasure, DSAR, and audit retention |
 | [Record-level auth with Topaz](playbooks/record-level-auth-topaz.md) | Top-level AuthZEN 1.0 authorizer, Topaz ReBAC manifest, record-level `resource` templates, list filtering |
 | [Public portals & subdomain routing](playbooks/public-and-subdomain-saas.md) | `kind.host` subdomains, `scope: public` routes, guest invites |
 

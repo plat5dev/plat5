@@ -12,6 +12,8 @@ concurrency:
 permissions:
   contents: read
   packages: write
+  id-token: write
+  attestations: write
 
 env:
   REGISTRY: ghcr.io
@@ -84,6 +86,8 @@ jobs:
             schema=schema
           target: prod
           platforms: ${{ matrix.platform }}
+          sbom: true
+          provenance: mode=max
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           build-args: |
             VERSION=${{ github.ref_name }}
@@ -156,3 +160,33 @@ jobs:
         run: |
           docker buildx imagetools inspect \
             ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
+
+      - name: Resolve manifest digest
+        id: digest
+        run: |
+          digest=$(docker buildx imagetools inspect "${{ env.IMAGE }}:${{ steps.meta.outputs.version }}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: "${{ env.IMAGE }}@${{ steps.digest.outputs.digest }}"
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4
+
+      - name: Sign multi-arch image
+        env:
+          COSIGN_YES: "true"
+        run: cosign sign "${{ env.IMAGE }}@${{ steps.digest.outputs.digest }}"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true

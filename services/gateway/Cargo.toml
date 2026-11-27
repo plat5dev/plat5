@@ -19,8 +19,9 @@ opentelemetry-otlp = { version = "0.31", default-features = false, features = ["
 opentelemetry_sdk = { version = "0.31", features = ["metrics"] }
 pingora = { version = "0.6", features = ["proxy", "rustls"] }
 prometheus = { version = "0.13.4", features = ["process"] }
-redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "script"] }
+redis = { version = "0.27", features = ["tokio-comp", "tokio-rustls-comp", "connection-manager", "script"] }
 reqwest = { version = "0.12.24", features = ["json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["raw_value"] }
 sha2 = "0.10"

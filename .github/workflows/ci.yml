@@ -159,6 +159,20 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
 
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan dependencies and config with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL
+
   # Single required check for branch protection. Skipped jobs count as ok.
   ci:
     needs:
@@ -167,6 +181,7 @@ jobs:
       - control-plane
       - identity
       - audit
+      - security
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -178,6 +193,7 @@ jobs:
             "${{ needs.control-plane.result }}"
             "${{ needs.identity.result }}"
             "${{ needs.audit.result }}"
+            "${{ needs.security.result }}"
           )
           for r in "${results[@]}"; do
             case "$r" in

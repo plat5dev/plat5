@@ -50,6 +50,24 @@ Optional tuning:
 
 If your deployment forwards to untrusted external URLs and requires SSRF / private-IP egress protection, enforce it at the network layer (VPC security groups, Kubernetes `NetworkPolicy`, or an egress proxy) rather than in the gateway ([upstream security](../reference/gateway.md#upstream-security)).
 
+### Transport encryption and supply-chain verification
+
+For hardened or compliance-scoped deployments (see the [SOC 2, ISO 27001 & GDPR playbook](../playbooks/compliance-soc2-gdpr.md)):
+
+- **Postgres TLS:** Append `?sslmode=require` (or `verify-full` with your CA mounted into the container's system trust store) to `DATABASE_URL` on `control-plane`, `identity`, and `audit`.
+- **Valkey TLS:** Use a `rediss://` URL for `VALKEY_URL` on `gateway` (verified against the container's system CA bundle via `rustls`).
+- **Upstream & internal traffic:** Point service `url` entries at `https://…` (or run inside a private VPC/mesh) and set `UPSTREAM_SIGNING_KEY` so services can cryptographically verify `X-Plat5-Signature` ([signing](../reference/headers.md#upstream-request-signing)).
+- **Image verification:** Published release images on `ghcr.io/plat5dev/*` are multi-arch, run as non-root, include BuildKit SBOM and SLSA provenance attestations, and are signed with keyless Cosign (Sigstore):
+
+```bash
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/plat5dev/plat5/\.github/workflows/release\.yml@refs/tags/v' \
+  ghcr.io/plat5dev/gateway:${PLAT5_VERSION}
+
+docker buildx imagetools inspect --format '{{json .SBOM}}' ghcr.io/plat5dev/gateway:${PLAT5_VERSION}
+```
+
 ### Optional modules
 
 Both **audit** and **rate limiting** default to on (`AUDIT_URL` and `VALKEY_URL` are required unless turned off):
