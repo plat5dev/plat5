@@ -177,7 +177,7 @@ jobs:
           severity: CRITICAL
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v4
+        uses: sigstore/cosign-installer@v4.1.4
 
       - name: Sign multi-arch image
         env:
