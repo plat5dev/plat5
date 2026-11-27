@@ -789,7 +789,9 @@ issuers:
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let info: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(info["methods"], json!(["oidc"]));
         assert_eq!(info["issuers"][0]["cli"]["client_id"], json!("cli-pub"));
@@ -829,7 +831,9 @@ issuers:
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let who: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(who["access"], json!("read"));
         assert_eq!(who["actor"]["subject"], json!("alice@example.com"));
@@ -847,7 +851,9 @@ issuers:
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let body: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body["error"]["code"], json!("FORBIDDEN"));
         assert_eq!(body["error"]["details"]["required_access"], json!("apply"));

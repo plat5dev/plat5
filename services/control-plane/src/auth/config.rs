@@ -120,7 +120,10 @@ impl AuthConfig {
         let mut issuers = HashSet::new();
         for (i, iss) in self.issuers.iter().enumerate() {
             if !names.insert(iss.name.as_str()) {
-                return Err(format!("issuers[{i}].name: duplicate issuer name {:?}", iss.name));
+                return Err(format!(
+                    "issuers[{i}].name: duplicate issuer name {:?}",
+                    iss.name
+                ));
             }
             if !issuers.insert(iss.issuer.as_str()) {
                 return Err(format!(
@@ -129,8 +132,9 @@ impl AuthConfig {
                 ));
             }
             if let Some(ref d) = iss.max_token_lifetime {
-                parse_duration_secs(d)
-                    .ok_or_else(|| format!("issuers[{i}].max_token_lifetime: invalid duration {d:?}"))?;
+                parse_duration_secs(d).ok_or_else(|| {
+                    format!("issuers[{i}].max_token_lifetime: invalid duration {d:?}")
+                })?;
             }
         }
         Ok(())

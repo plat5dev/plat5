@@ -170,7 +170,10 @@ fn parse_optional_header(
         return Ok(None);
     };
     let s = raw.to_str().map_err(|_| {
-        AppError::invalid_request(request_id.to_string(), format!("{name} must be valid UTF-8."))
+        AppError::invalid_request(
+            request_id.to_string(),
+            format!("{name} must be valid UTF-8."),
+        )
     })?;
     let trimmed = s.trim();
     if trimmed.is_empty() {

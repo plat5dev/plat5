@@ -16,8 +16,8 @@ use serde_json::{json, Value};
 use subtle::ConstantTimeEq;
 use tokio::sync::watch;
 
-pub use config::{AccessLevel, AuthConfig, AuthRule, CliAuthConfig};
 use config::{claim_at, parse_duration_secs, rule_matches};
+pub use config::{AccessLevel, AuthConfig, AuthRule, CliAuthConfig};
 use jwks::IssuerJwks;
 
 const CLOCK_SKEW_SECS: u64 = 60;
@@ -49,12 +49,7 @@ impl AuthenticatedActor {
         }
     }
 
-    pub fn jwt(
-        issuer_name: String,
-        issuer: String,
-        subject: String,
-        access: AccessLevel,
-    ) -> Self {
+    pub fn jwt(issuer_name: String, issuer: String, subject: String, access: AccessLevel) -> Self {
         Self {
             actor_type: "jwt",
             issuer: Some(issuer),
