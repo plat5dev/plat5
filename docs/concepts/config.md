@@ -1,6 +1,6 @@
 # Config
 
-The deployment's desired state: settings, kinds, built-in RBAC (`roles` + `creator_role`) or an external `authorizer`, rate limits, CORS, and services, as one config. Each apply submits the whole config to the control plane: a dry run shows the plan, and the apply carries a precondition that makes a stale plan fail. The control plane validates the config as a whole, records it as a revision in Postgres with the bodies it serves, and serves them to the gateway and identity. It is Plat5's only supported write path for any of these.
+The deployment's desired state: settings, kinds, built-in RBAC (`roles` + `creator_role`) or an external `authorizer`, rate limits, and services, as one config. Each apply submits the whole config to the control plane: a dry run shows the plan, and the apply carries a precondition that makes a stale plan fail. The control plane validates the config as a whole, records it as a revision in Postgres with the bodies it serves, and serves them to the gateway and identity. It is Plat5's only supported write path for any of these.
 
 The runtime reads no config files from disk — it accepts JSON or YAML over the control plane's [admin API](../reference/api/control-plane.md). Teams managing config in Git typically use the [`plat5` CLI](https://github.com/plat5dev/cli) (`plat5.yml` plus one file per service); an API client or control UI can call `POST /apply` directly.
 
@@ -15,7 +15,6 @@ The control plane holds the operator's typed, deployment-wide state that changes
 | `roles`, `creator_role`, `custom_roles`, `permissions` | identity | [roles](../reference/config/roles.md) |
 | `authorizer` | gateway, identity | [authorizer](../reference/config/authorizer.md) |
 | `rate_limits` | gateway | [rate limits](../reference/config/rate-limits.md) |
-| `cors` | gateway | [cors](../reference/config/cors.md) |
 | `services` | gateway | [services](../reference/config/services.md); identity's and audit's [routes](../reference/config/generated-routes.md) |
 
 Each document has a published schema ([below](#schema)), and the [rules at apply](#validation-at-apply) check them together. There is no free-form key. `kinds` is required, and the config must specify either `roles` + `creator_role` (built-in RBAC) or `authorizer` (external AuthZEN PDP) — mutually exclusive. Everything else is optional.
@@ -27,12 +26,13 @@ These stay out of it, as process env:
 | Wiring and module switches: URLs, ports, `AUDIT_MODE` / `AUDIT_URL`, `RATE_LIMIT_ENABLED` / `VALKEY_URL` | Needed to boot and connect infrastructure, and kept out of the config so `ADMIN_TOKEN` can't turn audit or rate limiting off ([audit](audit.md#on-and-off), [gateway](../reference/gateway.md#rate-limits)) |
 | Secrets: `ADMIN_TOKEN`, `UPSTREAM_SIGNING_KEY`, authorizer `token_env` values | Not desired state; never stored in config revisions |
 | IdP trust anchors and claim mappings: `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_ALLOWED_AUDIENCES`, `AUTH_SUBJECT_CLAIM`, `AUTH_NAME_CLAIMS`, `AUTH_SCOPE_CLAIM` | Changing the issuer lets you sign in as anyone; `ADMIN_TOKEN` must not be able to |
+| `CORS_ALLOWED_ORIGINS`, `CORS_ALLOWED_HEADERS` | Environment-specific browser origins (`localhost` in dev vs production domain); instance facts stay in gateway env |
 | `SECRET_BRAND`, `ADMIT_CACHE_TTL`, `ADMIT_NEGATIVE_CACHE_TTL` | Set at boot; changing them while running buys nothing (and changing `SECRET_BRAND` invalidates minted keys) |
 | Per-tree data | Identity |
 
 ## The config shape
 
-The control plane validates and stores one flat object (`schema/config.json`): top-level settings (`deletion_grace`, `reserved_slugs`, `policy_claims`, `defaults`), `kinds`, either `roles` + `creator_role` (+ optional `custom_roles`, `permissions`) or `authorizer`, optional `rate_limits` and `cors`, and `services` as a map of service name to service.
+The control plane validates and stores one flat object (`schema/config.json`): top-level settings (`deletion_grace`, `reserved_slugs`, `policy_claims`, `defaults`), `kinds`, either `roles` + `creator_role` (+ optional `custom_roles`, `permissions`) or `authorizer`, optional `rate_limits`, and `services` as a map of service name to service.
 
 ```yaml
 deletion_grace: 30d
@@ -41,8 +41,6 @@ kinds: { … }
 roles: { … }       # or top-level authorizer: { url: … } (mutually exclusive)
 creator_role: admin
 rate_limits: { … }
-cors:
-  allowed_origins: [https://app.example.com]
 services:
   identity: { … }
   audit: { … }
@@ -122,10 +120,10 @@ A dry run ignores `expect`. The apply recomputes the plan and fails with **409**
 }
 ```
 
-Changes are ordered kinds, settings, roles, authorizer, rate limits, CORS, services, then by name.
+Changes are ordered kinds, settings, roles, authorizer, rate limits, services, then by name.
 
 - `revision` is the config revision the plan was made against, `0` before the first apply. The apply sends it back as `expect.revision`.
-- `what` is `kind`, `setting` (`deletion_grace`, `reserved_slugs`, `policy_claims`, `defaults`, `creator_role`, `custom_roles`, or `permissions`), `role`, `authorizer`, `rate_limit`, `cors`, or `service`. `op` is `add`, `change` or `remove`.
+- `what` is `kind`, `setting` (`deletion_grace`, `reserved_slugs`, `policy_claims`, `defaults`, `creator_role`, `custom_roles`, or `permissions`), `role`, `authorizer`, `rate_limit`, or `service`. `op` is `add`, `change` or `remove`.
 - `before` and `after` show what changed, field by field: `before` comes from what readers are served now (the head's stored bodies); `after` is the new config expanded by the running control plane. After an upgrade, a plan of unchanged config shows exactly what the new version would serve differently ([upgrading](#upgrading)).
 - A service line lists its `routes`, expanded as the gateway will match them, each with its own `op`, `before` and `after`.
 - `summary` counts lines. A `blocked` line counts only in `blocked`, and any `blocked` line stops the whole apply.
@@ -149,7 +147,7 @@ Everything else is safe:
 | `deletion_grace` changed | Applies to new deletes only: identity stores `purge_after` on each node when it's deleted ([lifecycle](lifecycle.md#deleting-restoring-and-purging)) |
 | Role added, changed or removed; a kind added to or dropped from `bindable_at` | Bindings keep the role's name. A role that's gone, or not bindable at that kind, grants nothing, and grants again if a role with that name comes back. Don't reuse a removed role's name for something else |
 | Service or route added, changed or removed | A removed service's routes stop matching; its data stays in the service |
-| CORS, rate limits, `defaults` or a reserved slug changed | Take effect on the readers' next poll |
+| `defaults` or a reserved slug changed | Take effect on the readers' next poll |
 
 A kind renamed reads as a remove plus an add. Tightened rules (a new reserved slug) apply to new values only: a node whose slug became reserved keeps it.
 
@@ -182,7 +180,7 @@ The gateway and identity long-poll the control plane's feeds ([`reference/api/in
 | | Gateway | Identity |
 |--|--|--|
 | Boot | Waits for the first snapshot; retries while the control plane is down. Does not listen until it has one | Same |
-| Running | Long-polls; swaps routes, kinds, rate limits and CORS whole on each change | Long-polls; swaps settings, kinds and roles whole on each change |
+| Running | Long-polls; swaps routes, kinds, and rate limits whole on each change | Long-polls; swaps settings, kinds and roles whole on each change |
 | Control plane down | Keeps serving the last snapshot | Keeps serving the last snapshot |
 | A snapshot it can't parse or build | Keeps the current one, logs, counts it, and reports the refusal and its reason on its next poll | Keeps the current one, logs, and moves its cursor past it |
 

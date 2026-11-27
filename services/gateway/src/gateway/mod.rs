@@ -47,8 +47,9 @@ pub struct Gateway {
     authenticator: Authenticator,
     name_claims: NameClaims,
     pipeline: GatewayPipeline,
-    /// Routes, rate limits and CORS from the control plane, swapped whole on each change.
+    /// Routes and rate limits from the control plane, swapped whole on each change.
     snapshot: Arc<ArcSwap<Snapshot>>,
+    cors: Arc<CorsPolicy>,
     audit: Audit,
     trusted_proxies: TrustedProxies,
     upstream_signer: Option<signing::UpstreamSigner>,
@@ -65,17 +66,13 @@ impl Gateway {
         invalidations: InvalidationTracker,
     ) -> Self {
         let admit = HttpAdmit::new(&cfg.identity_internal_url, InternalHttpClient::new());
-        let mut upstream_allowed = cfg.upstream_allow_private_hosts.clone();
-        upstream_allowed.extend(cfg.own_service_hosts());
-        let upstream_resolver = upstream::PeerResolver::with_allowed_private_hosts(
-            cfg.upstream_block_private_ips,
-            upstream_allowed,
-        );
-        let authorizer_resolver = upstream::PeerResolver::with_allowed_private_hosts(
-            cfg.upstream_block_private_ips,
-            cfg.upstream_allow_private_hosts.clone(),
-        );
+        let upstream_resolver = upstream::PeerResolver::new();
+        let authorizer_resolver = upstream::PeerResolver::new();
         let authorizer = AuthorizerCache::new(HttpAuthorizer::new(authorizer_resolver));
+        let cors = Arc::new(CorsPolicy::new(
+            cfg.cors_allowed_origins.clone(),
+            &cfg.cors_allowed_headers,
+        ));
         Self {
             authenticator: Authenticator::new(
                 jwt_validator,
@@ -98,6 +95,7 @@ impl Gateway {
                 authorizer,
             ),
             snapshot,
+            cors,
             audit,
             trusted_proxies: cfg.trusted_proxies.clone(),
             upstream_signer: cfg.upstream_signer.clone(),
@@ -105,9 +103,9 @@ impl Gateway {
         }
     }
 
-    /// The current CORS policy. Each response reads it once.
-    fn cors(&self) -> Arc<CorsPolicy> {
-        self.snapshot.load().cors.clone()
+    /// The process CORS policy.
+    fn cors(&self) -> &CorsPolicy {
+        &self.cors
     }
 
     /// CORS preflight: 204 with no body. A 204 has no body by definition, so the
@@ -147,7 +145,7 @@ impl Gateway {
         );
         Ok(Some(
             response::write_json_error(
-                &self.cors(),
+                self.cors(),
                 session,
                 ctx,
                 413,
@@ -166,7 +164,7 @@ impl Gateway {
         request_id: &str,
     ) -> Result<bool> {
         let route = &matched.route;
-        let cors = &snapshot.cors;
+        let cors = self.cors();
         if let Err(err) = session
             .req_header_mut()
             .insert_header("X-Request-ID", request_id)
@@ -450,7 +448,7 @@ impl ProxyHttp for Gateway {
             let Some(matched) = snapshot.routes.find_route_with_host(&path, &method, host) else {
                 warn!("no matching route");
                 return response::write_json_error(
-                    &snapshot.cors,
+                    self.cors(),
                     session,
                     ctx,
                     404,
@@ -524,7 +522,7 @@ impl ProxyHttp for Gateway {
                 _ => ApiError::internal_error(),
             };
             if let Err(err) =
-                response::send_json_error(&self.cors(), session, ctx, code, error).await
+                response::send_json_error(self.cors(), session, ctx, code, error).await
             {
                 warn!(
                     status = code,

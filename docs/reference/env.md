@@ -25,10 +25,10 @@ Internal ports (`INTERNAL_PORT`) take no token. Keep them inside the deployment'
 | `AUDIT_MODE` | `sync` (default), `async`, or `off`. In `sync`, audited writes wait on an intent write before forwarding (**503** on failure). In `async`, writes forward immediately and queue one completed event in the background. `off` disables audit writes and ignores `AUDIT_URL` ([audit](../concepts/audit.md#on-and-off)) |
 | `AUDIT_URL` | Audit's internal base URL, e.g. `http://audit:3003`. Required unless `AUDIT_MODE=off` |
 | `TRUSTED_PROXIES` | Comma-separated IPs/CIDRs trusted for `X-Forwarded-For` and `X-Forwarded-Proto` ([client IP](gateway.md#client-ip)) |
+| `CORS_ALLOWED_ORIGINS` | Optional comma-separated allowed browser origins (`http://host[:port]` or `https://host[:port]`, lowercase, no path, up to 100), or `*` alone. Unset or empty allows no cross-origin requests ([CORS](gateway.md#cors)) |
+| `CORS_ALLOWED_HEADERS` | Optional comma-separated lowercase request header names (up to 32) added to the gateway's base preflight allowlist |
 | `UPSTREAM_SIGNING_KEY` | Optional 32-byte Ed25519 seed encoded as base64url without padding. When set, every upstream request carries `X-Plat5-Signature` ([signing](headers.md#upstream-request-signing)); empty-but-set or invalid refuses boot |
 | `UPSTREAM_SIGNING_KEY_ID` | Optional `kid` (`1–64` of `[A-Za-z0-9._-]`) for `X-Plat5-Signature`. Defaults to the first 16 hex chars of `SHA-256(public_key)`. Refuses boot if set without `UPSTREAM_SIGNING_KEY` |
-| `UPSTREAM_BLOCK_PRIVATE_IPS` | Default `false`. Set `true` to refuse upstream connections whose resolved IP is loopback, RFC1918 private, link-local, CGNAT, ULA, or unspecified; `IDENTITY_INTERNAL_URL` and `AUDIT_URL` hosts are automatically exempted for proxied routes ([gateway](gateway.md#upstream-security)) |
-| `UPSTREAM_ALLOW_PRIVATE_HOSTS` | Optional comma-separated hostnames or IP literals exempted from `UPSTREAM_BLOCK_PRIVATE_IPS` for trusted internal upstreams or authorizers |
 
 The replica id reported to the control plane is `service.instance.id` from `OTEL_RESOURCE_ATTRIBUTES`, falling back to `HOSTNAME`.
 
@@ -53,7 +53,6 @@ Ready is **503** unless Postgres answers.
 | `DATABASE_URL` | required | Postgres; schema `identity` |
 | `CONTROL_PLANE_URL` | required | Identity doesn't listen until it has its first config |
 | `SECRET_BRAND` | `plat5` | Prefix on minted API keys (`{brand}-k-2-…`) and invite tokens (`{brand}-i-1-…`); empty-but-set refuses boot |
-| `UPSTREAM_BLOCK_PRIVATE_IPS` | `false` | Set `true` to refuse outbound AuthZEN PDP connections to loopback, RFC1918 private, link-local, CGNAT, ULA, or unspecified IPs |
 
 Ready fails closed (**503**) when Postgres is unreachable or no config is loaded.
 

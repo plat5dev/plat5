@@ -28,7 +28,7 @@ Concepts hold the rules, reference holds the wire and config shapes, guides walk
 
 | Doc | Contents |
 |-----|----------|
-| [config/settings](reference/config/settings.md), [kinds](reference/config/kinds.md), [roles](reference/config/roles.md), [authorizer](reference/config/authorizer.md), [rate limits](reference/config/rate-limits.md), [cors](reference/config/cors.md), [services](reference/config/services.md) | Control-plane config shapes (field tables generated from `schema/`) |
+| [config/settings](reference/config/settings.md), [kinds](reference/config/kinds.md), [roles](reference/config/roles.md), [authorizer](reference/config/authorizer.md), [rate limits](reference/config/rate-limits.md), [services](reference/config/services.md) | Control-plane config shapes (field tables generated from `schema/`) |
 | [config/generated-routes](reference/config/generated-routes.md) | Reference routes for exposing `identity` and `audit` through the gateway |
 | [api/identity](reference/api/identity.md) | Identity service API |
 | [api/control-plane](reference/api/control-plane.md) | Control plane admin API |

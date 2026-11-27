@@ -2,7 +2,7 @@
   "revision": 7,
   "summary": {
     "add": 1,
-    "change": 5,
+    "change": 4,
     "remove": 0,
     "blocked": 0
   },
@@ -43,23 +43,6 @@
       },
       "after": {
         "requests": 120
-      }
-    },
-    {
-      "op": "change",
-      "what": "cors",
-      "name": "cors",
-      "before": {
-        "allowed_origins": [],
-        "allowed_headers": []
-      },
-      "after": {
-        "allowed_origins": [
-          "https://app.example.com"
-        ],
-        "allowed_headers": [
-          "idempotency-key"
-        ]
       }
     },
     {

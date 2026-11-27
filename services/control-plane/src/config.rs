@@ -46,8 +46,6 @@ pub struct Config {
     #[serde(default)]
     pub rate_limits: BTreeMap<String, Policy>,
     #[serde(default)]
-    pub cors: Cors,
-    #[serde(default)]
     pub services: BTreeMap<String, Service>,
 }
 
@@ -233,15 +231,6 @@ pub struct Policy {
     pub count_at: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tiers: BTreeMap<String, TierLimit>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct Cors {
-    #[serde(default)]
-    pub allowed_origins: Vec<String>,
-    #[serde(default)]
-    pub allowed_headers: Vec<String>,
 }
 
 /// One service: identity and audit are services like any other.

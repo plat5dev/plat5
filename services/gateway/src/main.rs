@@ -33,7 +33,7 @@ fn main() {
         .build()
         .expect("failed to create tokio runtime");
 
-    // Routes, rate limits and CORS: wait for the first snapshot, then follow the
+    // Routes and rate limits: wait for the first snapshot, then follow the
     // control plane.
     let snapshot = rt.block_on(async {
         ControlPlane::connect(&cfg.control_plane_url, telemetry::service_instance_id())
@@ -72,9 +72,6 @@ fn main() {
 
     if let Some(ref signer) = cfg.upstream_signer {
         info!(kid = %signer.kid(), "upstream request signing on");
-    }
-    if cfg.upstream_block_private_ips {
-        info!("upstream private IP blocking on");
     }
 
     // Background audit writes run on this runtime, off the request path.

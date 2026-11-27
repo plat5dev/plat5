@@ -7,9 +7,6 @@ defaults:
 rate_limits:
   standard: { requests: 120, window: 60s }
   evals-org: { requests: 300, window: 1s, count_at: organization }
-cors:
-  allowed_origins: ["https://app.example.com"]
-  allowed_headers: [idempotency-key]
 kinds:
   organization:
     path: /orgs/{organization}

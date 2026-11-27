@@ -44,9 +44,11 @@ Optional tuning:
 - `AUTH_SCOPE_CLAIM` — optional JWT claim path for narrowing token permissions
 - `SECRET_BRAND` — prefix for API keys and invite tokens (default `plat5`)
 - `TRUSTED_PROXIES` — CIDR/IP list of your edge proxy so `X-Forwarded-For` and `X-Forwarded-Proto` are honored
+- `CORS_ALLOWED_ORIGINS` / `CORS_ALLOWED_HEADERS` — browser origins (or `*`) and extra request headers allowed by the gateway ([CORS](../reference/gateway.md#cors))
 - `UPSTREAM_SIGNING_KEY` / `UPSTREAM_SIGNING_KEY_ID` — optional Ed25519 signing of forwarded upstream requests ([signing](../reference/headers.md#upstream-request-signing))
-- `UPSTREAM_BLOCK_PRIVATE_IPS` — set `true` on `gateway` and `identity` when forwarding to external/untrusted upstreams or an external PDP to block private-IP SSRF
 - `OTEL_EXPORTER_OTLP_ENDPOINT` — optional OTLP collector ([`reference/telemetry.md`](../reference/telemetry.md))
+
+If your deployment forwards to untrusted external URLs and requires SSRF / private-IP egress protection, enforce it at the network layer (VPC security groups, Kubernetes `NetworkPolicy`, or an egress proxy) rather than in the gateway ([upstream security](../reference/gateway.md#upstream-security)).
 
 ### Optional modules
 
@@ -83,7 +85,7 @@ Or call `POST /apply?dry_run=true` and `POST /apply` directly with JSON or YAML 
 2. Follow the rules in [write a service](write-a-service.md).
 3. Add the service under `services` in your config and apply.
 
-To allow browser clients, list their origins under `cors.allowed_origins` in your config and apply ([`reference/config/cors.md`](../reference/config/cors.md)).
+To allow browser clients, set `CORS_ALLOWED_ORIGINS` (and optionally `CORS_ALLOWED_HEADERS`) on the gateway container ([CORS](../reference/gateway.md#cors)).
 
 ## Health & verification
 

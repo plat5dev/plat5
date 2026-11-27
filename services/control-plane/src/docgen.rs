@@ -25,7 +25,6 @@ const PAGES: &[&str] = &[
     "roles.md",
     "authorizer.md",
     "rate-limits.md",
-    "cors.md",
     "services.md",
 ];
 

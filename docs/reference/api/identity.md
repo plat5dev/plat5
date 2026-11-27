@@ -27,7 +27,7 @@ Each is optional: without it, nobody is bound, and the list is the full list. A 
 | `POST` | `/roots/{kind}` | `{ display_name, slug? }`. A root kind. Returns the node, **201** |
 | `GET` | `/nodes` | Every node, unfiltered: `?kind=`, `?parent_id=`, `?status=`. For other front doors |
 | `POST` | `/nodes/{node_id}/release-slug` | <a id="slug-release"></a>On a purged root: frees its slug for a new root. **409** `SLUG_NOT_RELEASABLE` on a node that isn't a purged root. For an operator plane |
-| `PATCH` | `/nodes/{root_id}/rate-limit-tier` | `{ rate_limit_tier }`: opaque tier name (`[a-z0-9:._-]+`, max 64) or `null` to clear. Root nodes only (**422** on a child node). For billing/operator front doors; not generated in customer routes. Returns the node |
+| `PATCH` | `/nodes/{root_id}/rate-limit-tier` | `{ rate_limit_tier }`: opaque tier name (`[a-z0-9:._-]+`, max 64) or `null` to clear. Root nodes only (**422** on a child node). For internal services and operator front doors; not generated in customer routes. Returns the node |
 
 ## Bindings
 

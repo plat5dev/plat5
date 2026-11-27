@@ -1,4 +1,4 @@
-//! What the gateway runs on: routes, rate limits and CORS from the control plane.
+//! What the gateway runs on: routes and rate limits from the control plane.
 //!
 //! At boot the gateway waits for its first snapshot. It then long-polls
 //! `GET {CONTROL_PLANE_URL}/internal/gateway?after={revision}` and swaps the
@@ -19,7 +19,6 @@ use tracing::{error, info, warn};
 
 use crate::auth::parse_claim_path;
 use crate::authorizer::{parse_authorizer, AuthorizerDoc, AuthorizerSpec};
-use crate::cors::CorsPolicy;
 use crate::kinds::{KindDoc, Kinds};
 use crate::metrics;
 use crate::route_map::{Policy, PolicyDoc, RouteMap, ServiceDoc};
@@ -33,7 +32,6 @@ const MAX_REASON_CHARS: usize = 512;
 pub struct Snapshot {
     pub revision: i64,
     pub routes: RouteMap,
-    pub cors: Arc<CorsPolicy>,
     /// The policies `defaults.rate_limit` names, counted per credential for
     /// `POST /access/routes`. Empty when `defaults.rate_limit` is unset.
     pub default_policies: Vec<Policy>,
@@ -50,7 +48,6 @@ struct GatewayFeed {
     services: BTreeMap<String, ServiceDoc>,
     rate_limits: BTreeMap<String, PolicyDoc>,
     defaults: DefaultsFeed,
-    cors: CorsFeed,
     #[serde(default)]
     policy_claims: Vec<String>,
     #[serde(default)]
@@ -62,12 +59,6 @@ struct GatewayFeed {
 #[derive(Deserialize)]
 struct DefaultsFeed {
     rate_limit: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct CorsFeed {
-    allowed_origins: Vec<String>,
-    allowed_headers: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -303,10 +294,6 @@ pub fn build(feed: Value) -> Result<Snapshot, String> {
     Ok(Snapshot {
         revision: feed.revision,
         routes,
-        cors: Arc::new(CorsPolicy::new(
-            feed.cors.allowed_origins,
-            &feed.cors.allowed_headers,
-        )),
         default_policies,
         authorizer,
         policy_claims,
@@ -368,8 +355,7 @@ mod tests {
                 "burst": { "requests": 5, "window": "1s" },
                 "per-org": { "requests": 9, "window": "1s", "count_at": "organization" }
             },
-            "defaults": { "rate_limit": ["standard", "burst"] },
-            "cors": { "allowed_origins": ["https://app.example.com"], "allowed_headers": [] }
+            "defaults": { "rate_limit": ["standard", "burst"] }
         })
     }
 

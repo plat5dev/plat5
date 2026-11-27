@@ -41,10 +41,6 @@ pub const FILES: &[(&str, &str)] = &[
         include_str!(concat!(env!("PLAT5_SCHEMA_DIR"), "/rate_limits.json")),
     ),
     (
-        "cors.json",
-        include_str!(concat!(env!("PLAT5_SCHEMA_DIR"), "/cors.json")),
-    ),
-    (
         "services.json",
         include_str!(concat!(env!("PLAT5_SCHEMA_DIR"), "/services.json")),
     ),

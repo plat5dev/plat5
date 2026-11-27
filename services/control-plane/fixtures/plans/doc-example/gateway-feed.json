@@ -1120,9 +1120,5 @@
     "rate_limit": [
       "standard"
     ]
-  },
-  "cors": {
-    "allowed_origins": [],
-    "allowed_headers": []
   }
 }

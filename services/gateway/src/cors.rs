@@ -7,8 +7,8 @@ const BASE_ALLOW_HEADERS: &str =
 const EXPOSE_HEADERS: &str =
     "X-Request-ID, Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset";
 
-/// CORS from the control plane's `cors` document (docs/reference/gateway.md#cors).
-/// `["*"]` allows any origin; an empty list allows none.
+/// CORS from gateway environment (`CORS_ALLOWED_ORIGINS` / `CORS_ALLOWED_HEADERS`,
+/// docs/reference/gateway.md#cors). `["*"]` allows any origin; an empty list allows none.
 #[derive(Clone, Debug)]
 pub struct CorsPolicy {
     allowed_origins: Vec<String>,

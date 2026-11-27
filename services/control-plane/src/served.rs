@@ -52,7 +52,7 @@ pub fn feed_body(revision: i64, body: &Value) -> Value {
 }
 
 /// The body of `GET /internal/gateway`: kinds, every service's routes
-/// expanded, rate limits, `defaults.rate_limit`, CORS, optional `policy_claims`,
+/// expanded, rate limits, `defaults.rate_limit`, optional `policy_claims`,
 /// and optional deployment-wide `authorizer`.
 pub fn gateway_body_with(c: &Config, services: &BTreeMap<String, ExpandedService>) -> Value {
     let mut out = Map::new();
@@ -63,7 +63,6 @@ pub fn gateway_body_with(c: &Config, services: &BTreeMap<String, ExpandedService
         "defaults".into(),
         json!({ "rate_limit": c.defaults.rate_limit }),
     );
-    out.insert("cors".into(), json!(c.cors));
     if !c.policy_claims.is_empty() {
         let mut claims = c.policy_claims.clone();
         claims.sort();
@@ -204,10 +203,7 @@ mod tests {
     fn feeds_fill_defaults_and_expand_routes() {
         let gateway = gateway_feed(4, &base());
         assert_eq!(gateway["revision"], json!(4));
-        assert_eq!(
-            gateway["cors"],
-            json!({ "allowed_origins": [], "allowed_headers": [] })
-        );
+        assert!(gateway.get("cors").is_none());
         assert_eq!(
             gateway["rate_limits"],
             json!({ "standard": { "requests": 60, "window": "60s" } })

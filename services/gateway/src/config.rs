@@ -23,7 +23,7 @@ pub struct GatewayConfig {
     pub port: String,
     pub internal_port: String,
     /// The control plane's internal base URL (`CONTROL_PLANE_URL`): kinds, routes,
-    /// rate limits and CORS come from `{url}/internal/gateway`.
+    /// and rate limits come from `{url}/internal/gateway`.
     pub control_plane_url: String,
     /// Valkey for rate-limit counters. None = rate limiting off (`RATE_LIMIT_ENABLED=false`).
     pub valkey_url: Option<String>,
@@ -63,15 +63,10 @@ pub struct GatewayConfig {
     /// Optional Ed25519 signer for outgoing upstream requests (`UPSTREAM_SIGNING_KEY`).
     pub upstream_signer: Option<UpstreamSigner>,
 
-    /// Refuse upstream connections whose resolved IP is loopback, private, link-local,
-    /// CGNAT, ULA, or unspecified (`UPSTREAM_BLOCK_PRIVATE_IPS`).
-    pub upstream_block_private_ips: bool,
-    /// Hostnames or IP literals exempted from `UPSTREAM_BLOCK_PRIVATE_IPS`
-    /// (`UPSTREAM_ALLOW_PRIVATE_HOSTS`), in addition to Plat5's own identity/audit hosts.
-    pub upstream_allow_private_hosts: Vec<String>,
-    /// Host extracted from `AUDIT_URL` (even when `AUDIT_MODE=off`) so proxied audit
-    /// read routes stay reachable under `UPSTREAM_BLOCK_PRIVATE_IPS=true`.
-    pub audit_host: Option<String>,
+    /// Allowed CORS origins (`CORS_ALLOWED_ORIGINS`). `["*"]` allows any origin; empty allows none.
+    pub cors_allowed_origins: Vec<String>,
+    /// Extra request headers allowed on CORS preflight (`CORS_ALLOWED_HEADERS`).
+    pub cors_allowed_headers: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -113,15 +108,10 @@ impl GatewayConfig {
             env::var("VALKEY_URL").ok().as_deref(),
             false,
         )?;
-        let raw_audit_url = env::var("AUDIT_URL").ok();
         let (audit_mode, audit_url) = parse_audit_config(
             env::var("AUDIT_MODE").ok().as_deref(),
-            raw_audit_url.as_deref(),
+            env::var("AUDIT_URL").ok().as_deref(),
         )?;
-        let audit_host = audit_url
-            .as_deref()
-            .or(raw_audit_url.as_deref())
-            .and_then(url_host);
         let rate_limit_auth_failure_requests = parse_u64_env(
             "RATE_LIMIT_AUTH_FAILURE_REQUESTS",
             DEFAULT_RATE_LIMIT_AUTH_FAILURE_REQUESTS,
@@ -143,13 +133,10 @@ impl GatewayConfig {
             env::var("UPSTREAM_SIGNING_KEY").ok().as_deref(),
             env::var("UPSTREAM_SIGNING_KEY_ID").ok().as_deref(),
         )?;
-        let upstream_block_private_ips = parse_bool_env(
-            "UPSTREAM_BLOCK_PRIVATE_IPS",
-            env::var("UPSTREAM_BLOCK_PRIVATE_IPS").ok().as_deref(),
-            false,
-        )?;
-        let upstream_allow_private_hosts =
-            parse_host_list(env::var("UPSTREAM_ALLOW_PRIVATE_HOSTS").ok().as_deref());
+        let cors_allowed_origins =
+            parse_cors_origins(env::var("CORS_ALLOWED_ORIGINS").ok().as_deref())?;
+        let cors_allowed_headers =
+            parse_cors_headers(env::var("CORS_ALLOWED_HEADERS").ok().as_deref())?;
 
         Ok(Self {
             port: env::var("PORT").unwrap_or_else(|_| DEFAULT_PORT.to_string()),
@@ -184,25 +171,9 @@ impl GatewayConfig {
             audit_mode,
             trusted_proxies,
             upstream_signer,
-            upstream_block_private_ips,
-            upstream_allow_private_hosts,
-            audit_host,
+            cors_allowed_origins,
+            cors_allowed_headers,
         })
-    }
-
-    /// Hostnames of Plat5's own internal services (`IDENTITY_INTERNAL_URL` and `AUDIT_URL`)
-    /// so `UPSTREAM_BLOCK_PRIVATE_IPS=true` does not break Plat5's own generated routes.
-    pub fn own_service_hosts(&self) -> Vec<String> {
-        let mut hosts = Vec::new();
-        if let Some(h) = url_host(&self.identity_internal_url) {
-            hosts.push(h);
-        }
-        if let Some(h) = self.audit_host.clone() {
-            if !hosts.contains(&h) {
-                hosts.push(h);
-            }
-        }
-        hosts
     }
 }
 
@@ -366,42 +337,145 @@ fn parse_audit_config(
     }
 }
 
-fn url_host(raw: &str) -> Option<String> {
-    let parsed = reqwest::Url::parse(raw.trim()).ok()?;
-    parsed.host_str().map(|h| {
-        h.trim_start_matches('[')
-            .trim_end_matches(']')
-            .to_ascii_lowercase()
-    })
-}
+const MAX_CORS_ORIGINS: usize = 100;
+const MAX_CORS_HEADERS: usize = 32;
 
-fn parse_host_list(raw: Option<&str>) -> Vec<String> {
-    raw.unwrap_or_default()
+/// Parse `CORS_ALLOWED_ORIGINS`: comma-separated origins, or `*` alone.
+/// Empty or unset allows no cross-origin requests.
+fn parse_cors_origins(raw: Option<&str>) -> Result<Vec<String>, GatewayConfigError> {
+    let items: Vec<String> = raw
+        .unwrap_or_default()
         .split(',')
-        .map(|s| {
-            s.trim()
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .to_ascii_lowercase()
-        })
+        .map(str::trim)
         .filter(|s| !s.is_empty())
-        .collect()
+        .map(ToString::to_string)
+        .collect();
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+    if items.len() > MAX_CORS_ORIGINS {
+        return Err(GatewayConfigError::Invalid {
+            key: "CORS_ALLOWED_ORIGINS",
+            message: format!("at most {MAX_CORS_ORIGINS} origins allowed"),
+        });
+    }
+    if items.iter().any(|o| o == "*") {
+        if items.len() > 1 {
+            return Err(GatewayConfigError::Invalid {
+                key: "CORS_ALLOWED_ORIGINS",
+                message: "\"*\" must appear alone".to_string(),
+            });
+        }
+        return Ok(items);
+    }
+    let mut seen = std::collections::HashSet::with_capacity(items.len());
+    for origin in &items {
+        if !is_valid_origin(origin) {
+            return Err(GatewayConfigError::Invalid {
+                key: "CORS_ALLOWED_ORIGINS",
+                message: format!(
+                    "origin {origin:?} must be lowercase http://host[:port] or https://host[:port] with no path"
+                ),
+            });
+        }
+        if !seen.insert(origin.as_str()) {
+            return Err(GatewayConfigError::Invalid {
+                key: "CORS_ALLOWED_ORIGINS",
+                message: format!("duplicate origin {origin:?}"),
+            });
+        }
+    }
+    Ok(items)
 }
 
-fn parse_bool_env(
-    key: &'static str,
-    raw: Option<&str>,
-    default: bool,
-) -> Result<bool, GatewayConfigError> {
-    match raw.map(str::trim) {
-        None | Some("") => Ok(default),
-        Some("true") => Ok(true),
-        Some("false") => Ok(false),
-        Some(other) => Err(GatewayConfigError::Invalid {
-            key,
-            message: format!("must be true or false, got {other:?}"),
-        }),
+fn is_valid_origin(origin: &str) -> bool {
+    let rest = if let Some(r) = origin.strip_prefix("https://") {
+        r
+    } else if let Some(r) = origin.strip_prefix("http://") {
+        r
+    } else {
+        return false;
+    };
+    if rest.is_empty() || rest.contains('/') || rest.contains('?') || rest.contains('#') {
+        return false;
     }
+    let (host, port) = if let Some(after_open) = rest.strip_prefix('[') {
+        let Some((h, tail)) = after_open.split_once(']') else {
+            return false;
+        };
+        if h.is_empty() || h.parse::<std::net::Ipv6Addr>().is_err() {
+            return false;
+        }
+        if tail.is_empty() {
+            (h, None)
+        } else if let Some(p) = tail.strip_prefix(':') {
+            (h, Some(p))
+        } else {
+            return false;
+        }
+    } else {
+        let (h, p) = match rest.rsplit_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (rest, None),
+        };
+        if h.is_empty()
+            || !h
+                .bytes()
+                .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-'))
+        {
+            return false;
+        }
+        (h, p)
+    };
+    if host.is_empty() {
+        return false;
+    }
+    if let Some(p) = port {
+        if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) {
+            return false;
+        }
+        if p.parse::<u16>().ok().filter(|&n| n > 0).is_none() {
+            return false;
+        }
+    }
+    true
+}
+
+/// Parse `CORS_ALLOWED_HEADERS`: comma-separated lowercase HTTP header names.
+fn parse_cors_headers(raw: Option<&str>) -> Result<Vec<String>, GatewayConfigError> {
+    let items: Vec<String> = raw
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .collect();
+    if items.len() > MAX_CORS_HEADERS {
+        return Err(GatewayConfigError::Invalid {
+            key: "CORS_ALLOWED_HEADERS",
+            message: format!("at most {MAX_CORS_HEADERS} headers allowed"),
+        });
+    }
+    let mut seen = std::collections::HashSet::with_capacity(items.len());
+    for header in &items {
+        if header.len() > 128
+            || !header
+                .bytes()
+                .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-'))
+        {
+            return Err(GatewayConfigError::Invalid {
+                key: "CORS_ALLOWED_HEADERS",
+                message: format!("header {header:?} must be lowercase [a-z0-9-]"),
+            });
+        }
+        if !seen.insert(header.as_str()) {
+            return Err(GatewayConfigError::Invalid {
+                key: "CORS_ALLOWED_HEADERS",
+                message: format!("duplicate header {header:?}"),
+            });
+        }
+    }
+    Ok(items)
 }
 
 fn parse_upstream_signer(
@@ -558,12 +632,26 @@ mod tests {
     }
 
     #[test]
-    fn bool_env_parses_strictly() {
-        assert!(!parse_bool_env("UPSTREAM_BLOCK_PRIVATE_IPS", None, false).unwrap());
-        assert!(!parse_bool_env("UPSTREAM_BLOCK_PRIVATE_IPS", Some(""), false).unwrap());
-        assert!(parse_bool_env("UPSTREAM_BLOCK_PRIVATE_IPS", Some("true"), false).unwrap());
-        assert!(!parse_bool_env("UPSTREAM_BLOCK_PRIVATE_IPS", Some("false"), true).unwrap());
-        assert!(parse_bool_env("UPSTREAM_BLOCK_PRIVATE_IPS", Some("1"), false).is_err());
+    fn cors_env_parses_and_validates() {
+        assert!(parse_cors_origins(None).unwrap().is_empty());
+        assert!(parse_cors_origins(Some("")).unwrap().is_empty());
+        assert_eq!(parse_cors_origins(Some("*")).unwrap(), vec!["*"]);
+        assert_eq!(
+            parse_cors_origins(Some("https://app.example.com, http://localhost:3001")).unwrap(),
+            vec!["https://app.example.com", "http://localhost:3001"]
+        );
+        assert!(parse_cors_origins(Some("*, https://a.com")).is_err());
+        assert!(parse_cors_origins(Some("https://a.com/")).is_err());
+        assert!(parse_cors_origins(Some("https://A.com")).is_err());
+        assert!(parse_cors_origins(Some("https://a.com, https://a.com")).is_err());
+
+        assert!(parse_cors_headers(None).unwrap().is_empty());
+        assert_eq!(
+            parse_cors_headers(Some("idempotency-key, x-custom")).unwrap(),
+            vec!["idempotency-key", "x-custom"]
+        );
+        assert!(parse_cors_headers(Some("X-Custom")).is_err());
+        assert!(parse_cors_headers(Some("x-a, x-a")).is_err());
     }
 
     #[test]

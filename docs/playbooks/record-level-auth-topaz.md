@@ -6,7 +6,7 @@ Authorization in Plat5 is all-or-nothing: a deployment uses either built-in RBAC
 
 ## 1. Topaz manifest (`topaz/manifest.yaml`)
 
-Define types matching Plat5's AuthZEN payloads (`member` subjects, node kinds, and your record types). Topaz permission identifiers cannot contain `:`, so use underscore-separated permission names (`organization_read`, `project_read`, `docs_read`, …) across your Topaz manifest, `plat5.yml` `list_permission` values, and service route files (the CLI does this automatically with `plat5 init --authorizer topaz` and `routes.permission_separator: "_"`). See [`e2e/topaz/manifest.yaml`](../../e2e/topaz/manifest.yaml) for the reference:
+Define types matching Plat5's AuthZEN payloads (`member` subjects, node kinds, and your record types). Topaz permission identifiers cannot contain `:`, so use underscore-separated permission names (`organization_read`, `project_read`, `docs_read`, …) across your Topaz manifest, `plat5.yml` `list_permission` values, and service route files (the `go-topaz-api` starter sets `routes.permission_separator: "_"` for `plat5 routes generate`). See [`e2e/topaz/manifest.yaml`](../../e2e/topaz/manifest.yaml) for the reference:
 
 ```yaml
 model:
@@ -116,7 +116,7 @@ Identity automatically queries Topaz on node lists (`GET /orgs/{org}/projects` u
 
 Your `docs` service still does **no auth checks** on individual document endpoints — the gateway already enforced Topaz before forwarding. Your service only:
 
-1. **Bootstraps root and project relations in Topaz:** in external `authorizer` mode, creating an organization creates the creator's `member` row but writes no role in Plat5. Either follow identity's lifecycle log (`node.created` / `member.created`) or handle provisioning in your onboarding service to write `(subject: member:<member_id>, relation: admin, object: organization:<org_id>)` (and `(subject: organization:<org_id>, relation: organization, object: project:<project_id>)` for inheritance).
+1. **Bootstraps root and project relations in Topaz:** in external `authorizer` mode, creating an organization creates the creator's `member` row but writes no role in Plat5. The cleanest synchronous pattern is to **wrap `POST /orgs` and `POST /orgs/{organization}/projects` in your own service** ([wrapping identity routes](../guides/write-a-service.md#wrapping-identity-routes-for-custom-orchestration)): call identity's internal API to create the node, write `(subject: member:<member_id>, relation: admin, object: organization:<org_id>)` (and `(subject: organization:<org_id>, relation: organization, object: project:<project_id>)` for inheritance) to Topaz's directory, and then return **201** — so the creator's very next request succeeds immediately with no async race.
 2. **Writes record relations to Topaz on create/share/unshare** using `X-Plat5-Member-Id` and the document ID:
    - On `POST /projects/{project_id}/documents`: create the document in your DB and write `(subject: member:<X-Plat5-Member-Id>, relation: owner, object: document:<project_id>:<doc_id>)` to Topaz's directory.
    - On `POST /projects/{project_id}/documents/{doc_id}/shares`: write/delete the `viewer`/`editor` relation in Topaz.

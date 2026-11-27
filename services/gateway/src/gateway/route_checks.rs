@@ -32,7 +32,7 @@ impl Gateway {
         }
         ctx.route = Some(route);
         ctx.max_body_bytes = MAX_CHECKS_BODY;
-        let cors = snapshot.cors.clone();
+        let cors = self.cors();
 
         let presented = self
             .authenticator
@@ -48,7 +48,7 @@ impl Gateway {
         };
         let credential = match GatewayPipeline::check_credential(presented) {
             Ok(c) => c,
-            Err(rejection) => return write_check_rejection(&cors, session, ctx, rejection).await,
+            Err(rejection) => return write_check_rejection(cors, session, ctx, rejection).await,
         };
 
         if let Some(done) = self.reject_oversized_content_length(session, ctx).await? {
@@ -62,7 +62,7 @@ impl Gateway {
                     "route checks body too large"
                 );
                 return response::write_json_error(
-                    &cors,
+                    cors,
                     session,
                     ctx,
                     413,
@@ -78,7 +78,7 @@ impl Gateway {
                 let fields: Vec<(String, String)> =
                     fields.into_iter().map(|f| (f.path, f.message)).collect();
                 return response::write_json_error(
-                    &cors,
+                    cors,
                     session,
                     ctx,
                     422,
@@ -106,7 +106,7 @@ impl Gateway {
             .await;
         let checked = match checked {
             Ok(c) => c,
-            Err(rejection) => return write_check_rejection(&cors, session, ctx, rejection).await,
+            Err(rejection) => return write_check_rejection(cors, session, ctx, rejection).await,
         };
         let answer = serde_json::json!({
             "checks": checked
@@ -121,7 +121,7 @@ impl Gateway {
             .map(|info| response::rate_limit_headers(info).into_iter().collect())
             .unwrap_or_default();
         response::send_json(
-            &cors,
+            cors,
             session,
             ctx,
             200,

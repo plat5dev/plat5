@@ -207,10 +207,7 @@ async fn plan_and_apply_against_postgres() {
     assert_eq!(gateway["revision"], json!(1));
     // The dry run's services are what the feed serves once it's applied.
     assert_eq!(plan["services"], gateway["services"]);
-    assert_eq!(
-        gateway["cors"],
-        json!({ "allowed_origins": [], "allowed_headers": [] })
-    );
+    assert!(gateway.get("cors").is_none());
     let routes = gateway["services"]["e10s"]["routes"].as_array().unwrap();
     assert!(routes.iter().any(|r| r["path"]
         == json!("/orgs/{organization}/folders/{folder}/plans")

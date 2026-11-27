@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/netip"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -67,13 +66,8 @@ type HTTPPDP struct {
 	client *http.Client
 }
 
+// NewHTTPPDP builds an HTTPPDP with connection pooling and redirects disabled (fail closed).
 func NewHTTPPDP() *HTTPPDP {
-	return NewHTTPPDPWithOptions(false)
-}
-
-// NewHTTPPDPWithOptions builds an HTTPPDP with connection pooling, redirects
-// disabled (fail closed), and optional private-IP SSRF blocking.
-func NewHTTPPDPWithOptions(blockPrivateIPs bool) *HTTPPDP {
 	dialer := &net.Dialer{
 		Timeout:   5 * time.Second,
 		KeepAlive: 30 * time.Second,
@@ -86,62 +80,15 @@ func NewHTTPPDPWithOptions(blockPrivateIPs bool) *HTTPPDP {
 		ExpectContinueTimeout: time.Second,
 		DialContext:           dialer.DialContext,
 	}
-	if blockPrivateIPs {
-		tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
-			}
-			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-			if err != nil {
-				return nil, err
-			}
-			var allowed []net.IP
-			for _, ipAddr := range ips {
-				if !isBlockedIP(ipAddr.IP) {
-					allowed = append(allowed, ipAddr.IP)
-				}
-			}
-			if len(allowed) == 0 {
-				return nil, fmt.Errorf("blocked private IP for host %q", host)
-			}
-			var lastErr error
-			for _, ip := range allowed {
-				conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-				if err == nil {
-					return conn, nil
-				}
-				lastErr = err
-			}
-			return nil, lastErr
-		}
-	}
 	return &HTTPPDP{
 		client: &http.Client{
 			Transport: tr,
-			// Never follow redirects: prevents 302 SSRF bypasses and fails closed as non-2xx.
+			// Never follow redirects: fail closed as non-2xx.
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
 		},
 	}
-}
-
-var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
-
-func isBlockedIP(ip net.IP) bool {
-	addr, ok := netip.AddrFromSlice(ip)
-	if !ok {
-		return true
-	}
-	addr = addr.Unmap()
-	return addr.IsLoopback() ||
-		addr.IsPrivate() ||
-		addr.IsLinkLocalUnicast() ||
-		addr.IsLinkLocalMulticast() ||
-		addr.IsMulticast() ||
-		addr.IsUnspecified() ||
-		cgnatPrefix.Contains(addr)
 }
 
 type authzenBatchBody struct {

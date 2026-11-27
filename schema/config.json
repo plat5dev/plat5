@@ -18,7 +18,6 @@
     "permissions": { "$ref": "roles.json#/properties/permissions" },
     "authorizer": { "$ref": "authorizer.json#/properties/authorizer" },
     "rate_limits": { "$ref": "rate_limits.json#/properties/rate_limits" },
-    "cors": { "$ref": "cors.json#/properties/cors" },
     "services": {
       "title": "services",
       "description": "Map of service name → service.",

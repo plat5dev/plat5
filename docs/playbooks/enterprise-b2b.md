@@ -181,9 +181,9 @@ POST /user/keys
 
 Narrowed personal keys cannot call user routes (**403**) and can never exceed the intersection of the member's bindings and `scopes`.
 
-### Set an org's billing rate-limit tier
+### Set an org's rate-limit tier
 
-From your billing service or operator plane on the private network (not exposed on customer routes), tag the root node ([nodes](../reference/api/identity.md#nodes)):
+From an internal service or operator plane on the private network (not exposed on customer routes), tag the root node with a tier name defined in your `rate_limits` policies ([nodes](../reference/api/identity.md#nodes)):
 
 ```bash
 PATCH {IDENTITY_URL}/nodes/{root_id}/rate-limit-tier

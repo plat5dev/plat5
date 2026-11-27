@@ -6,7 +6,7 @@ How nodes and members are created, deleted, restored and purged, how a person's 
 
 Nodes are created through identity's routes ([generated routes](../reference/config/generated-routes.md)), or identity's service API by another front door. The creator gets `creator_role` on the new node when its kind binds its creator ([access](access.md#assigning)). A slug is fixed at creation ([ids and slugs](model.md#ids-and-slugs)). Identity writes `node.created`. Nothing is created under a deleted or purged parent (**409**).
 
-A service never creates a node in its own tables first: it creates it through the node API, so the gateway's check never runs ahead of Plat5.
+A service never creates a node in its own tables first: it creates it through the node API, so the gateway's check never runs ahead of Plat5. When a deployment needs synchronous checks or provisioning around a lifecycle write (plan quotas, delete guards, default child nodes, or writing initial tuples to an external authorizer), claim that route in your own service (`services/api.yml`) and call identity's service API internally rather than letting the request go straight to `services/identity.yml` ([wrapping identity routes](../guides/write-a-service.md#wrapping-identity-routes-for-custom-orchestration)).
 
 ## Deleting, restoring and purging
 

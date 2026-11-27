@@ -1,6 +1,6 @@
 # Settings
 
-Deployment-wide settings in the control-plane config, beside `kinds`, `roles` (or `authorizer`), `rate_limits`, `cors` and `services`. All fields here are optional. Concept: [config](../../concepts/config.md).
+Deployment-wide settings in the control-plane config, beside `kinds`, `roles` (or `authorizer`), `rate_limits` and `services`. All fields here are optional. Concept: [config](../../concepts/config.md).
 
 ```yaml
 deletion_grace: 30d

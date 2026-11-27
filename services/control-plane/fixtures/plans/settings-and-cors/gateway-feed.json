@@ -92,13 +92,5 @@
     "rate_limit": [
       "standard"
     ]
-  },
-  "cors": {
-    "allowed_origins": [
-      "https://app.example.com"
-    ],
-    "allowed_headers": [
-      "idempotency-key"
-    ]
   }
 }

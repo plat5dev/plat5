@@ -11,7 +11,7 @@ use tracing::{warn, Instrument, Span};
 
 use crate::internal_http::traced;
 use crate::metrics;
-use crate::net::{is_blocked_ip, PeerResolver};
+use crate::net::PeerResolver;
 
 use super::config::AuthorizerSpec;
 
@@ -166,43 +166,20 @@ impl Authorizer for NoAuthorizer {
     }
 }
 
-/// Real HTTP AuthZEN 1.0 client backed by the shared cached SSRF-safe [`PeerResolver`].
+/// Real HTTP AuthZEN 1.0 client backed by the shared cached [`PeerResolver`].
 #[derive(Clone)]
 pub struct HttpAuthorizer {
     client: reqwest::Client,
-    resolver: PeerResolver,
 }
 
 impl HttpAuthorizer {
     pub fn new(resolver: PeerResolver) -> Self {
         let client = reqwest::Client::builder()
-            .dns_resolver(Arc::new(resolver.clone()))
+            .dns_resolver(Arc::new(resolver))
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("failed to build authorizer HTTP client");
-        Self { client, resolver }
-    }
-
-    /// Reject literal private/reserved IP URLs up front (reqwest bypasses its
-    /// `dns_resolver` for IP literals; hostnames are checked and pinned inside
-    /// `PeerResolver` without TOCTOU re-resolution).
-    fn check_ip_literal(&self, url: &str) -> Result<(), AuthorizerUnavailable> {
-        if !self.resolver.block_private_ips() {
-            return Ok(());
-        }
-        let parsed = reqwest::Url::parse(url)
-            .map_err(|e| AuthorizerUnavailable(format!("invalid url: {e}")))?;
-        if let Some(host) = parsed.host_str() {
-            let trimmed = host.trim_start_matches('[').trim_end_matches(']');
-            if let Ok(ip) = trimmed.parse::<std::net::IpAddr>() {
-                if !self.resolver.is_allowed_private_host(trimmed) && is_blocked_ip(ip) {
-                    return Err(AuthorizerUnavailable(format!(
-                        "blocked private or reserved IP {ip}"
-                    )));
-                }
-            }
-        }
-        Ok(())
+        Self { client }
     }
 
     async fn post_json<B: Serialize + ?Sized, R: for<'de> Deserialize<'de>>(
@@ -215,16 +192,6 @@ impl HttpAuthorizer {
     ) -> Result<R, AuthorizerUnavailable> {
         let url = format!("{}{}", spec.url, path);
         let start = Instant::now();
-        if let Err(err) = self.check_ip_literal(&url) {
-            metrics::record_authorizer_request(
-                AUTHORIZER_METRIC_LABEL,
-                op,
-                "error",
-                start.elapsed().as_secs_f64(),
-            );
-            warn!(op, error = %err.0, "authorizer request blocked");
-            return Err(err);
-        }
         let span = authorizer_span(op, &url);
         let mut req = self
             .client

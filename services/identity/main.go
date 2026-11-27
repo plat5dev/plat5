@@ -66,7 +66,7 @@ func main() {
 		baseLogger.Info().Err(err).Msg("stopped before config loaded")
 		return
 	}
-	pdp := access.NewHTTPPDPWithOptions(cfg.UpstreamBlockPrivateIPs)
+	pdp := access.NewHTTPPDP()
 	nodeStore := nodes.NewStore(pool)
 	memberStore := members.NewStore(pool, nodeStore, cfg.SecretBrand).WithPDP(pdp).WithFeed(src)
 	accessStore := access.NewStore(pool, cfg.SecretBrand, memberStore).WithPDP(pdp)

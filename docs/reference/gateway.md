@@ -42,7 +42,7 @@ In-process per replica, backed by identity's invalidation feed (`GET {IDENTITY_I
 
 ## Control plane
 
-Routes, kinds, rate limits, defaults and CORS come from the control plane (`CONTROL_PLANE_URL`, required to boot). The gateway reads `GET {CONTROL_PLANE_URL}/internal/gateway`.
+Routes, kinds, rate limits and defaults come from the control plane (`CONTROL_PLANE_URL`, required to boot). The gateway reads `GET {CONTROL_PLANE_URL}/internal/gateway`.
 
 - **Boot.** Waits for its first snapshot, retrying while the control plane is down, and doesn't listen until it has one.
 - **Running.** Long-polls with `?after={revision}` and swaps them whole on each change.
@@ -130,7 +130,7 @@ TLS terminates at the edge or load balancer, not the gateway. Services behind th
 ## Upstream security
 
 - **Request signing.** Set `UPSTREAM_SIGNING_KEY` (and optionally `UPSTREAM_SIGNING_KEY_ID`) to attach an Ed25519 `X-Plat5-Signature` header to every forwarded request ([`reference/headers.md`](headers.md#upstream-request-signing)), so services outside the private network can verify requests came from the gateway.
-- **Private-IP blocking.** Set `UPSTREAM_BLOCK_PRIVATE_IPS=true` to refuse upstream connections (and outbound AuthZEN PDP calls) whose DNS-resolved address is loopback, private (RFC1918 / IPv6 ULA), link-local (`169.254.0.0/16` / `fe80::/10`), CGNAT (`100.64.0.0/10`), unspecified, or an IPv4-mapped IPv6 address pointing to any of those. The hosts of `IDENTITY_INTERNAL_URL` and `AUDIT_URL` are automatically exempted for proxied routes so Plat5's own identity and audit routes keep working; set `UPSTREAM_ALLOW_PRIVATE_HOSTS` (comma-separated hostnames or IPs) to exempt additional trusted private upstreams or authorizers. Blocked upstream requests return **502** `SERVICE_UNAVAILABLE`; blocked authorizer calls return **503** `SERVICE_UNAVAILABLE`.
+- **Egress & SSRF isolation.** Service `url` values and `authorizer.url` are operator-configured, not end-user inputs. The gateway does not filter private or reserved IP ranges in-process; if your deployment forwards to untrusted or third-party endpoints and needs private-IP / metadata SSRF protection, enforce egress restrictions at the network layer (VPC security groups, Kubernetes `NetworkPolicy`, or a dedicated egress proxy).
 
 ## Outbound authorizer
 
@@ -138,13 +138,13 @@ When top-level `authorizer` is configured in place of built-in RBAC ([`reference
 
 ## CORS
 
-The gateway answers every `OPTIONS` request as a preflight: `204 No Content`, `Access-Control-Allow-*` and `Access-Control-Max-Age: 86400`. It adds `Access-Control-Allow-Origin` and `Access-Control-Expose-Headers` on responses.
+Configured on the gateway process via `CORS_ALLOWED_ORIGINS` and `CORS_ALLOWED_HEADERS` ([`reference/env.md`](env.md#gateway)). The gateway answers every `OPTIONS` request as a preflight: `204 No Content`, `Access-Control-Allow-*` and `Access-Control-Max-Age: 86400`. It adds `Access-Control-Allow-Origin` and `Access-Control-Expose-Headers` on responses.
 
 | Header | Value |
 |--------|-------|
-| `Access-Control-Allow-Origin` | With `allowed_origins: ["*"]`, `*`. Otherwise an `Origin` in the list, echoed, with `Vary: Origin`; otherwise omitted |
+| `Access-Control-Allow-Origin` | With `CORS_ALLOWED_ORIGINS=*`, `*`. Otherwise an `Origin` in the comma-separated list, echoed, with `Vary: Origin`; otherwise omitted |
 | `Access-Control-Allow-Methods` | `GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS` |
-| `Access-Control-Allow-Headers` | `Authorization`, `Content-Type`, `X-Request-ID`, `traceparent`, `tracestate`, plus `cors.allowed_headers` |
+| `Access-Control-Allow-Headers` | `Authorization`, `Content-Type`, `X-Request-ID`, `traceparent`, `tracestate`, plus `CORS_ALLOWED_HEADERS` |
 | `Access-Control-Expose-Headers` | `X-Request-ID`, `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` |
 
 ## Security headers

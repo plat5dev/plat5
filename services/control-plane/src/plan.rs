@@ -34,7 +34,6 @@ pub enum What {
     Role,
     Authorizer,
     RateLimit,
-    Cors,
     Service,
 }
 
@@ -326,20 +325,6 @@ async fn make_plan(
             .unwrap_or_default(),
         &named(&next.gateway, "rate_limits"),
     ));
-
-    let new_cors = next.gateway["cors"].clone();
-    match current.map(|c| &c.gateway["cors"]) {
-        Some(old) if *old == new_cors => {}
-        Some(old) => changes.push(line(
-            Op::Change,
-            What::Cors,
-            "cors",
-            Some(old),
-            Some(&new_cors),
-        )),
-        None if new_cors == json!({ "allowed_origins": [], "allowed_headers": [] }) => {}
-        None => changes.push(line(Op::Add, What::Cors, "cors", None, Some(&new_cors))),
-    }
 
     let old_services = current
         .map(|c| named(&c.gateway, "services"))

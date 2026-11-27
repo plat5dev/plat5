@@ -65,8 +65,6 @@ fn a_full_config_passes() {
         "standard": { "requests": 60, "window": "60s" },
         "evals-org": { "requests": 300, "window": "1s", "count_at": "organization" }
     });
-    c["cors"] =
-        json!({ "allowed_origins": ["https://app.example.com"], "allowed_headers": ["x-custom"] });
     c["services"] = json!({
         "identity": { "url": "http://identity:3000", "scopes": { "user": { "routes": [
             { "path": "/user", "upstream": "/users/{user.id}", "methods": ["GET", "PATCH", "DELETE"] }
@@ -186,18 +184,6 @@ fn shape_errors() {
             "rate_limits.p.requests",
             Box::new(|c| c["rate_limits"] = json!({ "p": { "requests": 0, "window": "1s" } })),
         ),
-        (
-            "cors.allowed_origins",
-            Box::new(|c| c["cors"] = json!({ "allowed_origins": ["*", "https://a.com"] })),
-        ),
-        (
-            "cors.allowed_origins",
-            Box::new(|c| c["cors"] = json!({ "allowed_origins": ["https://a.com/"] })),
-        ),
-        (
-            "cors.allowed_headers[0]",
-            Box::new(|c| c["cors"] = json!({ "allowed_headers": ["X-Custom"] })),
-        ),
         ("", Box::new(|c| c["unknown"] = json!(1))),
     ];
     for (path, mutate) in cases {
@@ -206,15 +192,6 @@ fn shape_errors() {
         let errs = errors(c);
         assert!(errs.iter().any(|e| e.path == path), "{path}: {errs:?}");
     }
-}
-
-#[test]
-fn any_origin_is_written_out() {
-    let mut c = base();
-    c["cors"] = json!({ "allowed_origins": ["*"] });
-    check_config(&c).unwrap();
-    c["cors"] = json!({ "allowed_origins": [] });
-    check_config(&c).unwrap();
 }
 
 #[test]

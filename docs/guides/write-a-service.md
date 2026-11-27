@@ -97,7 +97,15 @@ If your deployment configures a top-level external AuthZEN 1.0 `authorizer` and 
 
 ## Nodes with service fields
 
-Identity stores a node's `id`, `kind`, `parent_id`, `slug`, `display_name`, and `status`. Any product-specific fields about a node (like a project's region or billing settings) live in your service, keyed by the node id:
+Identity stores a node's `id`, `kind`, `parent_id`, `slug`, `display_name`, and `status`. Any product-specific fields about a node (like a project's region or plan settings) live in your service, keyed by the node id:
 
 - Identity creates the node through its route.
 - Your service treats a node with no row yet as having defaults, creating its row lazily on first read/write or via a follow-up `PUT` from the console.
+
+## Wrapping identity routes for custom orchestration
+
+Identity's public routes live in `services/identity.yml` like any other service. When a lifecycle mutation needs synchronous business logic — such as checking seat or project limits, refusing to delete a project that still has active resources, creating default child nodes, or writing bootstrap relations to an external PDP before returning **201** — the expected pattern is to **claim that `(method, path)` in your own service file** (`services/api.yml`) and call identity's internal API (`http://identity:3000/…`) from your handler:
+
+1. Claim the public route (for example `POST /orgs`, `POST /orgs/{organization}/projects`, or `DELETE /orgs/{organization}/projects/{project}`) in your service's YAML. The gateway still handles authentication, permission checks, rate limits, and audit, and forwards `X-Plat5-User-Id` or `X-Plat5-<Kind>-Id` + `X-Plat5-Member-Id`.
+2. In your handler, run your validation or checks, call identity's service API (`POST /nodes`, `POST /nodes/{org_id}/children/project`, `DELETE /nodes/{id}`, …) forwarding `X-Plat5-User-Id` / `X-Plat5-Member-Id`, perform any synchronous follow-up work (seeding DB rows, writing PDP tuples), and return the response.
+3. Because the public path and response shape stay unchanged, consoles and API clients keep working without modification — and `plat5 routes generate` skips routes already claimed by your services.

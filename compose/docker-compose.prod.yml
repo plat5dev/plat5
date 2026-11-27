@@ -107,11 +107,12 @@ services:
       RATE_LIMIT_AUTH_FAILURE_REQUESTS: ${RATE_LIMIT_AUTH_FAILURE_REQUESTS:-60}
       RATE_LIMIT_AUTH_FAILURE_WINDOW: ${RATE_LIMIT_AUTH_FAILURE_WINDOW:-60s}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      CORS_ALLOWED_HEADERS: ${CORS_ALLOWED_HEADERS:-}
       UPSTREAM_SIGNING_KEY: ${UPSTREAM_SIGNING_KEY:-}
       UPSTREAM_SIGNING_KEY_ID: ${UPSTREAM_SIGNING_KEY_ID:-}
-      UPSTREAM_BLOCK_PRIVATE_IPS: ${UPSTREAM_BLOCK_PRIVATE_IPS:-}
       RUST_LOG: info
-      # Kinds, routes, rate limits and CORS (docs/reference/gateway.md#control-plane).
+      # Kinds, routes and rate limits (docs/reference/gateway.md#control-plane).
       CONTROL_PLANE_URL: http://control-plane:5003
       OTEL_SERVICE_NAME: gateway
       OTEL_RESOURCE_ATTRIBUTES: service.namespace=edge,deployment.environment=prod
@@ -147,7 +148,6 @@ services:
       SECRET_BRAND: ${SECRET_BRAND:-plat5}
       DATABASE_URL: postgres://${POSTGRES_USER:-plat5}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-plat5}?sslmode=disable
       CONTROL_PLANE_URL: http://control-plane:5003
-      UPSTREAM_BLOCK_PRIVATE_IPS: ${UPSTREAM_BLOCK_PRIVATE_IPS:-}
       OTEL_SERVICE_NAME: identity
       OTEL_RESOURCE_ATTRIBUTES: service.namespace=identity,deployment.environment=prod
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}

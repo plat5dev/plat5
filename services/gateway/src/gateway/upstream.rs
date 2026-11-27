@@ -310,36 +310,35 @@ impl Injector for RequestHeaderInjector<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::net::{IpAddr, SocketAddr};
+    use std::net::SocketAddr;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
 
     use super::*;
-    use crate::net::is_blocked_ip;
 
     #[tokio::test]
     async fn resolve_peer_rejects_bad_addresses() {
-        let open = PeerResolver::new(false);
-        let strict = PeerResolver::new(true);
-        assert!(open.resolve("example.com").await.is_none());
-        assert!(open.resolve("").await.is_none());
-        assert!(open.resolve("host:notaport").await.is_none());
+        let resolver = PeerResolver::new();
+        assert!(resolver.resolve("example.com").await.is_none());
+        assert!(resolver.resolve("").await.is_none());
+        assert!(resolver.resolve("host:notaport").await.is_none());
         assert_eq!(
-            open.resolve("127.0.0.1:3000").await.map(|a| a.port()),
+            resolver.resolve("127.0.0.1:3000").await.map(|a| a.port()),
             Some(3000)
         );
-        assert!(strict.resolve("127.0.0.1:3000").await.is_none());
-        assert!(strict.resolve("169.254.169.254:80").await.is_none());
         assert_eq!(
-            strict.resolve("93.184.216.34:443").await.map(|a| a.port()),
+            resolver
+                .resolve("93.184.216.34:443")
+                .await
+                .map(|a| a.port()),
             Some(443)
         );
     }
 
     #[tokio::test]
     async fn peer_resolver_caches_and_round_robins_records() {
-        let resolver = PeerResolver::with_ttl(true, Duration::from_millis(80));
+        let resolver = PeerResolver::with_ttl(Duration::from_millis(80));
         let calls = Arc::new(AtomicUsize::new(0));
         let a: SocketAddr = "93.184.216.34:443".parse().unwrap();
         let b: SocketAddr = "93.184.216.35:443".parse().unwrap();
@@ -396,10 +395,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn peer_resolver_does_not_cache_blocked_or_failed_lookups() {
-        let resolver = PeerResolver::with_ttl(true, Duration::from_secs(60));
+    async fn peer_resolver_does_not_cache_failed_lookups() {
+        let resolver = PeerResolver::with_ttl(Duration::from_secs(60));
         let calls = Arc::new(AtomicUsize::new(0));
-        let private: SocketAddr = "10.0.0.5:8080".parse().unwrap();
         let public: SocketAddr = "93.184.216.34:8080".parse().unwrap();
 
         let run = |res: Option<Vec<SocketAddr>>| {
@@ -414,27 +412,22 @@ mod tests {
             .resolve_with("flaky.example.com:8080", run(None))
             .await
             .is_none());
-        assert!(resolver
-            .resolve_with("flaky.example.com:8080", run(Some(vec![public, private])))
-            .await
-            .is_none());
         assert_eq!(
             resolver
                 .resolve_with("flaky.example.com:8080", run(Some(vec![public])))
                 .await,
             Some(public)
         );
-        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
     async fn peer_resolver_sticks_to_preferred_address_family() {
-        let resolver = PeerResolver::with_ttl(true, Duration::from_secs(60));
+        let resolver = PeerResolver::with_ttl(Duration::from_secs(60));
         let v4_a: SocketAddr = "93.184.216.34:443".parse().unwrap();
         let v4_b: SocketAddr = "93.184.216.35:443".parse().unwrap();
         let v6_a: SocketAddr = "[2606:2800:220:1:248:1893:25c8:1946]:443".parse().unwrap();
         let v6_b: SocketAddr = "[2606:2800:220:1:248:1893:25c8:1947]:443".parse().unwrap();
-        let v6_private: SocketAddr = "[::1]:443".parse().unwrap();
 
         let give = |res: Vec<SocketAddr>| move |_addr: String| async move { Some(res) };
 
@@ -456,73 +449,6 @@ mod tests {
                     .await,
                 Some(expected)
             );
-        }
-
-        // A private IP in the non-preferred family still fails SSRF checks.
-        assert!(resolver
-            .resolve_with("mixed.example.com:443", give(vec![v4_a, v6_private]))
-            .await
-            .is_none());
-
-        // Allowed private hosts bypass private-IP blocking while other hosts stay blocked.
-        let exempt =
-            PeerResolver::with_allowed_private_hosts(true, vec!["identity".into(), "audit".into()]);
-        let docker_ip: SocketAddr = "172.21.0.9:3000".parse().unwrap();
-        assert_eq!(
-            exempt
-                .resolve_with("identity:3000", give(vec![docker_ip]))
-                .await,
-            Some(docker_ip)
-        );
-        assert!(exempt
-            .resolve_with("echo:80", give(vec!["172.21.0.10:80".parse().unwrap()]))
-            .await
-            .is_none());
-    }
-
-    #[test]
-    fn blocked_ips_cover_private_metadata_cgnat_and_mapped_v6() {
-        for blocked in [
-            "127.0.0.1",
-            "127.255.255.254",
-            "10.0.0.1",
-            "172.16.0.1",
-            "172.31.255.254",
-            "192.168.1.1",
-            "169.254.169.254",
-            "100.64.0.1",
-            "100.127.255.254",
-            "0.0.0.0",
-            "0.1.2.3",
-            "224.0.0.1",
-            "255.255.255.255",
-            "::1",
-            "::",
-            "fc00::1",
-            "fd12:3456::1",
-            "fe80::1",
-            "ff02::1",
-            "::ffff:127.0.0.1",
-            "::ffff:169.254.169.254",
-            "::ffff:10.0.0.5",
-            "::ffff:100.64.1.1",
-        ] {
-            let ip: IpAddr = blocked.parse().unwrap();
-            assert!(is_blocked_ip(ip), "expected {blocked} to be blocked");
-        }
-
-        for allowed in [
-            "1.1.1.1",
-            "8.8.8.8",
-            "93.184.216.34",
-            "100.63.255.255",
-            "100.128.0.1",
-            "172.32.0.1",
-            "2606:4700:4700::1111",
-            "::ffff:93.184.216.34",
-        ] {
-            let ip: IpAddr = allowed.parse().unwrap();
-            assert!(!is_blocked_ip(ip), "expected {allowed} to be allowed");
         }
     }
 
