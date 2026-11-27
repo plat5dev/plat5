@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/gofiber/contrib/v3/otel v1.1.3
 	github.com/gofiber/fiber/v3 v3.2.0
-	github.com/jackc/pgx/v5 v5.7.4
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/oklog/ulid/v2 v2.1.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/rs/zerolog v1.34.0

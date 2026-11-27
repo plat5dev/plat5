@@ -17,7 +17,7 @@ uuid = { version = "1", features = ["v4"] }
 opentelemetry = { version = "0.31", features = ["trace", "metrics"] }
 opentelemetry-otlp = { version = "0.31", default-features = false, features = ["http-proto", "reqwest-blocking-client", "metrics", "trace"] }
 opentelemetry_sdk = { version = "0.31", features = ["metrics"] }
-pingora = { version = "0.6", features = ["proxy", "rustls"] }
+pingora = { version = "0.8", features = ["proxy", "rustls"] }
 prometheus = { version = "0.13.4", features = ["process"] }
 redis = { version = "0.27", features = ["tokio-comp", "tokio-rustls-comp", "connection-manager", "script"] }
 reqwest = { version = "0.12.24", features = ["json"] }
