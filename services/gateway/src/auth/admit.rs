@@ -265,9 +265,15 @@ impl<A: Admit> AdmitCache<A> {
         &self.tracker
     }
 
-    async fn entry_is_fresh(&self, entry: &Entry) -> bool {
+    async fn entry_is_fresh(&self, entry: &Entry, req: &AdmitRequest) -> bool {
         if entry.is_negative {
-            return true;
+            return self.tracker.is_negative_fresh(
+                &entry.answer,
+                req,
+                entry.global_gen,
+                entry.seq,
+                entry.config_revision,
+            );
         }
         self.tracker
             .is_fresh(
@@ -282,7 +288,7 @@ impl<A: Admit> AdmitCache<A> {
     pub async fn get(&self, req: &AdmitRequest) -> Result<Arc<CachedAdmit>, Arc<AdmitUnavailable>> {
         let key = cache_key(req);
         if let Some(entry) = self.entries.get(&key).await {
-            if self.entry_is_fresh(&entry).await {
+            if self.entry_is_fresh(&entry, req).await {
                 metrics::record_auth_cache_hit("admit");
                 return Ok(entry.answer);
             }
@@ -293,7 +299,7 @@ impl<A: Admit> AdmitCache<A> {
             .entry(key)
             .and_try_compute_with(|maybe_entry| async move {
                 if let Some(existing) = maybe_entry {
-                    if self.entry_is_fresh(existing.value()).await {
+                    if self.entry_is_fresh(existing.value(), req).await {
                         return Ok(Op::Nop);
                     }
                 }
@@ -315,7 +321,7 @@ impl<A: Admit> AdmitCache<A> {
                     })?;
                 }
                 let min_rev = self.tracker.observe_config_revision(cached.config_revision);
-                if !is_negative && cached.config_revision < min_rev {
+                if cached.valid && cached.config_revision < min_rev {
                     return Err(ComputeErr::Uncached(Arc::new(cached)));
                 }
                 let ttl = if is_negative {
@@ -375,9 +381,19 @@ fn check_admitted(answer: &AdmitAnswer, req: &AdmitRequest) -> Result<(), &'stat
     if req.chain.is_empty() {
         return match answer.user_id.as_deref() {
             _ if principal == "service_account" => Ok(()),
-            // A narrowed personal API key on a user route returns user_id: null;
-            // the pipeline refuses it with 403 rather than treating it as 503.
-            None if answer.key_id.is_some() => Ok(()),
+            // A narrowed personal API key or scoped JWT on a user route returns
+            // user_id: null; the pipeline refuses it with 403 rather than treating it as 503.
+            None if answer.key_id.is_some()
+                || matches!(
+                    &req.credential,
+                    AdmitCredential::Idp {
+                        scopes: Some(_),
+                        ..
+                    }
+                ) =>
+            {
+                Ok(())
+            }
             Some(id) if !id.is_empty() => Ok(()),
             _ => Err("user_id"),
         };
@@ -982,6 +998,26 @@ pub mod tests {
         // A service account has no user: its answer is whole.
         let (c, _) = cache(Ok(service_account_user()));
         assert!(c.get(&user_req).await.is_ok());
+        // A scoped JWT on a user route returns user_id: null and is refused with 403, not 503.
+        let scoped_jwt_req = request(
+            AdmitCredential::Idp {
+                issuer: "https://auth".into(),
+                subject: "s".into(),
+                name: None,
+                scopes: Some(vec!["project:read".into()]),
+                claims: BTreeMap::new(),
+            },
+            &[],
+            false,
+        );
+        let (c, _) = cache(Ok(AdmitAnswer {
+            user_id: None,
+            ..user()
+        }));
+        assert!(c.get(&scoped_jwt_req).await.is_ok());
+        // An unscoped JWT returning user_id: null is still a contract violation (503).
+        let unscoped_jwt_req = request(idp("s", None), &[], false);
+        assert!(c.get(&unscoped_jwt_req).await.is_err());
 
         // A valid answer with an unparseable CIDR is rejected (503) and not cached.
         let (c, fake) = cache(Ok(AdmitAnswer {
@@ -1165,5 +1201,99 @@ pub mod tests {
         // Not cached, so a second call hits identity again.
         assert_eq!(c.get(&req).await.unwrap().permissions, vec!["stale"]);
         assert_eq!(fake.calls.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn negative_entries_invalidate_on_events_while_unknown_keys_stay_cached() {
+        use crate::auth::invalidations::{FeedPage, InvalidationEvent};
+
+        let tracker = InvalidationTracker::new(Duration::from_secs(300));
+        tracker
+            .apply_page(
+                FeedPage {
+                    head: 20,
+                    config_revision: 5,
+                    reset: false,
+                    events: vec![],
+                },
+                true,
+            )
+            .await;
+
+        // 1. Authenticated refusal on a tree route (e.g. before invite redeem or while suspended).
+        let jwt_tree_req = request(idp("bob", None), &[("organization", "acme")], false);
+        let refused = AdmitAnswer {
+            key_id: None,
+            invalidation_seq: 20,
+            config_revision: 5,
+            ..not_in_tree()
+        };
+        let fake = Arc::new(FakeAdmit::new(Ok(refused)));
+        let c = AdmitCache::with_tracker(
+            fake.clone(),
+            Duration::from_secs(300),
+            Duration::from_secs(60),
+            tracker.clone(),
+        );
+        assert!(c.get(&jwt_tree_req).await.unwrap().member_id.is_none());
+        // Still cached while no invalidations arrive.
+        assert!(c.get(&jwt_tree_req).await.unwrap().member_id.is_none());
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 1);
+
+        // Invite redeem / member reactivation emits an invalidation event -> immediate re-admit.
+        *fake.answer.lock().unwrap() = Ok(AdmitAnswer {
+            key_id: None,
+            invalidation_seq: 21,
+            config_revision: 5,
+            ..admitted(&[("organization", "01o")], &["organization:read"])
+        });
+        tracker
+            .apply_page(
+                FeedPage {
+                    head: 21,
+                    config_revision: 5,
+                    reset: false,
+                    events: vec![InvalidationEvent {
+                        id: 21,
+                        scope: "user".into(),
+                        target: USER.into(),
+                    }],
+                },
+                false,
+            )
+            .await;
+        assert_eq!(
+            c.get(&jwt_tree_req).await.unwrap().member_id.as_deref(),
+            Some(MEMBER)
+        );
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 2);
+
+        // 2. Invalid API key (valid: false) stays negatively cached across unrelated events.
+        let bad_key_req = request(key("bad-key"), &[("organization", "acme")], false);
+        let bad_fake = Arc::new(FakeAdmit::new(Ok(invalid())));
+        let bad_cache = AdmitCache::with_tracker(
+            bad_fake.clone(),
+            Duration::from_secs(300),
+            Duration::from_secs(60),
+            tracker.clone(),
+        );
+        assert!(!bad_cache.get(&bad_key_req).await.unwrap().valid);
+        tracker
+            .apply_page(
+                FeedPage {
+                    head: 22,
+                    config_revision: 5,
+                    reset: false,
+                    events: vec![InvalidationEvent {
+                        id: 22,
+                        scope: "member".into(),
+                        target: MEMBER.into(),
+                    }],
+                },
+                false,
+            )
+            .await;
+        assert!(!bad_cache.get(&bad_key_req).await.unwrap().valid);
+        assert_eq!(bad_fake.calls.load(Ordering::SeqCst), 1);
     }
 }

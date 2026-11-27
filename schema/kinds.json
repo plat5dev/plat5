@@ -26,7 +26,7 @@
       "title": "kind",
       "type": "object",
       "additionalProperties": false,
-      "required": ["path"],
+      "required": ["path", "list_permission"],
       "properties": {
         "parent": {
           "title": "parent",
@@ -41,7 +41,7 @@
         },
         "list_permission": {
           "title": "list_permission",
-          "description": "The permission that shows a node of this kind in a list, live or deleted ([lists](../../concepts/access.md#lists)). Default: `<kind name>:read`.",
+          "description": "Required. The permission that shows a node of this kind in a list, live or deleted ([lists](../../concepts/access.md#lists)).",
           "$ref": "roles.json#/$defs/permission"
         },
         "bind_creator": {

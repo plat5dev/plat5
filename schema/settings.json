@@ -19,7 +19,7 @@
     },
     "policy_claims": {
       "title": "policy_claims",
-      "description": "JWT claim paths (dot-separated for nested objects, e.g. `acr`, `amr`, `org.sso`) extracted by the gateway for root security policy `required_idp_claims` checks. Identity rejects `required_idp_claims` keys not listed here.",
+      "description": "JWT claim paths (dot-separated for nested objects, e.g. `acr`, `amr`, `org.sso`) extracted by the gateway for root security policy `required_idp_claims` checks. Identity rejects `required_idp_claims` keys not listed here. Applies to JWTs only; set `allow_personal_keys: false` on the root security policy to block personal API keys as well.",
       "type": "array",
       "maxItems": 32,
       "uniqueItems": true,

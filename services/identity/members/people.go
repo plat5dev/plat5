@@ -414,6 +414,16 @@ func (s *Store) SetMemberStatus(ctx context.Context, rootID, memberID, status st
 			if err := w.tx.QueryRow(ctx, `SELECT user_id FROM principals WHERE id = $1`, *m.principalID).Scan(&userID); err == nil && userID != "" {
 				w.invalidate(lifecycle.InvalidateUser(userID))
 			}
+		} else if m.principal == PrincipalServiceAccount && m.principalID != nil {
+			if rows, err := w.tx.Query(ctx, `SELECT id FROM api_keys WHERE principal_id = $1 AND revoked_at IS NULL`, *m.principalID); err == nil {
+				for rows.Next() {
+					var kid string
+					if rows.Scan(&kid) == nil {
+						w.invalidate(lifecycle.InvalidateKey(kid))
+					}
+				}
+				rows.Close()
+			}
 		}
 	}
 	after, err := s.getMember(ctx, w.tx, m.id, s.externalAuthz())

@@ -10,10 +10,12 @@ Enable `host` on the root kind in `plat5.yml`:
 kinds:
   organization:
     path: /orgs/{organization}
+    list_permission: organization:read
     host: "{organization}.api.example.com"
   project:
     parent: organization
     path: /projects/{project}
+    list_permission: project:read
     bind_creator: false
 
 roles:

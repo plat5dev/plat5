@@ -128,6 +128,10 @@ func startEchoUpstream(t *testing.T, dockerHost string) string {
 }
 
 func configWithDocsAuthorizer(base map[string]any, authzURL, upstreamURL, cacheTTL string) map[string]any {
+	return configWithDocsAuthorizerSep(base, authzURL, upstreamURL, cacheTTL, ":")
+}
+
+func configWithDocsAuthorizerSep(base map[string]any, authzURL, upstreamURL, cacheTTL, sep string) map[string]any {
 	delete(base, "roles")
 	delete(base, "creator_role")
 	delete(base, "custom_roles")
@@ -137,6 +141,21 @@ func configWithDocsAuthorizer(base map[string]any, authzURL, upstreamURL, cacheT
 		"timeout":            "2s",
 		"cache_ttl":          cacheTTL,
 		"negative_cache_ttl": cacheTTL,
+	}
+
+	if sep != ":" {
+		if kinds, ok := base["kinds"].(map[string]any); ok {
+			for _, raw := range kinds {
+				if k, ok := raw.(map[string]any); ok {
+					if lp, ok := k["list_permission"].(string); ok {
+						k["list_permission"] = strings.ReplaceAll(lp, ":", sep)
+					}
+				}
+			}
+		}
+		if services, ok := base["services"].(map[string]any); ok {
+			rewriteServicePermissions(services, ":", sep)
+		}
 	}
 
 	services := base["services"].(map[string]any)
@@ -155,15 +174,15 @@ func configWithDocsAuthorizer(base map[string]any, authzURL, upstreamURL, cacheT
 						"path": "/docs/{doc_id}",
 						"methods": map[string]any{
 							"GET": map[string]any{
-								"permissions": "docs:read",
+								"permissions": "docs" + sep + "read",
 								"resource":    map[string]any{"type": "document", "id": "{doc_id}"},
 							},
 							"PATCH": map[string]any{
-								"permissions": "docs:write",
+								"permissions": "docs" + sep + "write",
 								"resource":    map[string]any{"type": "document", "id": "{doc_id}"},
 							},
 							"DELETE": map[string]any{
-								"permissions": "docs:delete",
+								"permissions": "docs" + sep + "delete",
 								"resource":    map[string]any{"type": "document", "id": "{doc_id}"},
 							},
 						},
@@ -173,6 +192,34 @@ func configWithDocsAuthorizer(base map[string]any, authzURL, upstreamURL, cacheT
 		},
 	}
 	return base
+}
+
+func rewriteServicePermissions(v any, oldSep, newSep string) {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			if k == "permissions" {
+				switch p := val.(type) {
+				case string:
+					if p != "any_member" {
+						t[k] = strings.ReplaceAll(p, oldSep, newSep)
+					}
+				case []any:
+					for i, item := range p {
+						if s, ok := item.(string); ok {
+							p[i] = strings.ReplaceAll(s, oldSep, newSep)
+						}
+					}
+				}
+				continue
+			}
+			rewriteServicePermissions(val, oldSep, newSep)
+		}
+	case []any:
+		for _, item := range t {
+			rewriteServicePermissions(item, oldSep, newSep)
+		}
+	}
 }
 
 func waitForConfigSync(t *testing.T, s *stack, c caller, path string, want bool) {
@@ -318,7 +365,7 @@ func TestOutboundAuthZEN(t *testing.T) {
 func TestOutboundAuthZENTopaz(t *testing.T) {
 	topazInternal := os.Getenv("TOPAZ_URL")
 	if topazInternal == "" {
-		t.Skip("set TOPAZ_URL=http://topaz:8383 with e2e/compose.topaz.yml to run Topaz interop tests")
+		t.Skip("set TOPAZ_URL=http://topaz:9393 with e2e/compose.topaz.yml to run Topaz interop tests")
 	}
 	s := newStack(t)
 	dockerHost := env("E2E_DOCKER_HOST", "host.docker.internal")
@@ -342,7 +389,7 @@ func TestOutboundAuthZENTopaz(t *testing.T) {
 		s.apply(s.config())
 		waitForConfigSync(t, s, owner, "/pdp-ready", false)
 	})
-	s.apply(configWithDocsAuthorizer(base, topazInternal, upstream, "0s"))
+	s.apply(configWithDocsAuthorizerSep(base, topazInternal, upstream, "0s", "_"))
 	waitForConfigSync(t, s, owner, "/pdp-ready", true)
 
 	var org, proj node

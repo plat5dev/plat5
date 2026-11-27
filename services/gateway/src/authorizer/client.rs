@@ -170,28 +170,24 @@ impl Authorizer for NoAuthorizer {
 #[derive(Clone)]
 pub struct HttpAuthorizer {
     client: reqwest::Client,
-    block_private_ips: bool,
+    resolver: PeerResolver,
 }
 
 impl HttpAuthorizer {
     pub fn new(resolver: PeerResolver) -> Self {
-        let block_private_ips = resolver.block_private_ips();
         let client = reqwest::Client::builder()
-            .dns_resolver(Arc::new(resolver))
+            .dns_resolver(Arc::new(resolver.clone()))
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("failed to build authorizer HTTP client");
-        Self {
-            client,
-            block_private_ips,
-        }
+        Self { client, resolver }
     }
 
     /// Reject literal private/reserved IP URLs up front (reqwest bypasses its
     /// `dns_resolver` for IP literals; hostnames are checked and pinned inside
     /// `PeerResolver` without TOCTOU re-resolution).
     fn check_ip_literal(&self, url: &str) -> Result<(), AuthorizerUnavailable> {
-        if !self.block_private_ips {
+        if !self.resolver.block_private_ips() {
             return Ok(());
         }
         let parsed = reqwest::Url::parse(url)
@@ -199,7 +195,7 @@ impl HttpAuthorizer {
         if let Some(host) = parsed.host_str() {
             let trimmed = host.trim_start_matches('[').trim_end_matches(']');
             if let Ok(ip) = trimmed.parse::<std::net::IpAddr>() {
-                if is_blocked_ip(ip) {
+                if !self.resolver.is_allowed_private_host(trimmed) && is_blocked_ip(ip) {
                     return Err(AuthorizerUnavailable(format!(
                         "blocked private or reserved IP {ip}"
                     )));

@@ -694,8 +694,9 @@ fn service_account_on_user_route(req: &AdmitRequest, answer: &AdmitAnswer) -> bo
     answer.valid && req.chain.is_empty() && answer.principal.as_deref() == Some(SERVICE_ACCOUNT)
 }
 
-/// A narrowed (scoped or root-restricted) personal API key on a user route:
-/// identity returns `user_id: null` so it cannot manage user-level resources.
+/// A narrowed (scoped or root-restricted) personal API key or scoped JWT on a
+/// user route: identity returns `user_id: null` so it cannot manage user-level
+/// resources.
 fn scoped_key_on_user_route(req: &AdmitRequest, answer: &AdmitAnswer) -> bool {
     answer.valid
         && req.chain.is_empty()

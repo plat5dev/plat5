@@ -17,7 +17,7 @@ defaults:
 |-------|------|
 | `deletion_grace` | How long a deleted node stays restorable before it's purged. One value for every kind. A duration: a whole number and `s`, `m`, `h` or `d` (`30d`, `12h`). Default `30d`. A change applies to new deletes only |
 | `reserved_slugs` | Slugs no node may take, deployment-wide |
-| `policy_claims` | JWT claim paths (dot-separated for nested objects, e.g. `acr`, `amr`, `org.sso`) extracted by the gateway for root security policy `required_idp_claims` checks. Identity rejects `required_idp_claims` keys not listed here |
+| `policy_claims` | JWT claim paths (dot-separated for nested objects, e.g. `acr`, `amr`, `org.sso`) extracted by the gateway for root security policy `required_idp_claims` checks. Identity rejects `required_idp_claims` keys not listed here. Applies to JWTs only; set `allow_personal_keys: false` on the root security policy to block personal API keys as well |
 | `defaults` | What a route or a service gets for a field it leaves out |
 | `rate_limit` | One or more policies from `rate_limits`, unique, none with `count_at`: what a route without `rate_limit` uses, and what the gateway counts `/access/routes` against ([rate limits](rate-limits.md#on-a-route)). Omitted: routes without `rate_limit` are unlimited |
 | `timeouts` | `{ connect, read }`, each a duration. Default `10s` and `30s` |

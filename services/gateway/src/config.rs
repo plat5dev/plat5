@@ -66,6 +66,12 @@ pub struct GatewayConfig {
     /// Refuse upstream connections whose resolved IP is loopback, private, link-local,
     /// CGNAT, ULA, or unspecified (`UPSTREAM_BLOCK_PRIVATE_IPS`).
     pub upstream_block_private_ips: bool,
+    /// Hostnames or IP literals exempted from `UPSTREAM_BLOCK_PRIVATE_IPS`
+    /// (`UPSTREAM_ALLOW_PRIVATE_HOSTS`), in addition to Plat5's own identity/audit hosts.
+    pub upstream_allow_private_hosts: Vec<String>,
+    /// Host extracted from `AUDIT_URL` (even when `AUDIT_MODE=off`) so proxied audit
+    /// read routes stay reachable under `UPSTREAM_BLOCK_PRIVATE_IPS=true`.
+    pub audit_host: Option<String>,
 }
 
 #[derive(Debug)]
@@ -107,10 +113,15 @@ impl GatewayConfig {
             env::var("VALKEY_URL").ok().as_deref(),
             false,
         )?;
+        let raw_audit_url = env::var("AUDIT_URL").ok();
         let (audit_mode, audit_url) = parse_audit_config(
             env::var("AUDIT_MODE").ok().as_deref(),
-            env::var("AUDIT_URL").ok().as_deref(),
+            raw_audit_url.as_deref(),
         )?;
+        let audit_host = audit_url
+            .as_deref()
+            .or(raw_audit_url.as_deref())
+            .and_then(url_host);
         let rate_limit_auth_failure_requests = parse_u64_env(
             "RATE_LIMIT_AUTH_FAILURE_REQUESTS",
             DEFAULT_RATE_LIMIT_AUTH_FAILURE_REQUESTS,
@@ -137,6 +148,8 @@ impl GatewayConfig {
             env::var("UPSTREAM_BLOCK_PRIVATE_IPS").ok().as_deref(),
             false,
         )?;
+        let upstream_allow_private_hosts =
+            parse_host_list(env::var("UPSTREAM_ALLOW_PRIVATE_HOSTS").ok().as_deref());
 
         Ok(Self {
             port: env::var("PORT").unwrap_or_else(|_| DEFAULT_PORT.to_string()),
@@ -172,7 +185,24 @@ impl GatewayConfig {
             trusted_proxies,
             upstream_signer,
             upstream_block_private_ips,
+            upstream_allow_private_hosts,
+            audit_host,
         })
+    }
+
+    /// Hostnames of Plat5's own internal services (`IDENTITY_INTERNAL_URL` and `AUDIT_URL`)
+    /// so `UPSTREAM_BLOCK_PRIVATE_IPS=true` does not break Plat5's own generated routes.
+    pub fn own_service_hosts(&self) -> Vec<String> {
+        let mut hosts = Vec::new();
+        if let Some(h) = url_host(&self.identity_internal_url) {
+            hosts.push(h);
+        }
+        if let Some(h) = self.audit_host.clone() {
+            if !hosts.contains(&h) {
+                hosts.push(h);
+            }
+        }
+        hosts
     }
 }
 
@@ -334,6 +364,28 @@ fn parse_audit_config(
         Some(u) if !u.is_empty() => Ok((mode, Some(u.trim_end_matches('/').to_string()))),
         _ => Err(GatewayConfigError::Missing("AUDIT_URL")),
     }
+}
+
+fn url_host(raw: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(raw.trim()).ok()?;
+    parsed.host_str().map(|h| {
+        h.trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_ascii_lowercase()
+    })
+}
+
+fn parse_host_list(raw: Option<&str>) -> Vec<String> {
+    raw.unwrap_or_default()
+        .split(',')
+        .map(|s| {
+            s.trim()
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .to_ascii_lowercase()
+        })
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn parse_bool_env(

@@ -68,6 +68,7 @@ services:
       OTEL_SERVICE_NAME: control-plane
       OTEL_RESOURCE_ATTRIBUTES: service.namespace=edge,deployment.environment=docker
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-10000}
     volumes:
       - ../services/control-plane/src:/app/src
       - ../services/control-plane/migrations:/app/migrations:ro
@@ -129,6 +130,7 @@ services:
       OTEL_SERVICE_NAME: gateway
       OTEL_RESOURCE_ATTRIBUTES: service.namespace=edge,deployment.environment=docker
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-10000}
     volumes:
       - ../services/gateway/src:/app/src
     networks:
@@ -170,6 +172,7 @@ services:
       OTEL_SERVICE_NAME: identity
       OTEL_RESOURCE_ATTRIBUTES: service.namespace=identity,deployment.environment=docker
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-10000}
     volumes:
       - ../services/identity:/app
     networks:
@@ -202,6 +205,7 @@ services:
       OTEL_SERVICE_NAME: audit
       OTEL_RESOURCE_ATTRIBUTES: service.namespace=audit,deployment.environment=docker
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-10000}
     volumes:
       - ../services/audit:/app
     networks:

@@ -155,9 +155,10 @@ func (s *Store) Admit(ctx context.Context, snap *feed.Snapshot, in AdmitInput) (
 		ConfigRevision:  configRev,
 	}
 	if userRoute {
-		// A person's user id. A service account, or a personal key narrowed by
-		// scopes or allowed_roots, gets no user_id and is refused with 403.
-		if len(p.scopes) == 0 && len(p.allowedRoots) == 0 {
+		// A person's user id. A service account, a personal key narrowed by
+		// scopes or allowed_roots, or a JWT narrowed by the scope claim gets
+		// no user_id and is refused with 403.
+		if len(p.scopes) == 0 && len(p.allowedRoots) == 0 && (in.IdP == nil || !in.IdP.HasScopes) {
 			out.UserID = p.userID
 		}
 		op.OK("admitted")

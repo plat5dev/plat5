@@ -16,7 +16,7 @@ use moka::ops::compute::Op;
 use serde::Deserialize;
 use tracing::{info, warn};
 
-use crate::auth::admit::AdmitAnswer;
+use crate::auth::admit::{AdmitAnswer, AdmitCredential, AdmitRequest};
 use crate::metrics;
 
 const EPOCH_CACHE_CAPACITY: u64 = 100_000;
@@ -82,6 +82,7 @@ impl EpochScope {
 struct Inner {
     global_gen: AtomicU64,
     cursor: AtomicI64,
+    user_seq: AtomicI64,
     synced: AtomicBool,
     min_config_revision: AtomicI64,
     epochs: Cache<(EpochScope, String), i64>,
@@ -107,6 +108,7 @@ impl InvalidationTracker {
             inner: Arc::new(Inner {
                 global_gen: AtomicU64::new(0),
                 cursor: AtomicI64::new(0),
+                user_seq: AtomicI64::new(0),
                 synced: AtomicBool::new(false),
                 min_config_revision: AtomicI64::new(0),
                 epochs,
@@ -190,6 +192,41 @@ impl InvalidationTracker {
         true
     }
 
+    /// Whether a cached negative entry is still valid.
+    ///
+    /// - Valid credentials refused on a tree route (`valid: true`, `member_id: None`,
+    ///   e.g. outside the tree, suspended member, or org security policy) are invalidated
+    ///   when any commit-ordered invalidation event or config revision arrives past the
+    ///   entry's stamp, so invite redeem, member reactivation, and policy updates take
+    ///   effect without waiting for `ADMIT_NEGATIVE_CACHE_TTL`.
+    /// - Invalid JWTs (`valid: false`, e.g. a platform-suspended person) are invalidated
+    ///   on `user` events or DB resets.
+    /// - Invalid API keys (`valid: false`, e.g. unknown or revoked keys) are only
+    ///   invalidated on DB resets (`global_gen`), preserving negative-cache protection
+    ///   against bad-key floods.
+    pub fn is_negative_fresh(
+        &self,
+        answer: &AdmitAnswer,
+        req: &AdmitRequest,
+        global_gen: u64,
+        seq: i64,
+        config_revision: i64,
+    ) -> bool {
+        if global_gen != self.inner.global_gen.load(Ordering::Acquire) {
+            return false;
+        }
+        if answer.valid {
+            if config_revision < self.inner.min_config_revision.load(Ordering::Acquire) {
+                return false;
+            }
+            return self.inner.cursor.load(Ordering::Acquire) <= seq;
+        }
+        if matches!(req.credential, AdmitCredential::Idp { .. }) {
+            return self.inner.user_seq.load(Ordering::Acquire) <= seq;
+        }
+        true
+    }
+
     /// Applies one page from `GET /internal/admit-invalidations`.
     pub async fn apply_page(&self, page: FeedPage, initial_sync: bool) {
         let prev_rev = self
@@ -202,6 +239,7 @@ impl InvalidationTracker {
 
         if initial_sync {
             self.inner.cursor.store(page.head, Ordering::Release);
+            self.inner.user_seq.store(page.head, Ordering::Release);
             self.inner.synced.store(true, Ordering::Release);
             // Flush anything cached before initial sync connected.
             self.inner.global_gen.fetch_add(1, Ordering::AcqRel);
@@ -211,6 +249,7 @@ impl InvalidationTracker {
         if page.reset {
             self.inner.global_gen.fetch_add(1, Ordering::AcqRel);
             self.inner.cursor.store(page.head, Ordering::Release);
+            self.inner.user_seq.store(page.head, Ordering::Release);
             metrics::record_admit_invalidation("reset");
             return;
         }
@@ -222,6 +261,9 @@ impl InvalidationTracker {
             }
             match EpochScope::from_wire(&ev.scope) {
                 Some(scope) => {
+                    if scope == EpochScope::User {
+                        self.inner.user_seq.fetch_max(ev.id, Ordering::AcqRel);
+                    }
                     bump_epoch(&self.inner.epochs, (scope, ev.target), ev.id).await;
                     metrics::record_admit_invalidation(scope.as_str());
                 }

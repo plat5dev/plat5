@@ -3,10 +3,10 @@
 # Run:
 #   ADMIT_CACHE_TTL=1s ADMIT_NEGATIVE_CACHE_TTL=1s \
 #     docker compose -f compose/docker-compose.yml -f e2e/compose.yml -f e2e/compose.topaz.yml up -d --build
-#   cd e2e && PLAT5_E2E=1 TOPAZ_URL=http://topaz:8383 go test -run TestOutboundAuthZENTopaz -v
+#   cd e2e && PLAT5_E2E=1 TOPAZ_URL=http://topaz:9393 go test -run TestOutboundAuthZENTopaz -v
 services:
   topaz:
-    image: ghcr.io/aserto-dev/topaz:latest
+    image: ghcr.io/aserto-dev/topaz:0.33.28
     command: ["run", "--config-file", "/config/config.yaml"]
     ports:
       - "127.0.0.1:8383:8383"

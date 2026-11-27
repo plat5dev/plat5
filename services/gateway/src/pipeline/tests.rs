@@ -1616,7 +1616,11 @@ async fn a_scoped_personal_key_on_a_user_route_is_403_and_false_in_route_checks(
     let body = rejection.body(&me.route);
     assert_eq!(
         (body.code.as_str(), body.message.as_str(), body.details),
-        ("FORBIDDEN", "Scoped API keys can't use this route.", None)
+        (
+            "FORBIDDEN",
+            "Scoped credentials can't use this route.",
+            None
+        )
     );
     assert!(h.counter.buckets().is_empty());
     assert_eq!(cred.principal.as_deref(), Some("person"));
@@ -1632,6 +1636,60 @@ async fn a_scoped_personal_key_on_a_user_route_is_403_and_false_in_route_checks(
     .await
     .unwrap();
     assert_eq!(got, vec![false, true]);
+    assert_eq!(counter.count(IP_BUCKET), 0);
+}
+
+#[tokio::test]
+async fn a_scoped_jwt_on_a_user_route_is_403_and_false_in_route_checks() {
+    let snapshot = catalog();
+    let me = find(&snapshot, "GET", "/user");
+    let scoped_jwt_answer = AdmitAnswer {
+        key_id: None,
+        ..scoped_personal_user()
+    };
+    let scoped_jwt = Presented::Jwt {
+        issuer: "https://auth".into(),
+        subject: "sub-1".into(),
+        name: Some("Dana".into()),
+        scopes: Some(vec!["project:read".into()]),
+        policy_claims: BTreeMap::new(),
+        kid: Some("kid-1".into()),
+    };
+    let h = harness(Ok(scoped_jwt_answer.clone()));
+    let (r, cred) = h.run(&me, Ok(scoped_jwt)).await;
+    let rejection = r.err().unwrap();
+    assert_eq!(rejection, Rejection::ScopedCredential);
+    assert_eq!(rejection.status(), 403);
+    let body = rejection.body(&me.route);
+    assert_eq!(
+        (body.code.as_str(), body.message.as_str(), body.details),
+        (
+            "FORBIDDEN",
+            "Scoped credentials can't use this route.",
+            None
+        )
+    );
+    assert!(h.counter.buckets().is_empty());
+    assert_eq!(cred.principal.as_deref(), Some("person"));
+
+    let identity = ByChain::with(&[("", scoped_jwt_answer), ("acme", org(&["project:read"]))]);
+    let (p, counter) = checks_pipeline(identity, AUTH_FAILURE);
+    let jwt_cred = AdmitCredential::Idp {
+        issuer: "https://auth".into(),
+        subject: "sub-1".into(),
+        name: None,
+        scopes: Some(vec!["project:read".into()]),
+        claims: BTreeMap::new(),
+    };
+    let got = run_checks(
+        &p,
+        &snapshot,
+        &jwt_cred,
+        &[("GET", "/user"), ("GET", "/orgs/acme")],
+    )
+    .await
+    .unwrap();
+    assert_eq!(got, vec![false, false]);
     assert_eq!(counter.count(IP_BUCKET), 0);
 }
 

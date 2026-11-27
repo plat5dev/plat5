@@ -1,44 +1,106 @@
-# Minimal local Topaz config for Plat5 AuthZEN 1.0 interop testing.
+# Minimal local Topaz v2 config for Plat5 AuthZEN 1.0 interop testing (topaz 0.33.28).
 # Plaintext HTTP on the private compose network:
-#   :8383 — Authorizer & OpenID AuthZEN 1.0 (/access/v1/evaluation, /access/v1/evaluations)
-#   :9393 — Directory v3 REST API (/api/v3/directory/manifest, /object, /relation)
-version: 3
+#   :9393 — Directory v3 REST API (/api/v3/directory/*) & OpenID AuthZEN 1.0 (/access/v1/evaluation(s))
+#   :8383 — OPA Authorizer REST gateway
+version: 2
 
 logging:
   prod: false
   log_level: info
 
-directory_config:
-  edge_directory:
-    db_path: /tmp/topaz-directory.db
-    seed_metadata: false
+directory:
+  db_path: /tmp/topaz-directory.db
+  request_timeout: 5s
+
+remote_directory:
+  address: "0.0.0.0:9292"
+  insecure: true
+  no_tls: true
+
+auth:
+  options:
+    default:
+      enable_api_key: false
+      enable_anonymous: true
 
 api:
   health:
-    listen_address: 0.0.0.0:9494
-  reader:
-    grpc:
-      listen_address: 0.0.0.0:9292
-    gateway:
-      listen_address: 0.0.0.0:9393
-      allowed_origins: ["*"]
-  writer:
-    grpc:
-      listen_address: 0.0.0.0:9292
-    gateway:
-      listen_address: 0.0.0.0:9393
-      allowed_origins: ["*"]
-  model:
-    grpc:
-      listen_address: 0.0.0.0:9292
-    gateway:
-      listen_address: 0.0.0.0:9393
-      allowed_origins: ["*"]
-  authorizer:
-    needs:
-      - reader
-    grpc:
-      listen_address: 0.0.0.0:8282
-    gateway:
-      listen_address: 0.0.0.0:8383
-      allowed_origins: ["*"]
+    listen_address: "0.0.0.0:9494"
+  services:
+    model:
+      grpc:
+        listen_address: "0.0.0.0:9292"
+      gateway:
+        listen_address: "0.0.0.0:9393"
+        allowed_origins: ["*"]
+        http: true
+        read_timeout: 2s
+        read_header_timeout: 2s
+        write_timeout: 2s
+        idle_timeout: 30s
+    reader:
+      needs:
+        - model
+      grpc:
+        listen_address: "0.0.0.0:9292"
+      gateway:
+        listen_address: "0.0.0.0:9393"
+        allowed_origins: ["*"]
+        http: true
+        read_timeout: 2s
+        read_header_timeout: 2s
+        write_timeout: 2s
+        idle_timeout: 30s
+    writer:
+      needs:
+        - model
+      grpc:
+        listen_address: "0.0.0.0:9292"
+      gateway:
+        listen_address: "0.0.0.0:9393"
+        allowed_origins: ["*"]
+        http: true
+        read_timeout: 2s
+        read_header_timeout: 2s
+        write_timeout: 2s
+        idle_timeout: 30s
+    exporter:
+      needs:
+        - model
+      grpc:
+        listen_address: "0.0.0.0:9292"
+      gateway:
+        listen_address: "0.0.0.0:9393"
+        allowed_origins: ["*"]
+        http: true
+        read_timeout: 2s
+        read_header_timeout: 2s
+        write_timeout: 2s
+        idle_timeout: 30s
+    importer:
+      needs:
+        - model
+      grpc:
+        listen_address: "0.0.0.0:9292"
+      gateway:
+        listen_address: "0.0.0.0:9393"
+        allowed_origins: ["*"]
+        http: true
+        read_timeout: 2s
+        read_header_timeout: 2s
+        write_timeout: 2s
+        idle_timeout: 30s
+    authorizer:
+      needs:
+        - reader
+      grpc:
+        connection_timeout_seconds: 2
+        listen_address: "0.0.0.0:8282"
+      gateway:
+        listen_address: "0.0.0.0:8383"
+        allowed_origins: ["*"]
+        http: true
+        read_timeout: 2s
+        read_header_timeout: 2s
+        write_timeout: 2s
+        idle_timeout: 30s

@@ -463,6 +463,21 @@ mod tests {
             .resolve_with("mixed.example.com:443", give(vec![v4_a, v6_private]))
             .await
             .is_none());
+
+        // Allowed private hosts bypass private-IP blocking while other hosts stay blocked.
+        let exempt =
+            PeerResolver::with_allowed_private_hosts(true, vec!["identity".into(), "audit".into()]);
+        let docker_ip: SocketAddr = "172.21.0.9:3000".parse().unwrap();
+        assert_eq!(
+            exempt
+                .resolve_with("identity:3000", give(vec![docker_ip]))
+                .await,
+            Some(docker_ip)
+        );
+        assert!(exempt
+            .resolve_with("echo:80", give(vec!["172.21.0.10:80".parse().unwrap()]))
+            .await
+            .is_none());
     }
 
     #[test]

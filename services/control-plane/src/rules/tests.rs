@@ -93,6 +93,7 @@ fn kinds() {
     c["kinds"]["organization"]["host"] = json!("{organization}.api.example.com");
     c["kinds"]["workspace"] = json!({
         "path": "/workspaces/{workspace}",
+        "list_permission": "workspace:read",
         "host": "{workspace}.api.example.com"
     });
     c["roles"]["admin"]["bindable_at"] = json!(["organization", "project", "workspace"]);
@@ -108,7 +109,10 @@ fn kinds() {
 
     // Sibling kinds cannot share the same collection path.
     let mut c = base();
-    c["kinds"]["workspace"] = json!({ "path": "/orgs/{workspace}" });
+    c["kinds"]["workspace"] = json!({
+        "path": "/orgs/{workspace}",
+        "list_permission": "workspace:read"
+    });
     c["roles"]["admin"]["bindable_at"] = json!(["organization", "project", "workspace"]);
     errors_at(c, "kinds.workspace.path");
 
@@ -626,22 +630,27 @@ fn identity_routes_are_served_as_written() {
     assert!(serde_json::from_value::<Config>(c).is_err());
 }
 
-// A kind's list_permission is <kind name>:read when it names none.
+// Every kind must declare list_permission explicitly; Plat5 derives no permission format.
 #[test]
-fn list_permission_defaults_to_the_kinds_read() {
+fn list_permission_is_required_and_preserved_verbatim() {
     let mut c = base();
     c["kinds"]["project"]
         .as_object_mut()
         .unwrap()
         .remove("list_permission");
+    assert!(crate::schema::check_config(&c).is_err());
+    assert!(serde_json::from_value::<Config>(c).is_err());
+
+    let mut c = base();
+    c["kinds"]["project"]["list_permission"] = json!("project_read");
     c["kinds"]["environment"] = json!({
-        "parent": "project", "path": "/envs/{environment}", "list_permission": "project:read"
+        "parent": "project", "path": "/envs/{environment}", "list_permission": "project_read"
     });
     c["roles"]["admin"]["bindable_at"] = json!(["organization", "project", "environment"]);
     run(c.clone()).unwrap();
     let config: Config = serde_json::from_value(c.clone()).unwrap();
-    assert_eq!(config.kinds["project"].list_permission, "project:read");
-    assert_eq!(config.kinds["environment"].list_permission, "project:read");
+    assert_eq!(config.kinds["project"].list_permission, "project_read");
+    assert_eq!(config.kinds["environment"].list_permission, "project_read");
     // permission_name is gone: an unknown field.
     c["kinds"]["environment"]["permission_name"] = json!("project");
     assert!(crate::schema::check_config(&c).is_err());

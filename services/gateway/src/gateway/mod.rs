@@ -65,8 +65,17 @@ impl Gateway {
         invalidations: InvalidationTracker,
     ) -> Self {
         let admit = HttpAdmit::new(&cfg.identity_internal_url, InternalHttpClient::new());
-        let upstream_resolver = upstream::PeerResolver::new(cfg.upstream_block_private_ips);
-        let authorizer = AuthorizerCache::new(HttpAuthorizer::new(upstream_resolver.clone()));
+        let mut upstream_allowed = cfg.upstream_allow_private_hosts.clone();
+        upstream_allowed.extend(cfg.own_service_hosts());
+        let upstream_resolver = upstream::PeerResolver::with_allowed_private_hosts(
+            cfg.upstream_block_private_ips,
+            upstream_allowed,
+        );
+        let authorizer_resolver = upstream::PeerResolver::with_allowed_private_hosts(
+            cfg.upstream_block_private_ips,
+            cfg.upstream_allow_private_hosts.clone(),
+        );
+        let authorizer = AuthorizerCache::new(HttpAuthorizer::new(authorizer_resolver));
         Self {
             authenticator: Authenticator::new(
                 jwt_validator,

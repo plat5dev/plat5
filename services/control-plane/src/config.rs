@@ -32,7 +32,6 @@ pub struct Config {
     pub policy_claims: Vec<String>,
     #[serde(default)]
     pub defaults: Defaults,
-    #[serde(deserialize_with = "kinds_filled")]
     pub kinds: BTreeMap<String, Kind>,
     #[serde(default)]
     pub roles: BTreeMap<String, Role>,
@@ -120,9 +119,7 @@ pub struct Kind {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     pub path: String,
-    /// `<kind name>:read` when unset: filled in as the config is parsed,
-    /// so readers always get one.
-    #[serde(default)]
+    /// The permission that shows a node of this kind in a list.
     pub list_permission: String,
     /// Whether creating a node of this kind binds its creator with `creator_role`.
     /// Sent only when off, so a reader takes a missing value as on.
@@ -131,19 +128,6 @@ pub struct Kind {
     /// Optional hostname template on a root kind: `{<kind>}.<domain>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
-}
-
-/// The kinds, each `list_permission` filled in where the config leaves it out.
-fn kinds_filled<'de, D: serde::Deserializer<'de>>(
-    d: D,
-) -> Result<BTreeMap<String, Kind>, D::Error> {
-    let mut kinds = BTreeMap::<String, Kind>::deserialize(d)?;
-    for (name, kind) in kinds.iter_mut() {
-        if kind.list_permission.is_empty() {
-            kind.list_permission = format!("{name}:read");
-        }
-    }
-    Ok(kinds)
 }
 
 fn yes() -> bool {

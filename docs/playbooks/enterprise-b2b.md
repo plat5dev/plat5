@@ -35,9 +35,11 @@ policy_claims: [amr, idp_connection]
 kinds:
   organization:
     path: /orgs/{organization}
+    list_permission: organization:read
   project:
     parent: organization
     path: /projects/{project}
+    list_permission: project:read
     bind_creator: false
   environment:
     parent: project

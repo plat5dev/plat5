@@ -2,6 +2,7 @@
 //! both upstream proxying (`gateway::upstream`) and outbound AuthZEN PDPs
 //! (`authorizer::client`).
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -33,6 +34,7 @@ impl ResolvedHost {
 pub struct PeerResolver {
     cache: Cache<String, Arc<ResolvedHost>>,
     block_private_ips: bool,
+    allowed_private_hosts: Arc<HashSet<String>>,
 }
 
 impl PeerResolver {
@@ -40,19 +42,45 @@ impl PeerResolver {
         Self::with_ttl(block_private_ips, DNS_CACHE_TTL)
     }
 
+    pub fn with_allowed_private_hosts(
+        block_private_ips: bool,
+        allowed: impl IntoIterator<Item = String>,
+    ) -> Self {
+        Self::with_ttl_and_allowed(block_private_ips, DNS_CACHE_TTL, allowed)
+    }
+
     pub fn with_ttl(block_private_ips: bool, ttl: Duration) -> Self {
+        Self::with_ttl_and_allowed(block_private_ips, ttl, std::iter::empty())
+    }
+
+    pub fn with_ttl_and_allowed(
+        block_private_ips: bool,
+        ttl: Duration,
+        allowed: impl IntoIterator<Item = String>,
+    ) -> Self {
         let cache = Cache::builder()
             .max_capacity(DNS_CACHE_CAPACITY)
             .time_to_live(ttl)
             .build();
+        let allowed_private_hosts: HashSet<String> = allowed
+            .into_iter()
+            .map(|h| normalize_host(&h))
+            .filter(|h| !h.is_empty())
+            .collect();
         Self {
             cache,
             block_private_ips,
+            allowed_private_hosts: Arc::new(allowed_private_hosts),
         }
     }
 
     pub fn block_private_ips(&self) -> bool {
         self.block_private_ips
+    }
+
+    pub fn is_allowed_private_host(&self, host: &str) -> bool {
+        !self.allowed_private_hosts.is_empty()
+            && self.allowed_private_hosts.contains(&normalize_host(host))
     }
 
     pub async fn resolve(&self, addr: &str) -> Option<SocketAddr> {
@@ -64,7 +92,7 @@ impl PeerResolver {
     pub async fn resolve_all(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
         let host = host.trim_start_matches('[').trim_end_matches(']');
         if let Ok(ip) = host.parse::<IpAddr>() {
-            if self.block_private_ips && is_blocked_ip(ip) {
+            if self.block_private_ips && !self.is_allowed_private_host(host) && is_blocked_ip(ip) {
                 warn!(host = %host, ip = %ip, "blocked outbound connection to private or reserved IP");
                 return Err(format!("blocked private or reserved IP {ip}"));
             }
@@ -86,7 +114,11 @@ impl PeerResolver {
         Fut: Future<Output = Option<Vec<SocketAddr>>>,
     {
         if let Ok(sa) = addr.parse::<SocketAddr>() {
-            if self.block_private_ips && is_blocked_ip(sa.ip()) {
+            let ip_str = sa.ip().to_string();
+            if self.block_private_ips
+                && !self.is_allowed_private_host(&ip_str)
+                && is_blocked_ip(sa.ip())
+            {
                 warn!(
                     upstream = %addr,
                     ip = %sa.ip(),
@@ -113,7 +145,7 @@ impl PeerResolver {
     {
         let key = host.to_ascii_lowercase();
         let query_addr = format!("{host}:{port}");
-        let block_private_ips = self.block_private_ips;
+        let block_private_ips = self.block_private_ips && !self.is_allowed_private_host(host);
         self.cache
             .try_get_with(key, async move {
                 let addrs = lookup(query_addr.clone())
@@ -149,6 +181,13 @@ impl PeerResolver {
             .await
             .map_err(|e| (*e).clone())
     }
+}
+
+fn normalize_host(host: &str) -> String {
+    host.trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase()
 }
 
 fn split_host_port(addr: &str) -> Option<(&str, u16)> {

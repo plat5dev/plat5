@@ -1,5 +1,6 @@
 # yaml-language-server: $schema=https://www.topaz.sh/schema/manifest.json
 # ReBAC model matching Plat5's member -> organization -> project -> document AuthZEN 1.0 payloads.
+# Topaz permission identifiers use underscores (colons are forbidden in Topaz manifests).
 model:
   version: 3
 
@@ -11,20 +12,28 @@ types:
       admin: member
       viewer: member
     permissions:
-      organization:read: viewer | admin
-      organization:write: admin
-      organization:delete: admin
-      organization:bindings:read: admin
-      organization:bindings:write: admin
-      project:create: admin
+      organization_read: viewer | admin
+      organization_write: admin
+      organization_delete: admin
+      organization_bindings_read: admin
+      organization_bindings_write: admin
+      project_create: admin
+      audit_read: viewer | admin
 
   project:
     relations:
-      viewer: member
+      organization: organization
+      admin: member
       editor: member
+      viewer: member
     permissions:
-      project:read: viewer | editor
-      project:write: editor
+      project_read: viewer | editor | admin | organization->admin
+      project_write: editor | admin | organization->admin
+      project_delete: admin | organization->admin
+      project_bindings_read: admin | organization->admin
+      project_bindings_write: admin | organization->admin
+      guests_write: admin | organization->admin
+      audit_read: viewer | editor | admin | organization->admin
 
   document:
     relations:
@@ -32,6 +41,6 @@ types:
       editor: member
       viewer: member
     permissions:
-      docs:read: viewer | editor | owner
-      docs:write: editor | owner
-      docs:delete: owner
+      docs_read: viewer | editor | owner
+      docs_write: editor | owner
+      docs_delete: owner

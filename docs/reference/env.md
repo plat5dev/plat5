@@ -27,7 +27,8 @@ Internal ports (`INTERNAL_PORT`) take no token. Keep them inside the deployment'
 | `TRUSTED_PROXIES` | Comma-separated IPs/CIDRs trusted for `X-Forwarded-For` and `X-Forwarded-Proto` ([client IP](gateway.md#client-ip)) |
 | `UPSTREAM_SIGNING_KEY` | Optional 32-byte Ed25519 seed encoded as base64url without padding. When set, every upstream request carries `X-Plat5-Signature` ([signing](headers.md#upstream-request-signing)); empty-but-set or invalid refuses boot |
 | `UPSTREAM_SIGNING_KEY_ID` | Optional `kid` (`1–64` of `[A-Za-z0-9._-]`) for `X-Plat5-Signature`. Defaults to the first 16 hex chars of `SHA-256(public_key)`. Refuses boot if set without `UPSTREAM_SIGNING_KEY` |
-| `UPSTREAM_BLOCK_PRIVATE_IPS` | Default `false`. Set `true` to refuse upstream connections whose resolved IP is loopback, RFC1918 private, link-local, CGNAT, ULA, or unspecified ([gateway](gateway.md#upstream-security)) |
+| `UPSTREAM_BLOCK_PRIVATE_IPS` | Default `false`. Set `true` to refuse upstream connections whose resolved IP is loopback, RFC1918 private, link-local, CGNAT, ULA, or unspecified; `IDENTITY_INTERNAL_URL` and `AUDIT_URL` hosts are automatically exempted for proxied routes ([gateway](gateway.md#upstream-security)) |
+| `UPSTREAM_ALLOW_PRIVATE_HOSTS` | Optional comma-separated hostnames or IP literals exempted from `UPSTREAM_BLOCK_PRIVATE_IPS` for trusted internal upstreams or authorizers |
 
 The replica id reported to the control plane is `service.instance.id` from `OTEL_RESOURCE_ATTRIBUTES`, falling back to `HOSTNAME`.
 

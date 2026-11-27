@@ -34,7 +34,7 @@ func gatewayStatus(r response, need any) int {
 		return 401
 	}
 	if need == nil {
-		if r.body["principal"] == "service_account" {
+		if r.body["principal"] == "service_account" || r.body["user_id"] == nil {
 			return 403
 		}
 		return 200
@@ -195,6 +195,8 @@ func TestAdmit(t *testing.T) {
 		{"user route: suspended person's key", keyBody(frankKey), nil, want{status: 401}},
 		{"user route: service account that belongs to a deleted node", keyBody(oldSAKey), nil, want{status: 401}},
 		{"user route: service account", keyBody(saKey), nil, want{status: 403, principal: "service_account", keyID: saKeyID}},
+		{"user route: scoped JWT", admitBody(`"idp": {"issuer": "https://idp.test", "subject": "alice", "scopes": ["project:read"]}`, false), nil, want{status: 403, principal: "person"}},
+		{"user route: empty-scoped JWT", admitBody(`"idp": {"issuer": "https://idp.test", "subject": "alice", "scopes": []}`, false), nil, want{status: 403, principal: "person"}},
 		{"user route: person", idpBody("alice"), nil, want{status: 200, principal: "person", user: alice}},
 
 		// member_id: null, nodes empty → 403

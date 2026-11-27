@@ -1,4 +1,4 @@
-use opentelemetry::metrics::{Counter, Histogram};
+use opentelemetry::metrics::{Counter, Histogram, ObservableCounter, ObservableGauge};
 use opentelemetry::{global, KeyValue};
 use prometheus::{
     histogram_opts, register_histogram_vec, register_int_counter_vec, Encoder, HistogramVec,
@@ -46,6 +46,24 @@ static HTTP_REQUEST_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| 
 struct OtelInstruments {
     http_requests: Counter<u64>,
     http_duration: Histogram<f64>,
+    _process_start_time: ObservableGauge<f64>,
+    _process_cpu_seconds: ObservableCounter<f64>,
+    _process_resident_memory: ObservableGauge<f64>,
+}
+
+fn gather_prom_scalar(name: &str) -> Option<f64> {
+    for mf in prometheus::default_registry().gather() {
+        if mf.get_name() == name {
+            if let Some(m) = mf.get_metric().first() {
+                return match mf.get_field_type() {
+                    prometheus::proto::MetricType::GAUGE => Some(m.get_gauge().get_value()),
+                    prometheus::proto::MetricType::COUNTER => Some(m.get_counter().get_value()),
+                    _ => None,
+                };
+            }
+        }
+    }
+    None
 }
 
 static OTEL: LazyLock<OtelInstruments> = LazyLock::new(|| {
@@ -61,6 +79,33 @@ static OTEL: LazyLock<OtelInstruments> = LazyLock::new(|| {
             .with_boundaries(vec![
                 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0,
             ])
+            .build(),
+        _process_start_time: meter
+            .f64_observable_gauge("process_start_time_seconds")
+            .with_description("Start time of the process since unix epoch in seconds")
+            .with_callback(|observer| {
+                if let Some(v) = gather_prom_scalar("process_start_time_seconds") {
+                    observer.observe(v, &[]);
+                }
+            })
+            .build(),
+        _process_cpu_seconds: meter
+            .f64_observable_counter("process_cpu_seconds_total")
+            .with_description("Total user and system CPU time spent in seconds")
+            .with_callback(|observer| {
+                if let Some(v) = gather_prom_scalar("process_cpu_seconds_total") {
+                    observer.observe(v, &[]);
+                }
+            })
+            .build(),
+        _process_resident_memory: meter
+            .f64_observable_gauge("process_resident_memory_bytes")
+            .with_description("Resident memory size in bytes")
+            .with_callback(|observer| {
+                if let Some(v) = gather_prom_scalar("process_resident_memory_bytes") {
+                    observer.observe(v, &[]);
+                }
+            })
             .build(),
     }
 });

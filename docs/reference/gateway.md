@@ -36,7 +36,7 @@ In-process per replica, backed by identity's invalidation feed (`GET {IDENTITY_I
 | Key | The credential (a key as presented, or a verified JWT's issuer, subject, forwarded scopes when `AUTH_SCOPE_CLAIM` is set, and forwarded policy claims when `policy_claims` is set in config), `allow_deleted`, and the chain refs as written in the path |
 | Invalidation | Targeted epoch checks (`key_id`, `user_id`, `member_id`, `root_id`, global reset, and identity's `config_revision`) driven by identity's invalidation feed; entries stamped before the admit call so in-flight revocations are never pinned. A lagging identity replica returning an older `config_revision` is served without caching |
 | TTL | `ADMIT_CACHE_TTL` (default `5m`), capped at `expires_at - now` when admit returns a key or binding expiry — fallback upper bound if the invalidation feed is disconnected |
-| Negative entries | For invalid credentials and `member_id: null`, for `ADMIT_NEGATIVE_CACHE_TTL` (default `10s`). Never for identity errors |
+| Negative entries | For invalid credentials and `member_id: null`, for `ADMIT_NEGATIVE_CACHE_TTL` (default `10s`). Authenticated tree refusals (`valid: true`, `member_id: null`) and JWT refusals are invalidated immediately via the invalidation feed; invalid API keys live until TTL or DB reset. Never cached for identity errors |
 | Singleflight | Concurrent misses for one key share a single identity call |
 | JWT verification | Each request; the token's `exp` is checked every time |
 
@@ -130,7 +130,7 @@ TLS terminates at the edge or load balancer, not the gateway. Services behind th
 ## Upstream security
 
 - **Request signing.** Set `UPSTREAM_SIGNING_KEY` (and optionally `UPSTREAM_SIGNING_KEY_ID`) to attach an Ed25519 `X-Plat5-Signature` header to every forwarded request ([`reference/headers.md`](headers.md#upstream-request-signing)), so services outside the private network can verify requests came from the gateway.
-- **Private-IP blocking.** Set `UPSTREAM_BLOCK_PRIVATE_IPS=true` to refuse upstream connections (and outbound AuthZEN PDP calls) whose DNS-resolved address is loopback, private (RFC1918 / IPv6 ULA), link-local (`169.254.0.0/16` / `fe80::/10`), CGNAT (`100.64.0.0/10`), unspecified, or an IPv4-mapped IPv6 address pointing to any of those. Blocked upstream requests return **502** `SERVICE_UNAVAILABLE`; blocked authorizer calls return **503** `SERVICE_UNAVAILABLE`.
+- **Private-IP blocking.** Set `UPSTREAM_BLOCK_PRIVATE_IPS=true` to refuse upstream connections (and outbound AuthZEN PDP calls) whose DNS-resolved address is loopback, private (RFC1918 / IPv6 ULA), link-local (`169.254.0.0/16` / `fe80::/10`), CGNAT (`100.64.0.0/10`), unspecified, or an IPv4-mapped IPv6 address pointing to any of those. The hosts of `IDENTITY_INTERNAL_URL` and `AUDIT_URL` are automatically exempted for proxied routes so Plat5's own identity and audit routes keep working; set `UPSTREAM_ALLOW_PRIVATE_HOSTS` (comma-separated hostnames or IPs) to exempt additional trusted private upstreams or authorizers. Blocked upstream requests return **502** `SERVICE_UNAVAILABLE`; blocked authorizer calls return **503** `SERVICE_UNAVAILABLE`.
 
 ## Outbound authorizer
 
@@ -169,7 +169,7 @@ The gateway listens only once it has a control-plane snapshot. `/health/ready` i
 |------|------|
 | Bad or missing credential, or key IP allowlist refusal | `UNAUTHORIZED` (401) |
 | Node not found, not in the tree, org security policy/IP refusal, or permission/authorizer denied | `FORBIDDEN` (403) |
-| A service account or narrowed personal key on a user route | `FORBIDDEN` (403) |
+| A service account, narrowed personal key, or scoped JWT on a user route | `FORBIDDEN` (403) |
 | Route not registered | `NOT_FOUND` (404) |
 | Request body too large | `PAYLOAD_TOO_LARGE` (413) |
 | Bad `/access/routes` body | `VALIDATION_ERROR` (422) |
