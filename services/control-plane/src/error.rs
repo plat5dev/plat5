@@ -34,14 +34,25 @@ pub struct AppError {
 }
 
 impl AppError {
-    pub fn unauthorized(request_id: String) -> Self {
+    pub fn unauthorized(request_id: String, reason: &'static str) -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,
             error_type: "invalid_request_error",
             code: "UNAUTHORIZED",
             message: "Authentication required.".into(),
+            details: Some(Box::new(json!({ "reason": reason }))),
+            request_id,
+        }
+    }
+
+    pub fn forbidden(request_id: String, reason: &'static str, required: &'static str) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            error_type: "invalid_request_error",
+            code: "FORBIDDEN",
+            message: "Insufficient permissions for this control-plane operation.".into(),
             details: Some(Box::new(
-                json!({ "reason": "invalid_or_missing_admin_token" }),
+                json!({ "reason": reason, "required_access": required }),
             )),
             request_id,
         }

@@ -118,7 +118,7 @@ async fn plan_and_apply_against_postgres() {
         feed: Feed::spawn(store.clone(), 0, shutdown_rx),
         store,
         counts: counts.clone(),
-        admin_token: TOKEN.into(),
+        auth: crate::auth::Authenticator::static_token(TOKEN),
     };
     let api = Api {
         public: crate::api::public_router(state.clone()),
@@ -557,7 +557,7 @@ mod unit_tests {
             store: Store::lazy_for_test(),
             feed: Feed::new_for_test(head, rx),
             counts: Arc::new(NoCounts),
-            admin_token: TOKEN.into(),
+            auth: crate::auth::Authenticator::static_token(TOKEN),
         };
         (state, tx)
     }
@@ -729,5 +729,143 @@ mod unit_tests {
             .expect("long-poll should finish promptly on shutdown")
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn oidc_router_enforces_read_vs_apply_and_exposes_info_and_whoami() {
+        use jsonwebtoken::jwk::JwkSet;
+        use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+        use std::collections::HashMap;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        const ED_PRIV: &[u8] = &[
+            0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
+            0x04, 0x20, 0xbf, 0xb5, 0xcd, 0x6d, 0x82, 0xec, 0x0e, 0x21, 0x15, 0xe7, 0x6b, 0x03,
+            0x48, 0x76, 0xd0, 0x90, 0xf4, 0x3e, 0xb5, 0x28, 0x01, 0x8f, 0x36, 0x01, 0xf8, 0xae,
+            0xf9, 0x5d, 0xac, 0xc5, 0xa1, 0xef,
+        ];
+        const ED_PUB_X: &str = "bXUj6dVFBJp4oH4PZBzpnTQAuK8oEtKDiftREsbKRFI";
+
+        let auth_cfg = crate::auth::AuthConfig::parse_yaml_or_json(
+            r#"
+issuers:
+  - name: okta
+    issuer: https://idp.example.com
+    audiences: [plat5-cp]
+    cli:
+      client_id: cli-pub
+      scopes: [openid, email]
+    rules:
+      - access: read
+        claims:
+          groups: [eng]
+      - access: apply
+        claims:
+          groups: [admins]
+"#,
+        )
+        .unwrap();
+        let jwks: JwkSet = serde_json::from_value(json!({
+            "keys": [{ "kty": "OKP", "crv": "Ed25519", "kid": "k1", "use": "sig", "alg": "EdDSA", "x": ED_PUB_X }]
+        }))
+        .unwrap();
+        let mut map = HashMap::new();
+        map.insert("https://idp.example.com".to_string(), jwks);
+        let auth = crate::auth::Authenticator::with_static_jwks(None, auth_cfg, map);
+
+        let (_tx, rx) = watch::channel(false);
+        let state = AppState {
+            store: Store::lazy_for_test(),
+            feed: Feed::new_for_test(0, rx),
+            counts: Arc::new(NoCounts),
+            auth,
+        };
+        let router = public_router(state);
+
+        // GET /auth/info is public and never leaks rules.
+        let resp = router
+            .clone()
+            .oneshot(Request::get("/auth/info").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let info: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(info["methods"], json!(["oidc"]));
+        assert_eq!(info["issuers"][0]["cli"]["client_id"], json!("cli-pub"));
+        assert!(info["issuers"][0].get("rules").is_none());
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let sign = |groups: &[&str]| {
+            let mut h = Header::new(Algorithm::EdDSA);
+            h.kid = Some("k1".into());
+            encode(
+                &h,
+                &json!({
+                    "iss": "https://idp.example.com",
+                    "aud": "plat5-cp",
+                    "sub": "alice@example.com",
+                    "exp": now + 300,
+                    "groups": groups
+                }),
+                &EncodingKey::from_ed_der(ED_PRIV),
+            )
+            .unwrap()
+        };
+
+        // Read-only JWT: /auth/whoami succeeds with access=read; mutating POST /apply is 403.
+        let ro_tok = sign(&["eng"]);
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::get("/auth/whoami")
+                    .header("authorization", format!("Bearer {ro_tok}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let who: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(who["access"], json!("read"));
+        assert_eq!(who["actor"]["subject"], json!("alice@example.com"));
+        assert_eq!(who["actor"]["issuer_name"], json!("okta"));
+
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::post("/apply")
+                    .header("authorization", format!("Bearer {ro_tok}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["code"], json!("FORBIDDEN"));
+        assert_eq!(body["error"]["details"]["required_access"], json!("apply"));
+
+        // Admin JWT with overlong X-Plat5-Change-Reason is rejected with 400.
+        let rw_tok = sign(&["admins"]);
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::post("/apply")
+                    .header("authorization", format!("Bearer {rw_tok}"))
+                    .header("x-plat5-change-reason", "x".repeat(600))
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

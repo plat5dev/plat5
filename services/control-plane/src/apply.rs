@@ -12,7 +12,7 @@ use crate::plan::{self, Expect, Plan, Refused, Summary};
 use crate::rules::{self, Checked};
 use crate::schema::{self, FieldError};
 use crate::served::Served;
-use crate::store::{Store, StoreError};
+use crate::store::{ChangeMetadata, RevisionActor, Store, StoreError};
 
 /// Why an apply or a dry run didn't happen.
 #[derive(Debug)]
@@ -139,6 +139,8 @@ pub async fn apply(
     counts: &dyn Counts,
     prepared: &Prepared,
     request_id: &str,
+    actor: Option<&RevisionActor>,
+    metadata: Option<&ChangeMetadata>,
 ) -> Result<Applied, Failure> {
     let Some(expect) = prepared.expect.as_ref() else {
         return Err(Failure::Invalid(vec![plan::missing_expect_error()]));
@@ -170,7 +172,15 @@ pub async fn apply(
     }
     let summary = serde_json::to_value(&plan.summary).expect("summary serializes");
     let revision = store
-        .write(locked, &prepared.sent, &next, &summary, request_id)
+        .write(
+            locked,
+            &prepared.sent,
+            &next,
+            &summary,
+            request_id,
+            actor,
+            metadata,
+        )
         .await?;
     Ok(Applied {
         revision,
@@ -251,6 +261,8 @@ mod tests {
             &crate::counts::NoCounts,
             &prepared,
             "req-1",
+            None,
+            None,
         )
         .await;
         match err {

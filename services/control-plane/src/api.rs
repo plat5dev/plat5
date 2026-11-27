@@ -11,13 +11,17 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::apply::{self, Failure};
+use crate::auth::AuthenticatedActor;
 use crate::error::AppError;
 use crate::metrics;
 use crate::middleware::{admin_auth_middleware, feed_observability, http_observability, RequestId};
 use crate::schema;
 use crate::served;
-use crate::store::{Reader, Report};
+use crate::store::{ChangeMetadata, Reader, Report, RevisionActor};
 use crate::AppState;
+
+const MAX_CHANGE_REASON_LEN: usize = 512;
+const MAX_CHANGE_REF_LEN: usize = 256;
 
 /// How long an internal read with `after` waits for a newer revision.
 const LONG_POLL_WAIT: Duration = Duration::from_secs(25);
@@ -32,6 +36,7 @@ pub fn public_router(state: AppState) -> Router {
         .route("/revisions", get(list_revisions))
         .route("/revisions/{rev}", get(get_revision))
         .route("/status", get(get_status))
+        .route("/auth/whoami", get(auth_whoami))
         .layer(axum_mw::from_fn_with_state(
             state.clone(),
             admin_auth_middleware,
@@ -40,6 +45,7 @@ pub fn public_router(state: AppState) -> Router {
     Router::new()
         .merge(authed)
         .route("/schema", get(get_schema))
+        .route("/auth/info", get(auth_info))
         .route_layer(axum_mw::from_fn(http_observability))
         .with_state(state)
 }
@@ -70,15 +76,34 @@ async fn health_live() -> impl IntoResponse {
 }
 
 async fn health_ready(State(state): State<AppState>) -> impl IntoResponse {
-    if state.store.ping().await.is_ok() {
+    let pg_ok = state.store.ping().await.is_ok();
+    let jwks_ok = state.auth.is_ready();
+    if pg_ok && jwks_ok {
         (StatusCode::OK, Json(json!({ "status": "healthy" }))).into_response()
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "status": "unhealthy" })),
+            Json(json!({
+                "status": "unhealthy",
+                "checks": {
+                    "postgres_ready": pg_ok,
+                    "jwks_ready": jwks_ok
+                }
+            })),
         )
             .into_response()
     }
+}
+
+async fn auth_info(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.auth.auth_info())
+}
+
+async fn auth_whoami(Extension(actor): Extension<AuthenticatedActor>) -> impl IntoResponse {
+    Json(json!({
+        "actor": actor,
+        "access": actor.access.as_str(),
+    }))
 }
 
 fn failure(request_id: &str, f: Failure) -> AppError {
@@ -135,18 +160,71 @@ struct ApplyQuery {
     dry_run: bool,
 }
 
+fn parse_optional_header(
+    headers: &axum::http::HeaderMap,
+    name: &'static str,
+    max_len: usize,
+    request_id: &str,
+) -> Result<Option<String>, AppError> {
+    let Some(raw) = headers.get(name) else {
+        return Ok(None);
+    };
+    let s = raw.to_str().map_err(|_| {
+        AppError::invalid_request(request_id.to_string(), format!("{name} must be valid UTF-8."))
+    })?;
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.len() > max_len {
+        return Err(AppError::invalid_request(
+            request_id.to_string(),
+            format!("{name} must be at most {max_len} bytes."),
+        ));
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err(AppError::invalid_request(
+            request_id.to_string(),
+            format!("{name} must not contain control characters."),
+        ));
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
 /// `POST /apply?dry_run=true` answers the plan, with every service expanded as
 /// the gateway feed would serve it; `POST /apply` applies it if its
 /// preconditions hold (docs/concepts/config.md#plan-and-apply).
 async fn apply_config(
     State(state): State<AppState>,
     Extension(RequestId(request_id)): Extension<RequestId>,
+    Extension(actor): Extension<AuthenticatedActor>,
     query: Result<Query<ApplyQuery>, QueryRejection>,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, AppError> {
     let Query(query) =
         query.map_err(|e| AppError::invalid_request(request_id.clone(), e.body_text()))?;
+    let reason = parse_optional_header(
+        &headers,
+        "x-plat5-change-reason",
+        MAX_CHANGE_REASON_LEN,
+        &request_id,
+    )?;
+    let change_ref = parse_optional_header(
+        &headers,
+        "x-plat5-change-ref",
+        MAX_CHANGE_REF_LEN,
+        &request_id,
+    )?;
+    let metadata = ChangeMetadata { reason, change_ref };
+    let metadata_opt = (!metadata.is_empty()).then_some(&metadata);
+    let rev_actor = RevisionActor {
+        actor_type: actor.actor_type.to_string(),
+        issuer: actor.issuer,
+        issuer_name: actor.issuer_name,
+        subject: actor.subject,
+    };
+
     let body = parse_body(&headers, &body, &request_id)?;
     let prepared = apply::prepare(body).map_err(|f| failure(&request_id, f))?;
     if query.dry_run {
@@ -155,24 +233,48 @@ async fn apply_config(
             .map_err(|f| failure(&request_id, f))?;
         return Ok(Json(dry_run).into_response());
     }
-    let applied = apply::apply(&state.store, state.counts.as_ref(), &prepared, &request_id)
-        .await
-        .map_err(|f| failure(&request_id, f))?;
+    let applied = apply::apply(
+        &state.store,
+        state.counts.as_ref(),
+        &prepared,
+        &request_id,
+        Some(&rev_actor),
+        metadata_opt,
+    )
+    .await
+    .map_err(|f| failure(&request_id, f))?;
     state.feed.advance(applied.revision);
     Ok(Json(json!({ "revision": applied.revision, "summary": applied.summary })).into_response())
+}
+
+fn revision_meta_fields(r: &crate::store::Revision, obj: &mut serde_json::Map<String, Value>) {
+    obj.insert(
+        "actor".into(),
+        r.actor
+            .as_ref()
+            .map(|a| serde_json::to_value(a).expect("actor serializes"))
+            .unwrap_or(Value::Null),
+    );
+    if let Some(ref m) = r.metadata {
+        obj.insert(
+            "metadata".into(),
+            serde_json::to_value(m).expect("metadata serializes"),
+        );
+    }
 }
 
 /// A revision's source, for a pull. Read strictly first: a source the
 /// running version can't read is **422**, never served with a field dropped.
 fn revision_body(r: &crate::store::Revision, request_id: &str) -> Result<Value, AppError> {
     apply::read(&r.config).map_err(|f| failure(request_id, f))?;
-    Ok(json!({
-        "revision": r.revision,
-        "created_at": r.created_at.to_rfc3339(),
-        "request_id": r.request_id,
-        "summary": r.summary,
-        "config": r.config,
-    }))
+    let mut obj = serde_json::Map::new();
+    obj.insert("revision".into(), json!(r.revision));
+    obj.insert("created_at".into(), json!(r.created_at.to_rfc3339()));
+    obj.insert("request_id".into(), json!(r.request_id));
+    obj.insert("summary".into(), r.summary.clone());
+    revision_meta_fields(r, &mut obj);
+    obj.insert("config".into(), r.config.clone());
+    Ok(Value::Object(obj))
 }
 
 /// The current config, as applied. **404** before the first apply.
@@ -206,12 +308,13 @@ async fn list_revisions(
     let revisions: Vec<Value> = revisions
         .iter()
         .map(|r| {
-            json!({
-                "revision": r.revision,
-                "created_at": r.created_at.to_rfc3339(),
-                "request_id": r.request_id,
-                "summary": r.summary,
-            })
+            let mut obj = serde_json::Map::new();
+            obj.insert("revision".into(), json!(r.revision));
+            obj.insert("created_at".into(), json!(r.created_at.to_rfc3339()));
+            obj.insert("request_id".into(), json!(r.request_id));
+            obj.insert("summary".into(), r.summary.clone());
+            revision_meta_fields(r, &mut obj);
+            Value::Object(obj)
         })
         .collect();
     Ok(Json(json!({ "revisions": revisions })).into_response())

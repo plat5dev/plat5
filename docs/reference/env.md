@@ -39,10 +39,11 @@ The replica id reported to the control plane is `service.instance.id` from `OTEL
 | `PORT` | `5002` | Admin API |
 | `INTERNAL_PORT` | `5003` | Feeds, health, metrics |
 | `DATABASE_URL` | required | Postgres; schema `control_plane` |
-| `ADMIN_TOKEN` | required | Bearer token for Admin API |
+| `AUTH_CONFIG_FILE` | unset | Path to a read-only YAML/JSON multi-issuer OIDC JWT auth config (`schema/control_plane_auth.json`). Recommended for production; at least one of `AUTH_CONFIG_FILE` or `ADMIN_TOKEN` is required |
+| `ADMIN_TOKEN` | unset | Static bearer token granting `apply` access on the Admin API (required only when `AUTH_CONFIG_FILE` is unset; omit in hardened production) |
 | `IDENTITY_INTERNAL_URL` | required | Identity's internal base URL, for plan counts |
 
-Ready is **503** unless Postgres answers.
+Ready is **503** unless Postgres answers and every issuer configured in `AUTH_CONFIG_FILE` has loaded its JWKS at least once.
 
 ## Identity
 

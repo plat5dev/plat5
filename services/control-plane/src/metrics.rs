@@ -32,6 +32,15 @@ static HTTP_REQUESTS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     .expect("failed to register http_requests_total")
 });
 
+static CONTROL_PLANE_AUTH_FAILURES_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "control_plane_auth_failures_total",
+        "Total failed control-plane admin API auth attempts",
+        &["reason"]
+    )
+    .expect("failed to register control_plane_auth_failures_total")
+});
+
 static HTTP_REQUEST_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
     let opts = histogram_opts!(
         "http_request_duration_seconds",
@@ -46,6 +55,7 @@ static HTTP_REQUEST_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| 
 struct OtelInstruments {
     http_requests: Counter<u64>,
     http_duration: Histogram<f64>,
+    auth_failures: Counter<u64>,
     _process_start_time: ObservableGauge<f64>,
     _process_cpu_seconds: ObservableCounter<f64>,
     _process_resident_memory: ObservableGauge<f64>,
@@ -79,6 +89,10 @@ static OTEL: LazyLock<OtelInstruments> = LazyLock::new(|| {
             .with_boundaries(vec![
                 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0,
             ])
+            .build(),
+        auth_failures: meter
+            .u64_counter("control_plane_auth_failures_total")
+            .with_description("Total failed control-plane admin API auth attempts")
             .build(),
         _process_start_time: meter
             .f64_observable_gauge("process_start_time_seconds")
@@ -114,6 +128,15 @@ static OTEL: LazyLock<OtelInstruments> = LazyLock::new(|| {
 pub fn init() {
     LazyLock::force(&HTTP_REQUESTS_TOTAL);
     LazyLock::force(&HTTP_REQUEST_DURATION_SECONDS);
+    LazyLock::force(&CONTROL_PLANE_AUTH_FAILURES_TOTAL);
+}
+
+pub fn record_auth_failure(reason: &str) {
+    CONTROL_PLANE_AUTH_FAILURES_TOTAL
+        .with_label_values(&[reason])
+        .inc();
+    OTEL.auth_failures
+        .add(1, &[KeyValue::new("reason", reason.to_string())]);
 }
 
 /// Force OTel instrument creation after MeterProvider is installed.

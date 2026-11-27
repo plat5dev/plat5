@@ -4,17 +4,17 @@
 use std::time::Instant;
 
 use axum::extract::{MatchedPath, Request, State};
-use axum::http::{header, HeaderValue};
+use axum::http::{header, HeaderValue, Method};
 use axum::middleware::Next;
 use axum::response::Response;
 use opentelemetry::global;
 use opentelemetry::propagation::Extractor;
 use opentelemetry::trace::{Status, TraceContextExt};
-use subtle::ConstantTimeEq;
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
+use crate::auth::{AccessLevel, AuthFailure};
 use crate::error::AppError;
 use crate::metrics;
 use crate::telemetry::redact_query;
@@ -182,9 +182,22 @@ pub(crate) async fn feed_observability(mut request: Request, next: Next) -> Resp
     response
 }
 
+fn required_access(request: &Request) -> AccessLevel {
+    if request.method() == Method::POST && request.uri().path() == "/apply" {
+        let is_dry_run = request
+            .uri()
+            .query()
+            .is_some_and(|q| q.split('&').any(|kv| kv == "dry_run=true"));
+        if !is_dry_run {
+            return AccessLevel::Apply;
+        }
+    }
+    AccessLevel::Read
+}
+
 pub(crate) async fn admin_auth_middleware(
     State(state): State<AppState>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Result<Response, AppError> {
     let request_id = request
@@ -192,18 +205,49 @@ pub(crate) async fn admin_auth_middleware(
         .get::<RequestId>()
         .map(|id| id.0.clone())
         .unwrap_or_else(|| request_id_from_headers(request.headers()));
-    let authorized = request
+    let required = required_access(&request);
+    let auth_header = request
         .headers()
         .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .is_some_and(|t| bool::from(t.as_bytes().ct_eq(state.admin_token.as_bytes())));
+        .and_then(|v| v.to_str().ok());
 
-    if !authorized {
-        return Err(AppError::unauthorized(request_id));
+    match state.auth.authenticate(auth_header, required).await {
+        Ok(actor) => {
+            tracing::info!(
+                request_id = %request_id,
+                actor_type = actor.actor_type,
+                actor_issuer = actor.issuer.as_deref(),
+                actor_issuer_name = actor.issuer_name.as_deref(),
+                actor_subject = actor.subject.as_deref(),
+                access = actor.access.as_str(),
+                required = required.as_str(),
+                "control-plane request authenticated"
+            );
+            request.extensions_mut().insert(actor);
+            Ok(next.run(request).await)
+        }
+        Err(err) => {
+            let reason = err.reason();
+            metrics::record_auth_failure(reason);
+            tracing::warn!(
+                request_id = %request_id,
+                reason = reason,
+                required = required.as_str(),
+                method = %request.method(),
+                path = %request.uri().path(),
+                "control-plane authentication failed"
+            );
+            match err {
+                AuthFailure::Unauthorized { reason } => {
+                    Err(AppError::unauthorized(request_id, reason))
+                }
+                AuthFailure::Forbidden { reason, required } => {
+                    Err(AppError::forbidden(request_id, reason, required.as_str()))
+                }
+                AuthFailure::Unavailable { .. } => Err(AppError::service_unavailable(request_id)),
+            }
+        }
     }
-
-    Ok(next.run(request).await)
 }
 
 pub(crate) fn request_id_from_headers(headers: &axum::http::HeaderMap) -> String {

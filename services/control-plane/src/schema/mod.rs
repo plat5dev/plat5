@@ -44,6 +44,13 @@ pub const FILES: &[(&str, &str)] = &[
         "services.json",
         include_str!(concat!(env!("PLAT5_SCHEMA_DIR"), "/services.json")),
     ),
+    (
+        "control_plane_auth.json",
+        include_str!(concat!(
+            env!("PLAT5_SCHEMA_DIR"),
+            "/control_plane_auth.json"
+        )),
+    ),
 ];
 
 /// One problem with the config, at a field path such as
@@ -105,9 +112,19 @@ fn config_validator() -> &'static Validator {
     V.get_or_init(|| compile(&json!({ "$ref": format!("{BASE}config.json") })))
 }
 
+fn control_plane_auth_validator() -> &'static Validator {
+    static V: OnceLock<Validator> = OnceLock::new();
+    V.get_or_init(|| compile(&json!({ "$ref": format!("{BASE}control_plane_auth.json") })))
+}
+
 /// Checks a flat config against `config.json`.
 pub fn check_config(config: &Value) -> Result<(), Vec<FieldError>> {
     check(config_validator(), config)
+}
+
+/// Checks a control-plane `AUTH_CONFIG_FILE` document against `control_plane_auth.json`.
+pub fn check_control_plane_auth(doc: &Value) -> Result<(), Vec<FieldError>> {
+    check(control_plane_auth_validator(), doc)
 }
 
 fn check(validator: &Validator, instance: &Value) -> Result<(), Vec<FieldError>> {

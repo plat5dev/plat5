@@ -2,6 +2,7 @@ mod api;
 #[cfg(test)]
 mod api_tests;
 mod apply;
+mod auth;
 mod config;
 mod counts;
 #[cfg(test)]
@@ -21,11 +22,13 @@ mod store;
 mod telemetry;
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use tracing::{error, info, warn};
 
+use crate::auth::{AuthConfig, Authenticator};
 use crate::counts::{Counts, HttpCounts};
 use crate::feed::Feed;
 use crate::store::Store;
@@ -40,7 +43,7 @@ pub struct AppState {
     /// Identity's plan counts, asked only when a plan removes a kind or changes
     /// a kind's parent.
     pub counts: Arc<dyn Counts>,
-    pub admin_token: String,
+    pub auth: Authenticator,
 }
 
 #[tokio::main]
@@ -58,10 +61,25 @@ async fn main() {
         error!("DATABASE_URL is required");
         std::process::exit(1);
     });
-    let admin_token = nonempty_env("ADMIN_TOKEN").unwrap_or_else(|| {
-        error!("ADMIN_TOKEN is required");
+    let admin_token = nonempty_env("ADMIN_TOKEN");
+    let auth_config = match nonempty_env("AUTH_CONFIG_FILE") {
+        Some(path) => match AuthConfig::load_file(&PathBuf::from(&path)) {
+            Ok(cfg) => Some(cfg),
+            Err(err) => {
+                error!(error = %err, "failed to load AUTH_CONFIG_FILE");
+                std::process::exit(1);
+            }
+        },
+        None => None,
+    };
+    if admin_token.is_none() && auth_config.is_none() {
+        error!("either ADMIN_TOKEN or AUTH_CONFIG_FILE is required");
         std::process::exit(1);
-    });
+    }
+    if admin_token.is_some() && auth_config.is_some() {
+        warn!("static ADMIN_TOKEN is enabled alongside OIDC AUTH_CONFIG_FILE; omit ADMIN_TOKEN in production unless required for break-glass");
+    }
+    let auth = Authenticator::new(admin_token, auth_config);
 
     let port: u16 = std::env::var("PORT")
         .ok()
@@ -97,6 +115,7 @@ async fn main() {
         std::process::exit(1);
     });
     let feed = Feed::spawn(store.clone(), head, shutdown_rx.clone());
+    auth.spawn_refresh(shutdown_rx.clone());
 
     {
         let store = store.clone();
@@ -121,7 +140,7 @@ async fn main() {
         store,
         feed,
         counts,
-        admin_token,
+        auth,
     };
 
     let public = api::public_router(state.clone());

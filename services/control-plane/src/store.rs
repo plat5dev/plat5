@@ -13,7 +13,13 @@ use tracing::info;
 use crate::served::Served;
 
 const SCHEMA: &str = "control_plane";
-const MIGRATIONS: &[(&str, &str)] = &[("001_init", include_str!("../migrations/001_init.sql"))];
+const MIGRATIONS: &[(&str, &str)] = &[
+    ("001_init", include_str!("../migrations/001_init.sql")),
+    (
+        "002_revision_attribution",
+        include_str!("../migrations/002_revision_attribution.sql"),
+    ),
+];
 
 #[derive(Clone)]
 pub struct Store {
@@ -37,6 +43,35 @@ impl From<sqlx::Error> for StoreError {
     }
 }
 
+/// Verified caller identity persisted with a revision.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RevisionActor {
+    #[serde(rename = "type")]
+    pub actor_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issuer_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+}
+
+/// Optional caller-supplied context persisted alongside a revision (strictly
+/// separate from verified `actor` attribution).
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
+pub struct ChangeMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
+    pub change_ref: Option<String>,
+}
+
+impl ChangeMetadata {
+    pub fn is_empty(&self) -> bool {
+        self.reason.is_none() && self.change_ref.is_none()
+    }
+}
+
 /// One applied revision: the config as sent, and the plan's summary. The
 /// bodies it serves are read on their own ([`Store::current_body`]).
 #[derive(Debug, Clone)]
@@ -46,6 +81,31 @@ pub struct Revision {
     pub summary: Value,
     pub request_id: String,
     pub created_at: DateTime<Utc>,
+    pub actor: Option<RevisionActor>,
+    pub metadata: Option<ChangeMetadata>,
+}
+
+fn build_actor(
+    actor_type: Option<String>,
+    issuer: Option<String>,
+    issuer_name: Option<String>,
+    subject: Option<String>,
+) -> Option<RevisionActor> {
+    actor_type.map(|actor_type| RevisionActor {
+        actor_type,
+        issuer,
+        issuer_name,
+        subject,
+    })
+}
+
+fn build_metadata(reason: Option<String>, change_ref: Option<String>) -> Option<ChangeMetadata> {
+    let m = ChangeMetadata { reason, change_ref };
+    if m.is_empty() {
+        None
+    } else {
+        Some(m)
+    }
 }
 
 /// The head, locked for an apply. Dropped without `write`, it rolls back.
@@ -140,20 +200,36 @@ impl Store {
 
     /// The head and its config, read in one snapshot. `None` before the first apply.
     pub async fn current(&self) -> Result<Option<Revision>, StoreError> {
-        let row: Option<(i64, Value, Value, String, DateTime<Utc>)> = sqlx::query_as(
-            "SELECT r.revision, r.config, r.summary, r.request_id, r.created_at
+        let row: Option<FullRevisionRow> = sqlx::query_as(
+            "SELECT r.revision, r.config, r.summary, r.request_id, r.created_at,
+                    r.actor_type, r.actor_issuer, r.actor_issuer_name, r.actor_subject,
+                    r.change_reason, r.change_ref
              FROM config_head h
              JOIN config_revisions r ON r.revision = h.revision",
         )
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(
-            |(revision, config, summary, request_id, created_at)| Revision {
+            |(
                 revision,
                 config,
                 summary,
                 request_id,
                 created_at,
+                actor_type,
+                actor_issuer,
+                actor_issuer_name,
+                actor_subject,
+                change_reason,
+                change_ref,
+            )| Revision {
+                revision,
+                config,
+                summary,
+                request_id,
+                created_at,
+                actor: build_actor(actor_type, actor_issuer, actor_issuer_name, actor_subject),
+                metadata: build_metadata(change_reason, change_ref),
             },
         ))
     }
@@ -198,6 +274,7 @@ impl Store {
 
     /// Writes the next revision, its source and the bodies it serves, and
     /// moves the head to it. Returns the revision.
+    #[allow(clippy::too_many_arguments)]
     pub async fn write(
         &self,
         mut locked: Locked,
@@ -205,11 +282,17 @@ impl Store {
         served: &Served,
         summary: &Value,
         request_id: &str,
+        actor: Option<&RevisionActor>,
+        metadata: Option<&ChangeMetadata>,
     ) -> Result<i64, StoreError> {
         let next = locked.revision + 1;
         sqlx::query(
-            "INSERT INTO config_revisions (revision, config, gateway, identity, summary, request_id)
-             VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO config_revisions (
+                 revision, config, gateway, identity, summary, request_id,
+                 actor_type, actor_issuer, actor_issuer_name, actor_subject,
+                 change_reason, change_ref
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
         .bind(next)
         .bind(config)
@@ -217,6 +300,12 @@ impl Store {
         .bind(&served.identity)
         .bind(summary)
         .bind(request_id)
+        .bind(actor.map(|a| a.actor_type.as_str()))
+        .bind(actor.and_then(|a| a.issuer.as_deref()))
+        .bind(actor.and_then(|a| a.issuer_name.as_deref()))
+        .bind(actor.and_then(|a| a.subject.as_deref()))
+        .bind(metadata.and_then(|m| m.reason.as_deref()))
+        .bind(metadata.and_then(|m| m.change_ref.as_deref()))
         .execute(&mut *locked.tx)
         .await?;
         sqlx::query("UPDATE config_head SET revision = $1")
@@ -229,41 +318,73 @@ impl Store {
 
     /// History, newest first, without the configs.
     pub async fn revisions(&self) -> Result<Vec<Revision>, StoreError> {
-        let rows: Vec<(i64, Value, String, DateTime<Utc>)> = sqlx::query_as(
-            "SELECT revision, summary, request_id, created_at
+        let rows: Vec<SummaryRevisionRow> = sqlx::query_as(
+            "SELECT revision, summary, request_id, created_at,
+                    actor_type, actor_issuer, actor_issuer_name, actor_subject,
+                    change_reason, change_ref
              FROM config_revisions ORDER BY revision DESC",
         )
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
             .into_iter()
-            .map(|(revision, summary, request_id, created_at)| Revision {
-                revision,
-                config: Value::Null,
-                summary,
-                request_id,
-                created_at,
-            })
+            .map(
+                |(
+                    revision,
+                    summary,
+                    request_id,
+                    created_at,
+                    actor_type,
+                    actor_issuer,
+                    actor_issuer_name,
+                    actor_subject,
+                    change_reason,
+                    change_ref,
+                )| Revision {
+                    revision,
+                    config: Value::Null,
+                    summary,
+                    request_id,
+                    created_at,
+                    actor: build_actor(actor_type, actor_issuer, actor_issuer_name, actor_subject),
+                    metadata: build_metadata(change_reason, change_ref),
+                },
+            )
             .collect())
     }
 
     pub async fn revision(&self, revision: i64) -> Result<Option<Revision>, StoreError> {
-        let row: Option<(Value, Value, String, DateTime<Utc>)> = sqlx::query_as(
-            "SELECT config, summary, request_id, created_at
+        let row: Option<RevisionByIdRow> = sqlx::query_as(
+            "SELECT config, summary, request_id, created_at,
+                    actor_type, actor_issuer, actor_issuer_name, actor_subject,
+                    change_reason, change_ref
              FROM config_revisions WHERE revision = $1",
         )
         .bind(revision)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(
-            row.map(|(config, summary, request_id, created_at)| Revision {
+        Ok(row.map(
+            |(
+                config,
+                summary,
+                request_id,
+                created_at,
+                actor_type,
+                actor_issuer,
+                actor_issuer_name,
+                actor_subject,
+                change_reason,
+                change_ref,
+            )| Revision {
                 revision,
                 config,
                 summary,
                 request_id,
                 created_at,
-            }),
-        )
+                actor: build_actor(actor_type, actor_issuer, actor_issuer_name, actor_subject),
+                metadata: build_metadata(change_reason, change_ref),
+            },
+        ))
     }
 
     /// Keeps a gateway replica's latest report, seen now.
@@ -327,6 +448,43 @@ impl Store {
 }
 
 type ReplicaRow = (String, i64, Option<i64>, Option<String>, DateTime<Utc>);
+type FullRevisionRow = (
+    i64,
+    Value,
+    Value,
+    String,
+    DateTime<Utc>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+type SummaryRevisionRow = (
+    i64,
+    Value,
+    String,
+    DateTime<Utc>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+type RevisionByIdRow = (
+    Value,
+    Value,
+    String,
+    DateTime<Utc>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 /// What a gateway replica says on its long poll: the revision it serves, and
 /// the newest one it was served if it refused it, with why.

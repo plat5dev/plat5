@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plat5.com/schema/control_plane_auth.json",
+  "title": "Control plane authentication",
+  "description": "Multi-issuer OIDC JWT authentication and read/apply claim authorization rules for the Plat5 control plane admin API (AUTH_CONFIG_FILE).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["issuers"],
+  "properties": {
+    "issuers": {
+      "title": "issuers",
+      "description": "Trusted OIDC/JWT issuers. Each entry must have a unique `name` and unique `issuer` URL.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/issuer" }
+    }
+  },
+  "$defs": {
+    "issuer": {
+      "title": "issuer",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "issuer", "audiences", "rules"],
+      "properties": {
+        "name": {
+          "title": "name",
+          "description": "Short unique label for this issuer (recorded in revision attribution and `GET /auth/info`), e.g. `github-actions` or `okta`.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+        },
+        "issuer": {
+          "title": "issuer",
+          "description": "Exact JWT `iss` claim value and base URL for OIDC Discovery (`{issuer}/.well-known/openid-configuration`).",
+          "type": "string",
+          "pattern": "^https?://[^\\s]+$"
+        },
+        "jwks_uri": {
+          "title": "jwks_uri",
+          "description": "Optional explicit JWKS URI override. When omitted, discovered from `{issuer}/.well-known/openid-configuration`.",
+          "type": "string",
+          "pattern": "^https?://[^\\s]+$"
+        },
+        "audiences": {
+          "title": "audiences",
+          "description": "Allowed JWT `aud` claim values. Wildcard `*` is forbidden on the control plane.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "not": { "const": "*" }
+          }
+        },
+        "subject_claim": {
+          "title": "subject_claim",
+          "description": "Dotted JSON path to the stable caller subject claim. Default `sub`.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}(\\.[A-Za-z0-9_-]{1,64})*$"
+        },
+        "max_token_lifetime": {
+          "title": "max_token_lifetime",
+          "description": "Optional maximum allowed token lifetime (`exp - iat`, e.g. `1h` or `24h`). Requires numeric `iat` when set.",
+          "$ref": "settings.json#/$defs/duration"
+        },
+        "cli": {
+          "title": "cli",
+          "description": "Optional non-secret OAuth 2.0 public client metadata advertised on `GET /auth/info` for `plat5 login`.",
+          "$ref": "#/$defs/cli"
+        },
+        "rules": {
+          "title": "rules",
+          "description": "Authorization rules mapping required JWT claims to `read` or `apply` access. Evaluated as OR across rules, AND across claims within a rule.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/rule" }
+        }
+      }
+    },
+    "cli": {
+      "title": "cli",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["client_id"],
+      "properties": {
+        "client_id": {
+          "title": "client_id",
+          "description": "OAuth 2.0 public client ID used by `plat5 login` (RFC 8252 PKCE and RFC 8628 Device Flow).",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "audience": {
+          "title": "audience",
+          "description": "Optional OAuth `audience` parameter sent during `plat5 login` (for IdPs such as Auth0 that require it).",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "scopes": {
+          "title": "scopes",
+          "description": "OAuth scopes requested by `plat5 login`. Default `[\"openid\"]`.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "token_source": {
+          "title": "token_source",
+          "description": "Which OAuth token `plat5 login` sends to the control plane (`access_token` default; use `id_token` for OIDC providers whose access tokens are opaque).",
+          "type": "string",
+          "enum": ["access_token", "id_token"]
+        },
+        "authorization_endpoint": {
+          "title": "authorization_endpoint",
+          "description": "Optional OAuth authorization endpoint override (otherwise discovered via OIDC Discovery).",
+          "type": "string",
+          "pattern": "^https?://[^\\s]+$"
+        },
+        "token_endpoint": {
+          "title": "token_endpoint",
+          "description": "Optional OAuth token endpoint override (otherwise discovered via OIDC Discovery).",
+          "type": "string",
+          "pattern": "^https?://[^\\s]+$"
+        },
+        "device_authorization_endpoint": {
+          "title": "device_authorization_endpoint",
+          "description": "Optional RFC 8628 device authorization endpoint override (otherwise discovered via OIDC Discovery).",
+          "type": "string",
+          "pattern": "^https?://[^\\s]+$"
+        }
+      }
+    },
+    "rule": {
+      "title": "rule",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["access", "claims"],
+      "properties": {
+        "access": {
+          "title": "access",
+          "description": "`read` grants read endpoints and `POST /apply?dry_run=true`; `apply` grants all `read` endpoints plus mutating `POST /apply`.",
+          "type": "string",
+          "enum": ["read", "apply"]
+        },
+        "claims": {
+          "title": "claims",
+          "description": "Required JWT claims (all keys must match; each key matches if any listed pattern matches). Patterns use full-string anchored `*` globbing; bare `*` is forbidden.",
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 32,
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}(\\.[A-Za-z0-9_-]{1,64})*$"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "not": { "pattern": "^\\*+$" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
