@@ -19,10 +19,15 @@ import (
 )
 
 type fakeStore struct {
-	byRequest map[string]*Event
-	lastList  Filter
-	list      []*Event
-	err       error
+	byRequest    map[string]*Event
+	lastList     Filter
+	list         []*Event
+	exportEvents []*Event
+	exportCursor int64
+	exportMore   bool
+	exportAfter  int64
+	exportLimit  int
+	err          error
 }
 
 func (f *fakeStore) CreateIntent(_ context.Context, in *Intent, final *Outcome) (bool, error) {
@@ -64,6 +69,19 @@ func (f *fakeStore) List(_ context.Context, filter Filter) ([]*Event, bool, erro
 	}
 	f.lastList = filter
 	return f.list, false, nil
+}
+
+func (f *fakeStore) Export(_ context.Context, after int64, limit int) ([]*Event, int64, bool, error) {
+	if f.err != nil {
+		return nil, 0, false, f.err
+	}
+	f.exportAfter = after
+	f.exportLimit = limit
+	cursor := f.exportCursor
+	if cursor == 0 {
+		cursor = after
+	}
+	return f.exportEvents, cursor, f.exportMore, nil
 }
 
 func newTestApp(s *fakeStore) *fiber.App {
@@ -272,6 +290,7 @@ func TestStoreErrorStatusMapping(t *testing.T) {
 	}{
 		{"put intent", http.MethodPut, "/internal/events/req-1", validIntent},
 		{"patch outcome", http.MethodPatch, "/internal/events/req-1", `{"outcome":"responded","status":200}`},
+		{"export", http.MethodGet, "/internal/events", ""},
 		{"list node", http.MethodGet, "/nodes/01o/audit-events", ""},
 		{"list user", http.MethodGet, "/users/01u/audit-events", ""},
 	}
@@ -309,5 +328,82 @@ func TestStoreErrorStatusMapping(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestExport(t *testing.T) {
+	seq1 := int64(41)
+	s := &fakeStore{
+		exportEvents: []*Event{{
+			ID:           "01ja2z6q3y8d5v2k9n4r7t1w0x",
+			FinalizedSeq: &seq1,
+			Intent: Intent{
+				RequestID:  "req-export-1",
+				OccurredAt: time.Date(2026, 10, 8, 18, 30, 0, 120_000_000, time.UTC),
+				RootID:     strPtr("01o"),
+				Nodes:      []Node{{Kind: "organization", ID: "01o"}},
+				Actor:      Actor{MemberID: strPtr("01m"), Principal: strPtr(PrincipalPerson), AuthType: strPtr(AuthJWT)},
+				Service:    "identity",
+				Method:     strPtr("POST"),
+				Route:      strPtr("/orgs/{organization}/projects"),
+				IP:         strPtr("203.0.113.7"),
+			},
+			Outcome: Outcome{Outcome: OutcomeResponded, Status: intPtr(201)},
+		}},
+		exportCursor: 41,
+		exportMore:   true,
+	}
+	app := newTestApp(s)
+
+	code, body := do(t, app, http.MethodGet, "/internal/events?after=40&limit=5000", "")
+	if code != http.StatusOK {
+		t.Fatalf("export: %d %s", code, body)
+	}
+	if s.exportAfter != 40 || s.exportLimit != maxExportLimit {
+		t.Fatalf("parsed export query: after=%d limit=%d", s.exportAfter, s.exportLimit)
+	}
+	var resp struct {
+		AuditEvents []map[string]any `json:"audit_events"`
+		Cursor      string           `json:"cursor"`
+		HasMore     bool             `json:"has_more"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Cursor != "41" || !resp.HasMore || len(resp.AuditEvents) != 1 || resp.AuditEvents[0]["seq"] != "41" {
+		t.Fatalf("export response: %s", body)
+	}
+
+	// Empty feed keeps cursor at requested after (or 0 when omitted).
+	s.exportEvents = nil
+	s.exportCursor = 0
+	s.exportMore = false
+	code, body = do(t, app, http.MethodGet, "/internal/events", "")
+	if code != http.StatusOK || !strings.Contains(string(body), `"cursor":"0"`) || !strings.Contains(string(body), `"audit_events":[]`) {
+		t.Fatalf("empty export: %d %s", code, body)
+	}
+
+	// Cursor ahead -> 409 CURSOR_AHEAD.
+	s.err = ErrCursorAhead
+	code, body = do(t, app, http.MethodGet, "/internal/events?after=99", "")
+	if code != http.StatusConflict || !strings.Contains(string(body), `"CURSOR_AHEAD"`) {
+		t.Fatalf("cursor ahead: %d %s", code, body)
+	}
+	s.err = nil
+
+	for name, q := range map[string]string{
+		"zero after":    "?after=0",
+		"leading zero":  "?after=01",
+		"negative":      "?after=-1",
+		"non-int after": "?after=abc",
+		"zero limit":    "?limit=0",
+		"unknown":       "?foo=bar",
+		"repeated":      "?limit=10&limit=20",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if code, body := do(t, app, http.MethodGet, "/internal/events"+q, ""); code != http.StatusUnprocessableEntity {
+				t.Fatalf("want 422, got %d %s", code, body)
+			}
+		})
 	}
 }

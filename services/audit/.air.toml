@@ -3,6 +3,7 @@ tmp_dir = "tmp"
 
 [build]
   bin = "./tmp/server"
+  args_bin = ["serve"]
   cmd = "go build -o ./tmp/server ."
   delay = 1000
   exclude_dir = ["tmp", "vendor"]

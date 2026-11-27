@@ -21,7 +21,10 @@ import (
 	"github.com/plat5dev/plat5/audit/metrics"
 )
 
-var ErrNotFound = stderrors.New("not found")
+var (
+	ErrNotFound    = stderrors.New("not found")
+	ErrCursorAhead = stderrors.New("cursor ahead")
+)
 
 type Store struct {
 	pool   *pgxpool.Pool
@@ -97,6 +100,15 @@ func (s *Store) CreateIntent(parentCtx context.Context, in *Intent, final *Outco
 			return false, err
 		}
 		defer tx.Rollback(insertCtx)
+		// Single-write final events (gateway refusals, async mode) serialize on
+		// export_seq so finalized_seq values commit in strictly monotonic order.
+		finalizedExpr := "NULL"
+		if final != nil {
+			if _, err := tx.Exec(insertCtx, `SELECT pg_advisory_xact_lock(hashtext('audit.export_seq'))`); err != nil {
+				return false, err
+			}
+			finalizedExpr = "nextval('export_seq')"
+		}
 		// request_id alone is the dedupe. The unique index has occurred_at
 		// too (the partition key), so check request_id within a 1-day window
 		// (pruning to 1-2 monthly partitions) and let the index catch two
@@ -104,10 +116,10 @@ func (s *Store) CreateIntent(parentCtx context.Context, in *Intent, final *Outco
 		tag, err := tx.Exec(insertCtx, `
 			INSERT INTO audit_events (id, occurred_at, request_id, root_id, nodes, actor_member_id, actor_user_id,
 				actor_principal, actor_auth_type, actor_key_id, service, method, route, params, ip, user_agent,
-				outcome, status, details, created_id, named_node_ids, named_member_id)
+				outcome, status, details, created_id, named_node_ids, named_member_id, finalized_seq)
 			SELECT $1::text, $2::timestamptz, $3::text, $4::text, $5::jsonb, $6::text, $7::text, $8::text,
 				$9::text, $10::text, $11::text, $12::text, $13::text, $14::jsonb, $15::text, $16::text,
-				$17::text, $18::integer, $19::jsonb, $20::text, $21::text[], $22::text
+				$17::text, $18::integer, $19::jsonb, $20::text, $21::text[], $22::text, `+finalizedExpr+`
 			WHERE NOT EXISTS (
 				SELECT 1 FROM audit_events
 				WHERE request_id = $3::text
@@ -189,6 +201,12 @@ func (s *Store) ApplyOutcome(ctx context.Context, requestID string, out *Outcome
 	}
 	defer tx.Rollback(ctx)
 
+	// Serialize finalization on export_seq so finalized_seq values commit in
+	// strictly monotonic order for GET /internal/events readers.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('audit.export_seq'))`); err != nil {
+		return "", op.Fail(err)
+	}
+
 	// Only a user route's event names nodes. A tree route's event is in its
 	// chain's logs, and named nodes sent for it are ignored. When the caller
 	// sends occurred_at, include it so Postgres prunes to a single partition.
@@ -205,7 +223,8 @@ func (s *Store) ApplyOutcome(ctx context.Context, requestID string, out *Outcome
 		UPDATE audit_events
 		SET outcome = $2, status = $3, details = $4::jsonb, created_id = $5,
 			named_node_ids = CASE WHEN root_id IS NULL THEN $6::text[] ELSE '{}' END,
-			named_member_id = CASE WHEN root_id IS NULL THEN $7::text END
+			named_member_id = CASE WHEN root_id IS NULL THEN $7::text END,
+			finalized_seq = nextval('export_seq')
 		WHERE request_id = $1`+occurredCond+` AND outcome = 'pending'
 		RETURNING id, occurred_at, named_node_ids
 	`, updateArgs...).Scan(&eventID, &at, &stored)
@@ -348,6 +367,78 @@ func (s *Store) List(ctx context.Context, f Filter) ([]*Event, bool, error) {
 	return out, hasMore, nil
 }
 
+// Export returns one page of finalized events past after, ascending by
+// finalized_seq, for deployment-wide SIEM / WORM export (GET /internal/events).
+// Returns ErrCursorAhead when after is past export_seq's head (DB reset).
+func (s *Store) Export(ctx context.Context, after int64, limit int) ([]*Event, int64, bool, error) {
+	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "export_events", dbx.DefaultTimeout)
+	defer cancel()
+	defer op.End()
+
+	var head int64
+	if err := s.pool.QueryRow(ctx, `SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM export_seq`).Scan(&head); err != nil {
+		return nil, 0, false, op.Fail(err)
+	}
+	if after > head {
+		return nil, 0, false, op.Expected("cursor ahead", ErrCursorAhead)
+	}
+
+	rows, err := s.pool.Query(ctx, `SELECT e.finalized_seq, `+eventColumns+`
+		FROM audit_events e
+		WHERE e.finalized_seq > $1
+		ORDER BY e.finalized_seq ASC
+		LIMIT $2`, after, limit+1)
+	if err != nil {
+		return nil, 0, false, op.Fail(err)
+	}
+	defer rows.Close()
+
+	var out []*Event
+	for rows.Next() {
+		e, err := scanExportEvent(rows)
+		if err != nil {
+			return nil, 0, false, op.Fail(err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, false, op.Fail(err)
+	}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	cursor := after
+	if len(out) > 0 && out[len(out)-1].FinalizedSeq != nil {
+		cursor = *out[len(out)-1].FinalizedSeq
+	}
+	op.OK("")
+	return out, cursor, hasMore, nil
+}
+
+func scanExportEvent(row dbx.Scannable) (*Event, error) {
+	var e Event
+	var seq int64
+	var nodes, params, details []byte
+	if err := row.Scan(&seq, &e.ID, &e.OccurredAt, &e.RequestID, &e.RootID, &nodes, &e.Actor.MemberID, &e.Actor.UserID,
+		&e.Actor.Principal, &e.Actor.AuthType, &e.Actor.KeyID, &e.Service, &e.Method, &e.Route, &params, &e.IP,
+		&e.UserAgent, &e.Outcome.Outcome, &e.Status, &details, &e.CreatedID, &e.NamedNodeIDs, &e.NamedMemberID); err != nil {
+		return nil, err
+	}
+	e.FinalizedSeq = &seq
+	e.OccurredAt = e.OccurredAt.UTC()
+	if err := json.Unmarshal(nodes, &e.Nodes); err != nil {
+		return nil, fmt.Errorf("nodes: %w", err)
+	}
+	if err := json.Unmarshal(params, &e.Params); err != nil {
+		return nil, fmt.Errorf("params: %w", err)
+	}
+	if details != nil {
+		e.Details = json.RawMessage(details)
+	}
+	return &e, nil
+}
+
 func scanEvent(row dbx.Scannable) (*Event, error) {
 	var e Event
 	var nodes, params, details []byte
@@ -369,40 +460,20 @@ func scanEvent(row dbx.Scannable) (*Event, error) {
 	return &e, nil
 }
 
-const (
-	partitionTimeout         = 30 * time.Second
-	partitionLockSpace int32 = 0x706c6175 // "plau"
-)
+const partitionTimeout = 30 * time.Second
 
-// EnsurePartitions creates the monthly partitions of the events and their log
-// keys covering from..to (inclusive months). Replicas serialize on an advisory lock; existing partitions are kept.
+// EnsurePartitions creates the monthly partitions of audit_events and
+// audit_log_keys covering from..to (inclusive months) via the SECURITY DEFINER
+// ensure_partitions function, so the writer role needs no DDL rights.
 func (s *Store) EnsurePartitions(ctx context.Context, from, to time.Time) error {
 	ctx, cancel, op := dbx.BeginTimeout(ctx, s.tracer, "ensure_partitions", partitionTimeout)
 	defer cancel()
 	defer op.End()
 
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return op.Fail(err)
-	}
-	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext('audit.audit_events.partitions'))`, partitionLockSpace); err != nil {
-		return op.Fail(err)
-	}
 	for m := monthStart(from); !m.After(monthStart(to)); m = m.AddDate(0, 1, 0) {
-		for _, table := range []string{"audit_events", "audit_log_keys"} {
-			name := pgx.Identifier{fmt.Sprintf("%s_y%04dm%02d", table, m.Year(), int(m.Month()))}.Sanitize()
-			if _, err := tx.Exec(ctx, fmt.Sprintf(
-				`CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM ('%s') TO ('%s')`,
-				name, table, m.Format(time.RFC3339), m.AddDate(0, 1, 0).Format(time.RFC3339),
-			)); err != nil {
-				return op.Fail(err)
-			}
+		if _, err := s.pool.Exec(ctx, `SELECT ensure_partitions($1)`, m); err != nil {
+			return op.Fail(fmt.Errorf("ensure partitions for %s: %w", m.Format("2006-01"), err))
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return op.Fail(err)
 	}
 	op.OK("")
 	return nil

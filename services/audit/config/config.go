@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -13,28 +15,52 @@ const (
 
 // Config is process-level audit service configuration.
 // OTEL_* stays in the telemetry package (standard env contract).
-// There is no retention setting: events are kept (docs/internals/audit-storage.md).
 type Config struct {
 	Port         string
 	InternalPort string
 	DatabaseURL  string
+	WriterRole   string
 }
 
-func Load() (Config, error) {
-	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
-	if databaseURL == "" {
-		return Config{}, fmt.Errorf("DATABASE_URL is required")
-	}
-	return Config{
-		Port:         envOr("PORT", defaultPort),
-		InternalPort: envOr("INTERNAL_PORT", defaultInternalPort),
-		DatabaseURL:  databaseURL,
-	}, nil
+// Load reads what cmd needs: serve needs its ports, migrate needs WRITER_ROLE,
+// prune needs DATABASE_URL.
+func Load(cmd string) (Config, error) {
+	return LoadFrom(cmd, os.Getenv)
 }
 
-func envOr(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
+func LoadFrom(cmd string, getenv func(string) string) (Config, error) {
+	get := func(key, fallback string) string {
+		if v := strings.TrimSpace(getenv(key)); v != "" {
+			return v
+		}
+		return fallback
 	}
-	return fallback
+	cfg := Config{
+		Port:         get("PORT", defaultPort),
+		InternalPort: get("INTERNAL_PORT", defaultInternalPort),
+		DatabaseURL:  get("DATABASE_URL", ""),
+		WriterRole:   get("WRITER_ROLE", ""),
+	}
+	var errs []error
+	if cfg.DatabaseURL == "" {
+		errs = append(errs, errors.New("DATABASE_URL is required"))
+	}
+	switch cmd {
+	case "serve":
+		if p, err := strconv.Atoi(cfg.Port); err != nil || p < 1 || p > 65535 {
+			errs = append(errs, fmt.Errorf("PORT must be a port number"))
+		}
+		if p, err := strconv.Atoi(cfg.InternalPort); err != nil || p < 1 || p > 65535 {
+			errs = append(errs, fmt.Errorf("INTERNAL_PORT must be a port number"))
+		}
+	case "migrate":
+		if cfg.WriterRole == "" {
+			errs = append(errs, errors.New("WRITER_ROLE is required: migrate grants it the writer's rights"))
+		}
+	case "prune":
+		// DATABASE_URL only; cutoff flags are parsed by the prune command.
+	default:
+		errs = append(errs, errors.New("usage: audit migrate|serve|prune"))
+	}
+	return cfg, errors.Join(errs...)
 }

@@ -74,7 +74,8 @@ type Outcome struct {
 }
 
 type Event struct {
-	ID string
+	ID           string
+	FinalizedSeq *int64
 	Intent
 	Outcome
 }

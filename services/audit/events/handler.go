@@ -18,10 +18,16 @@ import (
 	"github.com/plat5dev/plat5/audit/metrics"
 )
 
+const (
+	defaultExportLimit = 100
+	maxExportLimit     = 1000
+)
+
 type store interface {
 	CreateIntent(ctx context.Context, in *Intent, final *Outcome) (bool, error)
 	ApplyOutcome(ctx context.Context, requestID string, out *Outcome) (string, error)
 	List(ctx context.Context, f Filter) ([]*Event, bool, error)
+	Export(ctx context.Context, after int64, limit int) ([]*Event, int64, bool, error)
 }
 
 type Handler struct {
@@ -32,8 +38,10 @@ func NewHandler(s *Store) *Handler {
 	return &Handler{store: s}
 }
 
-// MountInternal registers the gateway's writes on a router scoped under /internal.
+// MountInternal registers the gateway's writes and the deployment-wide export
+// feed on a router scoped under /internal.
 func (h *Handler) MountInternal(router fiber.Router) {
+	router.Get("/events", h.Export)
 	router.Put("/events/:request_id", h.PutIntent)
 	router.Patch("/events/:request_id", h.PatchOutcome)
 }
@@ -87,6 +95,17 @@ func (h *Handler) PatchOutcome(c fiber.Ctx) error {
 type listResponse struct {
 	AuditEvents []eventResponse `json:"audit_events"`
 	HasMore     bool            `json:"has_more"`
+}
+
+type exportEventResponse struct {
+	Seq string `json:"seq"`
+	eventResponse
+}
+
+type exportResponse struct {
+	AuditEvents []exportEventResponse `json:"audit_events"`
+	Cursor      string                `json:"cursor"`
+	HasMore     bool                  `json:"has_more"`
 }
 
 type eventResponse struct {
@@ -182,6 +201,91 @@ func (h *Handler) list(c fiber.Ctx, f Filter) error {
 		resp.AuditEvents = append(resp.AuditEvents, toResponse(e))
 	}
 	return c.JSON(resp)
+}
+
+// Export is GET /internal/events: deployment-wide finalized audit events in
+// commit order for SIEM / WORM archival (docs/reference/api/internal.md#export).
+func (h *Handler) Export(c fiber.Ctx) error {
+	after, limit, err := parseExportQuery(c)
+	if err != nil {
+		return err
+	}
+	list, cursor, hasMore, err := h.store.Export(c.Context(), after, limit)
+	if stderrors.Is(err, ErrCursorAhead) {
+		return errors.CursorAheadError()
+	}
+	if err != nil {
+		return dbError(c.Context(), "export audit events", err)
+	}
+	resp := exportResponse{
+		AuditEvents: make([]exportEventResponse, 0, len(list)),
+		Cursor:      strconv.FormatInt(cursor, 10),
+		HasMore:     hasMore,
+	}
+	for _, e := range list {
+		seq := ""
+		if e.FinalizedSeq != nil {
+			seq = strconv.FormatInt(*e.FinalizedSeq, 10)
+		}
+		resp.AuditEvents = append(resp.AuditEvents, exportEventResponse{
+			Seq:           seq,
+			eventResponse: toResponse(e),
+		})
+	}
+	c.Set("Cache-Control", "no-store")
+	return c.JSON(resp)
+}
+
+func parseExportQuery(c fiber.Ctx) (int64, int, error) {
+	var after int64
+	limit := defaultExportLimit
+	var bad fieldErrs
+	seen := map[string]bool{}
+
+	for k, v := range c.Request().URI().QueryArgs().All() {
+		key, value := string(k), strings.TrimSpace(string(v))
+		if seen[key] {
+			bad.add(key)
+			continue
+		}
+		seen[key] = true
+		switch key {
+		case "after":
+			n, ok := parseSeq(value)
+			if !ok {
+				bad.add(key)
+				continue
+			}
+			after = n
+		case "limit":
+			n, err := strconv.Atoi(value)
+			if err != nil || n < 1 {
+				bad.add(key)
+				continue
+			}
+			limit = min(n, maxExportLimit)
+		default:
+			bad.add(key)
+		}
+	}
+	if err := bad.err(); err != nil {
+		return 0, 0, err
+	}
+	return after, limit, nil
+}
+
+// parseSeq accepts a positive decimal integer with no leading zero.
+func parseSeq(v string) (int64, bool) {
+	if v == "" || v[0] < '1' || v[0] > '9' {
+		return 0, false
+	}
+	for i := 0; i < len(v); i++ {
+		if v[i] < '0' || v[i] > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	return n, err == nil
 }
 
 func dbError(ctx context.Context, msg string, err error) error {

@@ -35,6 +35,7 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d
 Required in `.env`:
 - `PLAT5_VERSION` — released `v*` tag (do not use `latest`)
 - `POSTGRES_PASSWORD` — URL-safe (hex recommended; raw base64 `+` / `/` breaks `DATABASE_URL`)
+- `AUDIT_OWNER_PASSWORD`, `AUDIT_WRITER_PASSWORD` — passwords for the separate `audit_owner` (`audit migrate` / `audit prune`) and non-deleting `audit_writer` (`audit serve`) Postgres roles ([audit storage](../internals/audit-storage.md#roles))
 - `ADMIN_TOKEN` — bearer token for the control plane Admin API
 - `AUTH_ISSUER`, `AUTH_JWKS_URI`, `AUTH_ALLOWED_AUDIENCES` — your IdP ([`reference/idp.md`](../reference/idp.md))
 

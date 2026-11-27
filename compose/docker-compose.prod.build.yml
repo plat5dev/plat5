@@ -24,6 +24,13 @@ services:
       args:
         VERSION: ${PLAT5_VERSION:?set PLAT5_VERSION}
         REVISION: ${PLAT5_REVISION:-}
+  audit-migrate:
+    build:
+      context: ../services/audit
+      target: prod
+      args:
+        VERSION: ${PLAT5_VERSION:?set PLAT5_VERSION}
+        REVISION: ${PLAT5_REVISION:-}
   audit:
     build:
       context: ../services/audit

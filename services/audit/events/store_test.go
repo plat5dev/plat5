@@ -494,3 +494,55 @@ func TestStoresWhatItsSent(t *testing.T) {
 		t.Fatalf("stored as sent: %+v", e)
 	}
 }
+
+// Export returns finalized events in commit (finalized_seq) order, never pending
+// events, even when an older intent finalizes after a newer one.
+func TestExportCommitOrderAndCursorAhead(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+	base := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
+
+	// Two pending intents: req-slow starts first, req-fast starts second.
+	if _, err := s.CreateIntent(ctx, testIntent("req-slow", base), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateIntent(ctx, testIntent("req-fast", base.Add(time.Second)), nil); err != nil {
+		t.Fatal(err)
+	}
+	// While both are pending, export is empty and cursor stays 0.
+	list, cursor, more, err := s.Export(ctx, 0, 10)
+	if err != nil || len(list) != 0 || cursor != 0 || more {
+		t.Fatalf("pending only: %v len=%d cursor=%d more=%v", err, len(list), cursor, more)
+	}
+
+	// req-fast finalizes first, then a single-write refusal, then req-slow.
+	if _, err := s.ApplyOutcome(ctx, "req-fast", &Outcome{Outcome: OutcomeResponded, Status: intPtr(200)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateIntent(ctx, testIntent("req-refused", base.Add(2*time.Second)), &Outcome{Outcome: OutcomeRejected, Status: intPtr(403)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ApplyOutcome(ctx, "req-slow", &Outcome{Outcome: OutcomeResponded, Status: intPtr(201)}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Page 1 (limit 2): req-fast, req-refused.
+	p1, c1, more1, err := s.Export(ctx, 0, 2)
+	if err != nil || !more1 || !slices.Equal(requestIDs(p1), []string{"req-fast", "req-refused"}) {
+		t.Fatalf("page 1: %v more=%v ids=%v", err, more1, requestIDs(p1))
+	}
+	// Page 2 from c1: req-slow (not missed despite older occurred_at / id).
+	p2, c2, more2, err := s.Export(ctx, c1, 10)
+	if err != nil || more2 || !slices.Equal(requestIDs(p2), []string{"req-slow"}) || c2 <= c1 {
+		t.Fatalf("page 2: %v more=%v ids=%v c1=%d c2=%d", err, more2, requestIDs(p2), c1, c2)
+	}
+	// Caught up.
+	p3, c3, more3, err := s.Export(ctx, c2, 10)
+	if err != nil || len(p3) != 0 || more3 || c3 != c2 {
+		t.Fatalf("caught up: %v len=%d more=%v c3=%d", err, len(p3), more3, c3)
+	}
+	// Ahead of head -> ErrCursorAhead.
+	if _, _, _, err := s.Export(ctx, c2+10, 10); !stderrors.Is(err, ErrCursorAhead) {
+		t.Fatalf("want ErrCursorAhead, got %v", err)
+	}
+}

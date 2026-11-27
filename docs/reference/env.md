@@ -59,8 +59,11 @@ Ready fails closed (**503**) when Postgres is unreachable or no config is loaded
 
 ## Audit
 
+Commands: `audit migrate`, `audit serve`, `audit prune` ([`internals/audit-storage.md`](../internals/audit-storage.md)).
+
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `PORT` | `3002` | Read API |
-| `INTERNAL_PORT` | `3003` | `/health/*`, `/metrics`, internal event writes |
-| `DATABASE_URL` | required | Postgres; schema `audit` |
+| `PORT` | `3002` | Read API (`serve`) |
+| `INTERNAL_PORT` | `3003` | `/health/*`, `/metrics`, internal event writes and export feed (`serve`) |
+| `DATABASE_URL` | required | Postgres; schema `audit` (owner role for `migrate`/`prune`, writer role for `serve`) |
+| `WRITER_ROLE` | required by `migrate` | Postgres role granted the writer's non-deleting rights |

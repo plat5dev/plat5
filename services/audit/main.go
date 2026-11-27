@@ -1,7 +1,16 @@
+// Command audit stores Plat5's customer and user audit logs and serves them back.
+// Contract: docs/concepts/audit.md, docs/internals/audit-storage.md.
+//
+//	audit migrate   as the schema owner: migrations, then the writer's grants
+//	audit serve     as the writer: the internal write/export API and read routes
+//	audit prune     as the schema owner: drop monthly partitions older than cutoff
 package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -29,34 +38,104 @@ import (
 const partitionInterval = time.Hour
 
 func main() {
-	cfg, err := config.Load()
-	if err != nil {
-		log.Fatalf("invalid audit configuration: %v", err)
+	cmd := ""
+	var args []string
+	if len(os.Args) > 1 {
+		cmd = os.Args[1]
+		args = os.Args[2:]
 	}
-	ctx := context.Background()
+	if err := run(cmd, args); err != nil {
+		log.Fatalf("audit %s: %v", cmd, err)
+	}
+}
 
+func run(cmd string, args []string) error {
+	cfg, err := config.Load(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	switch cmd {
+	case "migrate":
+		if len(args) > 0 {
+			return fmt.Errorf("unexpected arguments: %v", args)
+		}
+		pool, err := db.Connect(ctx, cfg.DatabaseURL)
+		if err != nil {
+			return fmt.Errorf("failed to connect to postgres: %w", err)
+		}
+		defer pool.Close()
+		if err := db.Migrate(ctx, pool, cfg.WriterRole); err != nil {
+			return fmt.Errorf("failed to migrate database: %w", err)
+		}
+		log.Printf("migrated audit schema version=%s writer_role=%s", db.LatestVersion(), cfg.WriterRole)
+		return nil
+
+	case "prune":
+		fs := flag.NewFlagSet("prune", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		before := fs.String("before", "", "drop monthly partitions strictly older than YYYY-MM (UTC)")
+		olderThan := fs.String("older-than", "", "drop monthly partitions strictly older than <N>m (e.g. 12m)")
+		dryRun := fs.Bool("dry-run", false, "list partitions that would be dropped without dropping them")
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		if fs.NArg() > 0 {
+			return fmt.Errorf("unexpected arguments: %v", fs.Args())
+		}
+		cutoff, err := db.ParsePruneCutoff(*before, *olderThan, time.Now())
+		if err != nil {
+			return err
+		}
+		pool, err := db.Connect(ctx, cfg.DatabaseURL)
+		if err != nil {
+			return fmt.Errorf("failed to connect to postgres: %w", err)
+		}
+		defer pool.Close()
+		dropped, err := db.Prune(ctx, pool, cutoff, *dryRun)
+		if err != nil {
+			return err
+		}
+		log.Printf("pruned audit partitions cutoff=%s dry_run=%t count=%d partitions=%v",
+			cutoff.Format("2006-01"), *dryRun, len(dropped), dropped)
+		return nil
+
+	case "serve":
+		if len(args) > 0 {
+			return fmt.Errorf("unexpected arguments: %v", args)
+		}
+		return serve(ctx, stop, cfg)
+
+	default:
+		return fmt.Errorf("usage: audit migrate|serve|prune")
+	}
+}
+
+func serve(runCtx context.Context, stop context.CancelFunc, cfg config.Config) error {
 	// Register prometheus metrics before OTLP bridge so the first export sees them.
 	metrics.Init()
 
-	telem, err := telemetry.Init(ctx)
+	telem, err := telemetry.Init(runCtx)
 	if err != nil {
-		log.Fatalf("failed to initialize telemetry: %v", err)
+		return fmt.Errorf("failed to initialize telemetry: %w", err)
 	}
 
-	pool, err := db.Connect(ctx, cfg.DatabaseURL)
+	pool, err := db.Connect(runCtx, cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("failed to connect to postgres: %v", err)
+		return fmt.Errorf("failed to connect to postgres: %w", err)
 	}
+	defer pool.Close()
 
-	if err := db.Migrate(ctx, pool); err != nil {
-		pool.Close()
-		log.Fatalf("failed to migrate database: %v", err)
+	// The role that serves can change or delete no history (docs/internals/audit-storage.md#roles).
+	if err := db.CheckWriter(runCtx, pool); err != nil {
+		return err
 	}
 
 	store := events.NewStore(pool)
-	if err := store.EnsureAround(ctx, time.Now()); err != nil {
-		pool.Close()
-		log.Fatalf("failed to create audit partitions: %v", err)
+	if err := store.EnsureAround(runCtx, time.Now()); err != nil {
+		return fmt.Errorf("failed to create audit partitions: %w", err)
 	}
 	handler := events.NewHandler(store)
 
@@ -67,10 +146,8 @@ func main() {
 	baseLogger.Info().
 		Str("port", cfg.Port).
 		Str("internal_port", cfg.InternalPort).
+		Str("version", db.LatestVersion()).
 		Msg("starting audit server")
-
-	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -111,14 +188,11 @@ func main() {
 		baseLogger.Error().Err(err).Msg("internal server shutdown")
 	}
 	wg.Wait()
-	pool.Close()
 	if err := telem.Shutdown(shutdownCtx); err != nil {
 		baseLogger.Error().Err(err).Msg("telemetry shutdown")
 	}
 	baseLogger.Info().Msg("shutdown complete")
-	if listenErr != nil {
-		os.Exit(1)
-	}
+	return listenErr
 }
 
 func newPublicApp(telem *telemetry.Telemetry, handler *events.Handler) *fiber.App {

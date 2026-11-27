@@ -332,3 +332,30 @@ PATCH /internal/events/{request_id}
 ### Completed and rejected (single write)
 
 A gateway refusal after admit (a permission **403**, a **400** on a param, a **500**) — and any forwarded audited request when `AUDIT_MODE=async` — is sent as one background `PUT /internal/events/{request_id}` carrying the intent fields plus the final outcome fields (`outcome`, `status`, and optionally `details`, `created_id`, `named_node_ids`, `named_member_id`). Audit inserts the row already final and adds the corresponding `audit_log_keys` (`created_id`, and `named_node_ids` on user routes) in one transaction. It answers as an intent does.
+
+### Export
+
+Deployment-wide pull cursor feed of finalized audit events in strictly monotonic commit order, for external SIEM shipping and WORM archival (`GET {AUDIT_URL}/internal/events`).
+
+```
+GET /internal/events?after=40&limit=100
+→ 200
+{
+  "audit_events": [
+    { "seq": "41", "id": "01ja2z6q…", "occurred_at": "…", "request_id": "…", "outcome": "responded", ... }
+  ],
+  "cursor": "41",
+  "has_more": false
+}
+```
+
+| Param | |
+|-------|--|
+| `after` | Optional. Last `seq` cursor read (positive decimal integer, no leading zero); omitted starts from the beginning. Malformed → **422** |
+| `limit` | Optional. Default **100**, max **1000** (over-max clamped). Below 1 or non-integer → **422** |
+
+- Only finalized events (`responded`, `rejected`, `no_response`) are exported; `pending` events appear once finalized, ordered by their finalization `seq` so slow requests that finish after faster ones are never missed.
+- Each item carries all fields of the [audit event](audit.md#event) plus `"seq"` (decimal string).
+- `cursor` is the last returned `seq` (or `after`, or `"0"` when empty). Poll again immediately while `has_more` is `true`.
+- An `after` past the sequence head (e.g., database reset/recreate) answers **409** `CURSOR_AHEAD` (`details: null`); reset the reader's cursor and start from the beginning. Partition pruning does not reset the sequence head.
+- Unknown or repeated query params → **422**. Postgres unavailable → **503**.

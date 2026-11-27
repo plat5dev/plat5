@@ -130,6 +130,17 @@ func ConflictError(message, field string, value interface{}) *ApiError {
 	}
 }
 
+func CursorAheadError() *ApiError {
+	return &ApiError{
+		Type:    "invalid_request_error",
+		Code:    "CURSOR_AHEAD",
+		Message: "Cursor is ahead of the log.",
+		Details: nil,
+		Status:  fiber.StatusConflict,
+		Kind:    KindValidation,
+	}
+}
+
 func PayloadTooLargeError(maxSizeBytes int64) *ApiError {
 	return &ApiError{
 		Type:    "invalid_request_error",

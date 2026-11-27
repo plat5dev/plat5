@@ -127,7 +127,12 @@ Any id the service returns is added as a log key, unchecked: the event is in the
 
 So on a user route the service names the chain and the member, and that member is who acted in a read of those nodes' logs. The gateway checks neither that the ids form a chain nor that the member is in that tree: the service is trusted, as it is with `Created`.
 
-The event's fields and the read API: [`reference/api/audit.md`](../reference/api/audit.md). Storage: [`internals/audit-storage.md`](../internals/audit-storage.md).
+The event's fields and the read API: [`reference/api/audit.md`](../reference/api/audit.md). Deployment-wide pull export (`GET /internal/events`): [`reference/api/internal.md`](../reference/api/internal.md#export). Storage, `Owner`/`Writer` DB roles, and partition pruning (`audit prune`): [`internals/audit-storage.md`](../internals/audit-storage.md).
+
+## Export and retention
+
+- **Export.** `audit` exposes a deployment-wide pull cursor feed (`GET /internal/events`) on its `INTERNAL_PORT` returning finalized events in strictly monotonic commit order (`seq`). Plat5 ships no SIEM or object-storage push connectors; run a small shipper/relay against this feed to archive to WORM storage (e.g., S3 Object Lock) or forward to Datadog, Splunk, or BigQuery.
+- **Retention.** The live `audit serve` process runs as a non-deleting Postgres `Writer` role and cannot delete or truncate events. To enforce hot-store retention and GDPR storage limitation after archival, run `audit prune --before YYYY-MM` (or `--older-than <N>m`) from a scheduled job under the schema `Owner` role, which drops expired whole monthly partitions without touching live or future months.
 
 ## Not here
 
@@ -136,7 +141,7 @@ The event's fields and the read API: [`reference/api/audit.md`](../reference/api
 - 401s, 429s, or not-found 403s in the log
 - The gateway reading inside details, or a service header creating or re-outcoming an event
 - A product feature that reads audit
-- Changing an event after its outcome, or deleting events through an API
+- Changing an event after its outcome, deleting individual events through an API, or running `audit serve` as a role that can delete
 - Audit for some trees or services and not others
-- Retention and purge
+- Built-in SIEM, S3, or webhook push connectors
 - Other front doors' events. Each keeps its own log

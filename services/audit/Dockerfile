@@ -61,6 +61,7 @@ COPY --from=builder /app/server ./server
 
 USER app
 
-EXPOSE 3002
+EXPOSE 3002 3003
 
-CMD ["./server"]
+ENTRYPOINT ["./server"]
+CMD ["serve"]
