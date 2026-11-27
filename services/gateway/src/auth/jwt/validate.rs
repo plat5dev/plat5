@@ -10,6 +10,10 @@ use tracing::debug;
 use super::Audiences;
 use crate::metrics;
 
+pub fn extract_kid(token: &str) -> Option<String> {
+    decode_header(token).ok().and_then(|h| h.kid)
+}
+
 pub async fn validate_token(
     token: &str,
     issuer: String,

@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwapOption;
 use jsonwebtoken::jwk::JwkSet;
@@ -12,8 +12,14 @@ use super::Audiences;
 const FETCH_TIMEOUT_SECS: u64 = 10;
 const RETRY_INTERVAL_SECS: u64 = 2;
 const REFRESH_INTERVAL_SECS: u64 = 15 * 60;
+const UNKNOWN_KID_REFRESH_COOLDOWN_SECS: u64 = 30;
 
 type JwksFetchTx = broadcast::Sender<Result<Arc<JwkSet>, String>>;
+
+struct FetchState {
+    in_flight: Option<JwksFetchTx>,
+    last_on_demand_refresh: Option<Instant>,
+}
 
 /// JWKS could not be fetched on the cold path: **503**.
 #[derive(Debug, Clone)]
@@ -34,13 +40,29 @@ pub struct JwtValidatorState {
     allowed_audiences: Audiences,
     jwks: Arc<ArcSwapOption<JwkSet>>,
     client: reqwest::Client,
-    /// In-flight cold-path fetch. Waiters subscribe; the network call runs without this lock.
-    in_flight: Arc<Mutex<Option<JwksFetchTx>>>,
+    /// In-flight fetch & unknown-kid refresh cooldown. Waiters subscribe; the
+    /// network call runs without holding this lock.
+    fetch_state: Arc<Mutex<FetchState>>,
+    refresh_cooldown: Duration,
     refresh_started: Arc<AtomicBool>,
 }
 
 impl JwtValidatorState {
     pub fn new(issuer: String, jwks_uri: String, allowed_audiences: Audiences) -> Self {
+        Self::with_refresh_cooldown(
+            issuer,
+            jwks_uri,
+            allowed_audiences,
+            Duration::from_secs(UNKNOWN_KID_REFRESH_COOLDOWN_SECS),
+        )
+    }
+
+    pub fn with_refresh_cooldown(
+        issuer: String,
+        jwks_uri: String,
+        allowed_audiences: Audiences,
+        refresh_cooldown: Duration,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
             .build()
@@ -52,7 +74,11 @@ impl JwtValidatorState {
             allowed_audiences,
             jwks: Arc::new(ArcSwapOption::empty()),
             client,
-            in_flight: Arc::new(Mutex::new(None)),
+            fetch_state: Arc::new(Mutex::new(FetchState {
+                in_flight: None,
+                last_on_demand_refresh: None,
+            })),
+            refresh_cooldown,
             refresh_started: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -63,15 +89,15 @@ impl JwtValidatorState {
         }
 
         let waiter = {
-            let mut slot = self.in_flight.lock().await;
+            let mut state = self.fetch_state.lock().await;
             if let Some(jwks) = self.jwks.load_full() {
                 return Ok(jwks);
             }
-            if let Some(tx) = slot.as_ref() {
+            if let Some(tx) = state.in_flight.as_ref() {
                 Some(tx.subscribe())
             } else {
                 let (tx, _) = broadcast::channel(1);
-                *slot = Some(tx);
+                state.in_flight = Some(tx);
                 None
             }
         };
@@ -92,8 +118,8 @@ impl JwtValidatorState {
             .await
             .map_err(|err| JwksUnavailable(err.to_string()));
         {
-            let mut slot = self.in_flight.lock().await;
-            if let Some(tx) = slot.take() {
+            let mut state = self.fetch_state.lock().await;
+            if let Some(tx) = state.in_flight.take() {
                 match &result {
                     Ok(j) => {
                         let _ = tx.send(Ok(Arc::clone(j)));
@@ -108,6 +134,79 @@ impl JwtValidatorState {
             self.try_start_refresh_task();
         }
         result
+    }
+
+    /// Triggers a singleflight-coalesced, cooldown-throttled JWKS refetch when
+    /// a token presents a `kid` absent from the currently cached key set.
+    ///
+    /// Returns `Some(jwks)` if a refreshed key set is available (or if `kid`
+    /// already appeared while waiting), or `None` if throttled or the refetch
+    /// failed (leaving the existing cached JWKS intact).
+    pub async fn refresh_for_unknown_kid(&self, kid: &str) -> Option<Arc<JwkSet>> {
+        let waiter = {
+            let mut state = self.fetch_state.lock().await;
+            if let Some(jwks) = self.jwks.load_full() {
+                if jwks.find(kid).is_some() {
+                    return Some(jwks);
+                }
+            }
+            if let Some(tx) = state.in_flight.as_ref() {
+                Some(tx.subscribe())
+            } else {
+                if let Some(last) = state.last_on_demand_refresh {
+                    if last.elapsed() < self.refresh_cooldown {
+                        return None;
+                    }
+                }
+                state.last_on_demand_refresh = Some(Instant::now());
+                let (tx, _) = broadcast::channel(1);
+                state.in_flight = Some(tx);
+                None
+            }
+        };
+
+        if let Some(mut rx) = waiter {
+            return match rx.recv().await {
+                Ok(Ok(jwks)) => Some(jwks),
+                Ok(Err(_)) => None,
+                Err(_) => self.jwks.load_full(),
+            };
+        }
+
+        let result = self.fetch_and_store().await;
+        {
+            let mut state = self.fetch_state.lock().await;
+            if let Some(tx) = state.in_flight.take() {
+                match &result {
+                    Ok(j) => {
+                        let _ = tx.send(Ok(Arc::clone(j)));
+                    }
+                    Err(err) => {
+                        let _ = tx.send(Err(err.to_string()));
+                    }
+                }
+            }
+        }
+        match result {
+            Ok(jwks) => {
+                info!(
+                    jwks_uri = %self.jwks_uri,
+                    kid = %kid,
+                    "jwks refreshed after unknown kid"
+                );
+                Some(jwks)
+            }
+            Err(err) => {
+                warn!(
+                    jwks_uri = %self.jwks_uri,
+                    kid = %kid,
+                    error_type = crate::error::ErrorKind::Network.as_str(),
+                    error_message = %err,
+                    "jwks on-demand refresh failed; keeping cached keys"
+                );
+                None
+            }
+        }
     }
 
     async fn fetch_and_store(&self) -> Result<Arc<JwkSet>, reqwest::Error> {
@@ -259,5 +358,102 @@ mod tests {
             1,
             "waiters must share the failed cold-path fetch instead of retrying concurrently"
         );
+    }
+
+    async fn spawn_dynamic_jwks(
+        body: Arc<std::sync::Mutex<String>>,
+        delay: Duration,
+    ) -> (std::net::SocketAddr, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                counter.fetch_add(1, Ordering::SeqCst);
+                let payload = body.lock().unwrap().clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    let _ = sock.read(&mut buf).await;
+                    if !delay.is_zero() {
+                        tokio::time::sleep(delay).await;
+                    }
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        payload.len(),
+                        payload
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+        (addr, hits)
+    }
+
+    fn ed25519_jwks_json(kids: &[&str]) -> String {
+        let keys: Vec<serde_json::Value> = kids
+            .iter()
+            .map(|kid| {
+                serde_json::json!({
+                    "kty": "OKP",
+                    "crv": "Ed25519",
+                    "kid": kid,
+                    "use": "sig",
+                    "alg": "EdDSA",
+                    "x": "bXUj6dVFBJp4oH4PZBzpnTQAuK8oEtKDiftREsbKRFI"
+                })
+            })
+            .collect();
+        serde_json::json!({ "keys": keys }).to_string()
+    }
+
+    #[tokio::test]
+    async fn unknown_kid_refetches_coalesces_and_respects_cooldown() {
+        let body = Arc::new(std::sync::Mutex::new(ed25519_jwks_json(&["k1"])));
+        let (addr, hits) = spawn_dynamic_jwks(body.clone(), Duration::from_millis(30)).await;
+
+        let state = JwtValidatorState::with_refresh_cooldown(
+            "https://auth".into(),
+            format!("http://{addr}/jwks"),
+            Audiences::Any,
+            Duration::from_millis(150),
+        );
+
+        let initial = state.get_jwks().await.unwrap();
+        assert!(initial.find("k1").is_some());
+        assert!(initial.find("k2").is_none());
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+        // Rotate JWKS to add k2; 8 concurrent requests for k2 must share 1 refetch.
+        *body.lock().unwrap() = ed25519_jwks_json(&["k1", "k2"]);
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            let s = state.clone();
+            tasks.push(tokio::spawn(async move {
+                s.refresh_for_unknown_kid("k2").await
+            }));
+        }
+        for t in tasks {
+            let jwks = t.await.unwrap().expect("expected refreshed jwks");
+            assert!(jwks.find("k2").is_some());
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+
+        // Another unknown kid within cooldown is throttled without hitting the IdP.
+        assert!(state.refresh_for_unknown_kid("bogus").await.is_none());
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+
+        // After cooldown elapses, a new rotation triggers a refetch.
+        tokio::time::sleep(Duration::from_millis(180)).await;
+        *body.lock().unwrap() = ed25519_jwks_json(&["k2", "k3"]);
+        let refreshed = state
+            .refresh_for_unknown_kid("k3")
+            .await
+            .expect("expected refetch after cooldown");
+        assert!(refreshed.find("k3").is_some());
+        assert_eq!(hits.load(Ordering::SeqCst), 3);
     }
 }

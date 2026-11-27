@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use pingora::http::RequestHeader;
 use serde_json::Value;
 
-use self::jwt::{is_unexpired, validate_token, JwtCache, JwtValidatorState};
+use self::jwt::{extract_kid, is_unexpired, validate_token, JwtCache, JwtValidatorState};
 
 const JWT_CACHE_CAPACITY: u64 = 10_000;
 const JWT_CACHE_TTL_BUFFER_SECS: u64 = 60;
@@ -173,11 +173,20 @@ impl Authenticator {
                 (cached.claims, kid)
             }
             None => {
-                let jwks = self
+                let mut jwks = self
                     .jwt_validator
                     .get_jwks()
                     .await
                     .map_err(|_| AuthError::JwtValidationUnavailable)?;
+                if let Some(kid) = extract_kid(token) {
+                    if jwks.find(&kid).is_none() {
+                        if let Some(refreshed) =
+                            self.jwt_validator.refresh_for_unknown_kid(&kid).await
+                        {
+                            jwks = refreshed;
+                        }
+                    }
+                }
                 let (data, kid) = validate_token(
                     token,
                     self.jwt_validator.get_issuer(),
