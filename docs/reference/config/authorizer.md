@@ -6,7 +6,7 @@ Authorization in Plat5 is **all or nothing**: a deployment either uses Plat5's b
 
 ```yaml
 authorizer:
-  url: http://topaz:8383
+  url: http://topaz:9393
   timeout: 2s
   cache_ttl: 5s
   negative_cache_ttl: 2s

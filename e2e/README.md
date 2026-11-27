@@ -56,7 +56,7 @@ cd e2e && PLAT5_E2E=1 go test ./... -count=1 -v
 | `IDENTITY_INTERNAL_URL` | `http://localhost:5404` | Identity's internal port, for the evaluation API and the lifecycle log |
 | `IDENTITY_URL` | `http://localhost:5405` | Identity's service API, as an operator plane calls it |
 | `E2E_DOCKER_HOST` | `host.docker.internal` | Hostname containers use to reach test servers (mock AuthZEN PDP & echo upstream) |
-| `TOPAZ_URL` | unset | Internal Topaz AuthZEN URL (e.g. `http://topaz:8383`) to run real Topaz interop tests (`e2e/compose.topaz.yml`) |
+| `TOPAZ_URL` | unset | Internal Topaz AuthZEN URL (e.g. `http://topaz:9393`) to run real Topaz interop tests (`e2e/compose.topaz.yml`) |
 | `TOPAZ_DIRECTORY_URL` | `http://localhost:9393` | Host Topaz directory REST URL used by `TestOutboundAuthZENTopaz` to seed objects/relations |
 | `TOPAZ_API_KEY` | unset | Optional Topaz API key when running against Topaz with auth enabled |
 | `ADMIN_TOKEN` | `dev-admin-token` | Its token |

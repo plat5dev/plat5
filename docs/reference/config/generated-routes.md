@@ -70,7 +70,7 @@ The generator sets no `rate_limit` or `audit`, so the [defaults](services.md#rou
 
 ## Identity's routes
 
-For a kind `K` with parent `P`. `<p>` is `K`'s permission prefix (`K`'s name, or its `list_permission` without `<sep>read` when it ends in `<sep>read`). `<sep>` is the generator's `permission_separator` (`:` by default, `_` for `--authorizer topaz`, configurable via `routes.permission_separator` in `plat5.local.yml` or `--permission-separator`). `<collection>` is the literal in `K`'s `path` (`/projects` for `/projects/{project}`). Paths are relative to the scope's node.
+For a kind `K` with parent `P`. `<p>` is `K`'s permission prefix (`K`'s name, or its `list_permission` without `<sep>read` when it ends in `<sep>read`). `<sep>` is the generator's `permission_separator` (`:` by default, `_` for Topaz, configurable via `routes.permission_separator` in `plat5.local.yml` or `--permission-separator`). `<collection>` is the literal in `K`'s `path` (`/projects` for `/projects/{project}`). Paths are relative to the scope's node.
 
 | Scope | Path | Methods and permissions | Upstream on identity |
 |---|---|---|---|

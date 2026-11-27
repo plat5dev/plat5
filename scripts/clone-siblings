@@ -15,6 +15,7 @@ REPOS=(
   operator
   template-bun-effect-api
   template-go-fiber-api
+  template-go-topaz-api
   template-node-fastify-api
   template-solid-customer-console
   template-solid-operator-console
